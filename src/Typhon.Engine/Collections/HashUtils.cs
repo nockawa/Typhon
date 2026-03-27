@@ -4,7 +4,7 @@ namespace Typhon.Engine;
 
 /// <summary>
 /// Shared hash utility functions for in-memory and page-backed hash map implementations.
-/// Hash functions extracted from HashMap; meta/bucket helpers extracted from HashMapBase.
+/// Hash functions extracted from HashMap; meta/bucket helpers extracted from PagedHashMapBase.
 /// </summary>
 internal static unsafe class HashUtils
 {

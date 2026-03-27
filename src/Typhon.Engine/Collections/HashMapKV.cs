@@ -18,7 +18,7 @@ namespace Typhon.Engine;
 /// </para>
 /// Replaces <see cref="Dictionary{TKey,TValue}"/> on hot paths.
 /// </summary>
-public unsafe class InMemoryHashMap<TKey, TValue> : IResource where TKey : unmanaged, IEquatable<TKey>
+public unsafe class HashMap<TKey, TValue> : IResource where TKey : unmanaged, IEquatable<TKey>
 {
     private const double MaxLoadFactor = 0.75;
 
@@ -44,7 +44,7 @@ public unsafe class InMemoryHashMap<TKey, TValue> : IResource where TKey : unman
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    public InMemoryHashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 64)
+    public HashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 64)
     {
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(allocator);
@@ -429,10 +429,10 @@ public unsafe class InMemoryHashMap<TKey, TValue> : IResource where TKey : unman
     /// <summary>Value-type enumerator yielding <c>(TKey Key, TValue Value)</c> tuples in memory order.</summary>
     public ref struct Enumerator
     {
-        private readonly InMemoryHashMap<TKey, TValue> _map;
+        private readonly HashMap<TKey, TValue> _map;
         private int _index;
 
-        internal Enumerator(InMemoryHashMap<TKey, TValue> map)
+        internal Enumerator(HashMap<TKey, TValue> map)
         {
             _map = map;
             _index = -1;

@@ -10,7 +10,7 @@ using Typhon.Engine;
 namespace Typhon.Benchmark;
 
 /// <summary>
-/// Profiling workload for InMemoryHashMap vs .NET Dictionary.
+/// Profiling workload for HashMap vs .NET Dictionary.
 /// Realistic scenarios: random keys, no pre-sizing, mixed insert/remove.
 /// Invoke via: Typhon.Benchmark.exe --profile-hashmap
 /// </summary>
@@ -183,12 +183,12 @@ static class HashMapProfileWorkload
     static (long addMs, long lookupMs) BenchMapInt(int[] keys, int[] lookupKeys, IResource parent, IMemoryAllocator alloc)
     {
         // Warmup
-        var m = new InMemoryHashMap<int, int>("W", parent, alloc);
+        var m = new HashMap<int, int>("W", parent, alloc);
         for (int i = 0; i < N; i++) m.TryAdd(keys[i], i);
         for (int i = 0; i < N; i++) m.TryGetValue(lookupKeys[i], out _);
         m.Dispose();
 
-        using var map = new InMemoryHashMap<int, int>("B", parent, alloc);
+        using var map = new HashMap<int, int>("B", parent, alloc);
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
@@ -239,12 +239,12 @@ static class HashMapProfileWorkload
 
     static (long addMs, long lookupMs) BenchMapGuid(Guid[] keys, Guid[] lookupKeys, IResource parent, IMemoryAllocator alloc)
     {
-        var m = new InMemoryHashMap<Guid, int>("W", parent, alloc);
+        var m = new HashMap<Guid, int>("W", parent, alloc);
         for (int i = 0; i < N; i++) m.TryAdd(keys[i], i);
         for (int i = 0; i < N; i++) m.TryGetValue(lookupKeys[i], out _);
         m.Dispose();
 
-        using var map = new InMemoryHashMap<Guid, int>("B", parent, alloc);
+        using var map = new HashMap<Guid, int>("B", parent, alloc);
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
@@ -293,11 +293,11 @@ static class HashMapProfileWorkload
 
     static (long mixedMs, long lookupMs) BenchMapIntMixed(int[] keys, int[] lookupKeys, MixedOp[] ops, IResource parent, IMemoryAllocator alloc)
     {
-        var m = new InMemoryHashMap<int, int>("W", parent, alloc);
+        var m = new HashMap<int, int>("W", parent, alloc);
         MapMixedInt(m, keys, ops, N);
         m.Dispose();
 
-        using var map = new InMemoryHashMap<int, int>("B", parent, alloc);
+        using var map = new HashMap<int, int>("B", parent, alloc);
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
@@ -344,11 +344,11 @@ static class HashMapProfileWorkload
 
     static (long mixedMs, long lookupMs) BenchMapGuidMixed(Guid[] keys, Guid[] lookupKeys, MixedOp[] ops, IResource parent, IMemoryAllocator alloc)
     {
-        var m = new InMemoryHashMap<Guid, int>("W", parent, alloc);
+        var m = new HashMap<Guid, int>("W", parent, alloc);
         MapMixedGuid(m, keys, ops, N);
         m.Dispose();
 
-        using var map = new InMemoryHashMap<Guid, int>("B", parent, alloc);
+        using var map = new HashMap<Guid, int>("B", parent, alloc);
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
@@ -389,13 +389,13 @@ static class HashMapProfileWorkload
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static void MapAddInt(InMemoryHashMap<int, int> m, int[] keys, int n)
+    static void MapAddInt(HashMap<int, int> m, int[] keys, int n)
     {
         for (int i = 0; i < n; i++) m.TryAdd(keys[i], i);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static void MapLookupInt(InMemoryHashMap<int, int> m, int[] keys, int n)
+    static void MapLookupInt(HashMap<int, int> m, int[] keys, int n)
     {
         int sum = 0;
         for (int i = 0; i < n; i++)
@@ -424,13 +424,13 @@ static class HashMapProfileWorkload
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static void MapAddGuid(InMemoryHashMap<Guid, int> m, Guid[] keys, int n)
+    static void MapAddGuid(HashMap<Guid, int> m, Guid[] keys, int n)
     {
         for (int i = 0; i < n; i++) m.TryAdd(keys[i], i);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static void MapLookupGuid(InMemoryHashMap<Guid, int> m, Guid[] keys, int n)
+    static void MapLookupGuid(HashMap<Guid, int> m, Guid[] keys, int n)
     {
         int sum = 0;
         for (int i = 0; i < n; i++)
@@ -466,7 +466,7 @@ static class HashMapProfileWorkload
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static void MapMixedInt(InMemoryHashMap<int, int> m, int[] keys, MixedOp[] ops, int n)
+    static void MapMixedInt(HashMap<int, int> m, int[] keys, MixedOp[] ops, int n)
     {
         var inserted = new List<int>(n);
         int keyIdx = 0;
@@ -513,7 +513,7 @@ static class HashMapProfileWorkload
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static void MapMixedGuid(InMemoryHashMap<Guid, int> m, Guid[] keys, MixedOp[] ops, int n)
+    static void MapMixedGuid(HashMap<Guid, int> m, Guid[] keys, MixedOp[] ops, int n)
     {
         var inserted = new List<Guid>(n);
         int keyIdx = 0;
@@ -597,14 +597,14 @@ static class HashMapProfileWorkload
     static long BenchConcMapDisjointInsert(int threadCount, int keysPerThread, IResource parent, IMemoryAllocator alloc)
     {
         // Warmup
-        var warmup = new ConcurrentInMemoryHashMap<int, int>("W", parent, alloc);
+        var warmup = new ConcurrentHashMap<int, int>("W", parent, alloc);
         for (int i = 0; i < keysPerThread; i++) warmup.TryAdd(i, i);
         warmup.Dispose();
 
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < 50; iter++)
         {
-            var map = new ConcurrentInMemoryHashMap<int, int>("B", parent, alloc, keysPerThread * threadCount);
+            var map = new ConcurrentHashMap<int, int>("B", parent, alloc, keysPerThread * threadCount);
             var threads = new Thread[threadCount];
             using var barrier = new Barrier(threadCount);
             for (int t = 0; t < threadCount; t++)
@@ -668,7 +668,7 @@ static class HashMapProfileWorkload
 
     static long BenchConcMapMixedReadWrite(int threadCount, int keyRange, IResource parent, IMemoryAllocator alloc)
     {
-        using var map = new ConcurrentInMemoryHashMap<int, int>("B", parent, alloc, keyRange);
+        using var map = new ConcurrentHashMap<int, int>("B", parent, alloc, keyRange);
         for (int i = 0; i < keyRange; i++) map.TryAdd(i, i);
 
         var sw = Stopwatch.StartNew();

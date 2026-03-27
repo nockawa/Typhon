@@ -11,7 +11,7 @@ namespace Typhon.Engine;
 /// Backward-shift deletion avoids tombstone accumulation.
 /// Replaces <see cref="HashSet{T}"/> on hot paths.
 /// </summary>
-public unsafe class InMemoryHashMap<TKey> : IResource where TKey : unmanaged, IEquatable<TKey>
+public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable<TKey>
 {
     private const double MaxLoadFactor = 0.75;
 
@@ -34,7 +34,7 @@ public unsafe class InMemoryHashMap<TKey> : IResource where TKey : unmanaged, IE
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    public InMemoryHashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 64)
+    public HashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 64)
     {
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(allocator);
@@ -234,10 +234,10 @@ public unsafe class InMemoryHashMap<TKey> : IResource where TKey : unmanaged, IE
     /// <summary>Value-type enumerator. Iterates occupied entry slots in memory order.</summary>
     public ref struct Enumerator
     {
-        private readonly InMemoryHashMap<TKey> _map;
+        private readonly HashMap<TKey> _map;
         private int _index;
 
-        internal Enumerator(InMemoryHashMap<TKey> map)
+        internal Enumerator(HashMap<TKey> map)
         {
             _map = map;
             _index = -1;

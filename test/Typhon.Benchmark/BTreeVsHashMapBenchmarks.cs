@@ -105,9 +105,9 @@ public unsafe class BTreeVsHashMap_BulkBenchmarks
     [Benchmark]
     public void HashMap_Sequential()
     {
-        int stride = HashMap<long, int, PersistentStore>.RecommendedStride();
+        int stride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 3000, stride);
-        var map = HashMap<long, int, PersistentStore>.Create(segment);
+        var map = PagedHashMap<long, int, PersistentStore>.Create(segment);
         var acc = segment.CreateChunkAccessor();
         for (int i = 1; i <= N; i++)
         {
@@ -134,9 +134,9 @@ public unsafe class BTreeVsHashMap_BulkBenchmarks
     [Benchmark]
     public void HashMap_Random()
     {
-        int stride = HashMap<long, int, PersistentStore>.RecommendedStride();
+        int stride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
         var segment = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 3000, stride);
-        var map = HashMap<long, int, PersistentStore>.Create(segment);
+        var map = PagedHashMap<long, int, PersistentStore>.Create(segment);
         var acc = segment.CreateChunkAccessor();
         for (int i = 0; i < N; i++)
         {
@@ -170,7 +170,7 @@ public unsafe class BTreeVsHashMap_PointBenchmarks
 
     // HashMap
     private ChunkBasedSegment<PersistentStore> _hmSegment;
-    private HashMap<long, int, PersistentStore> _hashMap;
+    private PagedHashMap<long, int, PersistentStore> _pagedHashMap;
 
     /// <summary>Pre-generated random existing keys in [1..N].</summary>
     private long[] _randomKeys;
@@ -184,7 +184,7 @@ public unsafe class BTreeVsHashMap_PointBenchmarks
 
         // Allocate separate segments for each data structure
         _btreeSegment = _helper.Pmmf.AllocateChunkBasedSegment(PageBlockType.None, 3000, sizeof(Index64Chunk));
-        int stride = HashMap<long, int, PersistentStore>.RecommendedStride();
+        int stride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
         _hmSegment = _helper.Pmmf.AllocateChunkBasedSegment(PageBlockType.None, 3000, stride);
 
         // Create + pre-fill BTree
@@ -192,12 +192,12 @@ public unsafe class BTreeVsHashMap_PointBenchmarks
         BTreeBenchmarkHelper.PreFillLong(_btree, _btreeSegment, N);
 
         // Create + pre-fill HashMap
-        _hashMap = HashMap<long, int, PersistentStore>.Create(_hmSegment);
+        _pagedHashMap = PagedHashMap<long, int, PersistentStore>.Create(_hmSegment);
         {
             var acc = _hmSegment.CreateChunkAccessor();
             for (int i = 1; i <= N; i++)
             {
-                _hashMap.Insert(i, i * 10, ref acc, null);
+                _pagedHashMap.Insert(i, i * 10, ref acc, null);
             }
             acc.Dispose();
         }
@@ -233,7 +233,7 @@ public unsafe class BTreeVsHashMap_PointBenchmarks
     public int HashMap_Lookup_Hit()
     {
         var acc = _hmSegment.CreateChunkAccessor();
-        _hashMap.TryGet(N / 2, out var v, ref acc);
+        _pagedHashMap.TryGet(N / 2, out var v, ref acc);
         acc.Dispose();
         return v;
     }
@@ -255,7 +255,7 @@ public unsafe class BTreeVsHashMap_PointBenchmarks
     public bool HashMap_Lookup_Miss()
     {
         var acc = _hmSegment.CreateChunkAccessor();
-        var found = _hashMap.TryGet(-1, out _, ref acc);
+        var found = _pagedHashMap.TryGet(-1, out _, ref acc);
         acc.Dispose();
         return found;
     }
@@ -286,7 +286,7 @@ public unsafe class BTreeVsHashMap_PointBenchmarks
         _opIndex = (start + 100) % _randomKeys.Length;
         for (int i = 0; i < 100; i++)
         {
-            _hashMap.TryGet(_randomKeys[(start + i) % _randomKeys.Length], out _, ref acc);
+            _pagedHashMap.TryGet(_randomKeys[(start + i) % _randomKeys.Length], out _, ref acc);
         }
         acc.Dispose();
     }
@@ -314,9 +314,9 @@ public unsafe class BTreeVsHashMap_PointBenchmarks
     {
         var acc = _hmSegment.CreateChunkAccessor();
         var key = _randomKeys[_opIndex++ % _randomKeys.Length];
-        if (_hashMap.Remove(key, out var val, ref acc, null))
+        if (_pagedHashMap.Remove(key, out var val, ref acc, null))
         {
-            _hashMap.Insert(key, val, ref acc, null);
+            _pagedHashMap.Insert(key, val, ref acc, null);
         }
         acc.Dispose();
     }
@@ -365,11 +365,11 @@ public unsafe class RawValueHashMap_PointBenchmarks
 
     // RawValueHashMap (entity-record style)
     private ChunkBasedSegment<PersistentStore> _rawSegment;
-    private RawValueHashMap<long, PersistentStore> _rawMap;
+    private RawValuePagedHashMap<long, PersistentStore> _rawMap;
 
     // Typed HashMap baseline (4-byte int value, same hash function)
     private ChunkBasedSegment<PersistentStore> _typedSegment;
-    private HashMap<long, int, PersistentStore> _typedMap;
+    private PagedHashMap<long, int, PersistentStore> _typedMap;
 
     private long[] _randomKeys;
     private int _opIndex;
@@ -381,9 +381,9 @@ public unsafe class RawValueHashMap_PointBenchmarks
         _helper.Setup();
 
         // ─── RawValueHashMap with variable-size records ─────────────
-        int rawStride = RawValueHashMap<long, PersistentStore>.RecommendedStride(ValueSize);
+        int rawStride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(ValueSize);
         _rawSegment = _helper.Pmmf.AllocateChunkBasedSegment(PageBlockType.None, 3000, rawStride);
-        _rawMap = RawValueHashMap<long, PersistentStore>.Create(_rawSegment, 64, ValueSize);
+        _rawMap = RawValuePagedHashMap<long, PersistentStore>.Create(_rawSegment, 64, ValueSize);
 
         {
             byte* buf = stackalloc byte[ValueSize];
@@ -397,9 +397,9 @@ public unsafe class RawValueHashMap_PointBenchmarks
         }
 
         // ─── Typed HashMap baseline ─────────────────────────────────
-        int typedStride = HashMap<long, int, PersistentStore>.RecommendedStride();
+        int typedStride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
         _typedSegment = _helper.Pmmf.AllocateChunkBasedSegment(PageBlockType.None, 3000, typedStride);
-        _typedMap = HashMap<long, int, PersistentStore>.Create(_typedSegment);
+        _typedMap = PagedHashMap<long, int, PersistentStore>.Create(_typedSegment);
 
         {
             var acc = _typedSegment.CreateChunkAccessor();

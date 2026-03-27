@@ -7,19 +7,19 @@ using System.Runtime.InteropServices;
 namespace Typhon.Engine.Tests;
 
 [TestFixture]
-public class InMemoryHashMapTests
+public class HashMapTests
 {
     // Reuse BitmapTestServices — same DI setup (ResourceRegistry + MemoryAllocator)
     private static IMemoryAllocator Allocator => BitmapTestServices.MemoryAllocator;
     private static IResource Parent => BitmapTestServices.AllocationResource;
 
-    private static InMemoryHashMap<int> CreateSet(int initialBuckets = 64) =>
+    private static HashMap<int> CreateSet(int initialBuckets = 64) =>
         new("TestSet", Parent, Allocator, initialBuckets);
 
-    private static InMemoryHashMap<int, int> CreateMap(int initialBuckets = 64) =>
+    private static HashMap<int, int> CreateMap(int initialBuckets = 64) =>
         new("TestMap", Parent, Allocator, initialBuckets);
 
-    private static InMemoryHashMap<int, string> CreateManagedMap(int initialBuckets = 64) =>
+    private static HashMap<int, string> CreateManagedMap(int initialBuckets = 64) =>
         new("TestManagedMap", Parent, Allocator, initialBuckets);
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -114,7 +114,7 @@ public class InMemoryHashMapTests
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // InMemoryHashMap<TKey> — Set variant
+    // HashMap<TKey> — Set variant
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
@@ -366,7 +366,7 @@ public class InMemoryHashMapTests
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // InMemoryHashMap<TKey, TValue> — Map variant (unmanaged TValue)
+    // HashMap<TKey, TValue> — Map variant (unmanaged TValue)
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
@@ -629,7 +629,7 @@ public class InMemoryHashMapTests
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // InMemoryHashMap<TKey, TValue> — TryUpdate
+    // HashMap<TKey, TValue> — TryUpdate
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
@@ -676,7 +676,7 @@ public class InMemoryHashMapTests
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // InMemoryHashMap<TKey, TValue> — Map variant (managed TValue)
+    // HashMap<TKey, TValue> — Map variant (managed TValue)
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]

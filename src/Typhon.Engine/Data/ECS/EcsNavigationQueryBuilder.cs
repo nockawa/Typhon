@@ -141,7 +141,7 @@ public unsafe class EcsNavigationQueryBuilder<TSourceArch, TSource, TTarget> whe
     }
 
     /// <summary>Collects visible entity PKs from EntityMap enumeration.</summary>
-    private struct TargetCollector : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
+    private struct TargetCollector : RawValuePagedHashMap<long, PersistentStore>.IEntryAction<long>
     {
         public ushort ArchetypeId;
         public List<long> TargetPKs;

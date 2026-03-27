@@ -10,21 +10,21 @@ namespace Typhon.Engine;
 
 /// <summary>
 /// Abstract base class for hash maps. Provides meta management, directory addressing, bucket resolution, split lock, and factory scaffolding.
-/// Concrete class <see cref="HashMap{TKey, TValue}"/> provides JIT-specialized hash functions via sizeof(TKey) branching.
+/// Concrete class <see cref="PagedHashMap{TKey,TValue,TStore}"/> provides JIT-specialized hash functions via sizeof(TKey) branching.
 /// </summary>
-abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
+public abstract unsafe partial class PagedHashMapBase<TStore> where TStore : struct, IPageStore
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Fields
     // ═══════════════════════════════════════════════════════════════════════
 
-    protected readonly ChunkBasedSegment<TStore> _segment;
+    private readonly ChunkBasedSegment<TStore> _segment;
 
     /// <summary>Initial bucket count (power of 2). Immutable after construction.</summary>
-    protected readonly int _n0;
+    private readonly int _n0;
 
     /// <summary>Atomic packed meta: Level(8) | Next(24) | BucketCount(32). Use <see cref="ReadMeta"/> to decode.</summary>
-    protected long _packedMeta;
+    protected long PackedMeta;
 
     /// <summary>Total entry count. Updated via <see cref="Interlocked"/>.</summary>
     protected long _entryCount;
@@ -42,7 +42,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     internal long _writeLockFailures;
 
     /// <summary>Maximum load factor before triggering a split.</summary>
-    protected const double MaxLoadFactor = 0.75;
+    private const double MaxLoadFactor = 0.75;
 
     /// <summary>Whether this hash map supports multiple values per key via VSBS buffer indirection.</summary>
     protected readonly bool _allowMultiple;
@@ -51,7 +51,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    protected HashMapBase(ChunkBasedSegment<TStore> segment, int n0, bool allowMultiple = false)
+    protected PagedHashMapBase(ChunkBasedSegment<TStore> segment, int n0, bool allowMultiple = false)
     {
         Debug.Assert(segment != null);
         Debug.Assert(n0 > 0 && BitOperations.IsPow2(n0), "N0 must be a positive power of 2");
@@ -154,7 +154,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected (int Level, int Next, int BucketCount) ReadMeta()
     {
-        long packed = _packedMeta;
+        long packed = PackedMeta;
         return UnpackMeta(packed);
     }
 
@@ -165,16 +165,16 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int GetDirectoryChunkId(int dirIndex, ref ChunkAccessor<TStore> accessor)
     {
-        ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
+        ref readonly var meta = ref accessor.GetChunkReadOnly<PagedHashMapMeta>(0);
 
-        if (dirIndex < HashMapMeta.MaxInlineDirectoryChunks)
+        if (dirIndex < PagedHashMapMeta.MaxInlineDirectoryChunks)
         {
             return meta.DirectoryChunkIds[dirIndex];
         }
 
         // Overflow path: walk the overflow dir-index chain
         int overflowChunkId = meta.OverflowDirIndexChunkId;
-        int remaining = dirIndex - HashMapMeta.MaxInlineDirectoryChunks;
+        int remaining = dirIndex - PagedHashMapMeta.MaxInlineDirectoryChunks;
 
         while (remaining >= OverflowDirIndex.EntriesPerChunk)
         {
@@ -193,12 +193,12 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected int GetBucketChunkId(int bucketId, ref ChunkAccessor<TStore> accessor)
     {
-        int dirIndex = bucketId >> HashMapDirectory.Shift;  // bucketId / 64
+        int dirIndex = bucketId >> PagedHashMapDirectory.Shift;  // bucketId / 64
         int dirSlot = bucketId & 0x3F;                         // bucketId % 64
 
         int dirChunkId = GetDirectoryChunkId(dirIndex, ref accessor);
 
-        ref readonly var dir = ref accessor.GetChunkReadOnly<HashMapDirectory>(dirChunkId);
+        ref readonly var dir = ref accessor.GetChunkReadOnly<PagedHashMapDirectory>(dirChunkId);
         return dir.BucketChunkIds[dirSlot];
     }
 
@@ -207,12 +207,12 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     /// </summary>
     protected void SetBucketChunkId(int bucketId, int chunkId, ref ChunkAccessor<TStore> accessor)
     {
-        int dirIndex = bucketId >> HashMapDirectory.Shift;
+        int dirIndex = bucketId >> PagedHashMapDirectory.Shift;
         int dirSlot = bucketId & 0x3F;
 
         int dirChunkId = GetDirectoryChunkId(dirIndex, ref accessor);
 
-        ref var dir = ref accessor.GetChunk<HashMapDirectory>(dirChunkId, true);
+        ref var dir = ref accessor.GetChunk<PagedHashMapDirectory>(dirChunkId, true);
         dir.BucketChunkIds[dirSlot] = chunkId;
     }
 
@@ -356,9 +356,9 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     /// </summary>
     protected void EnsureDirectoryCapacity(int maxBucketId, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
-        int requiredDirChunks = (maxBucketId >> HashMapDirectory.Shift) + 1;
+        int requiredDirChunks = (maxBucketId >> PagedHashMapDirectory.Shift) + 1;
 
-        ref var meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+        ref var meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
         int currentCount = meta.DirectoryChunkCount;
 
         if (currentCount >= requiredDirChunks)
@@ -369,23 +369,23 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
         for (int i = currentCount; i < requiredDirChunks; i++)
         {
             int newDirChunkId = _segment.AllocateChunk(true, changeSet);
-            meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+            meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
 
-            if (i < HashMapMeta.MaxInlineDirectoryChunks)
+            if (i < PagedHashMapMeta.MaxInlineDirectoryChunks)
             {
                 meta.DirectoryChunkIds[i] = newDirChunkId;
                 meta.DirectoryChunkCount = (ushort)(i + 1);
             }
             else
             {
-                int overflowOffset = i - HashMapMeta.MaxInlineDirectoryChunks;
+                int overflowOffset = i - PagedHashMapMeta.MaxInlineDirectoryChunks;
                 int targetIdx = overflowOffset / OverflowDirIndex.EntriesPerChunk;
                 int targetSlot = overflowOffset % OverflowDirIndex.EntriesPerChunk;
 
                 if (meta.OverflowDirIndexChunkId == -1)
                 {
                     int ovId = _segment.AllocateChunk(true, changeSet);
-                    meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+                    meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
                     meta.OverflowDirIndexChunkId = ovId;
 
                     ref var ov = ref accessor.GetChunk<OverflowDirIndex>(ovId, true);
@@ -418,7 +418,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
                     target.DirectoryChunkIds[targetSlot] = newDirChunkId;
                 }
 
-                meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+                meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
                 meta.DirectoryChunkCount = (ushort)(i + 1);
             }
         }
@@ -439,13 +439,13 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Persist in-memory <see cref="_packedMeta"/> and <see cref="_entryCount"/> to chunk 0.
+    /// Persist in-memory <see cref="PackedMeta"/> and <see cref="_entryCount"/> to chunk 0.
     /// Called after split or during flush.
     /// </summary>
     protected void FlushMetaToChunk(ref ChunkAccessor<TStore> accessor)
     {
-        ref var meta = ref accessor.GetChunk<HashMapMeta>(0, true);
-        meta.PackedMeta = _packedMeta;
+        ref var meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
+        meta.PackedMeta = PackedMeta;
         meta.EntryCount = _entryCount;
     }
 
@@ -466,7 +466,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
         var accessor = _segment.CreateChunkAccessor(changeSet);
         try
         {
-            ref var meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+            ref var meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
 
             // Write immutable fields
             meta.N0 = _n0;
@@ -474,7 +474,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
             meta.Flags = (byte)(_allowMultiple ? 1 : 0);
 
             // Compute how many directory chunks we need: ceil(initialBuckets / 64)
-            int dirChunkCount = (initialBuckets + HashMapDirectory.EntriesPerChunk - 1) / HashMapDirectory.EntriesPerChunk;
+            int dirChunkCount = (initialBuckets + PagedHashMapDirectory.EntriesPerChunk - 1) / PagedHashMapDirectory.EntriesPerChunk;
 
             // Allocate directory chunks and store their IDs in meta
             for (int i = 0; i < dirChunkCount; i++)
@@ -482,7 +482,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
                 int dirChunkId = _segment.AllocateChunk(true, changeSet);
 
                 // Re-obtain meta ref after allocation — AllocateChunk may trigger page eviction
-                meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+                meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
                 meta.DirectoryChunkIds[i] = dirChunkId;
             }
 
@@ -494,26 +494,26 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
                 int bucketChunkId = _segment.AllocateChunk(true, changeSet);
 
                 // Re-obtain meta ref after allocation
-                meta = ref accessor.GetChunk<HashMapMeta>(0, true);
+                meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
 
                 // Initialize the bucket
                 InitializeBucket(bucketChunkId, ref accessor);
 
                 // Register bucket in directory
-                int dirIndex = b >> HashMapDirectory.Shift;
+                int dirIndex = b >> PagedHashMapDirectory.Shift;
                 int dirSlot = b & 0x3F;
                 int dirChunkId = meta.DirectoryChunkIds[dirIndex];
-                ref var dir = ref accessor.GetChunk<HashMapDirectory>(dirChunkId, true);
+                ref var dir = ref accessor.GetChunk<PagedHashMapDirectory>(dirChunkId, true);
                 dir.BucketChunkIds[dirSlot] = bucketChunkId;
             }
 
             // Write initial packed meta: level=0, next=0, bucketCount=initialBuckets
-            _packedMeta = PackMeta(0, 0, initialBuckets);
+            PackedMeta = PackMeta(0, 0, initialBuckets);
             _entryCount = 0;
 
             // Persist to chunk 0
-            meta = ref accessor.GetChunk<HashMapMeta>(0, true);
-            meta.PackedMeta = _packedMeta;
+            meta = ref accessor.GetChunk<PagedHashMapMeta>(0, true);
+            meta.PackedMeta = PackedMeta;
             meta.EntryCount = 0;
         }
         finally
@@ -523,19 +523,19 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     }
 
     /// <summary>
-    /// Reconnect to an existing linear hash map by reading <see cref="_packedMeta"/> and <see cref="_entryCount"/> from chunk 0.
+    /// Reconnect to an existing linear hash map by reading <see cref="PackedMeta"/> and <see cref="_entryCount"/> from chunk 0.
     /// </summary>
     protected void InitializeOpen()
     {
         var accessor = _segment.CreateChunkAccessor();
         try
         {
-            ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
+            ref readonly var meta = ref accessor.GetChunkReadOnly<PagedHashMapMeta>(0);
 
             Debug.Assert(meta.N0 == _n0, "N0 mismatch between meta chunk and constructor parameter");
             Debug.Assert(((meta.Flags & 1) != 0) == _allowMultiple, "AllowMultiple mismatch between meta chunk and constructor parameter");
 
-            _packedMeta = meta.PackedMeta;
+            PackedMeta = meta.PackedMeta;
             _entryCount = meta.EntryCount;
         }
         finally
@@ -554,7 +554,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     /// </summary>
     public bool VerifyIntegrity(ref ChunkAccessor<TStore> accessor)
     {
-        ref readonly var meta = ref accessor.GetChunkReadOnly<HashMapMeta>(0);
+        ref readonly var meta = ref accessor.GetChunkReadOnly<PagedHashMapMeta>(0);
         if (meta.N0 != _n0 || meta.N0 <= 0 || !BitOperations.IsPow2(meta.N0))
         {
             return false;
@@ -576,7 +576,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
                     return false; // cycle detection
                 }
 
-                ref readonly var header = ref Unsafe.AsRef<HashMapBucketHeader>(accessor.GetChunkAddress(chunkId));
+                ref readonly var header = ref Unsafe.AsRef<PagedHashMapBucketHeader>(accessor.GetChunkAddress(chunkId));
                 if (header.EntryCount > BucketCapacity)
                 {
                     return false;
@@ -593,10 +593,10 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
     /// <summary>
     /// Collect diagnostic statistics: bucket count, entry distribution, overflow chain depths, fill histogram.
     /// </summary>
-    public HashMapStats GetStats(ref ChunkAccessor<TStore> accessor)
+    public PagedHashMapStats GetStats(ref ChunkAccessor<TStore> accessor)
     {
         var (_, _, bucketCount) = ReadMeta();
-        var stats = new HashMapStats
+        var stats = new PagedHashMapStats
         {
             BucketCount = bucketCount,
             EntryCount = _entryCount
@@ -605,7 +605,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
         for (int b = 0; b < bucketCount; b++)
         {
             int chunkId = GetBucketChunkId(b, ref accessor);
-            ref readonly var primary = ref Unsafe.AsRef<HashMapBucketHeader>(accessor.GetChunkAddress(chunkId));
+            ref readonly var primary = ref Unsafe.AsRef<PagedHashMapBucketHeader>(accessor.GetChunkAddress(chunkId));
             int primaryEntryCount = primary.EntryCount;
 
             // Fill histogram (primary bucket only)
@@ -647,7 +647,7 @@ abstract unsafe class HashMapBase<TStore> where TStore : struct, IPageStore
                     {
                         break; // cycle detection
                     }
-                    ref readonly var overflow = ref Unsafe.AsRef<HashMapBucketHeader>(accessor.GetChunkAddress(overflowId));
+                    ref readonly var overflow = ref Unsafe.AsRef<PagedHashMapBucketHeader>(accessor.GetChunkAddress(overflowId));
                     overflowId = overflow.OverflowChunkId;
                 }
             }

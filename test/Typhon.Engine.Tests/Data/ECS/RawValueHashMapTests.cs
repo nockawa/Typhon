@@ -5,7 +5,7 @@ using System;
 
 namespace Typhon.Engine.Tests;
 
-unsafe class RawValueHashMapTests
+unsafe class RawValuePagedHashMapTests
 {
     private IServiceProvider _serviceProvider;
     private string CurrentDatabaseName => $"{TestContext.CurrentContext.Test.Name.Replace("(", "_").Replace(")", "_").Replace(",", "_")}_database";
@@ -49,14 +49,14 @@ unsafe class RawValueHashMapTests
     [Test]
     public void RecommendedStride_SmallValue_256()
     {
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(22);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(22);
         Assert.That(stride, Is.EqualTo(256));
     }
 
     [Test]
     public void RecommendedStride_LargeValue_512()
     {
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(78);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(78);
         Assert.That(stride, Is.EqualTo(512));
     }
 
@@ -70,10 +70,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(2); // 22 bytes
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         // Build entity record
         byte* record = stackalloc byte[valueSize];
@@ -115,10 +115,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(2);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         // Insert 10 entries
         byte* record = stackalloc byte[valueSize];
@@ -160,10 +160,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(1);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         byte* record = stackalloc byte[valueSize];
         EntityRecordAccessor.InitializeRecord(record, 1);
@@ -189,10 +189,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(2);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         byte* record = stackalloc byte[valueSize];
         EntityRecordAccessor.InitializeRecord(record, 2);
@@ -230,10 +230,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(1);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         byte* record = stackalloc byte[valueSize];
         EntityRecordAccessor.InitializeRecord(record, 1);
@@ -264,10 +264,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(1);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         using (EpochGuard.Enter(em))
         {
@@ -288,10 +288,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(2);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
         int initialBucketCount = map.BucketCount;
 
         byte* record = stackalloc byte[valueSize];
@@ -334,11 +334,11 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(2);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, stride);
 
         // n0=4 so level advancement happens quickly
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         // Insert 20 entries
         byte* record = stackalloc byte[valueSize];
@@ -388,10 +388,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(2);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         // Pre-allocate for 200 entries
         using (EpochGuard.Enter(em))
@@ -447,10 +447,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(componentCount);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         byte* record = stackalloc byte[valueSize];
         EntityRecordAccessor.InitializeRecord(record, componentCount);
@@ -495,10 +495,10 @@ unsafe class RawValueHashMapTests
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         var em = _serviceProvider.GetRequiredService<EpochManager>();
         int valueSize = EntityRecordAccessor.RecordSize(1);
-        int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(valueSize);
+        int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(valueSize);
         var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, stride);
 
-        var map = RawValueHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
+        var map = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 4, valueSize);
 
         long largeTsn = (1L << 47) - 1;
 

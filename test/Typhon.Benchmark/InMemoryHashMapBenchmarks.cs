@@ -7,13 +7,13 @@ using Typhon.Engine;
 namespace Typhon.Benchmark;
 
 /// <summary>
-/// Benchmarks comparing InMemoryHashMap against .NET's Dictionary and HashSet.
+/// Benchmarks comparing HashMap against .NET's Dictionary and HashSet.
 /// Parameterized on N (entry count) and BucketCap (entries per slot).
 /// </summary>
 [MemoryDiagnoser]
 [SimpleJob(warmupCount: 2, iterationCount: 3)]
 [BenchmarkCategory("Collections")]
-public class InMemoryHashMapBenchmarks
+public class HashMapBenchmarks
 {
     [Params(100, 1_000, 100_000)]
     public int N;
@@ -31,8 +31,8 @@ public class InMemoryHashMapBenchmarks
     // Pre-populated for lookup benchmarks
     private Dictionary<int, int> _dictPopulated;
     private HashSet<int> _hashSetPopulated;
-    private InMemoryHashMap<int, int> _mapPopulated;
-    private InMemoryHashMap<int> _setPopulated;
+    private HashMap<int, int> _mapPopulated;
+    private HashMap<int> _setPopulated;
 
     [GlobalSetup]
     public void GlobalSetup()
@@ -62,8 +62,8 @@ public class InMemoryHashMapBenchmarks
         // Pre-populate for lookup benchmarks
         _dictPopulated = new Dictionary<int, int>(N);
         _hashSetPopulated = new HashSet<int>(N);
-        _mapPopulated = new InMemoryHashMap<int, int>("BenchMap", _parentResource, _memoryAllocator, 64);
-        _setPopulated = new InMemoryHashMap<int>("BenchSet", _parentResource, _memoryAllocator, 64);
+        _mapPopulated = new HashMap<int, int>("BenchMap", _parentResource, _memoryAllocator, 64);
+        _setPopulated = new HashMap<int>("BenchSet", _parentResource, _memoryAllocator, 64);
 
         for (int i = 0; i < N; i++)
         {
@@ -82,7 +82,7 @@ public class InMemoryHashMapBenchmarks
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Add — Dictionary vs InMemoryHashMap<K,V>
+    // Add — Dictionary vs HashMap<K,V>
     // ═══════════════════════════════════════════════════════════════════════
 
     [Benchmark(Description = "Dict.Add")]
@@ -99,9 +99,9 @@ public class InMemoryHashMapBenchmarks
 
     [Benchmark(Description = "Map.Add")]
     [BenchmarkCategory("Add")]
-    public InMemoryHashMap<int, int> Map_Add()
+    public HashMap<int, int> Map_Add()
     {
-        var map = new InMemoryHashMap<int, int>("B", _parentResource, _memoryAllocator, 64);
+        var map = new HashMap<int, int>("B", _parentResource, _memoryAllocator, 64);
         for (int i = 0; i < N; i++)
         {
             map.TryAdd(_keys[i], i);
@@ -110,7 +110,7 @@ public class InMemoryHashMapBenchmarks
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Add — HashSet vs InMemoryHashMap<K>
+    // Add — HashSet vs HashMap<K>
     // ═══════════════════════════════════════════════════════════════════════
 
     [Benchmark(Description = "HSet.Add")]
@@ -127,9 +127,9 @@ public class InMemoryHashMapBenchmarks
 
     [Benchmark(Description = "Set.Add")]
     [BenchmarkCategory("Add")]
-    public InMemoryHashMap<int> Set_Add()
+    public HashMap<int> Set_Add()
     {
-        var set = new InMemoryHashMap<int>("B", _parentResource, _memoryAllocator, 64);
+        var set = new HashMap<int>("B", _parentResource, _memoryAllocator, 64);
         for (int i = 0; i < N; i++)
         {
             set.TryAdd(_keys[i]);

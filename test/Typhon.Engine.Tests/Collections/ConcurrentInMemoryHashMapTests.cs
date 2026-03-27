@@ -9,16 +9,16 @@ using System.Threading;
 namespace Typhon.Engine.Tests;
 
 [TestFixture]
-public class ConcurrentInMemoryHashMapTests
+public class ConcurrentHashMapTests
 {
     private static IMemoryAllocator Allocator => BitmapTestServices.MemoryAllocator;
     private static IResource Parent => BitmapTestServices.AllocationResource;
 
-    private static ConcurrentInMemoryHashMap<int> CreateSet(int initialCapacity = 1024) => new("TestConcSet", Parent, Allocator, initialCapacity);
+    private static ConcurrentHashMap<int> CreateSet(int initialCapacity = 1024) => new("TestConcSet", Parent, Allocator, initialCapacity);
 
-    private static ConcurrentInMemoryHashMap<int, int> CreateMap(int initialCapacity = 1024) => new("TestConcMap", Parent, Allocator, initialCapacity);
+    private static ConcurrentHashMap<int, int> CreateMap(int initialCapacity = 1024) => new("TestConcMap", Parent, Allocator, initialCapacity);
 
-    private static ConcurrentInMemoryHashMap<int, string> CreateManagedMap(int initialCapacity = 1024) => new("TestConcManagedMap", Parent, Allocator, initialCapacity);
+    private static ConcurrentHashMap<int, string> CreateManagedMap(int initialCapacity = 1024) => new("TestConcManagedMap", Parent, Allocator, initialCapacity);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Single-threaded: Set variant

@@ -115,7 +115,7 @@ internal class ArchetypeEngineState
     public ComponentTable[] SlotToComponentTable;
 
     /// <summary>Per-archetype HashMap storing EntityRecords keyed by EntityKey (long). Backed by THIS engine's MMF.</summary>
-    public RawValueHashMap<long, PersistentStore> EntityMap;
+    public RawValuePagedHashMap<long, PersistentStore> EntityMap;
 
     /// <summary>Monotonic entity key counter. Use Interlocked.Increment for thread-safe generation.</summary>
     public long NextEntityKey;

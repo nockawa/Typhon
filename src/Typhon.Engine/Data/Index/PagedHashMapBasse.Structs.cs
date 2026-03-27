@@ -13,7 +13,7 @@ namespace Typhon.Engine;
 /// </para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4, Size = 256)]
-unsafe struct HashMapMeta
+struct PagedHashMapMeta
 {
     public const int MaxInlineDirectoryChunks = 57;
 
@@ -38,21 +38,21 @@ unsafe struct HashMapMeta
     public byte Reserved;
 
     /// <summary>Inline directory chunk IDs. Covers up to 57 × 64 = 3,648 buckets.</summary>
-    public fixed int DirectoryChunkIds[MaxInlineDirectoryChunks]; // 57 × 4 = 228 bytes
+    public unsafe fixed int DirectoryChunkIds[MaxInlineDirectoryChunks]; // 57 × 4 = 228 bytes
     // Total: 4 + 4 + 8 + 8 + 2 + 1 + 1 + 228 = 256 bytes
 }
 
 /// <summary>
-/// Directory chunk — a flat array of 64 bucket chunk IDs. Headerless; role is determined by position in the meta's <see cref="HashMapMeta.DirectoryChunkIds"/> array.
+/// Directory chunk — a flat array of 64 bucket chunk IDs. Headerless; role is determined by position in the meta's <see cref="PagedHashMapMeta.DirectoryChunkIds"/> array.
 /// <para>Power-of-2 entries per chunk enables shift+mask arithmetic for bucket addressing.</para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Size = 256)]
-unsafe struct HashMapDirectory
+struct PagedHashMapDirectory
 {
     public const int EntriesPerChunk = 64; // power of 2
-    public const int Shift = 6;           // log2(64)
+    public const int Shift = 6; // log2(64)
 
-    public fixed int BucketChunkIds[EntriesPerChunk]; // 64 × 4 = 256 bytes
+    public unsafe fixed int BucketChunkIds[EntriesPerChunk]; // 64 × 4 = 256 bytes
 }
 
 /// <summary>
@@ -61,14 +61,14 @@ unsafe struct HashMapDirectory
 /// <para>Each overflow chunk holds 63 directory chunk IDs, covering 63 × 64 = 4,032 additional buckets.</para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4, Size = 256)]
-unsafe struct OverflowDirIndex
+struct OverflowDirIndex
 {
     public const int EntriesPerChunk = 63;
 
     /// <summary>Next overflow dir-index chunk ID, or -1 for end of chain.</summary>
     public int NextOverflowChunkId;
 
-    public fixed int DirectoryChunkIds[EntriesPerChunk]; // 63 × 4 = 252 bytes
+    public unsafe fixed int DirectoryChunkIds[EntriesPerChunk]; // 63 × 4 = 252 bytes
     // Total: 4 + 252 = 256 bytes
 }
 
@@ -78,14 +78,17 @@ unsafe struct OverflowDirIndex
 /// <para>OlcVersion at offset 0 enables per-bucket optimistic lock coupling.</para>
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4, Size = 12)]
-struct HashMapBucketHeader
+struct PagedHashMapBucketHeader
 {
     /// <summary>OLC latch: bit0=locked, bit1=obsolete, bits2-31=version.</summary>
     public int OlcVersion;
+
     /// <summary>Number of live entries in this bucket chunk.</summary>
     public byte EntryCount;
+
     public byte Flags;
     public short Reserved;
+
     /// <summary>Overflow chunk ID, or -1 if no overflow.</summary>
     public int OverflowChunkId;
 }
@@ -94,24 +97,31 @@ struct HashMapBucketHeader
 /// Diagnostic statistics for a linear hash map.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-struct HashMapStats
+public struct PagedHashMapStats
 {
     public int BucketCount;
     public long EntryCount;
+
     /// <summary>Primary buckets with OverflowChunkId != -1.</summary>
     public int OverflowBucketCount;
+
     /// <summary>Longest chain (1 = primary only, 2+ = has overflow).</summary>
     public int MaxChainLength;
+
     public double LoadFactor;
 
     /// <summary>Bucket fill distribution: empty buckets.</summary>
     public int FillEmpty;
+
     /// <summary>Bucket fill distribution: 1-25% full.</summary>
     public int FillQuarter;
+
     /// <summary>Bucket fill distribution: 26-50% full.</summary>
     public int FillHalf;
+
     /// <summary>Bucket fill distribution: 51-75% full.</summary>
     public int FillThreeQuarter;
+
     /// <summary>Bucket fill distribution: 76-100% full.</summary>
     public int FillFull;
 }

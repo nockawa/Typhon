@@ -1797,7 +1797,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // Allocate or reload per-archetype entity storage (RawValueHashMap) on THIS engine's MMF
-            int stride = RawValueHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
+            int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
 
             // Skip O(1) EntityMap reopen if any of this archetype's component tables underwent migration.
             // Migration creates new segments with preserved chunk IDs, but the persisted EntityMap
@@ -1815,7 +1815,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 && MMF.TryLoadChunkBasedSegment(persisted.Arch.EntityMapSPI, stride, out var loadedSegment))
             {
                 // Reload existing EntityMap from persisted segment (O(1) reopen)
-                var em = RawValueHashMap<long, PersistentStore>.Open(loadedSegment, 256, meta._entityRecordSize);
+                var em = RawValuePagedHashMap<long, PersistentStore>.Open(loadedSegment, 256, meta._entityRecordSize);
                 _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
                 {
                     SlotToComponentTable = slotToTable,
@@ -1832,7 +1832,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 _archetypeStates[meta.ArchetypeId] = new ArchetypeEngineState
                 {
                     SlotToComponentTable = slotToTable,
-                    EntityMap = RawValueHashMap<long, PersistentStore>.Create(segment, 256, meta._entityRecordSize),
+                    EntityMap = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 256, meta._entityRecordSize),
                     NextEntityKey = 0,
                 };
             }

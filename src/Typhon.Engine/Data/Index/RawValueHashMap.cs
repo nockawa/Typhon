@@ -8,14 +8,14 @@ namespace Typhon.Engine;
 
 /// <summary>
 /// Page-backed hash map with unmanaged key type and runtime-configured value size.
-/// Identical to <see cref="HashMap{TKey,TValue,TStore}"/> except values are accessed as raw <c>byte*</c>
+/// Identical to <see cref="PagedHashMap{TKey,TValue,TStore}"/> except values are accessed as raw <c>byte*</c>
 /// pointers with <see cref="Unsafe.CopyBlock"/> instead of typed <c>ref TValue</c>.
 /// <para>
 /// Designed for entity records whose size varies per archetype (14 + componentCount × 4 bytes).
 /// Bucket layout: [Header 12B] [Key₀..Key_{cap-1}] [Val₀..Val_{cap-1}].
 /// </para>
 /// </summary>
-unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TStore : struct, IPageStore
+unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TStore : struct, IPageStore
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Layout fields (computed once at construction)
@@ -30,14 +30,14 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    private RawValueHashMap(ChunkBasedSegment<TStore> segment, int n0, int valueSize) : base(segment, n0)
+    private RawValuePagedHashMap(ChunkBasedSegment<TStore> segment, int n0, int valueSize) : base(segment, n0)
     {
         Debug.Assert(valueSize > 0, "Value size must be positive");
         _valueSize = valueSize;
-        _bucketCapacity = (segment.Stride - sizeof(HashMapBucketHeader)) / (sizeof(TKey) + valueSize);
+        _bucketCapacity = (segment.Stride - sizeof(PagedHashMapBucketHeader)) / (sizeof(TKey) + valueSize);
         Debug.Assert(_bucketCapacity >= 1, $"Stride {segment.Stride} too small for entry size {sizeof(TKey) + valueSize}");
-        _keysOffset = sizeof(HashMapBucketHeader);
-        _valuesOffset = sizeof(HashMapBucketHeader) + _bucketCapacity * sizeof(TKey);
+        _keysOffset = sizeof(PagedHashMapBucketHeader);
+        _valuesOffset = sizeof(PagedHashMapBucketHeader) + _bucketCapacity * sizeof(TKey);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -59,11 +59,11 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     public static int RecommendedStride(int valueSize, int minCapacity = 4)
     {
         int entrySize = sizeof(TKey) + valueSize;
-        if ((256 - sizeof(HashMapBucketHeader)) / entrySize >= minCapacity)
+        if ((256 - sizeof(PagedHashMapBucketHeader)) / entrySize >= minCapacity)
         {
             return 256;
         }
-        if ((512 - sizeof(HashMapBucketHeader)) / entrySize >= minCapacity)
+        if ((512 - sizeof(PagedHashMapBucketHeader)) / entrySize >= minCapacity)
         {
             return 512;
         }
@@ -75,7 +75,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     // ═══════════════════════════════════════════════════════════════════════
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ref HashMapBucketHeader GetHeader(byte* chunkAddr) => ref Unsafe.AsRef<HashMapBucketHeader>(chunkAddr);
+    private static ref PagedHashMapBucketHeader GetHeader(byte* chunkAddr) => ref Unsafe.AsRef<PagedHashMapBucketHeader>(chunkAddr);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private TKey* KeysPtr(byte* chunkAddr) => (TKey*)(chunkAddr + _keysOffset);
@@ -242,9 +242,9 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
         while (true)
         {
-            long packed = _packedMeta;
+            long packed = PackedMeta;
             var (level, next, _) = UnpackMeta(packed);
-            int bucket = ResolveBucket(hash, level, next, _n0);
+            int bucket = ResolveBucket(hash, level, next, N0);
             int chunkId = GetBucketChunkId(bucket, ref accessor);
 
             byte* addr = accessor.GetChunkAddress(chunkId);
@@ -271,7 +271,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
                 continue;
             }
 
-            if (!found && _packedMeta != packed)
+            if (!found && PackedMeta != packed)
             {
                 Interlocked.Increment(ref _olcRestarts);
                 continue;
@@ -292,9 +292,9 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
         while (true)
         {
-            long packed = _packedMeta;
+            long packed = PackedMeta;
             var (level, next, _) = UnpackMeta(packed);
-            int bucket = ResolveBucket(hash, level, next, _n0);
+            int bucket = ResolveBucket(hash, level, next, N0);
             int chunkId = GetBucketChunkId(bucket, ref accessor);
 
             byte* addr = accessor.GetChunkAddress(chunkId);
@@ -317,7 +317,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
                 continue;
             }
 
-            if (!found && _packedMeta != packed)
+            if (!found && PackedMeta != packed)
             {
                 Interlocked.Increment(ref _olcRestarts);
                 continue;
@@ -356,7 +356,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
             }
 
             // Allocate overflow — re-fetch current chunk after (AllocateChunk may remap segment)
-            int overflowChunkId = _segment.AllocateChunk(true, changeSet);
+            int overflowChunkId = Segment.AllocateChunk(true, changeSet);
             addr = accessor.GetChunkAddress(chunkId, true);
             GetHeader(addr).OverflowChunkId = overflowChunkId;
 
@@ -404,7 +404,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
                         int nextOverflow = header.OverflowChunkId;
                         byte* prevAddr = accessor.GetChunkAddress(prevChunkId, true);
                         GetHeader(prevAddr).OverflowChunkId = nextOverflow;
-                        _segment.FreeChunk(chunkId);
+                        Segment.FreeChunk(chunkId);
                     }
 
                     return true;
@@ -457,9 +457,9 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
         while (true)
         {
-            long packed = _packedMeta;
+            long packed = PackedMeta;
             var (level, next, _) = UnpackMeta(packed);
-            int bucket = ResolveBucket(hash, level, next, _n0);
+            int bucket = ResolveBucket(hash, level, next, N0);
             int chunkId = GetBucketChunkId(bucket, ref accessor);
 
             byte* addr = accessor.GetChunkAddress(chunkId, true);
@@ -470,7 +470,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
                 continue;
             }
 
-            if (_packedMeta != packed)
+            if (PackedMeta != packed)
             {
                 latch.AbortWriteLock();
                 continue;
@@ -505,9 +505,9 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
         while (true)
         {
-            long packed = _packedMeta;
+            long packed = PackedMeta;
             var (level, next, _) = UnpackMeta(packed);
-            int bucket = ResolveBucket(hash, level, next, _n0);
+            int bucket = ResolveBucket(hash, level, next, N0);
             int chunkId = GetBucketChunkId(bucket, ref accessor);
 
             byte* addr = accessor.GetChunkAddress(chunkId, true);
@@ -518,7 +518,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
                 continue;
             }
 
-            if (_packedMeta != packed)
+            if (PackedMeta != packed)
             {
                 latch.AbortWriteLock();
                 continue;
@@ -544,9 +544,9 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
         while (true)
         {
-            long packed = _packedMeta;
+            long packed = PackedMeta;
             var (level, next, _) = UnpackMeta(packed);
-            int bucket = ResolveBucket(hash, level, next, _n0);
+            int bucket = ResolveBucket(hash, level, next, N0);
             int chunkId = GetBucketChunkId(bucket, ref accessor);
 
             byte* addr = accessor.GetChunkAddress(chunkId, true);
@@ -557,7 +557,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
                 continue;
             }
 
-            if (_packedMeta != packed)
+            if (PackedMeta != packed)
             {
                 latch.AbortWriteLock();
                 continue;
@@ -589,9 +589,9 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
         while (true)
         {
-            long packed = _packedMeta;
+            long packed = PackedMeta;
             var (level, next, _) = UnpackMeta(packed);
-            int bucket = ResolveBucket(hash, level, next, _n0);
+            int bucket = ResolveBucket(hash, level, next, N0);
             int chunkId = GetBucketChunkId(bucket, ref accessor);
 
             byte* addr = accessor.GetChunkAddress(chunkId, true);
@@ -602,7 +602,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
                 continue;
             }
 
-            if (_packedMeta != packed)
+            if (PackedMeta != packed)
             {
                 latch.AbortWriteLock();
                 continue;
@@ -618,7 +618,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
             latch.AbortWriteLock();
 
-            if (_packedMeta != packed)
+            if (PackedMeta != packed)
             {
                 continue;
             }
@@ -634,7 +634,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     protected override void ExecuteSplit(ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         var (level, next, bucketCount) = ReadMeta();
-        int mod = _n0 << level;
+        int mod = N0 << level;
         int newMod = mod << 1;
         int oldBucketId = next;
         int newBucketId = next + mod;
@@ -711,7 +711,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
         RewriteBucket(oldChunkId, keepKeys, keepValues, keepCount, ref accessor, changeSet);
 
         // Allocate and write new bucket
-        int newChunkId = _segment.AllocateChunk(true, changeSet);
+        int newChunkId = Segment.AllocateChunk(true, changeSet);
         WriteBucket(newChunkId, moveKeys, moveValues, moveCount, ref accessor, changeSet);
 
         EnsureDirectoryCapacity(newBucketId, ref accessor, changeSet);
@@ -721,7 +721,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
         int freeCount = Math.Min(overflowCount, overflowIds.Length);
         for (int i = 0; i < freeCount; i++)
         {
-            _segment.FreeChunk(overflowIds[i]);
+            Segment.FreeChunk(overflowIds[i]);
         }
 
         int newNext = next + 1;
@@ -731,7 +731,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
             newNext = 0;
             newLevel = level + 1;
         }
-        _packedMeta = PackMeta(newLevel, newNext, bucketCount + 1);
+        PackedMeta = PackMeta(newLevel, newNext, bucketCount + 1);
         FlushMetaToChunk(ref accessor);
 
         byte* unlockAddr = accessor.GetChunkAddress(oldChunkId, true);
@@ -795,7 +795,7 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
 
         while (offset < entryCount)
         {
-            int overflowChunkId = _segment.AllocateChunk(true, changeSet);
+            int overflowChunkId = Segment.AllocateChunk(true, changeSet);
 
             byte* prevAddr = accessor.GetChunkAddress(prevChunkId, true);
             GetHeader(prevAddr).OverflowChunkId = overflowChunkId;
@@ -831,8 +831,8 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     internal void InsertDuringRebuild(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         uint hash = ComputeHash(key);
-        var (level, next, _) = UnpackMeta(_packedMeta);
-        int bucket = ResolveBucket(hash, level, next, _n0);
+        var (level, next, _) = UnpackMeta(PackedMeta);
+        int bucket = ResolveBucket(hash, level, next, N0);
         int chunkId = GetBucketChunkId(bucket, ref accessor);
 
         AppendEntry(chunkId, key, value, ref accessor, changeSet);
@@ -845,23 +845,23 @@ unsafe class RawValueHashMap<TKey, TStore> : HashMapBase<TStore> where TKey : un
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>Create a new raw value hash map, allocating meta + directory + initial buckets.</summary>
-    public static RawValueHashMap<TKey, TStore> Create(ChunkBasedSegment<TStore> segment, int n0, int valueSize, ChangeSet changeSet = null)
+    public static RawValuePagedHashMap<TKey, TStore> Create(ChunkBasedSegment<TStore> segment, int n0, int valueSize, ChangeSet changeSet = null)
     {
         Debug.Assert(n0 > 0 && BitOperations.IsPow2(n0), "N0 must be a positive power of 2");
 
         using var guard = EpochGuard.Enter(segment.Store.EpochManager);
 
-        var map = new RawValueHashMap<TKey, TStore>(segment, n0, valueSize);
+        var map = new RawValuePagedHashMap<TKey, TStore>(segment, n0, valueSize);
         map.InitializeCreate(n0, changeSet);
         return map;
     }
 
     /// <summary>Open an existing raw value hash map by reading meta from chunk 0.</summary>
-    public static RawValueHashMap<TKey, TStore> Open(ChunkBasedSegment<TStore> segment, int n0, int valueSize)
+    public static RawValuePagedHashMap<TKey, TStore> Open(ChunkBasedSegment<TStore> segment, int n0, int valueSize)
     {
         using var guard = EpochGuard.Enter(segment.Store.EpochManager);
 
-        var map = new RawValueHashMap<TKey, TStore>(segment, n0, valueSize);
+        var map = new RawValuePagedHashMap<TKey, TStore>(segment, n0, valueSize);
         map.InitializeOpen();
         return map;
     }

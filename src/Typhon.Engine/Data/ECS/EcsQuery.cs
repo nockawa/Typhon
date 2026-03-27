@@ -1023,7 +1023,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     // Broad scan action structs (JIT-specialized callbacks for ForEachEntry)
     // ═══════════════════════════════════════════════════════════════════════
 
-    private struct BroadScanAction : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
+    private struct BroadScanAction : RawValuePagedHashMap<long, PersistentStore>.IEntryAction<long>
     {
         public ArchetypeMetadata Meta;
         public long TxTsn;
@@ -1090,7 +1090,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         }
     }
 
-    private struct BroadScanCollectAction : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
+    private struct BroadScanCollectAction : RawValuePagedHashMap<long, PersistentStore>.IEntryAction<long>
     {
         public ArchetypeMetadata Meta;
         public long TxTsn;

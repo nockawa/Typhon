@@ -74,7 +74,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
         }
     }
 
-    private struct SourceCollector : RawValueHashMap<long, PersistentStore>.IEntryAction<long>
+    private struct SourceCollector : RawValuePagedHashMap<long, PersistentStore>.IEntryAction<long>
     {
         public ushort ArchetypeId;
         public NavigationView<TSource, TTarget> View;

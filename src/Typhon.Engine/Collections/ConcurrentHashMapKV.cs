@@ -7,20 +7,18 @@ using System.Threading;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Thread-safe in-memory hash set using striped open addressing with per-stripe OLC.
-/// Lock-free reads, exclusive writes per stripe. Each stripe is an independent open-addressing table with linear probing and backward-shift deletion
-/// (same internals as <see cref="InMemoryHashMap{TKey}"/>).
+/// Thread-safe in-memory hash map using striped open addressing with per-stripe OLC.
+/// Lock-free reads, exclusive writes per stripe. Each stripe is an independent open-addressing table with linear probing and backward-shift deletion.
 /// <para>
-/// Concurrency protocol:
+/// JIT-specialized dual path via <see cref="RuntimeHelpers.IsReferenceOrContainsReferences{T}"/>:
 /// <list type="bullet">
-///   <item><b>Reads</b>: Lock-free via OLC (Optimistic Lock Coupling). Zero writes to shared state.</item>
-///   <item><b>Writes</b>: Per-stripe exclusive lock via CAS on OlcVersion bit 0.</item>
-///   <item><b>Resize</b>: Per-stripe, under existing write lock. Other stripes remain fully accessible.</item>
+///   <item>Unmanaged TValue: values stored inline in entry array. Zero GC pressure.</item>
+///   <item>Managed TValue: keys in entry array, values in parallel <c>TValue[]</c>.</item>
 /// </list>
 /// </para>
-/// Replaces concurrent <see cref="HashSet{T}"/> usage on hot paths.
+/// Replaces <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/> on hot paths.
 /// </summary>
-public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unmanaged, IEquatable<TKey>
+public unsafe class ConcurrentHashMap<TKey, TValue> : IResource where TKey : unmanaged, IEquatable<TKey>
 {
     private const double MaxLoadFactor = 0.75;
 
@@ -37,6 +35,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         public int ResizeThreshold;
         public byte* Entries;
         public PinnedMemoryBlock Block;
+        public TValue[] ManagedValues;  // managed TValue path only (null for unmanaged)
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -44,7 +43,8 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
     // ═══════════════════════════════════════════════════════════════════════
 
     private readonly IMemoryAllocator _allocator;
-    private readonly int _entryStride;       // bytes per entry: (4 + sizeof(TKey)) aligned to 4
+    private readonly int _entryStride;
+    private readonly int _valueOffset;       // byte offset of value within entry (unmanaged path only)
     private readonly int _stripeCount;
     private readonly int _stripeShift;       // 32 - log2(stripeCount), for stripe selection via hash >> shift
     private readonly Stripe[] _stripes;
@@ -56,7 +56,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    public ConcurrentInMemoryHashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 1024)
+    public ConcurrentHashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 1024)
     {
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(allocator);
@@ -67,7 +67,17 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         CreatedAt = DateTime.UtcNow;
         _allocator = allocator;
 
-        _entryStride = (4 + sizeof(TKey) + 3) & ~3;
+        // Entry layout: [uint hash | TKey key | TValue value(unmanaged only)]
+        _valueOffset = 4 + sizeof(TKey);
+        if (!RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+        {
+            _entryStride = (4 + sizeof(TKey) + Unsafe.SizeOf<TValue>() + 3) & ~3;
+        }
+        else
+        {
+            _entryStride = (4 + sizeof(TKey) + 3) & ~3;
+        }
+
         _stripeCount = Math.Max(64, (int)BitOperations.RoundUpToPowerOf2((uint)Environment.ProcessorCount * 4));
         _stripeShift = 32 - BitOperations.Log2((uint)_stripeCount);
 
@@ -82,6 +92,11 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
             stripe.ResizeThreshold = (int)(perStripeCapacity * MaxLoadFactor);
             stripe.Block = allocator.AllocatePinned($"{Id}/Stripe{i}", this, perStripeCapacity * _entryStride, true, 64);
             stripe.Entries = stripe.Block.DataAsPointer;
+
+            if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+            {
+                stripe.ManagedValues = new TValue[perStripeCapacity];
+            }
         }
 
         parent.RegisterChild(this);
@@ -140,10 +155,10 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
     // Public API
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Add <paramref name="key"/> to the set if not already present. Thread-safe (acquires stripe lock).</summary>
-    /// <returns><c>true</c> if the key was added; <c>false</c> if it already existed.</returns>
+    /// <summary>Add a key-value pair if the key is not already present. Thread-safe (acquires stripe lock).</summary>
+    /// <returns><c>true</c> if the pair was added; <c>false</c> if the key already existed (existing value unchanged).</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryAdd(TKey key)
+    public bool TryAdd(TKey key, TValue value)
     {
         uint hash = HashUtils.ComputeHash(key);
         if (hash == 0)
@@ -175,6 +190,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
                 {
                     *(uint*)entry = hash;
                     *(TKey*)(entry + 4) = key;
+                    WriteValue(ref stripe, entry, idx, value);
                     stripe.Count++;
                     return true;
                 }
@@ -193,9 +209,10 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         }
     }
 
-    /// <summary>Check whether <paramref name="key"/> exists. Lock-free via OLC — zero writes to shared state.</summary>
+    /// <summary>Look up the value for <paramref name="key"/>. Lock-free via OLC — zero writes to shared state.</summary>
+    /// <returns><c>true</c> if found; <c>false</c> if the key is not present.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Contains(TKey key)
+    public bool TryGetValue(TKey key, out TValue value)
     {
         uint hash = HashUtils.ComputeHash(key);
         if (hash == 0)
@@ -219,8 +236,10 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
 
             byte* entries = stripe.Entries;
             int mask = stripe.Mask;
+            TValue[] managedValues = stripe.ManagedValues; // snapshot for managed path
             int idx = (int)(hash & (uint)mask);
             bool found = false;
+            TValue result = default;
 
             while (true)
             {
@@ -234,6 +253,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
 
                 if (h == hash && (*(TKey*)(entry + 4)).Equals(key))
                 {
+                    result = ReadValue(managedValues, entry, idx);
                     found = true;
                     break;
                 }
@@ -245,13 +265,114 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
             {
                 continue;
             }
+            value = result;
             return found;
         }
     }
 
-    /// <summary>Remove <paramref name="key"/> from the set. Thread-safe (acquires stripe lock). Uses backward-shift deletion.</summary>
+    /// <summary>Remove the entry for <paramref name="key"/> and return its value. Thread-safe. Uses backward-shift deletion.</summary>
     /// <returns><c>true</c> if the key was found and removed; <c>false</c> if not present.</returns>
-    public bool TryRemove(TKey key)
+    public bool TryRemove(TKey key, out TValue value)
+    {
+        uint hash = HashUtils.ComputeHash(key);
+        if (hash == 0)
+        {
+            hash = 1;
+        }
+
+        int stripeIdx = (int)(hash >> _stripeShift);
+
+        AcquireStripeLock(ref _stripes[stripeIdx]);
+        try
+        {
+            ref var stripe = ref _stripes[stripeIdx];
+            int idx = (int)(hash & (uint)stripe.Mask);
+            int stride = _entryStride;
+
+            while (true)
+            {
+                byte* entry = stripe.Entries + (long)idx * stride;
+                uint h = *(uint*)entry;
+
+                if (h == 0)
+                {
+                    value = default;
+                    return false;
+                }
+
+                if (h == hash && (*(TKey*)(entry + 4)).Equals(key))
+                {
+                    value = ReadValue(stripe.ManagedValues, entry, idx);
+                    stripe.Count--;
+                    BackwardShiftDelete(ref stripe, idx);
+                    return true;
+                }
+
+                idx = (idx + 1) & stripe.Mask;
+            }
+        }
+        finally
+        {
+            ReleaseStripeLock(ref _stripes[stripeIdx]);
+        }
+    }
+
+    /// <summary>Return the existing value for <paramref name="key"/>, or atomically add <paramref name="value"/> and return it.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public TValue GetOrAdd(TKey key, TValue value)
+    {
+        uint hash = HashUtils.ComputeHash(key);
+        if (hash == 0)
+        {
+            hash = 1;
+        }
+
+        int stripeIdx = (int)(hash >> _stripeShift);
+
+        AcquireStripeLock(ref _stripes[stripeIdx]);
+        try
+        {
+            ref var stripe = ref _stripes[stripeIdx];
+
+            if (stripe.Count >= stripe.ResizeThreshold)
+            {
+                ResizeStripe(ref stripe, stripeIdx, checked(stripe.Capacity * 2));
+            }
+
+            int idx = (int)(hash & (uint)stripe.Mask);
+            int stride = _entryStride;
+
+            while (true)
+            {
+                byte* entry = stripe.Entries + (long)idx * stride;
+                uint h = *(uint*)entry;
+
+                if (h == 0)
+                {
+                    *(uint*)entry = hash;
+                    *(TKey*)(entry + 4) = key;
+                    WriteValue(ref stripe, entry, idx, value);
+                    stripe.Count++;
+                    return value;
+                }
+
+                if (h == hash && (*(TKey*)(entry + 4)).Equals(key))
+                {
+                    return ReadValue(stripe.ManagedValues, entry, idx);
+                }
+
+                idx = (idx + 1) & stripe.Mask;
+            }
+        }
+        finally
+        {
+            ReleaseStripeLock(ref _stripes[stripeIdx]);
+        }
+    }
+
+    /// <summary>Update the value for an existing <paramref name="key"/>. Does not add if missing. Thread-safe.</summary>
+    /// <returns><c>true</c> if the key was found and the value updated; <c>false</c> if the key was not present.</returns>
+    public bool TryUpdate(TKey key, TValue newValue)
     {
         uint hash = HashUtils.ComputeHash(key);
         if (hash == 0)
@@ -280,8 +401,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
 
                 if (h == hash && (*(TKey*)(entry + 4)).Equals(key))
                 {
-                    stripe.Count--;
-                    BackwardShiftDelete(ref stripe, idx);
+                    WriteValue(ref stripe, entry, idx, newValue);
                     return true;
                 }
 
@@ -291,6 +411,120 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         finally
         {
             ReleaseStripeLock(ref _stripes[stripeIdx]);
+        }
+    }
+
+    /// <summary>
+    /// Atomically update the value for <paramref name="key"/> only if the current value equals <paramref name="comparisonValue"/>.
+    /// Compare-and-swap semantics — the check and write happen under the stripe lock.
+    /// </summary>
+    public bool TryUpdate(TKey key, TValue newValue, TValue comparisonValue)
+    {
+        uint hash = HashUtils.ComputeHash(key);
+        if (hash == 0)
+        {
+            hash = 1;
+        }
+
+        int stripeIdx = (int)(hash >> _stripeShift);
+
+        AcquireStripeLock(ref _stripes[stripeIdx]);
+        try
+        {
+            ref var stripe = ref _stripes[stripeIdx];
+            int idx = (int)(hash & (uint)stripe.Mask);
+            int stride = _entryStride;
+
+            while (true)
+            {
+                byte* entry = stripe.Entries + (long)idx * stride;
+                uint h = *(uint*)entry;
+
+                if (h == 0)
+                {
+                    return false;
+                }
+
+                if (h == hash && (*(TKey*)(entry + 4)).Equals(key))
+                {
+                    if (!EqualityComparer<TValue>.Default.Equals(ReadValue(stripe.ManagedValues, entry, idx), comparisonValue))
+                    {
+                        return false;
+                    }
+                    WriteValue(ref stripe, entry, idx, newValue);
+                    return true;
+                }
+
+                idx = (idx + 1) & stripe.Mask;
+            }
+        }
+        finally
+        {
+            ReleaseStripeLock(ref _stripes[stripeIdx]);
+        }
+    }
+
+    /// <summary>Get or set the value for <paramref name="key"/>. Getter is lock-free (OLC); throws <see cref="KeyNotFoundException"/> if missing. Setter acquires stripe lock; adds or overwrites.</summary>
+    public TValue this[TKey key]
+    {
+        get
+        {
+            if (!TryGetValue(key, out TValue value))
+            {
+                throw new KeyNotFoundException($"Key not found: {key}");
+            }
+            return value;
+        }
+        set
+        {
+            uint hash = HashUtils.ComputeHash(key);
+            if (hash == 0)
+            {
+                hash = 1;
+            }
+
+            int stripeIdx = (int)(hash >> _stripeShift);
+
+            AcquireStripeLock(ref _stripes[stripeIdx]);
+            try
+            {
+                ref var stripe = ref _stripes[stripeIdx];
+
+                if (stripe.Count >= stripe.ResizeThreshold)
+                {
+                    ResizeStripe(ref stripe, stripeIdx, checked(stripe.Capacity * 2));
+                }
+
+                int idx = (int)(hash & (uint)stripe.Mask);
+                int stride = _entryStride;
+
+                while (true)
+                {
+                    byte* entry = stripe.Entries + (long)idx * stride;
+                    uint h = *(uint*)entry;
+
+                    if (h == 0)
+                    {
+                        *(uint*)entry = hash;
+                        *(TKey*)(entry + 4) = key;
+                        WriteValue(ref stripe, entry, idx, value);
+                        stripe.Count++;
+                        return;
+                    }
+
+                    if (h == hash && (*(TKey*)(entry + 4)).Equals(key))
+                    {
+                        WriteValue(ref stripe, entry, idx, value);
+                        return;
+                    }
+
+                    idx = (idx + 1) & stripe.Mask;
+                }
+            }
+            finally
+            {
+                ReleaseStripeLock(ref _stripes[stripeIdx]);
+            }
         }
     }
 
@@ -308,6 +542,10 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
             {
                 ref var stripe = ref _stripes[i];
                 new Span<byte>(stripe.Entries, stripe.Capacity * _entryStride).Clear();
+                if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+                {
+                    Array.Clear(stripe.ManagedValues);
+                }
                 stripe.Count = 0;
             }
         }
@@ -320,7 +558,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         }
     }
 
-    /// <summary>Grow all stripes so the set can hold at least <paramref name="minimumEntries"/> without per-stripe resizing.</summary>
+    /// <summary>Grow all stripes so the map can hold at least <paramref name="minimumEntries"/> without per-stripe resizing.</summary>
     public void EnsureCapacity(int minimumEntries)
     {
         int perStripe = Math.Max(4, (int)(minimumEntries / (double)_stripeCount / MaxLoadFactor) + 1);
@@ -356,21 +594,21 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
     /// <summary>Returns a best-effort <see langword="ref struct"/> enumerator. No locks held — may observe partial state under concurrent writes.</summary>
     public Enumerator GetEnumerator() => new(this);
 
-    /// <summary>Best-effort value-type enumerator. Iterates stripes sequentially, no locking.</summary>
+    /// <summary>Best-effort value-type enumerator yielding <c>(TKey Key, TValue Value)</c> tuples. Iterates stripes sequentially, no locking.</summary>
     public ref struct Enumerator
     {
-        private readonly ConcurrentInMemoryHashMap<TKey> _map;
+        private readonly ConcurrentHashMap<TKey, TValue> _map;
         private int _stripeIdx;
         private int _entryIdx;
 
-        internal Enumerator(ConcurrentInMemoryHashMap<TKey> map)
+        internal Enumerator(ConcurrentHashMap<TKey, TValue> map)
         {
             _map = map;
             _stripeIdx = 0;
             _entryIdx = -1;
         }
 
-        public TKey Current { get; private set; }
+        public (TKey Key, TValue Value) Current { get; private set; }
 
         public bool MoveNext()
         {
@@ -383,7 +621,9 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
                     byte* entry = stripe.Entries + (long)_entryIdx * stride;
                     if (*(uint*)entry != 0)
                     {
-                        Current = *(TKey*)(entry + 4);
+                        TKey key = *(TKey*)(entry + 4);
+                        TValue value = _map.ReadValue(stripe.ManagedValues, entry, _entryIdx);
+                        Current = (key, value);
                         return true;
                     }
                 }
@@ -412,6 +652,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
             _stripes[i].Block?.Dispose();
             _stripes[i].Block = null;
             _stripes[i].Entries = null;
+            _stripes[i].ManagedValues = null;
         }
 
         lock (_retiredLock)
@@ -424,6 +665,33 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         }
 
         Parent.RemoveChild(this);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Private — value access (JIT-specialized)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private TValue ReadValue(TValue[] managedValues, byte* entry, int idx)
+    {
+        if (!RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+        {
+            return Unsafe.Read<TValue>(entry + _valueOffset);
+        }
+        return managedValues[idx];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteValue(ref Stripe stripe, byte* entry, int idx, TValue value)
+    {
+        if (!RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+        {
+            Unsafe.Write(entry + _valueOffset, value);
+        }
+        else
+        {
+            stripe.ManagedValues[idx] = value;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -477,7 +745,7 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
     /// On x64, store-store ordering (TSO) guarantees all prior writes are visible before this version bump.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void ReleaseStripeLock(ref Stripe stripe) => stripe.OlcVersion += 1;
+    private static void ReleaseStripeLock(ref Stripe stripe) => stripe.OlcVersion = stripe.OlcVersion + 1;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Private — backward shift deletion (per-stripe)
@@ -506,13 +774,24 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
             if (distI < distJ)
             {
                 Unsafe.CopyBlock(stripe.Entries + (long)idx * stride, entryJ, (uint)stride);
+
+                if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+                {
+                    stripe.ManagedValues[idx] = stripe.ManagedValues[j];
+                }
+
                 idx = j;
             }
 
             j = (j + 1) & mask;
         }
 
+        // Clear the gap
         *(uint*)(stripe.Entries + (long)idx * stride) = 0;
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+        {
+            stripe.ManagedValues[idx] = default;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -526,6 +805,12 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         byte* newEntries = newBlock.DataAsPointer;
         int newMask = newCapacity - 1;
 
+        TValue[] newManagedValues = null;
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
+        {
+            newManagedValues = new TValue[newCapacity];
+        }
+
         for (int i = 0; i < stripe.Capacity; i++)
         {
             byte* entry = stripe.Entries + (long)i * stride;
@@ -538,6 +823,11 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
                     idx = (idx + 1) & newMask;
                 }
                 Unsafe.CopyBlock(newEntries + (long)idx * stride, entry, (uint)stride);
+
+                if (newManagedValues != null)
+                {
+                    newManagedValues[idx] = stripe.ManagedValues[i];
+                }
             }
         }
 
@@ -553,5 +843,10 @@ public unsafe class ConcurrentInMemoryHashMap<TKey> : IResource where TKey : unm
         stripe.Capacity = newCapacity;
         stripe.Mask = newMask;
         stripe.ResizeThreshold = (int)(newCapacity * MaxLoadFactor);
+
+        if (newManagedValues != null)
+        {
+            stripe.ManagedValues = newManagedValues;
+        }
     }
 }
