@@ -1423,6 +1423,36 @@ public unsafe partial class Transaction
                         }
                     }
                 }
+
+                // Insert SV spatial indexes (Transient excluded by schema validation).
+                // Must iterate all component slots (not just svSlots) because spatial-only components// without B+Tree indexes are not in the svSlots array.
+                for (int slot = 0; slot < componentCount; slot++)
+                {
+                    if ((versionedMask & (1 << slot)) != 0)
+                    {
+                        continue; // Versioned — handled by CommitComponentCore
+                    }
+                    var table = engineState.SlotToComponentTable[slot];
+                    if (table.SpatialIndex == null)
+                    {
+                        continue;
+                    }
+                    int chunkId = entry.Loc[slot];
+                    if (chunkId == 0)
+                    {
+                        continue;
+                    }
+                    // Create a temporary component accessor for reading spatial field data
+                    var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+                    try
+                    {
+                        SpatialMaintainer.InsertSpatial((long)entry.Id.RawValue, chunkId, table, ref compAccessor, _changeSet);
+                    }
+                    finally
+                    {
+                        compAccessor.Dispose();
+                    }
+                }
             }
         }
         finally
@@ -1555,12 +1585,12 @@ public unsafe partial class Transaction
 
                 long pk = (long)entityId.RawValue;
 
-                // Check if this archetype has SV indexed components requiring entity record lookup
+                // Check if this archetype has SV indexed or spatial-indexed components requiring entity record lookup
                 bool needsEntityRecord = false;
                 for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
                     var table = engineState.SlotToComponentTable[slot];
-                    if (table?.HasShadowableIndexes == true)
+                    if (table?.HasShadowableIndexes == true || table?.SpatialIndex != null)
                     {
                         needsEntityRecord = true;
                         break;
@@ -1598,16 +1628,22 @@ public unsafe partial class Transaction
                     {
                         MarkComponentDeleted(meta._slotToComponentType[slot], pk);
                     }
-                    else if (table.HasShadowableIndexes && hasRecord)
+                    else if ((table.HasShadowableIndexes || table.SpatialIndex != null) && hasRecord)
                     {
                         int chunkId = EntityRecordAccessor.GetLocation(readBuf, slot);
                         table.TrackDestroyedChunkId(chunkId);
 
                         // If entity was NOT written this tick (no shadow), remove index entries now using current component data value (which matches the index).
                         // If entity WAS written (shadow exists), ProcessShadowEntries handles removal using the shadow's old key (which matches the index).
-                        if (!table.ShadowBitmap.Test(chunkId))
+                        if (table.HasShadowableIndexes && !table.ShadowBitmap.Test(chunkId))
                         {
                             RemoveNonVersionedIndexEntries(table, chunkId);
+                        }
+
+                        // Remove from spatial index immediately (no shadow needed — back-pointer provides O(1) lookup).
+                        if (table.SpatialIndex != null)
+                        {
+                            SpatialMaintainer.RemoveFromSpatial(pk, chunkId, table, _changeSet);
                         }
                     }
                 }

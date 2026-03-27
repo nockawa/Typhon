@@ -200,6 +200,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
+    internal ILogger<DatabaseEngine>            Logger => _log;
     private readonly IMemoryAllocator           _memoryAllocator;
     internal IMemoryAllocator                   MemoryAllocator => _memoryAllocator;
     internal TransientOptions                   TransientOptions => _options.Transient;
@@ -730,6 +731,15 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 ProcessShadowEntries(table);
             }
+
+            // Spatial index maintenance: iterate dirty entities, update R-Tree positions.
+            // Uses dirtyBits snapshot (still in scope from DirtyBitmap.Snapshot above).
+            // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup, and the containment check
+            // uses the fat AABB stored in the tree node. Only the final position matters.
+            if (table.SpatialIndex != null)
+            {
+                ProcessSpatialEntries(table, dirtyBits);
+            }
         }
 
         if (highestLSN > 0)
@@ -745,7 +755,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// the shadow was captured.
     /// Called at tick boundary from <see cref="WriteTickFence"/>.
     /// </summary>
-    private unsafe void ProcessShadowEntries(ComponentTable table)
+    private void ProcessShadowEntries(ComponentTable table)
     {
         var fields = table.IndexedFieldInfos;
         var buffers = table.FieldShadowBuffers;
@@ -892,6 +902,110 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 reg.View.DeltaBuffer.TryAppend(entry.EntityPK, oldKey, newKey, 0, flags, reg.ComponentTag);
             }
         }
+    }
+
+    /// <summary>
+    /// Iterate dirty entities from the tick fence snapshot and update spatial R-Tree positions.
+    /// For each dirty entity: if not destroyed, call UpdateSpatial (fat AABB containment check → possible reinsert).
+    /// </summary>
+    private unsafe void ProcessSpatialEntries(ComponentTable table, long[] dirtyBits)
+    {
+        var changeSet = MMF.CreateChangeSet();
+        var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
+        try
+        {
+            for (int wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
+            {
+                long word = dirtyBits[wordIdx];
+                while (word != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount((ulong)word);
+                    int chunkId = wordIdx * 64 + bit;
+                    word &= word - 1; // clear lowest set bit
+
+                    // Skip destroyed entities — already removed from spatial index in FlushPendingDestroys
+                    if (table.IsChunkDestroyed(chunkId))
+                    {
+                        continue;
+                    }
+
+                    // Read entityPK from inline overhead (if present) or resolve from back-pointer context.
+                    // For SV components with EntityPKOverheadSize > 0, entityPK is stored at offset 0 of the chunk.
+                    // For spatial-only (no B+Tree index), EntityPKOverheadSize may be 0, but the tree stores entityId in leaf entries.
+                    // The UpdateSpatial path uses the back-pointer (keyed by componentChunkId), so entityPK is not strictly needed
+                    // for the update itself. We pass 0 and let the warning logger use the componentChunkId if needed.
+                    long entityPK = 0;
+                    if (table.Definition.EntityPKOverheadSize > 0)
+                    {
+                        byte* chunkPtr = compAccessor.GetChunkAddress(chunkId);
+                        entityPK = *(long*)chunkPtr;
+                    }
+
+                    SpatialMaintainer.UpdateSpatial(entityPK, chunkId, table, ref compAccessor, changeSet);
+                }
+            }
+        }
+        finally
+        {
+            compAccessor.Dispose();
+            changeSet.SaveChanges();
+        }
+    }
+
+    /// <summary>
+    /// Persist spatial index segment root page indexes to BootstrapDictionary.
+    /// Written once at component registration; segment root pages are immutable after allocation.
+    /// </summary>
+    private void SaveSpatialBootstrap(ComponentTable table)
+    {
+        var state = table.SpatialIndex;
+        var fi = state.FieldInfo;
+        string key = $"spatial.{table.Definition.Name}";
+
+        // Tree SPIs + config packed into Int4: treeSPI, backPtrSPI, variant|stride, margin bits
+        MMF.Bootstrap.Set(key, BootstrapDictionary.Value.FromInt4(
+            state.Tree.Segment.RootPageIndex,
+            state.BackPointerSegment.RootPageIndex,
+            (int)state.Tree.Variant | (state.Descriptor.Stride << 8),
+            BitConverter.SingleToInt32Bits(fi.Margin)));
+
+        MMF.SaveBootstrap();
+    }
+
+    /// <summary>
+    /// Load spatial index from BootstrapDictionary and attach to the ComponentTable.
+    /// Called during database reopen for components with [SpatialIndex].
+    /// </summary>
+    private void LoadSpatialBootstrap(ComponentTable table)
+    {
+        string key = $"spatial.{table.Definition.Name}";
+        if (!MMF.Bootstrap.TryGet(key, out var val))
+        {
+            return; // No spatial index persisted (new attribute added after last save)
+        }
+
+        int treeSPI = val.GetInt(0);
+        int backPtrSPI = val.GetInt(1);
+        int variantStride = val.GetInt(2);
+
+        var variant = (SpatialVariant)(variantStride & 0xFF);
+        var stride = variantStride >> 8;
+        var descriptor = SpatialNodeDescriptor.FromVariant(variant, stride);
+
+        var treeSegment = MMF.LoadChunkBasedSegment(treeSPI, descriptor.Stride);
+        var backPtrSegment = MMF.LoadChunkBasedSegment(backPtrSPI, 8);
+
+        var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load: true);
+
+        var sf = table.Definition.SpatialField;
+        var fieldInfo = new SpatialFieldInfo(
+            table.ComponentOverhead + sf.OffsetInComponentStorage,
+            sf.SizeInComponentStorage,
+            sf.SpatialFieldType,
+            sf.SpatialMargin,
+            sf.SpatialCellSize);
+
+        table.SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor);
     }
 
     private void ConstructComponentStore()
@@ -1622,6 +1736,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         changeSet: migrationChangeSet);
                 }
 
+                // Load spatial index from bootstrap if present
+                if (definition.SpatialField != null)
+                {
+                    LoadSpatialBootstrap(componentTable);
+                }
+
                 // Populate newly created indexes by scanning entities
                 if (newIndexFieldIds != null)
                 {
@@ -1658,6 +1778,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             if (_componentsTable != null)
             {
                 var saved = SaveInSystemSchema(componentTable);
+
+                // Persist spatial index segment SPIs in bootstrap (segment root pages are immutable after creation)
+                if (componentTable.SpatialIndex != null)
+                {
+                    SaveSpatialBootstrap(componentTable);
+                }
+
                 cs.SaveChanges();
                 MMF.FlushToDisk();
 

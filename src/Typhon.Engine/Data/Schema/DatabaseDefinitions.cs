@@ -197,6 +197,24 @@ public class DatabaseDefinitions
                 field.ForeignKeyTargetType = fka.TargetComponentType;
             }
 
+            // Spatial index processing
+            var spa = fieldInfo.GetCustomAttribute<SpatialIndexAttribute>();
+            if (spa != null)
+            {
+                if (!IsSpatialFieldType(field.Type))
+                {
+                    throw new InvalidOperationException($"[SpatialIndex] on field '{field.Name}' requires a spatial type (AABB/BSphere), but found {field.Type}.");
+                }
+                if (spa.Margin < 0)
+                {
+                    throw new InvalidOperationException($"[SpatialIndex] margin must be non-negative on field '{field.Name}'.");
+                }
+                field.HasSpatialIndex = true;
+                field.SpatialMargin = spa.Margin;
+                field.SpatialCellSize = spa.CellSize;
+                field.SpatialFieldType = MapToSpatialFieldType(field.Type);
+            }
+
             // Index related data
             if (ia == null)
             {
@@ -206,6 +224,26 @@ public class DatabaseDefinitions
             field.HasIndex = true;
             field.IndexAllowMultiple = ia.AllowMultiple;
             field.IsIndexAuto = false;
+        }
+
+        // Validate spatial index constraints at component level
+        {
+            int spatialCount = 0;
+            foreach (var kvp in compDef.FieldsByName)
+            {
+                if (kvp.Value.HasSpatialIndex)
+                {
+                    spatialCount++;
+                }
+            }
+            if (spatialCount > 1)
+            {
+                throw new InvalidOperationException($"Component '{ca.Name ?? t.Name}' has {spatialCount} [SpatialIndex] fields, but at most one is allowed.");
+            }
+            if (spatialCount > 0 && ca.StorageMode == StorageMode.Transient)
+            {
+                throw new InvalidOperationException($"[SpatialIndex] is not supported on Transient component '{ca.Name ?? t.Name}'.");
+            }
         }
 
         resolver?.Complete();
@@ -222,4 +260,20 @@ public class DatabaseDefinitions
 
         return compDef;
     }
+
+    private static bool IsSpatialFieldType(FieldType type) => type is FieldType.AABB2F or FieldType.AABB3F or FieldType.BSphere2F or FieldType.BSphere3F
+        or FieldType.AABB2D or FieldType.AABB3D or FieldType.BSphere2D or FieldType.BSphere3D;
+
+    private static SpatialFieldType MapToSpatialFieldType(FieldType type) => type switch
+    {
+        FieldType.AABB2F => SpatialFieldType.AABB2F,
+        FieldType.AABB3F => SpatialFieldType.AABB3F,
+        FieldType.BSphere2F => SpatialFieldType.BSphere2F,
+        FieldType.BSphere3F => SpatialFieldType.BSphere3F,
+        FieldType.AABB2D => SpatialFieldType.AABB2D,
+        FieldType.AABB3D => SpatialFieldType.AABB3D,
+        FieldType.BSphere2D => SpatialFieldType.BSphere2D,
+        FieldType.BSphere3D => SpatialFieldType.BSphere3D,
+        _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Not a spatial field type")
+    };
 }

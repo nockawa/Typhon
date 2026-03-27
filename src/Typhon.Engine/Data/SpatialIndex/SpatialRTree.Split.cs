@@ -46,12 +46,12 @@ internal unsafe partial class SpatialRTree<TStore>
         byte* rightBase = accessor.GetChunkAddress(rightChunkId, dirty: true);
 
         // Scatter entries to left and right using bestPerm
-        ScatterLeafEntries(leafBase, tempCoords, tempIds, bestPerm, 0, splitPos);
+        ScatterLeafEntries(leafBase, fullLeafChunkId, tempCoords, tempIds, bestPerm, 0, splitPos);
         SpatialNodeHelper.SetCount(leafBase, splitPos);
         SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
 
         int rightCount = totalEntries - splitPos;
-        ScatterLeafEntries(rightBase, tempCoords, tempIds, bestPerm, splitPos, totalEntries);
+        ScatterLeafEntries(rightBase, rightChunkId, tempCoords, tempIds, bestPerm, splitPos, totalEntries);
         SpatialNodeHelper.SetCount(rightBase, rightCount);
         SpatialNodeHelper.RefitLeafMBR(rightBase, _desc);
 
@@ -76,9 +76,11 @@ internal unsafe partial class SpatialRTree<TStore>
 
     /// <summary>
     /// Scatter leaf entries from temp buffers into a node using the permutation.
+    /// If <see cref="BackPointerUpdater"/> is set, invokes it for each entry with the final (entityId, leafChunkId, slotIndex).
     /// </summary>
-    private void ScatterLeafEntries(byte* nodeBase, Span<double> allCoords, Span<long> allIds, Span<int> perm, int permStart, int permEnd)
+    private void ScatterLeafEntries(byte* nodeBase, int leafChunkId, Span<double> allCoords, Span<long> allIds, Span<int> perm, int permStart, int permEnd)
     {
+        var updater = BackPointerUpdater;
         for (int i = permStart; i < permEnd; i++)
         {
             int src = perm[i];
@@ -86,6 +88,7 @@ internal unsafe partial class SpatialRTree<TStore>
             SpatialNodeHelper.WriteLeafEntryCoords(nodeBase, dst,
                 allCoords.Slice(src * _desc.CoordCount, _desc.CoordCount), _desc);
             SpatialNodeHelper.WriteLeafEntityId(nodeBase, dst, allIds[src], _desc);
+            updater?.Invoke(allIds[src], leafChunkId, dst);
         }
     }
 

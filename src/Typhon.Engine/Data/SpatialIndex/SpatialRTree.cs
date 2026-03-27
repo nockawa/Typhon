@@ -77,6 +77,13 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     private int _entityCount;
     private int _depth;
 
+    /// <summary>
+    /// Optional callback invoked during leaf split scatter for each relocated entity.
+    /// Args: (entityId, newLeafChunkId, newSlotIndex). Set by SpatialMaintainer for ECS integration.
+    /// Null for standalone unit tests.
+    /// </summary>
+    internal Action<long, int, int> BackPointerUpdater;
+
     // Chunk 0 metadata layout
     private const int MetaRootOffset = 0;
     private const int MetaNodeCountOffset = 4;
@@ -273,5 +280,14 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
             SpatialNodeHelper.RefitInternalMBR(parentBase, _desc);
             parentLatch.WriteUnlock();
         }
+    }
+
+    /// <summary>
+    /// Read the fat AABB coordinates of a leaf entry at a known position. Used by SpatialMaintainer for containment check.
+    /// </summary>
+    internal void ReadLeafCoords(int leafChunkId, int slotIndex, Span<double> coords, ref ChunkAccessor<TStore> accessor)
+    {
+        byte* leafBase = accessor.GetChunkAddress(leafChunkId);
+        SpatialNodeHelper.ReadLeafEntryCoords(leafBase, slotIndex, coords, _desc);
     }
 }

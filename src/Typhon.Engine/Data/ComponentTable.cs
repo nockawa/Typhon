@@ -236,6 +236,9 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     internal DirtyBitmap ShadowBitmap { get; private set; }
     internal FieldShadowBuffer[] FieldShadowBuffers { get; private set; }
 
+    // ── Spatial index state (non-null only when a [SpatialIndex] field exists) ──
+    internal SpatialIndexState SpatialIndex { get; set; }
+
     // ── Destroyed chunk tracking for SV index cleanup ──
     // Accumulates chunkIds of destroyed SV entities during commits this tick.
     // Checked by ProcessShadowEntries to distinguish Remove vs Move. Cleared at tick boundary.
@@ -480,6 +483,12 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         ViewRegistry = new ViewRegistry(IndexedFieldInfos.Length);
         BuildComponentCollectionInfo(changeSet);
 
+        // Allocate spatial index segments and construct R-Tree if [SpatialIndex] is present
+        if (definition.SpatialField != null)
+        {
+            BuildSpatialIndex(false, changeSet);
+        }
+
         if (storageMode == StorageMode.SingleVersion)
         {
             DirtyBitmap = new DirtyBitmap(ComponentSegment.ChunkCapacity);
@@ -662,6 +671,43 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         {
             IndexStats[i] = new IndexStatistics(IndexedFieldInfos[i].Index);
         }
+    }
+
+    /// <summary>
+    /// Allocate spatial index segments and construct the R-Tree + SpatialIndexState.
+    /// Called from both the create constructor and the load constructor.
+    /// </summary>
+    private void BuildSpatialIndex(bool load, ChangeSet changeSet = null, ChunkBasedSegment<PersistentStore> existingTreeSegment = null, 
+        ChunkBasedSegment<PersistentStore> existingBackPtrSegment = null)
+    {
+        var sf = Definition.SpatialField;
+        var fieldInfo = new SpatialFieldInfo(
+            ComponentOverhead + sf.OffsetInComponentStorage,
+            sf.SizeInComponentStorage,
+            sf.SpatialFieldType,
+            sf.SpatialMargin,
+            sf.SpatialCellSize);
+
+        var variant = fieldInfo.ToVariant();
+        var descriptor = SpatialNodeDescriptor.ForVariant(variant);
+
+        ChunkBasedSegment<PersistentStore> treeSegment;
+        ChunkBasedSegment<PersistentStore> backPtrSegment;
+
+        if (!load)
+        {
+            var mmf = DBE.MMF;
+            treeSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, descriptor.Stride, changeSet);
+            backPtrSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, 8, changeSet);
+        }
+        else
+        {
+            treeSegment = existingTreeSegment;
+            backPtrSegment = existingBackPtrSegment;
+        }
+
+        var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load, changeSet);
+        SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor);
     }
 
     /// <summary>

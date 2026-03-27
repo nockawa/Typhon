@@ -1206,6 +1206,21 @@ public unsafe partial class Transaction : IDisposable
                 }
             }
 
+            // Versioned spatial index maintenance — after B+Tree indices are updated
+            if (info.ComponentTable.SpatialIndex != null)
+            {
+                if (compRevInfo.CurCompContentChunkId != 0)
+                {
+                    // Update or insert spatial entry using current component data
+                    SpatialMaintainer.UpdateSpatial(pk, compRevInfo.CurCompContentChunkId, info.ComponentTable, ref info.CompContentAccessor, _changeSet);
+                }
+                else if (readCompChunkId != 0)
+                {
+                    // Entity deleted — remove from spatial index
+                    SpatialMaintainer.RemoveFromSpatial(pk, readCompChunkId, info.ComponentTable, _changeSet);
+                }
+            }
+
             // Periodic flush: bound dirty counter inflation for large transactions
             if (_batchIndexActive && (++_batchEntityCount & 0x3FF) == 0)
             {
