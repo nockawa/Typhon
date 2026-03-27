@@ -95,3 +95,17 @@ public sealed class ArchetypeAttribute : Attribute
         Revision = revision;
     }
 }
+
+[AttributeUsage(AttributeTargets.Field)]
+[PublicAPI]
+public sealed class SpatialIndexAttribute : Attribute
+{
+    public float Margin { get; }
+    public float CellSize { get; }
+
+    public SpatialIndexAttribute(float margin, float cellSize = 0f)
+    {
+        Margin = margin;
+        CellSize = cellSize;
+    }
+}
