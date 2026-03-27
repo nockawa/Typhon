@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
@@ -108,6 +109,35 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         using var dbe = SetupEngine();
         var table = dbe.GetComponentTable<SpatialName>();
         Assert.That(table.SpatialIndex, Is.Null);
+    }
+
+    [Test]
+    public void Schema_CellSizeZero_NoHashmap()
+    {
+        using var dbe = SetupEngine();
+        var table = dbe.GetComponentTable<SpatialShip>();
+        // SpatialShip uses [SpatialIndex(5.0f)] — CellSize defaults to 0
+        Assert.That(table.SpatialIndex.OccupancyMap, Is.Null);
+    }
+
+    [Test]
+    public void CellKey2D_Lossless_DifferentInputs_DifferentKeys()
+    {
+        // Verify 2D lossless packing produces unique keys for distinct cell coords
+        var keys = new HashSet<long>();
+        for (int x = -10; x <= 10; x++)
+        {
+            for (int y = -10; y <= 10; y++)
+            {
+                double cx = x * 100.0 + 50;
+                double cy = y * 100.0 + 50;
+                // coordCount=4 (2D): coords = [minX, minY, maxX, maxY], center = ((min+max)/2)
+                Span<double> coords = stackalloc double[] { cx - 1, cy - 1, cx + 1, cy + 1 };
+                long key = SpatialMaintainer.ComputeCellKey(coords, 4, 1.0f / 100.0f);
+                Assert.That(keys.Add(key), Is.True, $"Duplicate key for cell ({x},{y})");
+            }
+        }
+        Assert.That(keys.Count, Is.EqualTo(21 * 21));
     }
 
     // ── Spawn + Query ────────────────────────────────────────────────────

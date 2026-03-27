@@ -16,6 +16,9 @@ internal static unsafe partial class SpatialMaintainer
     [LoggerMessage(Level = LogLevel.Warning, Message = "Degenerate spatial AABB for entity {EntityPK} in {ComponentName}, skipping spatial {Operation}")]
     private static partial void LogDegenerateAABB(ILogger logger, long entityPK, string componentName, string operation);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Spatial escape rate {EscapeRate:P1} ({EscapeCount}/{DirtyCount}) for {ComponentName} exceeds 10% — consider increasing margin")]
+    internal static partial void LogHighEscapeRate(ILogger logger, string componentName, double escapeRate, int escapeCount, int dirtyCount);
+
     // ── Public API ───────────────────────────────────────────────────────────
 
     /// <summary>
@@ -61,13 +64,17 @@ internal static unsafe partial class SpatialMaintainer
         {
             treeAccessor.Dispose();
         }
+
+        // Layer 1: increment occupancy counter for this entity's coarse cell
+        IncrementOccupancy(state, coords, changeSet);
     }
 
     /// <summary>
     /// Update an existing entity's spatial position. Fast path if tight AABB is still within fat AABB (~25ns).
     /// Slow path removes and reinserts (~500–700ns). Called at tick fence (SV) or commit (Versioned).
     /// </summary>
-    internal static void UpdateSpatial(long entityPK, int componentChunkId, ComponentTable table, ref ChunkAccessor<PersistentStore> compAccessor, ChangeSet changeSet)
+    /// <returns>True if the entity escaped the fat AABB and was reinserted (slow path). False for fast path or skip.</returns>
+    internal static bool UpdateSpatial(long entityPK, int componentChunkId, ComponentTable table, ref ChunkAccessor<PersistentStore> compAccessor, ChangeSet changeSet)
     {
         var state = table.SpatialIndex;
         var fi = state.FieldInfo;
@@ -80,7 +87,7 @@ internal static unsafe partial class SpatialMaintainer
 
         if (!ReadAndValidateBounds(compPtr, fi, desc, tightCoords, entityPK, table, "update"))
         {
-            return;
+            return false;
         }
 
         // Read back-pointer
@@ -93,7 +100,7 @@ internal static unsafe partial class SpatialMaintainer
                 // No back-pointer — entity was never inserted (degenerate at spawn). Try inserting now.
                 bpAccessor.Dispose();
                 InsertSpatial(entityPK, componentChunkId, table, ref compAccessor, changeSet);
-                return;
+                return false;
             }
 
             // Read fat AABB from tree leaf
@@ -106,22 +113,22 @@ internal static unsafe partial class SpatialMaintainer
                 // Fast path: containment check
                 if (CoordsContained(fatCoords, tightCoords, desc.CoordCount))
                 {
-                    return;
+                    return false;
                 }
 
                 // Slow path: remove + reinsert
                 long swappedEntityId = tree.Remove(bp.LeafChunkId, bp.SlotIndex, ref treeAccessor);
 
-                // Update swapped entity's back-pointer if applicable
                 if (swappedEntityId != 0 && swappedEntityId != entityPK)
                 {
                     UpdateSwappedBackPointer(swappedEntityId, bp.LeafChunkId, bp.SlotIndex, table, ref bpAccessor);
                 }
 
-                // Compute new fat AABB and reinsert
                 EnlargeCoords(tightCoords, fi.Margin, desc);
                 var (newLeaf, newSlot) = tree.Insert(entityPK, tightCoords, ref treeAccessor, changeSet);
                 SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, newLeaf, (short)newSlot);
+
+                return true; // Escaped fat AABB → reinserted
             }
             finally
             {
@@ -154,12 +161,19 @@ internal static unsafe partial class SpatialMaintainer
             var treeAccessor = tree.Segment.CreateChunkAccessor(changeSet);
             try
             {
+                // Read fat AABB coords before removing (needed for Layer 1 decrement)
+                Span<double> removedCoords = stackalloc double[state.Descriptor.CoordCount];
+                tree.ReadLeafCoords(bp.LeafChunkId, bp.SlotIndex, removedCoords, ref treeAccessor);
+
                 long swappedEntityId = tree.Remove(bp.LeafChunkId, bp.SlotIndex, ref treeAccessor);
 
                 if (swappedEntityId != 0 && swappedEntityId != entityPK)
                 {
                     UpdateSwappedBackPointer(swappedEntityId, bp.LeafChunkId, bp.SlotIndex, table, ref bpAccessor);
                 }
+
+                // Layer 1: decrement occupancy for the removed entity's cell
+                DecrementOccupancy(state, removedCoords, changeSet);
             }
             finally
             {
@@ -388,5 +402,151 @@ internal static unsafe partial class SpatialMaintainer
         {
             emAccessor.Dispose();
         }
+    }
+
+    // ── Layer 1 occupancy helpers ────────────────────────────────────────
+
+    /// <summary>Compute coarse cell key from AABB center. 2D uses lossless packing, 3D uses XOR-multiply hash.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long ComputeCellKey(ReadOnlySpan<double> coords, int coordCount, float inverseCellSize)
+    {
+        int half = coordCount / 2;
+        int cellX = (int)Math.Floor((coords[0] + coords[half]) * 0.5 * inverseCellSize);
+        int cellY = (int)Math.Floor((coords[1] + coords[half + 1]) * 0.5 * inverseCellSize);
+        if (half == 2)
+        {
+            // 2D: lossless packing
+            return ((long)cellX << 32) | (uint)cellY;
+        }
+        // 3D: XOR-multiply with Teschner primes
+        int cellZ = (int)Math.Floor((coords[2] + coords[half + 2]) * 0.5 * inverseCellSize);
+        return (long)((cellX * 73856093) ^ (cellY * 19349663) ^ (cellZ * 83492791));
+    }
+
+    /// <summary>Increment occupancy count for the cell containing the given coords.</summary>
+    private static void IncrementOccupancy(SpatialIndexState state, ReadOnlySpan<double> coords, ChangeSet changeSet)
+    {
+        var map = state.OccupancyMap;
+        if (map == null)
+        {
+            return;
+        }
+
+        long cellKey = ComputeCellKey(coords, state.Descriptor.CoordCount, state.FieldInfo.InverseCellSize);
+        var accessor = map.Segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            if (map.TryGet(cellKey, out int count, ref accessor))
+            {
+                map.Upsert(cellKey, count + 1, ref accessor, changeSet);
+            }
+            else
+            {
+                map.Insert(cellKey, 1, ref accessor, changeSet);
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    /// <summary>Decrement occupancy count. Removes the cell entry when count reaches zero.</summary>
+    private static void DecrementOccupancy(SpatialIndexState state, ReadOnlySpan<double> coords, ChangeSet changeSet)
+    {
+        var map = state.OccupancyMap;
+        if (map == null)
+        {
+            return;
+        }
+
+        long cellKey = ComputeCellKey(coords, state.Descriptor.CoordCount, state.FieldInfo.InverseCellSize);
+        var accessor = map.Segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            if (map.TryGet(cellKey, out int count, ref accessor))
+            {
+                if (count <= 1)
+                {
+                    map.Remove(cellKey, out _, ref accessor, changeSet);
+                }
+                else
+                {
+                    map.Upsert(cellKey, count - 1, ref accessor, changeSet);
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Check if all coarse cells overlapping the query AABB are empty. Returns true if the query can be skipped entirely.
+    /// </summary>
+    internal static bool Layer1FastReject(SpatialIndexState state, ReadOnlySpan<double> queryCoords)
+    {
+        var map = state.OccupancyMap;
+        if (map == null)
+        {
+            return false; // No hashmap → can't reject, proceed to tree
+        }
+
+        var fi = state.FieldInfo;
+        int coordCount = state.Descriptor.CoordCount;
+        int half = coordCount / 2;
+
+        // Compute min/max cell coordinates
+        int minCellX = (int)Math.Floor(queryCoords[0] * fi.InverseCellSize);
+        int minCellY = (int)Math.Floor(queryCoords[1] * fi.InverseCellSize);
+        int maxCellX = (int)Math.Floor(queryCoords[half] * fi.InverseCellSize);
+        int maxCellY = (int)Math.Floor(queryCoords[half + 1] * fi.InverseCellSize);
+
+        var accessor = map.Segment.CreateChunkAccessor();
+        try
+        {
+            if (half == 2)
+            {
+                // 2D: iterate all cells in the query box
+                for (int cx = minCellX; cx <= maxCellX; cx++)
+                {
+                    for (int cy = minCellY; cy <= maxCellY; cy++)
+                    {
+                        long cellKey = ((long)cx << 32) | (uint)cy;
+                        if (map.TryGet(cellKey, out int count, ref accessor) && count > 0)
+                        {
+                            return false; // At least one populated cell → can't reject
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // 3D: iterate all cells
+                int minCellZ = (int)Math.Floor(queryCoords[2] * fi.InverseCellSize);
+                int maxCellZ = (int)Math.Floor(queryCoords[half + 2] * fi.InverseCellSize);
+                for (int cx = minCellX; cx <= maxCellX; cx++)
+                {
+                    for (int cy = minCellY; cy <= maxCellY; cy++)
+                    {
+                        for (int cz = minCellZ; cz <= maxCellZ; cz++)
+                        {
+                            long cellKey = (long)((cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791));
+                            if (map.TryGet(cellKey, out int count, ref accessor) && count > 0)
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        return true; // All cells empty → reject query
     }
 }

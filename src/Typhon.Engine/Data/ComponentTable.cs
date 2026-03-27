@@ -677,8 +677,8 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// Allocate spatial index segments and construct the R-Tree + SpatialIndexState.
     /// Called from both the create constructor and the load constructor.
     /// </summary>
-    private void BuildSpatialIndex(bool load, ChangeSet changeSet = null, ChunkBasedSegment<PersistentStore> existingTreeSegment = null, 
-        ChunkBasedSegment<PersistentStore> existingBackPtrSegment = null)
+    private void BuildSpatialIndex(bool load, ChangeSet changeSet = null, ChunkBasedSegment<PersistentStore> existingTreeSegment = null,
+        ChunkBasedSegment<PersistentStore> existingBackPtrSegment = null, PagedHashMap<long, int, PersistentStore> existingOccupancyMap = null)
     {
         var sf = Definition.SpatialField;
         var fieldInfo = new SpatialFieldInfo(
@@ -693,21 +693,31 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
         ChunkBasedSegment<PersistentStore> treeSegment;
         ChunkBasedSegment<PersistentStore> backPtrSegment;
+        PagedHashMap<long, int, PersistentStore> occupancyMap = null;
 
         if (!load)
         {
             var mmf = DBE.MMF;
             treeSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, descriptor.Stride, changeSet);
             backPtrSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, ComponentSegmentStartingSize, 8, changeSet);
+
+            // Allocate Layer 1 occupancy hashmap when CellSize > 0
+            if (fieldInfo.CellSize > 0)
+            {
+                int hmStride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
+                var hmSegment = mmf.AllocateChunkBasedSegment(PageBlockType.None, MainIndexSegmentStartingSize, hmStride, changeSet);
+                occupancyMap = PagedHashMap<long, int, PersistentStore>.Create(hmSegment, initialBuckets: 64, changeSet: changeSet);
+            }
         }
         else
         {
             treeSegment = existingTreeSegment;
             backPtrSegment = existingBackPtrSegment;
+            occupancyMap = existingOccupancyMap;
         }
 
         var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load, changeSet);
-        SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor);
+        SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 
     /// <summary>

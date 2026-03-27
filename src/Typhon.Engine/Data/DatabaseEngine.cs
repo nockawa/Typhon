@@ -912,6 +912,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     {
         var changeSet = MMF.CreateChangeSet();
         var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
+        int dirtyCount = 0;
+        int escapeCount = 0;
         try
         {
             for (int wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
@@ -923,17 +925,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     int chunkId = wordIdx * 64 + bit;
                     word &= word - 1; // clear lowest set bit
 
-                    // Skip destroyed entities — already removed from spatial index in FlushPendingDestroys
                     if (table.IsChunkDestroyed(chunkId))
                     {
                         continue;
                     }
 
-                    // Read entityPK from inline overhead (if present) or resolve from back-pointer context.
-                    // For SV components with EntityPKOverheadSize > 0, entityPK is stored at offset 0 of the chunk.
-                    // For spatial-only (no B+Tree index), EntityPKOverheadSize may be 0, but the tree stores entityId in leaf entries.
-                    // The UpdateSpatial path uses the back-pointer (keyed by componentChunkId), so entityPK is not strictly needed
-                    // for the update itself. We pass 0 and let the warning logger use the componentChunkId if needed.
                     long entityPK = 0;
                     if (table.Definition.EntityPKOverheadSize > 0)
                     {
@@ -941,7 +937,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         entityPK = *(long*)chunkPtr;
                     }
 
-                    SpatialMaintainer.UpdateSpatial(entityPK, chunkId, table, ref compAccessor, changeSet);
+                    dirtyCount++;
+                    if (SpatialMaintainer.UpdateSpatial(entityPK, chunkId, table, ref compAccessor, changeSet))
+                    {
+                        escapeCount++;
+                    }
                 }
             }
         }
@@ -949,6 +949,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             compAccessor.Dispose();
             changeSet.SaveChanges();
+        }
+
+        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB
+        if (TelemetryConfig.SpatialActive && dirtyCount > 0)
+        {
+            double escapeRate = (double)escapeCount / dirtyCount;
+            if (escapeRate > 0.10)
+            {
+                SpatialMaintainer.LogHighEscapeRate(_log, table.Definition.Name, escapeRate, escapeCount, dirtyCount);
+            }
         }
     }
 
@@ -962,12 +972,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var fi = state.FieldInfo;
         string key = $"spatial.{table.Definition.Name}";
 
-        // Tree SPIs + config packed into Int4: treeSPI, backPtrSPI, variant|stride, margin bits
-        MMF.Bootstrap.Set(key, BootstrapDictionary.Value.FromInt4(
+        // Tree SPIs + config packed into Int5: treeSPI, backPtrSPI, variant|stride, margin bits, hmSPI (0 if no hashmap)
+        MMF.Bootstrap.Set(key, BootstrapDictionary.Value.FromInt5(
             state.Tree.Segment.RootPageIndex,
             state.BackPointerSegment.RootPageIndex,
             (int)state.Tree.Variant | (state.Descriptor.Stride << 8),
-            BitConverter.SingleToInt32Bits(fi.Margin)));
+            BitConverter.SingleToInt32Bits(fi.Margin),
+            state.OccupancyMap?.Segment.RootPageIndex ?? 0));
 
         MMF.SaveBootstrap();
     }
@@ -995,6 +1006,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var treeSegment = MMF.LoadChunkBasedSegment(treeSPI, descriptor.Stride);
         var backPtrSegment = MMF.LoadChunkBasedSegment(backPtrSPI, 8);
 
+        // Load Layer 1 occupancy hashmap if persisted (Int5[4] > 0)
+        PagedHashMap<long, int, PersistentStore> occupancyMap = null;
+        int hmSPI = val.GetInt(4);
+        if (hmSPI > 0)
+        {
+            int hmStride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
+            var hmSegment = MMF.LoadChunkBasedSegment(hmSPI, hmStride);
+            occupancyMap = PagedHashMap<long, int, PersistentStore>.Open(hmSegment);
+        }
+
         var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load: true);
 
         var sf = table.Definition.SpatialField;
@@ -1005,7 +1026,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             sf.SpatialMargin,
             sf.SpatialCellSize);
 
-        table.SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor);
+        table.SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 
     private void ConstructComponentStore()

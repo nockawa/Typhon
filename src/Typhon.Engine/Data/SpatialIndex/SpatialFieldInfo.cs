@@ -32,6 +32,7 @@ public readonly struct SpatialFieldInfo
     public readonly SpatialFieldType FieldType;
     public readonly float Margin;
     public readonly float CellSize;
+    public readonly float InverseCellSize;
 
     public SpatialFieldInfo(int fieldOffset, int fieldSize, SpatialFieldType fieldType, float margin, float cellSize)
     {
@@ -40,6 +41,7 @@ public readonly struct SpatialFieldInfo
         FieldType = fieldType;
         Margin = margin;
         CellSize = cellSize;
+        InverseCellSize = cellSize > 0 ? 1.0f / cellSize : 0;
     }
 
     /// <summary>
