@@ -35,7 +35,7 @@ internal static unsafe partial class SpatialMaintainer
         byte* compPtr = compAccessor.GetChunkAddress(componentChunkId);
         Span<double> coords = stackalloc double[desc.CoordCount];
 
-        if (!ReadAndValidateBounds(compPtr, fi, desc, coords, entityPK, table, "insert"))
+        if (!ReadAndValidateBounds(compPtr, fi, coords, entityPK, table, "insert"))
         {
             return;
         }
@@ -112,7 +112,7 @@ internal static unsafe partial class SpatialMaintainer
         byte* compPtr = compAccessor.GetChunkAddress(componentChunkId);
         Span<double> tightCoords = stackalloc double[desc.CoordCount];
 
-        if (!ReadAndValidateBounds(compPtr, fi, desc, tightCoords, entityPK, table, "update"))
+        if (!ReadAndValidateBounds(compPtr, fi, tightCoords, entityPK, table, "update"))
         {
             return false;
         }
@@ -196,6 +196,41 @@ internal static unsafe partial class SpatialMaintainer
         }
     }
 
+    /// <summary>
+    /// Update the category mask of an entity's spatial leaf entry in-place. Called via back-pointer for runtime
+    /// category changes (e.g., entity dies → clear Alive bit, entity switches team → change Team bits).
+    /// Refits the union mask up the ancestor chain.
+    /// </summary>
+    internal static void SetSpatialCategory(int componentChunkId, ComponentTable table, uint newCategoryMask, ChangeSet changeSet)
+    {
+        var state = table.SpatialIndex;
+        var tree = state.Tree;
+
+        var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
+        try
+        {
+            var bp = SpatialBackPointerHelper.Read(ref bpAccessor, componentChunkId);
+            if (bp.LeafChunkId == 0)
+            {
+                return; // Never inserted (degenerate bounds)
+            }
+
+            var treeAccessor = tree.Segment.CreateChunkAccessor(changeSet);
+            try
+            {
+                tree.SetEntryCategoryMask(bp.LeafChunkId, bp.SlotIndex, newCategoryMask, ref treeAccessor);
+            }
+            finally
+            {
+                treeAccessor.Dispose();
+            }
+        }
+        finally
+        {
+            bpAccessor.Dispose();
+        }
+    }
+
     // ── Private helpers ──────────────────────────────────────────────────────
 
     /// <summary>
@@ -203,8 +238,7 @@ internal static unsafe partial class SpatialMaintainer
     /// Returns false if bounds are degenerate (NaN/Inf/Min>Max).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe bool ReadAndValidateBounds(byte* compPtr, SpatialFieldInfo fi, SpatialNodeDescriptor desc, Span<double> coords, long entityPK, 
-        ComponentTable table, string operation)
+    private static bool ReadAndValidateBounds(byte* compPtr, SpatialFieldInfo fi, Span<double> coords, long entityPK, ComponentTable table, string operation)
     {
         byte* fieldPtr = compPtr + fi.FieldOffset;
 
@@ -428,7 +462,7 @@ internal static unsafe partial class SpatialMaintainer
         }
         // 3D: XOR-multiply with Teschner primes (handles negative coords naturally)
         int cellZ = (int)Math.Floor((coords[2] + coords[half + 2]) * 0.5 * inverseCellSize);
-        return (long)((cellX * 73856093) ^ (cellY * 19349663) ^ (cellZ * 83492791));
+        return (cellX * 73856093) ^ (cellY * 19349663) ^ (cellZ * 83492791);
     }
 
     /// <summary>Increment occupancy count for the cell containing the given coords.</summary>
@@ -555,7 +589,7 @@ internal static unsafe partial class SpatialMaintainer
                     {
                         for (int cz = minCellZ; cz <= maxCellZ; cz++)
                         {
-                            long cellKey = (long)((cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791));
+                            long cellKey = (cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791);
                             if (map.TryGet(cellKey, out int count, ref accessor) && count > 0)
                             {
                                 return false;

@@ -211,10 +211,43 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
         }
     }
 
+    // ── Category mask helpers ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Recompute an internal node's UnionCategoryMask as the bitwise OR of all children's UnionCategoryMasks.
+    /// Must be called after RefitInternalMBR whenever category masks may have changed.
+    /// </summary>
+    private void RefitInternalUnionMask(byte* nodeBase, ref ChunkAccessor<TStore> accessor)
+    {
+        int count = SpatialNodeHelper.GetCount(nodeBase);
+        uint unionMask = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
+            byte* childBase = accessor.GetChunkAddress(childId);
+            unionMask |= SpatialNodeHelper.ReadUnionCategoryMask(childBase, _desc);
+        }
+        SpatialNodeHelper.WriteUnionCategoryMask(nodeBase, unionMask, _desc);
+    }
+
+    /// <summary>
+    /// Update the category mask of a leaf entry in-place and refit union masks up the ancestor chain.
+    /// Called via back-pointer for runtime category changes (e.g., entity dies → clear Alive bit).
+    /// </summary>
+    internal void SetEntryCategoryMask(int leafChunkId, int slotIndex, uint mask, ref ChunkAccessor<TStore> accessor)
+    {
+        byte* leafBase = accessor.GetChunkAddress(leafChunkId, dirty: true);
+        SpinWriteLock(leafBase, out var latch);
+        SpatialNodeHelper.WriteLeafCategoryMask(leafBase, slotIndex, mask, _desc);
+        SpatialNodeHelper.RefitLeafMBR(leafBase, _desc); // recomputes leaf union mask
+        latch.WriteUnlock();
+        RefitAncestorsBottomUp(leafChunkId, ref accessor);
+    }
+
     // ── Ancestor refit (bottom-up via ParentChunkId chain) ──────────────────
 
     /// <summary>
-    /// Walk up from a node to the root via ParentChunkId, refitting each ancestor's MBR.
+    /// Walk up from a node to the root via ParentChunkId, refitting each ancestor's MBR and UnionCategoryMask.
     /// Used after remove and other mutations that don't have a recorded descent path.
     /// </summary>
     private void RefitAncestorsBottomUp(int startChunkId, ref ChunkAccessor<TStore> accessor)
@@ -248,6 +281,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
             }
 
             SpatialNodeHelper.RefitInternalMBR(parentBase, _desc);
+            RefitInternalUnionMask(parentBase, ref accessor);
             parentLatch.WriteUnlock();
 
             currentChunkId = parentChunkId;
@@ -256,7 +290,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
 
     /// <summary>
     /// Walk the recorded descent path upward, refitting each ancestor's internal entry
-    /// for the child that was modified, then recomputing the ancestor's own NodeMBR.
+    /// for the child that was modified, then recomputing the ancestor's own NodeMBR and UnionCategoryMask.
     /// </summary>
     private void RefitAncestors(ref DescentPath path, ref ChunkAccessor<TStore> accessor)
     {
@@ -277,6 +311,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
             }
 
             SpatialNodeHelper.RefitInternalMBR(parentBase, _desc);
+            RefitInternalUnionMask(parentBase, ref accessor);
             parentLatch.WriteUnlock();
         }
     }

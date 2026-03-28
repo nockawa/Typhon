@@ -27,7 +27,8 @@ internal unsafe partial class SpatialRTree<TStore>
     /// </summary>
     /// <param name="queryCoords">CoordCount doubles: [min0, min1, ..., max0, max1, ...]</param>
     /// <param name="changeSet">ChangeSet for page access tracking</param>
-    internal AABBQueryEnumerator QueryAABB(ReadOnlySpan<double> queryCoords, ChangeSet changeSet = null) => new(this, queryCoords, changeSet);
+    internal AABBQueryEnumerator QueryAABB(ReadOnlySpan<double> queryCoords, ChangeSet changeSet = null, uint categoryMask = 0)
+        => new(this, queryCoords, changeSet, categoryMask);
 
     /// <summary>
     /// Ref struct enumerator for AABB overlap queries. Uses stack-based DFS with OLC read validation per node. Zero heap allocations.
@@ -41,6 +42,7 @@ internal unsafe partial class SpatialRTree<TStore>
         // Query bounds stored inline (max 6 doubles for 3D)
         private fixed double _queryCoords[6];
         private readonly int _coordCount;
+        private readonly uint _categoryMask;
 
         // DFS stack of chunk IDs to visit
         private QueryStackBuffer _stack;
@@ -54,7 +56,7 @@ internal unsafe partial class SpatialRTree<TStore>
         private SpatialQueryResult _current;
         private bool _disposed;
 
-        internal AABBQueryEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> queryCoords, ChangeSet changeSet)
+        internal AABBQueryEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> queryCoords, ChangeSet changeSet, uint categoryMask = 0)
         {
             _tree = tree;
             _desc = tree._desc;
@@ -66,6 +68,7 @@ internal unsafe partial class SpatialRTree<TStore>
             _currentLeafCount = 0;
             _current = default;
             _disposed = false;
+            _categoryMask = categoryMask;
 
             int len = Math.Min(queryCoords.Length, 6);
             for (int i = 0; i < len; i++)
@@ -100,6 +103,10 @@ internal unsafe partial class SpatialRTree<TStore>
                 byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
                 if (LeafEntryOverlapsQuery(leafBase, _currentLeafIndex))
                 {
+                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    {
+                        continue;
+                    }
                     _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc));
                     return true;
                 }
@@ -126,6 +133,12 @@ internal unsafe partial class SpatialRTree<TStore>
                 if (!latch.ValidateVersion(version))
                 {
                     RestartFromRoot();
+                    continue;
+                }
+
+                // Node-level category mask pruning: skip entire node if no entries match
+                if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
+                {
                     continue;
                 }
 
@@ -231,13 +244,14 @@ internal unsafe partial class SpatialRTree<TStore>
     /// Query all entities whose fat AABB overlaps a sphere defined by center + radius.
     /// Converts to AABB query internally. False positive rate: ~21% (2D), ~48% (3D) — caller post-filters.
     /// </summary>
-    internal RadiusEnumerator QueryRadius(ReadOnlySpan<double> center, double radius, ChangeSet changeSet = null) => new(this, center, radius, changeSet);
+    internal RadiusEnumerator QueryRadius(ReadOnlySpan<double> center, double radius, ChangeSet changeSet = null, uint categoryMask = 0)
+        => new(this, center, radius, changeSet, categoryMask);
 
     internal ref struct RadiusEnumerator
     {
         private AABBQueryEnumerator _inner;
 
-        internal RadiusEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> center, double radius, ChangeSet changeSet)
+        internal RadiusEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> center, double radius, ChangeSet changeSet, uint categoryMask = 0)
         {
             radius = Math.Max(radius, 0); // Clamp negative radius to empty query
             int halfCoord = tree._desc.CoordCount / 2;
@@ -247,7 +261,7 @@ internal unsafe partial class SpatialRTree<TStore>
                 aabb[d] = center[d] - radius;
                 aabb[d + halfCoord] = center[d] + radius;
             }
-            _inner = new AABBQueryEnumerator(tree, aabb, changeSet);
+            _inner = new AABBQueryEnumerator(tree, aabb, changeSet, categoryMask);
         }
 
         public SpatialQueryResult Current => _inner.Current;
@@ -262,8 +276,8 @@ internal unsafe partial class SpatialRTree<TStore>
     /// Query entities whose fat AABB intersects a ray, yielding results in front-to-back order.
     /// Uses a min-heap sorted by ray entry distance for priority traversal.
     /// </summary>
-    internal RayEnumerator QueryRay(ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist, ChangeSet changeSet = null)
-        => new(this, origin, direction, maxDist, changeSet);
+    internal RayEnumerator QueryRay(ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist, ChangeSet changeSet = null,
+        uint categoryMask = 0) => new(this, origin, direction, maxDist, changeSet, categoryMask);
 
     /// <summary>Inline min-heap buffer for ray query priority queue (64 entries).</summary>
     [InlineArray(64)]
@@ -278,6 +292,7 @@ internal unsafe partial class SpatialRTree<TStore>
         private ChunkAccessor<TStore> _accessor;
         private readonly SpatialNodeDescriptor _desc;
         private readonly double _maxDist;
+        private readonly uint _categoryMask;
 
         // Ray parameters stored as fixed arrays (origin + inverse direction, max 3 dimensions)
         private fixed double _origin[3];
@@ -297,7 +312,8 @@ internal unsafe partial class SpatialRTree<TStore>
         private SpatialQueryResult _current;
         private bool _disposed;
 
-        internal RayEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist, ChangeSet changeSet)
+        internal RayEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist,
+            ChangeSet changeSet, uint categoryMask = 0)
         {
             _tree = tree;
             _desc = tree._desc;
@@ -310,6 +326,7 @@ internal unsafe partial class SpatialRTree<TStore>
             _currentLeafCount = 0;
             _current = default;
             _disposed = false;
+            _categoryMask = categoryMask;
 
             int halfCoordInit = _desc.CoordCount / 2;
             bool degenerate = double.IsNaN(maxDist) || maxDist < 0;
@@ -361,6 +378,10 @@ internal unsafe partial class SpatialRTree<TStore>
                 var (hit, t) = SpatialGeometry.RayAABBIntersect(origin, invDir, coords, _coordCount);
                 if (hit && t <= _maxDist)
                 {
+                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    {
+                        continue;
+                    }
                     _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc));
                     return true;
                 }
@@ -392,6 +413,12 @@ internal unsafe partial class SpatialRTree<TStore>
                 if (!latch.ValidateVersion(version))
                 {
                     RestartFromRoot();
+                    continue;
+                }
+
+                // Node-level category mask pruning
+                if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
+                {
                     continue;
                 }
 
@@ -505,8 +532,8 @@ internal unsafe partial class SpatialRTree<TStore>
     /// Optimizes with INSIDE subtree yields (entire subtree visible → skip per-entry plane tests).
     /// Planes packed as (normalX, normalY, [normalZ,] distance), dimCount+1 doubles per plane.
     /// </summary>
-    internal FrustumEnumerator QueryFrustum(ReadOnlySpan<double> planes, int planeCount, ChangeSet changeSet = null)
-        => new(this, planes, planeCount, changeSet);
+    internal FrustumEnumerator QueryFrustum(ReadOnlySpan<double> planes, int planeCount, ChangeSet changeSet = null, uint categoryMask = 0)
+        => new(this, planes, planeCount, changeSet, categoryMask);
 
     /// <summary>Stack buffer for frustum DFS — encodes (chunkId, fullyInside) via sign bit.</summary>
     [InlineArray(256)]
@@ -520,6 +547,7 @@ internal unsafe partial class SpatialRTree<TStore>
         private readonly int _planeCount;
         private readonly int _dimCount;
         private readonly int _planeDataLen; // _planeCount * (_dimCount + 1)
+        private readonly uint _categoryMask;
 
         // Planes stored inline: max 6 planes × 4 doubles = 24 doubles
         private fixed double _planes[24];
@@ -537,7 +565,7 @@ internal unsafe partial class SpatialRTree<TStore>
         private SpatialQueryResult _current;
         private bool _disposed;
 
-        internal FrustumEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> planes, int planeCount, ChangeSet changeSet)
+        internal FrustumEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> planes, int planeCount, ChangeSet changeSet, uint categoryMask = 0)
         {
             _tree = tree;
             _desc = tree._desc;
@@ -552,6 +580,7 @@ internal unsafe partial class SpatialRTree<TStore>
             _currentLeafFullyInside = false;
             _current = default;
             _disposed = false;
+            _categoryMask = categoryMask;
 
             int len = Math.Min(planes.Length, 24);
             for (int i = 0; i < len; i++)
@@ -594,8 +623,12 @@ internal unsafe partial class SpatialRTree<TStore>
 
                 if (_currentLeafFullyInside)
                 {
-                    // INSIDE optimization: yield without plane tests
+                    // INSIDE optimization: yield without plane tests (but still check category mask)
                     byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
+                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    {
+                        continue;
+                    }
                     _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc));
                     return true;
                 }
@@ -607,6 +640,10 @@ internal unsafe partial class SpatialRTree<TStore>
                 int cls = SpatialGeometry.ClassifyAABBAgainstPlanes(coords, planeSpan, _planeCount, _dimCount);
                 if (cls != SpatialGeometry.FrustumOutside)
                 {
+                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(lb, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    {
+                        continue;
+                    }
                     _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(lb, _currentLeafIndex, _desc));
                     return true;
                 }
@@ -635,6 +672,12 @@ internal unsafe partial class SpatialRTree<TStore>
                 if (!latch.ValidateVersion(version))
                 {
                     RestartFromRoot();
+                    continue;
+                }
+
+                // Node-level category mask pruning
+                if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
+                {
                     continue;
                 }
 
@@ -712,12 +755,11 @@ internal unsafe partial class SpatialRTree<TStore>
 
     /// <summary>
     /// Find the k nearest entity candidates to a point via iterative radius expansion.
-    /// Returns entities whose fat AABB falls within the search radius. The <c>distSq</c> field is set to 0 — callers
-    /// must recompute actual distances from component data (the tree stores fat AABBs, not tight bounds).
-    /// Converges in 1–2 iterations for k &lt; 20.
+    /// Returns entities whose fat AABB falls within the search radius. The <c>distSq</c> field is set to 0 — callers must recompute actual distances from
+    /// component data (the tree stores fat AABBs, not tight bounds). Converges in 1–2 iterations for k &lt; 20.
     /// </summary>
     /// <returns>Number of results written (may be less than k if fewer entities exist).</returns>
-    internal int QueryKNN(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results, ChangeSet changeSet = null)
+    internal int QueryKNN(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results, ChangeSet changeSet = null, uint categoryMask = 0)
     {
         if (k <= 0 || _entityCount == 0)
         {
@@ -756,9 +798,8 @@ internal unsafe partial class SpatialRTree<TStore>
         double radius = Math.Pow(volumeForK, 1.0 / halfCoord) * 1.5; // 1.5x safety factor
         radius = Math.Max(radius, 1.0); // Minimum radius
 
-        // Iterative expansion — collect candidate entity IDs within expanding radius.
-        // distSq is set to 0 at the tree level because the tree stores fat AABBs, not tight bounds.
-        // Callers must recompute actual distances from component data for precise ordering.
+        // Iterative expansion — collect candidate entity IDs within expanding radius. distSq is set to 0 at the tree level because the tree stores fat
+        // AABBs, not tight bounds. Callers must recompute actual distances from component data for precise ordering.
         int maxCandidates = Math.Min(k * 4, 256);
         Span<(long entityId, double distSq)> candidates = stackalloc (long, double)[maxCandidates];
         int lastCount = 0;
@@ -766,7 +807,7 @@ internal unsafe partial class SpatialRTree<TStore>
         for (int iteration = 0; iteration < 8; iteration++)
         {
             int count = 0;
-            foreach (var result in QueryRadius(center, radius, changeSet))
+            foreach (var result in QueryRadius(center, radius, changeSet, categoryMask))
             {
                 if (count >= candidates.Length)
                 {

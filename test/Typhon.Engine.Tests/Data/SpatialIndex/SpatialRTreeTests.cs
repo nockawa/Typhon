@@ -435,4 +435,268 @@ public void QueryAABB_vs_BruteForce_RandomData(SpatialVariant variant)
         accessor.Dispose();
         guard.Dispose();
     }
+
+    // ── Category Mask Filtering ──────────────────────────────────────────
+
+    [Test]
+    [TestCase(SpatialVariant.R2Df32)]
+    [TestCase(SpatialVariant.R3Df32)]
+    [CancelAfter(5000)]
+    public unsafe void Insert_WithCategoryMask_StoresCorrectly(SpatialVariant variant)
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(variant);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, variant);
+        var accessor = segment.CreateChunkAccessor();
+
+        var coords = MakeCoords(variant, 1, 2, 3, 4);
+        uint mask = 0x0000_000F;
+        var (leafId, slot) = tree.Insert(100, 0, coords, ref accessor, categoryMask: mask);
+
+        // Read back the stored mask
+        byte* leafBase = accessor.GetChunkAddress(leafId);
+        uint readMask = SpatialNodeHelper.ReadLeafCategoryMask(leafBase, slot, desc);
+        Assert.That(readMask, Is.EqualTo(mask), "Stored category mask should match inserted value");
+
+        // Union mask on the node should also have these bits
+        uint unionMask = SpatialNodeHelper.ReadUnionCategoryMask(leafBase, desc);
+        Assert.That(unionMask & mask, Is.EqualTo(mask), "Union mask should contain entry's bits");
+
+        TreeValidator.Validate(tree);
+        accessor.Dispose();
+        guard.Dispose();
+    }
+
+    [Test]
+    [TestCase(SpatialVariant.R2Df32)]
+    [TestCase(SpatialVariant.R3Df32)]
+    [CancelAfter(5000)]
+    public void Query_NoCategoryMask_ReturnsAll(SpatialVariant variant)
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(variant);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, variant);
+        var accessor = segment.CreateChunkAccessor();
+
+        // Insert 5 entities with different masks
+        for (int i = 0; i < 5; i++)
+        {
+            var coords = MakeCoords(variant, i * 10, 0, i * 10 + 5, 5);
+            tree.Insert(100 + i, 0, coords, ref accessor, categoryMask: (uint)(1 << i));
+        }
+
+        // Query with mask=0 (no filter) — should return all 5
+        var results = new List<long>();
+        var queryCoords = MakeCoords(variant, -100, -100, 200, 200);
+        foreach (var r in tree.QueryAABB(queryCoords, categoryMask: 0))
+        {
+            results.Add(r.EntityId);
+        }
+        Assert.That(results, Has.Count.EqualTo(5), "No-filter query should return all entities");
+
+        TreeValidator.Validate(tree);
+        accessor.Dispose();
+        guard.Dispose();
+    }
+
+    [Test]
+    [TestCase(SpatialVariant.R2Df32)]
+    [TestCase(SpatialVariant.R3Df32)]
+    [CancelAfter(5000)]
+    public void Query_WithCategoryMask_FiltersCorrectly(SpatialVariant variant)
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(variant);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, variant);
+        var accessor = segment.CreateChunkAccessor();
+
+        // Insert entities with two different category masks
+        uint maskA = 0x01;  // Category A
+        uint maskB = 0x02;  // Category B
+        uint maskAB = 0x03; // Both categories
+
+        tree.Insert(1, 0, MakeCoords(variant, 0, 0, 5, 5), ref accessor, categoryMask: maskA);
+        tree.Insert(2, 0, MakeCoords(variant, 10, 0, 15, 5), ref accessor, categoryMask: maskB);
+        tree.Insert(3, 0, MakeCoords(variant, 20, 0, 25, 5), ref accessor, categoryMask: maskAB);
+
+        var queryCoords = MakeCoords(variant, -100, -100, 200, 200);
+
+        // Query for category A only — should return entities 1 and 3 (both have bit 0)
+        var resultsA = new List<long>();
+        foreach (var r in tree.QueryAABB(queryCoords, categoryMask: maskA))
+        {
+            resultsA.Add(r.EntityId);
+        }
+        Assert.That(resultsA, Has.Count.EqualTo(2), "Category A query");
+        Assert.That(resultsA, Does.Contain(1L));
+        Assert.That(resultsA, Does.Contain(3L));
+
+        // Query for category B only — should return entities 2 and 3 (both have bit 1)
+        var resultsB = new List<long>();
+        foreach (var r in tree.QueryAABB(queryCoords, categoryMask: maskB))
+        {
+            resultsB.Add(r.EntityId);
+        }
+        Assert.That(resultsB, Has.Count.EqualTo(2), "Category B query");
+        Assert.That(resultsB, Does.Contain(2L));
+        Assert.That(resultsB, Does.Contain(3L));
+
+        // Query for both A AND B — only entity 3 has both bits
+        var resultsAB = new List<long>();
+        foreach (var r in tree.QueryAABB(queryCoords, categoryMask: maskAB))
+        {
+            resultsAB.Add(r.EntityId);
+        }
+        Assert.That(resultsAB, Has.Count.EqualTo(1), "Category A+B conjunctive query");
+        Assert.That(resultsAB, Does.Contain(3L));
+
+        TreeValidator.Validate(tree);
+        accessor.Dispose();
+        guard.Dispose();
+    }
+
+    [Test]
+    [TestCase(SpatialVariant.R2Df32)]
+    [TestCase(SpatialVariant.R3Df32)]
+    [CancelAfter(5000)]
+    public unsafe void UnionMask_RecomputesOnRemove(SpatialVariant variant)
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(variant);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, variant);
+        var accessor = segment.CreateChunkAccessor();
+
+        // Insert two entities: one with mask 0x01, one with mask 0x02
+        var (leaf1, slot1) = tree.Insert(1, 0, MakeCoords(variant, 0, 0, 5, 5), ref accessor, categoryMask: 0x01);
+        tree.Insert(2, 0, MakeCoords(variant, 10, 0, 15, 5), ref accessor, categoryMask: 0x02);
+
+        // Union should have both bits
+        byte* leafBase = accessor.GetChunkAddress(leaf1);
+        Assert.That(SpatialNodeHelper.ReadUnionCategoryMask(leafBase, desc) & 0x03, Is.EqualTo(0x03u), "Union should have both bits before remove");
+
+        // Remove entity 1 (mask 0x01) — union should lose bit 0
+        tree.Remove(leaf1, slot1, ref accessor);
+        leafBase = accessor.GetChunkAddress(leaf1); // Re-read after potential pointer invalidation
+        uint unionAfter = SpatialNodeHelper.ReadUnionCategoryMask(leafBase, desc);
+        Assert.That(unionAfter & 0x01, Is.EqualTo(0u), "Union should NOT have bit 0 after removing entity with mask 0x01");
+        Assert.That(unionAfter & 0x02, Is.EqualTo(0x02u), "Union should still have bit 1");
+
+        TreeValidator.Validate(tree);
+        accessor.Dispose();
+        guard.Dispose();
+    }
+
+    [Test]
+    [TestCase(SpatialVariant.R2Df32)]
+    [CancelAfter(5000)]
+    public void SetEntryCategoryMask_UpdatesLeafAndAncestors(SpatialVariant variant)
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(variant);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 10, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, variant);
+        var accessor = segment.CreateChunkAccessor();
+
+        // Insert with default mask (uint.MaxValue)
+        var (leafId, slot) = tree.Insert(1, 0, MakeCoords(variant, 0, 0, 5, 5), ref accessor);
+
+        // Query with mask=0x01 — should find it (has all bits set)
+        var queryCoords = MakeCoords(variant, -100, -100, 200, 200);
+        int countBefore = 0;
+        foreach (var r in tree.QueryAABB(queryCoords, categoryMask: 0x01))
+        {
+            countBefore++;
+        }
+        Assert.That(countBefore, Is.EqualTo(1), "Default mask should match any category query");
+
+        // Change mask to 0x02 (only bit 1)
+        tree.SetEntryCategoryMask(leafId, slot, 0x02, ref accessor);
+
+        // Query with mask=0x01 — should NOT find it (entity only has bit 1, not bit 0)
+        int countAfter = 0;
+        foreach (var r in tree.QueryAABB(queryCoords, categoryMask: 0x01))
+        {
+            countAfter++;
+        }
+        Assert.That(countAfter, Is.EqualTo(0), "After mask change to 0x02, query for 0x01 should not match");
+
+        // Query with mask=0x02 — SHOULD find it
+        int countMatch = 0;
+        foreach (var r in tree.QueryAABB(queryCoords, categoryMask: 0x02))
+        {
+            countMatch++;
+        }
+        Assert.That(countMatch, Is.EqualTo(1), "After mask change to 0x02, query for 0x02 should match");
+
+        TreeValidator.Validate(tree);
+        accessor.Dispose();
+        guard.Dispose();
+    }
+
+    [Test]
+    [TestCase(SpatialVariant.R2Df32)]
+    [CancelAfter(5000)]
+    public void CategoryMask_WithBruteForce_RandomData(SpatialVariant variant)
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(variant);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 100, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, variant);
+        var oracle = new BruteForceSpatialIndex(desc.CoordCount);
+        var accessor = segment.CreateChunkAccessor();
+        var rng = new Random(42);
+
+        // Insert 100 entities with random positions and random category masks (4 categories)
+        for (int i = 0; i < 100; i++)
+        {
+            double x = rng.NextDouble() * 1000;
+            double y = rng.NextDouble() * 1000;
+            var coords = MakeCoords(variant, x, y, x + 5, y + 5);
+            uint mask = (uint)(1 << rng.Next(0, 4)); // One of 4 category bits
+            tree.Insert(i + 1, 0, coords, ref accessor, categoryMask: mask);
+            oracle.Insert(i + 1, coords, mask);
+        }
+
+        // Query with each of the 4 category masks and compare results
+        var queryCoords = MakeCoords(variant, 0, 0, 1000, 1000);
+        for (uint bit = 0; bit < 4; bit++)
+        {
+            uint queryMask = 1u << (int)bit;
+
+            var treeResults = new HashSet<long>();
+            foreach (var r in tree.QueryAABB(queryCoords, categoryMask: queryMask))
+            {
+                treeResults.Add(r.EntityId);
+            }
+
+            var oracleResults = new HashSet<long>(oracle.QueryAABB(queryCoords, queryMask));
+            Assert.That(treeResults, Is.EquivalentTo(oracleResults), $"Category bit {bit}: tree results should match oracle");
+        }
+
+        TreeValidator.Validate(tree);
+        accessor.Dispose();
+        guard.Dispose();
+    }
 }

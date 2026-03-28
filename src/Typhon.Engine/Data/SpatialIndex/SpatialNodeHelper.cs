@@ -65,6 +65,14 @@ internal static unsafe class SpatialNodeHelper
         }
     }
 
+    // ── UnionCategoryMask access (header field, after NodeMBR) ─────────────
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint ReadUnionCategoryMask(byte* nodeBase, in SpatialNodeDescriptor desc) => *(uint*)(nodeBase + desc.UnionCategoryMaskOffset);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteUnionCategoryMask(byte* nodeBase, uint mask, in SpatialNodeDescriptor desc) => *(uint*)(nodeBase + desc.UnionCategoryMaskOffset) = mask;
+
     // ── Leaf SOA access ─────────────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -102,6 +110,14 @@ internal static unsafe class SpatialNodeHelper
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteLeafCompChunkId(byte* nodeBase, int index, int compChunkId, in SpatialNodeDescriptor desc) =>
         *(int*)(nodeBase + desc.LeafCompChunkIdOffset + index * desc.LeafCompChunkIdSize) = compChunkId;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint ReadLeafCategoryMask(byte* nodeBase, int index, in SpatialNodeDescriptor desc) =>
+        *(uint*)(nodeBase + desc.LeafCategoryMaskOffset + index * desc.LeafCategoryMaskSize);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteLeafCategoryMask(byte* nodeBase, int index, uint mask, in SpatialNodeDescriptor desc) =>
+        *(uint*)(nodeBase + desc.LeafCategoryMaskOffset + index * desc.LeafCategoryMaskSize) = mask;
 
     // ── Internal SOA access ─────────────────────────────────────────────────
 
@@ -181,6 +197,7 @@ internal static unsafe class SpatialNodeHelper
         }
         WriteLeafEntityId(nodeBase, dstIdx, ReadLeafEntityId(nodeBase, srcIdx, desc), desc);
         WriteLeafCompChunkId(nodeBase, dstIdx, ReadLeafCompChunkId(nodeBase, srcIdx, desc), desc);
+        WriteLeafCategoryMask(nodeBase, dstIdx, ReadLeafCategoryMask(nodeBase, srcIdx, desc), desc);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -196,7 +213,7 @@ internal static unsafe class SpatialNodeHelper
     // ── MBR refit ───────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Recompute NodeMBR as the exact union of all leaf entries' coordinates.
+    /// Recompute NodeMBR as the exact union of all leaf entries' coordinates, and recompute UnionCategoryMask as the bitwise OR of all leaf entries' category masks.
     /// First half of CoordCount are min coords, second half are max coords.
     /// </summary>
     public static void RefitLeafMBR(byte* nodeBase, in SpatialNodeDescriptor desc)
@@ -208,12 +225,14 @@ internal static unsafe class SpatialNodeHelper
             {
                 WriteNodeMBRCoord(nodeBase, c, 0.0, desc);
             }
+            WriteUnionCategoryMask(nodeBase, 0, desc);
             return;
         }
 
         int halfCoord = desc.CoordCount / 2;
         Span<double> mbr = stackalloc double[desc.CoordCount];
         ReadLeafEntryCoords(nodeBase, 0, mbr, desc);
+        uint unionMask = ReadLeafCategoryMask(nodeBase, 0, desc);
 
         for (int i = 1; i < count; i++)
         {
@@ -233,12 +252,14 @@ internal static unsafe class SpatialNodeHelper
                     mbr[c] = v;
                 }
             }
+            unionMask |= ReadLeafCategoryMask(nodeBase, i, desc);
         }
 
         for (int c = 0; c < desc.CoordCount; c++)
         {
             WriteNodeMBRCoord(nodeBase, c, mbr[c], desc);
         }
+        WriteUnionCategoryMask(nodeBase, unionMask, desc);
     }
 
     /// <summary>

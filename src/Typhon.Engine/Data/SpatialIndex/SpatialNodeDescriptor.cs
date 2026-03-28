@@ -15,6 +15,9 @@ public readonly struct SpatialNodeDescriptor
     public readonly int HeaderSize;
     public readonly int EntryAreaSize;    // Stride - HeaderSize
 
+    // Category filtering — union mask in header, per-entry mask in leaf SOA
+    public readonly int UnionCategoryMaskOffset; // offset of 4-byte union mask in node header (both leaf and internal)
+
     // Leaf SOA layout
     public readonly int LeafCapacity;
     public readonly int LeafCoordOffsets; // = HeaderSize (start of first coord array)
@@ -23,6 +26,8 @@ public readonly struct SpatialNodeDescriptor
     public readonly int LeafIdSize;           // 8 (EntityId always 64-bit)
     public readonly int LeafCompChunkIdOffset; // start of ComponentChunkId array (int per entry)
     public readonly int LeafCompChunkIdSize;   // 4 (ComponentChunkId always int)
+    public readonly int LeafCategoryMaskOffset; // start of CategoryMask array (uint per entry)
+    public readonly int LeafCategoryMaskSize;   // 4 (CategoryMask always uint)
 
     // Internal SOA layout
     public readonly int InternalCapacity;
@@ -48,14 +53,14 @@ public readonly struct SpatialNodeDescriptor
         CoordCount = is3D ? 6 : 4;
         CoordSize = isF64 ? 8 : 4;
 
-        // Header: OlcVersion(4) + Control(4) + ParentChunkId(4) + NodeMBR(CoordCount * CoordSize)
-        // 2D variants get +4 padding for alignment
-        int rawHeader = 12 + CoordCount * CoordSize;
-        HeaderSize = rawHeader + (is3D ? 0 : 4);
+        // Header: OlcVersion(4) + Control(4) + ParentChunkId(4) + NodeMBR(CoordCount * CoordSize) + UnionCategoryMask(4)
+        // The UnionCategoryMask sits immediately after NodeMBR (replaces old 2D alignment padding)
+        UnionCategoryMaskOffset = 12 + CoordCount * CoordSize;
+        HeaderSize = UnionCategoryMaskOffset + 4;
 
         EntryAreaSize = Stride - HeaderSize;
 
-        int leafEntrySize = CoordCount * CoordSize + 8 + 4;   // +8 EntityId (64-bit) + 4 ComponentChunkId (int)
+        int leafEntrySize = CoordCount * CoordSize + 8 + 4 + 4;   // +8 EntityId (64-bit) + 4 ComponentChunkId (int) + 4 CategoryMask (uint)
         int internalEntrySize = CoordCount * CoordSize + 4;  // +4 for ChildChunkId (int)
 
         LeafCapacity = EntryAreaSize / leafEntrySize;
@@ -68,6 +73,8 @@ public readonly struct SpatialNodeDescriptor
         LeafIdSize = 8;
         LeafCompChunkIdOffset = LeafIdOffset + LeafCapacity * LeafIdSize;
         LeafCompChunkIdSize = 4;
+        LeafCategoryMaskOffset = LeafCompChunkIdOffset + LeafCapacity * LeafCompChunkIdSize;
+        LeafCategoryMaskSize = 4;
 
         // Internal SOA offsets
         InternalCoordStride = InternalCapacity * CoordSize;

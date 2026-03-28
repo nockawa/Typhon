@@ -12,20 +12,24 @@ internal readonly ref struct SpatialQuery<T> where T : unmanaged
 
     internal SpatialQuery(SpatialRTree<PersistentStore> tree) => _tree = tree;
 
-    /// <summary>AABB overlap query. Coords: [min0, min1, ..., max0, max1, ...].</summary>
-    public SpatialRTree<PersistentStore>.AABBQueryEnumerator AABB(ReadOnlySpan<double> coords) => _tree.QueryAABB(coords);
+    /// <summary>AABB overlap query. Coords: [min0, min1, ..., max0, max1, ...]. categoryMask=0 means no filtering.</summary>
+    public SpatialRTree<PersistentStore>.AABBQueryEnumerator AABB(ReadOnlySpan<double> coords, uint categoryMask = 0)
+        => _tree.QueryAABB(coords, categoryMask: categoryMask);
 
     /// <summary>Radius (sphere) query. Returns entities whose fat AABB overlaps the bounding box of the sphere. Caller post-filters by distance.</summary>
-    public SpatialRTree<PersistentStore>.RadiusEnumerator Radius(ReadOnlySpan<double> center, double radius) => _tree.QueryRadius(center, radius);
+    public SpatialRTree<PersistentStore>.RadiusEnumerator Radius(ReadOnlySpan<double> center, double radius, uint categoryMask = 0)
+        => _tree.QueryRadius(center, radius, categoryMask: categoryMask);
 
     /// <summary>Ray query with front-to-back ordering. Origin + direction + maxDist.</summary>
-    public SpatialRTree<PersistentStore>.RayEnumerator Ray(ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist) =>
-        _tree.QueryRay(origin, direction, maxDist);
+    public SpatialRTree<PersistentStore>.RayEnumerator Ray(ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist,
+        uint categoryMask = 0) =>
+        _tree.QueryRay(origin, direction, maxDist, categoryMask: categoryMask);
 
     /// <summary>Frustum query. Planes packed as (normalX, normalY, [normalZ,] distance), dimCount+1 doubles per plane.</summary>
-    public SpatialRTree<PersistentStore>.FrustumEnumerator Frustum(ReadOnlySpan<double> planes, int planeCount) =>
-        _tree.QueryFrustum(planes, planeCount);
+    public SpatialRTree<PersistentStore>.FrustumEnumerator Frustum(ReadOnlySpan<double> planes, int planeCount, uint categoryMask = 0) =>
+        _tree.QueryFrustum(planes, planeCount, categoryMask: categoryMask);
 
     /// <summary>k-nearest-neighbors query. Results written to caller-provided buffer sorted by ascending squared distance.</summary>
-    public int Nearest(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results) => _tree.QueryKNN(center, k, results);
+    public int Nearest(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results, uint categoryMask = 0)
+        => _tree.QueryKNN(center, k, results, categoryMask: categoryMask);
 }

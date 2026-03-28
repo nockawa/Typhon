@@ -17,16 +17,16 @@ public class SpatialNodeDescriptorTests
     [Test]
     public void KnownCapacities_MatchDesignDoc()
     {
-        // Updated for leaf entry layout: coords + EntityId(8B) + ComponentChunkId(4B)
-        Assert.That(SpatialNodeDescriptor.R2Df32.LeafCapacity, Is.EqualTo(17), "R2Df32 LeafCap");
+        // Updated for leaf entry layout: coords + EntityId(8B) + ComponentChunkId(4B) + CategoryMask(4B)
+        Assert.That(SpatialNodeDescriptor.R2Df32.LeafCapacity, Is.EqualTo(15), "R2Df32 LeafCap");
         Assert.That(SpatialNodeDescriptor.R2Df32.InternalCapacity, Is.EqualTo(24), "R2Df32 InternalCap");
-        Assert.That(SpatialNodeDescriptor.R2Df32.MinFill, Is.EqualTo(7), "R2Df32 MinFill");
+        Assert.That(SpatialNodeDescriptor.R2Df32.MinFill, Is.EqualTo(6), "R2Df32 MinFill");
 
-        Assert.That(SpatialNodeDescriptor.R3Df32.LeafCapacity, Is.EqualTo(13), "R3Df32 LeafCap");
-        Assert.That(SpatialNodeDescriptor.R3Df32.InternalCapacity, Is.EqualTo(17), "R3Df32 InternalCap");
-        Assert.That(SpatialNodeDescriptor.R3Df32.MinFill, Is.EqualTo(6), "R3Df32 MinFill");
+        Assert.That(SpatialNodeDescriptor.R3Df32.LeafCapacity, Is.EqualTo(11), "R3Df32 LeafCap");
+        Assert.That(SpatialNodeDescriptor.R3Df32.InternalCapacity, Is.EqualTo(16), "R3Df32 InternalCap");
+        Assert.That(SpatialNodeDescriptor.R3Df32.MinFill, Is.EqualTo(5), "R3Df32 MinFill");
 
-        Assert.That(SpatialNodeDescriptor.R2Df64.LeafCapacity, Is.EqualTo(10), "R2Df64 LeafCap");
+        Assert.That(SpatialNodeDescriptor.R2Df64.LeafCapacity, Is.EqualTo(9), "R2Df64 LeafCap");
         Assert.That(SpatialNodeDescriptor.R2Df64.InternalCapacity, Is.EqualTo(12), "R2Df64 InternalCap");
         Assert.That(SpatialNodeDescriptor.R2Df64.MinFill, Is.EqualTo(4), "R2Df64 MinFill");
 
@@ -38,10 +38,11 @@ public class SpatialNodeDescriptorTests
     [Test]
     public void HeaderSizes_MatchDesignDoc()
     {
-        Assert.That(SpatialNodeDescriptor.R2Df32.HeaderSize, Is.EqualTo(32), "R2Df32 header");
-        Assert.That(SpatialNodeDescriptor.R3Df32.HeaderSize, Is.EqualTo(36), "R3Df32 header");
-        Assert.That(SpatialNodeDescriptor.R2Df64.HeaderSize, Is.EqualTo(48), "R2Df64 header");
-        Assert.That(SpatialNodeDescriptor.R3Df64.HeaderSize, Is.EqualTo(60), "R3Df64 header");
+        // Header: OlcVersion(4) + Control(4) + ParentChunkId(4) + NodeMBR(CoordCount*CoordSize) + UnionCategoryMask(4)
+        Assert.That(SpatialNodeDescriptor.R2Df32.HeaderSize, Is.EqualTo(32), "R2Df32 header");  // 12+16+4=32
+        Assert.That(SpatialNodeDescriptor.R3Df32.HeaderSize, Is.EqualTo(40), "R3Df32 header");  // 12+24+4=40
+        Assert.That(SpatialNodeDescriptor.R2Df64.HeaderSize, Is.EqualTo(48), "R2Df64 header");  // 12+32+4=48
+        Assert.That(SpatialNodeDescriptor.R3Df64.HeaderSize, Is.EqualTo(64), "R3Df64 header");  // 12+48+4=64
     }
 
     [Test]
@@ -64,7 +65,7 @@ public class SpatialNodeDescriptorTests
     [TestCaseSource(nameof(AllVariants))]
     public void LeafLayout_FitsWithinStride(SpatialNodeDescriptor desc)
     {
-        int leafEnd = desc.LeafIdOffset + desc.LeafCapacity * desc.LeafIdSize;
+        int leafEnd = desc.LeafCategoryMaskOffset + desc.LeafCapacity * desc.LeafCategoryMaskSize;
         Assert.That(leafEnd, Is.LessThanOrEqualTo(desc.Stride),
             $"Leaf data overflows stride: ends at {leafEnd}, stride is {desc.Stride}");
     }

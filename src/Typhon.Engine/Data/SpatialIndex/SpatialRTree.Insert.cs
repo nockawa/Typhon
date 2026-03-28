@@ -13,13 +13,14 @@ internal unsafe partial class SpatialRTree<TStore>
     /// <param name="coords">CoordCount doubles ordered [min0, min1, ..., max0, max1, ...]</param>
     /// <param name="accessor">ChunkAccessor for page access</param>
     /// <param name="changeSet">ChangeSet for WAL participation</param>
+    /// <param name="categoryMask">Category bitmask for filtering (default: uint.MaxValue = matches all queries)</param>
     /// <returns>(leafChunkId, slotIndex) for back-pointer storage.</returns>
     internal (int leafChunkId, int slotIndex) Insert(long entityId, int componentChunkId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor,
-        ChangeSet changeSet = null)
+        ChangeSet changeSet = null, uint categoryMask = uint.MaxValue)
     {
         while (true)
         {
-            var result = TryInsert(entityId, componentChunkId, coords, ref accessor, changeSet);
+            var result = TryInsert(entityId, componentChunkId, coords, ref accessor, changeSet, categoryMask);
             if (result.success)
             {
                 return (result.leafChunkId, result.slotIndex);
@@ -29,11 +30,11 @@ internal unsafe partial class SpatialRTree<TStore>
     }
 
     /// <summary>Backward-compatible overload for standalone tree tests (no back-pointer tracking).</summary>
-    internal (int leafChunkId, int slotIndex) Insert(long entityId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet = null)
-        => Insert(entityId, 0, coords, ref accessor, changeSet);
+    internal (int leafChunkId, int slotIndex) Insert(long entityId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet = null,
+        uint categoryMask = uint.MaxValue) => Insert(entityId, 0, coords, ref accessor, changeSet, categoryMask);
 
     private (bool success, int leafChunkId, int slotIndex) TryInsert(long entityId, int componentChunkId, ReadOnlySpan<double> coords,
-        ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
+        ref ChunkAccessor<TStore> accessor, ChangeSet changeSet, uint categoryMask)
     {
         DescentPath path = default;
         int nodeChunkId = _rootChunkId;
@@ -76,7 +77,7 @@ internal unsafe partial class SpatialRTree<TStore>
         if (leafCount < _desc.LeafCapacity)
         {
             // Room available: append at leafCount position
-            WriteLeafEntry(leafBase, leafCount, entityId, componentChunkId, coords);
+            WriteLeafEntry(leafBase, leafCount, entityId, componentChunkId, coords, categoryMask);
             SpatialNodeHelper.SetCount(leafBase, leafCount + 1);
             SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
             leafLatch.WriteUnlock();
@@ -89,7 +90,7 @@ internal unsafe partial class SpatialRTree<TStore>
 
         // Leaf full: need split
         leafLatch.WriteUnlock();
-        return InsertWithSplit(entityId, componentChunkId, coords, nodeChunkId, ref path, ref accessor, changeSet);
+        return InsertWithSplit(entityId, componentChunkId, coords, nodeChunkId, ref path, ref accessor, changeSet, categoryMask);
     }
 
     /// <summary>
@@ -160,11 +161,12 @@ internal unsafe partial class SpatialRTree<TStore>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteLeafEntry(byte* nodeBase, int index, long entityId, int componentChunkId, ReadOnlySpan<double> coords)
+    private void WriteLeafEntry(byte* nodeBase, int index, long entityId, int componentChunkId, ReadOnlySpan<double> coords, uint categoryMask = uint.MaxValue)
     {
         SpatialNodeHelper.WriteLeafEntryCoords(nodeBase, index, coords, _desc);
         SpatialNodeHelper.WriteLeafEntityId(nodeBase, index, entityId, _desc);
         SpatialNodeHelper.WriteLeafCompChunkId(nodeBase, index, componentChunkId, _desc);
+        SpatialNodeHelper.WriteLeafCategoryMask(nodeBase, index, categoryMask, _desc);
     }
 
     private void WriteInternalEntry(byte* nodeBase, int index, int childChunkId, ref ChunkAccessor<TStore> accessor)

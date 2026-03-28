@@ -26,7 +26,7 @@ internal static unsafe class TreeValidator
                 int totalEntities = 0;
                 int totalNodes = 0;
 
-                ValidateNode(tree, tree.RootChunkId, 0, 0, desc, ref accessor, entityIds, ref totalEntities, ref totalNodes);
+                ValidateNode(tree.RootChunkId, 0, desc, ref accessor, entityIds, ref totalEntities, ref totalNodes);
 
                 // R5: each EntityId appears exactly once
                 if (entityIds.Count != totalEntities)
@@ -57,8 +57,8 @@ internal static unsafe class TreeValidator
         }
     }
 
-    private static void ValidateNode<TStore>(SpatialRTree<TStore> tree, int chunkId, int depth, int expectedParentChunkId, in SpatialNodeDescriptor desc, 
-        ref ChunkAccessor<TStore> accessor, HashSet<long> entityIds, ref int totalEntities, ref int totalNodes) where TStore : struct, IPageStore
+    private static void ValidateNode<TStore>(int chunkId, int expectedParentChunkId, in SpatialNodeDescriptor desc, ref ChunkAccessor<TStore> accessor, 
+        HashSet<long> entityIds, ref int totalEntities, ref int totalNodes) where TStore : struct, IPageStore
     {
         totalNodes++;
         byte* nodeBase = accessor.GetChunkAddress(chunkId);
@@ -91,6 +91,9 @@ internal static unsafe class TreeValidator
 
             // R1: MBR tightness
             ValidateMBRTightness(nodeBase, count, true, desc, chunkId);
+
+            // C2: UnionCategoryMask = OR of all leaf entries' CategoryMasks
+            ValidateLeafUnionMask(nodeBase, count, desc, chunkId);
         }
         else
         {
@@ -106,8 +109,11 @@ internal static unsafe class TreeValidator
                     throw new InvalidOperationException($"R6 violation: node {chunkId} child[{i}] has invalid chunkId={childId}");
                 }
 
-                ValidateNode(tree, childId, depth + 1, chunkId, desc, ref accessor, entityIds, ref totalEntities, ref totalNodes);
+                ValidateNode(childId, chunkId, desc, ref accessor, entityIds, ref totalEntities, ref totalNodes);
             }
+
+            // C2: UnionCategoryMask = OR of all children's UnionCategoryMasks
+            ValidateInternalUnionMask(nodeBase, count, desc, chunkId, ref accessor);
         }
     }
 
@@ -161,6 +167,37 @@ internal static unsafe class TreeValidator
             {
                 throw new InvalidOperationException($"R1 violation: node {chunkId} MBR coord[{c}] is {stored} but recomputed is {recomputed[c]}");
             }
+        }
+    }
+
+    private static void ValidateLeafUnionMask(byte* nodeBase, int count, in SpatialNodeDescriptor desc, int chunkId)
+    {
+        uint recomputed = 0;
+        for (int i = 0; i < count; i++)
+        {
+            recomputed |= SpatialNodeHelper.ReadLeafCategoryMask(nodeBase, i, desc);
+        }
+        uint stored = SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, desc);
+        if (stored != recomputed)
+        {
+            throw new InvalidOperationException($"C2 violation: leaf node {chunkId} UnionCategoryMask is 0x{stored:X8} but recomputed is 0x{recomputed:X8}");
+        }
+    }
+
+    private static void ValidateInternalUnionMask<TStore>(byte* nodeBase, int count, in SpatialNodeDescriptor desc, int chunkId,
+        ref ChunkAccessor<TStore> accessor) where TStore : struct, IPageStore
+    {
+        uint recomputed = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, desc);
+            byte* childBase = accessor.GetChunkAddress(childId);
+            recomputed |= SpatialNodeHelper.ReadUnionCategoryMask(childBase, desc);
+        }
+        uint stored = SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, desc);
+        if (stored != recomputed)
+        {
+            throw new InvalidOperationException($"C2 violation: internal node {chunkId} UnionCategoryMask is 0x{stored:X8} but recomputed is 0x{recomputed:X8}");
         }
     }
 }

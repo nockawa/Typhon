@@ -9,29 +9,43 @@ namespace Typhon.Engine.Tests;
 /// </summary>
 internal class BruteForceSpatialIndex
 {
-    private readonly List<(long entityId, double[] coords)> _entries = new();
+    private readonly List<(long entityId, double[] coords, uint categoryMask)> _entries = new();
     private readonly int _coordCount;
 
     internal BruteForceSpatialIndex(int coordCount) => _coordCount = coordCount;
 
-    internal void Insert(long entityId, ReadOnlySpan<double> coords) =>
-        _entries.Add((entityId, coords.ToArray()));
+    internal void Insert(long entityId, ReadOnlySpan<double> coords, uint categoryMask = uint.MaxValue) =>
+        _entries.Add((entityId, coords.ToArray(), categoryMask));
 
-    internal void Remove(long entityId) =>
-        _entries.RemoveAll(e => e.entityId == entityId);
+    private void Remove(long entityId) => _entries.RemoveAll(e => e.entityId == entityId);
 
     internal void Update(long entityId, ReadOnlySpan<double> newCoords)
     {
+        int idx = _entries.FindIndex(e => e.entityId == entityId);
+        uint mask = idx >= 0 ? _entries[idx].categoryMask : uint.MaxValue;
         Remove(entityId);
-        Insert(entityId, newCoords);
+        Insert(entityId, newCoords, mask);
     }
 
-    internal List<long> QueryAABB(ReadOnlySpan<double> queryCoords)
+    internal void SetCategoryMask(long entityId, uint mask)
+    {
+        int idx = _entries.FindIndex(e => e.entityId == entityId);
+        if (idx >= 0)
+        {
+            _entries[idx] = (_entries[idx].entityId, _entries[idx].coords, mask);
+        }
+    }
+
+    internal List<long> QueryAABB(ReadOnlySpan<double> queryCoords, uint categoryMask = 0)
     {
         var result = new List<long>();
         int halfCoord = _coordCount / 2;
-        foreach (var (entityId, coords) in _entries)
+        foreach (var (entityId, coords, entryMask) in _entries)
         {
+            if (categoryMask != 0 && (entryMask & categoryMask) != categoryMask)
+            {
+                continue;
+            }
             bool overlaps = true;
             for (int d = 0; d < halfCoord; d++)
             {
@@ -50,7 +64,7 @@ internal class BruteForceSpatialIndex
         return result;
     }
 
-    internal List<long> QueryRadius(ReadOnlySpan<double> center, double radius)
+    internal List<long> QueryRadius(ReadOnlySpan<double> center, double radius, uint categoryMask = 0)
     {
         // Convert to AABB query (same as tree implementation — coarse filter)
         int halfCoord = _coordCount / 2;
@@ -60,7 +74,7 @@ internal class BruteForceSpatialIndex
             aabb[d] = center[d] - radius;
             aabb[d + halfCoord] = center[d] + radius;
         }
-        return QueryAABB(aabb);
+        return QueryAABB(aabb, categoryMask);
     }
 
     internal List<(long entityId, double t)> QueryRay(ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist)
@@ -75,7 +89,7 @@ internal class BruteForceSpatialIndex
             invDir[d] = direction[d] != 0 ? 1.0 / direction[d] : double.MaxValue;
         }
 
-        foreach (var (entityId, coords) in _entries)
+        foreach (var (entityId, coords, _) in _entries)
         {
             // Ray-AABB slab test
             double tNear = double.MinValue;
@@ -120,7 +134,7 @@ internal class BruteForceSpatialIndex
         int dimCount = halfCoord;
         int planeStride = dimCount + 1;
 
-        foreach (var (entityId, coords) in _entries)
+        foreach (var (entityId, coords, _) in _entries)
         {
             bool outside = false;
             for (int p = 0; p < planeCount && !outside; p++)
@@ -150,7 +164,7 @@ internal class BruteForceSpatialIndex
     {
         var all = new List<(long entityId, double distSq)>();
         int halfCoord = _coordCount / 2;
-        foreach (var (entityId, coords) in _entries)
+        foreach (var (entityId, coords, _) in _entries)
         {
             double distSq = 0;
             for (int d = 0; d < halfCoord; d++)
