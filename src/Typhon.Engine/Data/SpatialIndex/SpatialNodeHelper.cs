@@ -95,6 +95,14 @@ internal static unsafe class SpatialNodeHelper
     public static void WriteLeafEntityId(byte* nodeBase, int index, long entityId, in SpatialNodeDescriptor desc) =>
         *(long*)(nodeBase + desc.LeafIdOffset + index * desc.LeafIdSize) = entityId;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int ReadLeafCompChunkId(byte* nodeBase, int index, in SpatialNodeDescriptor desc) =>
+        *(int*)(nodeBase + desc.LeafCompChunkIdOffset + index * desc.LeafCompChunkIdSize);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteLeafCompChunkId(byte* nodeBase, int index, int compChunkId, in SpatialNodeDescriptor desc) =>
+        *(int*)(nodeBase + desc.LeafCompChunkIdOffset + index * desc.LeafCompChunkIdSize) = compChunkId;
+
     // ── Internal SOA access ─────────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -128,6 +136,7 @@ internal static unsafe class SpatialNodeHelper
 
     // ── Bulk operations ─────────────────────────────────────────────────────
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void ReadLeafEntryCoords(byte* nodeBase, int index, Span<double> coords, in SpatialNodeDescriptor desc)
     {
         for (int c = 0; c < desc.CoordCount; c++)
@@ -136,6 +145,7 @@ internal static unsafe class SpatialNodeHelper
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void ReadInternalEntryCoords(byte* nodeBase, int index, Span<double> coords, in SpatialNodeDescriptor desc)
     {
         for (int c = 0; c < desc.CoordCount; c++)
@@ -144,6 +154,7 @@ internal static unsafe class SpatialNodeHelper
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteLeafEntryCoords(byte* nodeBase, int index, ReadOnlySpan<double> coords, in SpatialNodeDescriptor desc)
     {
         for (int c = 0; c < desc.CoordCount; c++)
@@ -152,6 +163,7 @@ internal static unsafe class SpatialNodeHelper
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteInternalEntryCoords(byte* nodeBase, int index, ReadOnlySpan<double> coords, in SpatialNodeDescriptor desc)
     {
         for (int c = 0; c < desc.CoordCount; c++)
@@ -160,6 +172,7 @@ internal static unsafe class SpatialNodeHelper
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void CopyLeafEntry(byte* nodeBase, int srcIdx, int dstIdx, in SpatialNodeDescriptor desc)
     {
         for (int c = 0; c < desc.CoordCount; c++)
@@ -167,8 +180,10 @@ internal static unsafe class SpatialNodeHelper
             WriteLeafCoord(nodeBase, dstIdx, c, ReadLeafCoord(nodeBase, srcIdx, c, desc), desc);
         }
         WriteLeafEntityId(nodeBase, dstIdx, ReadLeafEntityId(nodeBase, srcIdx, desc), desc);
+        WriteLeafCompChunkId(nodeBase, dstIdx, ReadLeafCompChunkId(nodeBase, srcIdx, desc), desc);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void CopyInternalEntry(byte* nodeBase, int srcIdx, int dstIdx, in SpatialNodeDescriptor desc)
     {
         for (int c = 0; c < desc.CoordCount; c++)

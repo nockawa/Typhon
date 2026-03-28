@@ -47,7 +47,7 @@ internal static unsafe partial class SpatialMaintainer
         var treeAccessor = tree.Segment.CreateChunkAccessor(changeSet);
         try
         {
-            var (leafChunkId, slotIndex) = tree.Insert(entityPK, coords, ref treeAccessor, changeSet);
+            var (leafChunkId, slotIndex) = tree.Insert(entityPK, componentChunkId, coords, ref treeAccessor, changeSet);
 
             // Write back-pointer
             var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
@@ -77,6 +77,33 @@ internal static unsafe partial class SpatialMaintainer
     internal static bool UpdateSpatial(long entityPK, int componentChunkId, ComponentTable table, ref ChunkAccessor<PersistentStore> compAccessor, ChangeSet changeSet)
     {
         var state = table.SpatialIndex;
+        var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
+        var treeAccessor = state.Tree.Segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            return UpdateSpatialCore(entityPK, componentChunkId, table, ref compAccessor, ref treeAccessor, ref bpAccessor, changeSet);
+        }
+        finally
+        {
+            treeAccessor.Dispose();
+            bpAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Batch-optimized overload: callers pre-create and reuse tree/bp accessors across many entities.
+    /// Used by <see cref="DatabaseEngine.ProcessSpatialEntries"/> at tick fence (same pattern as B+Tree batch index maintenance).
+    /// </summary>
+    internal static bool UpdateSpatialBatch(long entityPK, int componentChunkId, ComponentTable table,
+        ref ChunkAccessor<PersistentStore> compAccessor, ref ChunkAccessor<PersistentStore> treeAccessor,
+        ref ChunkAccessor<PersistentStore> bpAccessor, ChangeSet changeSet)
+        => UpdateSpatialCore(entityPK, componentChunkId, table, ref compAccessor, ref treeAccessor, ref bpAccessor, changeSet);
+
+    private static bool UpdateSpatialCore(long entityPK, int componentChunkId, ComponentTable table,
+        ref ChunkAccessor<PersistentStore> compAccessor, ref ChunkAccessor<PersistentStore> treeAccessor,
+        ref ChunkAccessor<PersistentStore> bpAccessor, ChangeSet changeSet)
+    {
+        var state = table.SpatialIndex;
         var fi = state.FieldInfo;
         var tree = state.Tree;
         var desc = state.Descriptor;
@@ -90,55 +117,36 @@ internal static unsafe partial class SpatialMaintainer
             return false;
         }
 
-        // Read back-pointer
-        var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
-        try
+        var bp = SpatialBackPointerHelper.Read(ref bpAccessor, componentChunkId);
+        if (bp.LeafChunkId == 0)
         {
-            var bp = SpatialBackPointerHelper.Read(ref bpAccessor, componentChunkId);
-            if (bp.LeafChunkId == 0)
-            {
-                // No back-pointer — entity was never inserted (degenerate at spawn). Try inserting now.
-                bpAccessor.Dispose();
-                InsertSpatial(entityPK, componentChunkId, table, ref compAccessor, changeSet);
-                return false;
-            }
-
-            // Read fat AABB from tree leaf
-            var treeAccessor = tree.Segment.CreateChunkAccessor(changeSet);
-            try
-            {
-                Span<double> fatCoords = stackalloc double[desc.CoordCount];
-                tree.ReadLeafCoords(bp.LeafChunkId, bp.SlotIndex, fatCoords, ref treeAccessor);
-
-                // Fast path: containment check
-                if (CoordsContained(fatCoords, tightCoords, desc.CoordCount))
-                {
-                    return false;
-                }
-
-                // Slow path: remove + reinsert
-                long swappedEntityId = tree.Remove(bp.LeafChunkId, bp.SlotIndex, ref treeAccessor);
-
-                if (swappedEntityId != 0 && swappedEntityId != entityPK)
-                {
-                    UpdateSwappedBackPointer(swappedEntityId, bp.LeafChunkId, bp.SlotIndex, table, ref bpAccessor);
-                }
-
-                EnlargeCoords(tightCoords, fi.Margin, desc);
-                var (newLeaf, newSlot) = tree.Insert(entityPK, tightCoords, ref treeAccessor, changeSet);
-                SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, newLeaf, (short)newSlot);
-
-                return true; // Escaped fat AABB → reinserted
-            }
-            finally
-            {
-                treeAccessor.Dispose();
-            }
+            // No back-pointer — entity was never inserted (degenerate at spawn). Try inserting now.
+            InsertSpatial(entityPK, componentChunkId, table, ref compAccessor, changeSet);
+            return false;
         }
-        finally
+
+        Span<double> fatCoords = stackalloc double[desc.CoordCount];
+        tree.ReadLeafCoords(bp.LeafChunkId, bp.SlotIndex, fatCoords, ref treeAccessor);
+
+        // Fast path: containment check
+        if (CoordsContained(fatCoords, tightCoords, desc.CoordCount))
         {
-            bpAccessor.Dispose();
+            return false;
         }
+
+        // Slow path: remove + reinsert
+        long swappedEntityId = tree.Remove(bp.LeafChunkId, bp.SlotIndex, ref treeAccessor);
+
+        if (swappedEntityId != 0 && swappedEntityId != entityPK)
+        {
+            UpdateSwappedBackPointer(swappedEntityId, bp.LeafChunkId, bp.SlotIndex, table, ref bpAccessor);
+        }
+
+        EnlargeCoords(tightCoords, fi.Margin, desc);
+        var (newLeaf, newSlot) = tree.Insert(entityPK, componentChunkId, tightCoords, ref treeAccessor, changeSet);
+        SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, newLeaf, (short)newSlot);
+
+        return true; // Escaped fat AABB → reinserted
     }
 
     /// <summary>
@@ -415,10 +423,10 @@ internal static unsafe partial class SpatialMaintainer
         int cellY = (int)Math.Floor((coords[1] + coords[half + 1]) * 0.5 * inverseCellSize);
         if (half == 2)
         {
-            // 2D: lossless packing
-            return ((long)cellX << 32) | (uint)cellY;
+            // 2D: lossless packing — XOR with MinValue to handle negative coords correctly
+            return ((long)(cellX ^ int.MinValue) << 32) | (uint)(cellY ^ int.MinValue);
         }
-        // 3D: XOR-multiply with Teschner primes
+        // 3D: XOR-multiply with Teschner primes (handles negative coords naturally)
         int cellZ = (int)Math.Floor((coords[2] + coords[half + 2]) * 0.5 * inverseCellSize);
         return (long)((cellX * 73856093) ^ (cellY * 19349663) ^ (cellZ * 83492791));
     }
@@ -503,6 +511,21 @@ internal static unsafe partial class SpatialMaintainer
         int maxCellX = (int)Math.Floor(queryCoords[half] * fi.InverseCellSize);
         int maxCellY = (int)Math.Floor(queryCoords[half + 1] * fi.InverseCellSize);
 
+        // Cap the number of cells to probe — if the query is too large relative to cell size,
+        // abandon fast-reject and proceed to tree (which handles large queries efficiently)
+        const int MaxCellsToProbe = 64;
+        long totalCells = (long)(maxCellX - minCellX + 1) * (maxCellY - minCellY + 1);
+        if (half == 3)
+        {
+            int minCellZ = (int)Math.Floor(queryCoords[2] * fi.InverseCellSize);
+            int maxCellZ = (int)Math.Floor(queryCoords[half + 2] * fi.InverseCellSize);
+            totalCells *= (maxCellZ - minCellZ + 1);
+        }
+        if (totalCells > MaxCellsToProbe)
+        {
+            return false; // Too many cells — skip fast-reject, proceed to tree
+        }
+
         var accessor = map.Segment.CreateChunkAccessor();
         try
         {
@@ -513,7 +536,7 @@ internal static unsafe partial class SpatialMaintainer
                 {
                     for (int cy = minCellY; cy <= maxCellY; cy++)
                     {
-                        long cellKey = ((long)cx << 32) | (uint)cy;
+                        long cellKey = ((long)(cx ^ int.MinValue) << 32) | (uint)(cy ^ int.MinValue);
                         if (map.TryGet(cellKey, out int count, ref accessor) && count > 0)
                         {
                             return false; // At least one populated cell → can't reject

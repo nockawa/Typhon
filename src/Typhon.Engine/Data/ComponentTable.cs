@@ -717,6 +717,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         }
 
         var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load, changeSet);
+        tree.BackPointerSegment = backPtrSegment;
         SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 

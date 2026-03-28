@@ -235,6 +235,7 @@ internal unsafe partial class SpatialRTree<TStore>
 
         internal RadiusEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> center, double radius, ChangeSet changeSet)
         {
+            radius = Math.Max(radius, 0); // Clamp negative radius to empty query
             int halfCoord = tree._desc.CoordCount / 2;
             Span<double> aabb = stackalloc double[tree._desc.CoordCount];
             for (int d = 0; d < halfCoord; d++)
@@ -312,7 +313,12 @@ internal unsafe partial class SpatialRTree<TStore>
             _idy = direction.Length > 1 && direction[1] != 0 ? 1.0 / direction[1] : double.MaxValue;
             _idz = direction.Length > 2 && direction[2] != 0 ? 1.0 / direction[2] : double.MaxValue;
 
-            if (tree._rootChunkId != 0)
+            // Reject degenerate rays (NaN/Infinity in origin or computed inverse direction)
+            bool degenerate = double.IsNaN(_ox) || double.IsNaN(_oy) || double.IsNaN(_oz)
+                || double.IsNaN(_idx) || double.IsNaN(_idy) || double.IsNaN(_idz)
+                || double.IsNaN(maxDist) || maxDist < 0;
+
+            if (tree._rootChunkId != 0 && !degenerate)
             {
                 HeapPush(tree._rootChunkId, 0.0);
             }
@@ -548,7 +554,7 @@ internal unsafe partial class SpatialRTree<TStore>
 
             if (tree._rootChunkId != 0)
             {
-                _stack[0] = tree._rootChunkId; // positive = needs testing
+                _stack[0] = tree._rootChunkId; // bit 31 clear = needs testing
                 _stackTop = 1;
             }
         }
@@ -558,12 +564,15 @@ internal unsafe partial class SpatialRTree<TStore>
 
         public bool MoveNext()
         {
-            // Hoist reusable buffers outside all loops
+            // Hoist reusable coord buffer outside all loops
             Span<double> coords = stackalloc double[_desc.CoordCount];
+
+            // Build plane span from fixed array — copy once per MoveNext call (required because
+            // fixed arrays in ref structs can't produce a stable pointer across the method body)
             Span<double> planeSpan = stackalloc double[_planeDataLen];
-            for (int i = 0; i < _planeDataLen; i++)
+            fixed (double* p = _planes)
             {
-                planeSpan[i] = _planes[i];
+                new ReadOnlySpan<double>(p, _planeDataLen).CopyTo(planeSpan);
             }
 
             // Resume leaf scan
@@ -600,8 +609,8 @@ internal unsafe partial class SpatialRTree<TStore>
             while (_stackTop > 0)
             {
                 int encoded = _stack[--_stackTop];
-                bool fullyInside = encoded < 0;
-                int chunkId = fullyInside ? -encoded : encoded;
+                bool fullyInside = (encoded & unchecked((int)0x80000000)) != 0;
+                int chunkId = encoded & 0x7FFFFFFF;
 
                 byte* nodeBase = _accessor.GetChunkAddress(chunkId);
 
@@ -639,7 +648,7 @@ internal unsafe partial class SpatialRTree<TStore>
                         int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
                         if (_stackTop < 256)
                         {
-                            _stack[_stackTop++] = -childId; // negative = fully inside
+                            _stack[_stackTop++] = childId | unchecked((int)0x80000000); // bit 31 = fully inside
                         }
                     }
                 }
@@ -657,7 +666,7 @@ internal unsafe partial class SpatialRTree<TStore>
                         int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
                         if (_stackTop < 256)
                         {
-                            _stack[_stackTop++] = cls == SpatialGeometry.FrustumInside ? -childId : childId;
+                            _stack[_stackTop++] = cls == SpatialGeometry.FrustumInside ? childId | unchecked((int)0x80000000) : childId;
                         }
                     }
                 }
@@ -695,8 +704,10 @@ internal unsafe partial class SpatialRTree<TStore>
     // ── kNN Query ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Find the k nearest entities to a point. Results written to caller-provided buffer, sorted by ascending squared distance.
-    /// Uses iterative radius expansion — converges in 1–2 iterations for k &lt; 20.
+    /// Find the k nearest entity candidates to a point via iterative radius expansion.
+    /// Returns entities whose fat AABB falls within the search radius. The <c>distSq</c> field is set to 0 — callers
+    /// must recompute actual distances from component data (the tree stores fat AABBs, not tight bounds).
+    /// Converges in 1–2 iterations for k &lt; 20.
     /// </summary>
     /// <returns>Number of results written (may be less than k if fewer entities exist).</returns>
     internal int QueryKNN(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results, ChangeSet changeSet = null)
@@ -738,7 +749,9 @@ internal unsafe partial class SpatialRTree<TStore>
         double radius = Math.Pow(volumeForK, 1.0 / halfCoord) * 1.5; // 1.5x safety factor
         radius = Math.Max(radius, 1.0); // Minimum radius
 
-        // Iterative expansion
+        // Iterative expansion — collect candidate entity IDs within expanding radius.
+        // distSq is set to 0 at the tree level because the tree stores fat AABBs, not tight bounds.
+        // Callers must recompute actual distances from component data for precise ordering.
         int maxCandidates = Math.Min(k * 4, 256);
         Span<(long entityId, double distSq)> candidates = stackalloc (long, double)[maxCandidates];
         int lastCount = 0;
@@ -757,7 +770,6 @@ internal unsafe partial class SpatialRTree<TStore>
 
             if (count >= k || count == lastCount || radius > 1e15)
             {
-                // Found enough, or no new results (all entities captured), or radius exceeded
                 int resultCount = Math.Min(count, k);
                 resultCount = Math.Min(resultCount, results.Length);
                 for (int i = 0; i < resultCount; i++)

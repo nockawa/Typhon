@@ -19,8 +19,10 @@ public readonly struct SpatialNodeDescriptor
     public readonly int LeafCapacity;
     public readonly int LeafCoordOffsets; // = HeaderSize (start of first coord array)
     public readonly int LeafCoordStride;  // LeafCapacity * CoordSize (distance between coord arrays)
-    public readonly int LeafIdOffset;     // start of EntityId array
-    public readonly int LeafIdSize;       // 8 (EntityId always 64-bit)
+    public readonly int LeafIdOffset;         // start of EntityId array
+    public readonly int LeafIdSize;           // 8 (EntityId always 64-bit)
+    public readonly int LeafCompChunkIdOffset; // start of ComponentChunkId array (int per entry)
+    public readonly int LeafCompChunkIdSize;   // 4 (ComponentChunkId always int)
 
     // Internal SOA layout
     public readonly int InternalCapacity;
@@ -53,17 +55,19 @@ public readonly struct SpatialNodeDescriptor
 
         EntryAreaSize = Stride - HeaderSize;
 
-        int leafEntrySize = CoordCount * CoordSize + 8;   // +8 for EntityId (64-bit)
-        int internalEntrySize = CoordCount * CoordSize + 4; // +4 for ChunkId (int)
+        int leafEntrySize = CoordCount * CoordSize + 8 + 4;   // +8 EntityId (64-bit) + 4 ComponentChunkId (int)
+        int internalEntrySize = CoordCount * CoordSize + 4;  // +4 for ChildChunkId (int)
 
         LeafCapacity = EntryAreaSize / leafEntrySize;
         InternalCapacity = EntryAreaSize / internalEntrySize;
 
-        // Leaf SOA offsets
+        // Leaf SOA offsets: [Coords...] [EntityIds] [ComponentChunkIds]
         LeafCoordOffsets = HeaderSize;
         LeafCoordStride = LeafCapacity * CoordSize;
         LeafIdOffset = LeafCoordOffsets + CoordCount * LeafCoordStride;
         LeafIdSize = 8;
+        LeafCompChunkIdOffset = LeafIdOffset + LeafCapacity * LeafIdSize;
+        LeafCompChunkIdSize = 4;
 
         // Internal SOA offsets
         InternalCoordStride = InternalCapacity * CoordSize;

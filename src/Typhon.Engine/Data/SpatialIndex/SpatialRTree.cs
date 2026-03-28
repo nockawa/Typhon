@@ -78,11 +78,10 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     private int _depth;
 
     /// <summary>
-    /// Optional callback invoked during leaf split scatter for each relocated entity.
-    /// Args: (entityId, newLeafChunkId, newSlotIndex). Set by SpatialMaintainer for ECS integration.
-    /// Null for standalone unit tests.
+    /// Back-pointer CBS for O(1) leaf lookup. When set, split scatter updates back-pointers directly
+    /// using componentChunkIds stored in leaf entries. Null for standalone unit tests.
     /// </summary>
-    internal Action<long, int, int> BackPointerUpdater;
+    internal ChunkBasedSegment<TStore> BackPointerSegment;
 
     // Chunk 0 metadata layout
     private const int MetaRootOffset = 0;

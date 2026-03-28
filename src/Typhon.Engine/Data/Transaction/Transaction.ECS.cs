@@ -1453,6 +1453,20 @@ public unsafe partial class Transaction
                     {
                         continue;
                     }
+
+                    // Zero the back-pointer chunk before InsertSpatial. Guarantees "not inserted" state (LeafChunkId=0)
+                    // even if InsertSpatial skips due to degenerate bounds. Without this, the CBS chunk may contain
+                    // garbage from a reused page, which UpdateSpatial would misinterpret as a valid leaf position.
+                    var bpAccessor = table.SpatialIndex.BackPointerSegment.CreateChunkAccessor(_changeSet);
+                    try
+                    {
+                        SpatialBackPointerHelper.Clear(ref bpAccessor, chunkId);
+                    }
+                    finally
+                    {
+                        bpAccessor.Dispose();
+                    }
+
                     // Create a temporary component accessor for reading spatial field data
                     var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
                     try

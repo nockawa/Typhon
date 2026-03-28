@@ -17,20 +17,20 @@ public class SpatialNodeDescriptorTests
     [Test]
     public void KnownCapacities_MatchDesignDoc()
     {
-        // Corrected table from 02-node-layout.md lines 136-141
-        Assert.That(SpatialNodeDescriptor.R2Df32.LeafCapacity, Is.EqualTo(20), "R2Df32 LeafCap");
+        // Updated for leaf entry layout: coords + EntityId(8B) + ComponentChunkId(4B)
+        Assert.That(SpatialNodeDescriptor.R2Df32.LeafCapacity, Is.EqualTo(17), "R2Df32 LeafCap");
         Assert.That(SpatialNodeDescriptor.R2Df32.InternalCapacity, Is.EqualTo(24), "R2Df32 InternalCap");
-        Assert.That(SpatialNodeDescriptor.R2Df32.MinFill, Is.EqualTo(8), "R2Df32 MinFill");
+        Assert.That(SpatialNodeDescriptor.R2Df32.MinFill, Is.EqualTo(7), "R2Df32 MinFill");
 
-        Assert.That(SpatialNodeDescriptor.R3Df32.LeafCapacity, Is.EqualTo(14), "R3Df32 LeafCap");
+        Assert.That(SpatialNodeDescriptor.R3Df32.LeafCapacity, Is.EqualTo(13), "R3Df32 LeafCap");
         Assert.That(SpatialNodeDescriptor.R3Df32.InternalCapacity, Is.EqualTo(17), "R3Df32 InternalCap");
         Assert.That(SpatialNodeDescriptor.R3Df32.MinFill, Is.EqualTo(6), "R3Df32 MinFill");
 
-        Assert.That(SpatialNodeDescriptor.R2Df64.LeafCapacity, Is.EqualTo(11), "R2Df64 LeafCap");
+        Assert.That(SpatialNodeDescriptor.R2Df64.LeafCapacity, Is.EqualTo(10), "R2Df64 LeafCap");
         Assert.That(SpatialNodeDescriptor.R2Df64.InternalCapacity, Is.EqualTo(12), "R2Df64 InternalCap");
-        Assert.That(SpatialNodeDescriptor.R2Df64.MinFill, Is.EqualTo(5), "R2Df64 MinFill");
+        Assert.That(SpatialNodeDescriptor.R2Df64.MinFill, Is.EqualTo(4), "R2Df64 MinFill");
 
-        Assert.That(SpatialNodeDescriptor.R3Df64.LeafCapacity, Is.EqualTo(12), "R3Df64 LeafCap");
+        Assert.That(SpatialNodeDescriptor.R3Df64.LeafCapacity, Is.EqualTo(11), "R3Df64 LeafCap");
         Assert.That(SpatialNodeDescriptor.R3Df64.InternalCapacity, Is.EqualTo(13), "R3Df64 InternalCap");
         Assert.That(SpatialNodeDescriptor.R3Df64.MinFill, Is.EqualTo(5), "R3Df64 MinFill");
     }

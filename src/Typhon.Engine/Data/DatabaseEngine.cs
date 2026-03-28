@@ -910,8 +910,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// </summary>
     private unsafe void ProcessSpatialEntries(ComponentTable table, long[] dirtyBits)
     {
+        var state = table.SpatialIndex;
         var changeSet = MMF.CreateChangeSet();
+
+        // Hoist accessor creation before the entity loop (same pattern as B+Tree batch index maintenance)
         var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
+        var treeAccessor = state.Tree.Segment.CreateChunkAccessor(changeSet);
+        var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
         int dirtyCount = 0;
         int escapeCount = 0;
         try
@@ -938,7 +943,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
 
                     dirtyCount++;
-                    if (SpatialMaintainer.UpdateSpatial(entityPK, chunkId, table, ref compAccessor, changeSet))
+                    if (SpatialMaintainer.UpdateSpatialBatch(entityPK, chunkId, table, ref compAccessor, ref treeAccessor, ref bpAccessor, changeSet))
                     {
                         escapeCount++;
                     }
@@ -947,6 +952,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
         finally
         {
+            bpAccessor.Dispose();
+            treeAccessor.Dispose();
             compAccessor.Dispose();
             changeSet.SaveChanges();
         }
@@ -1017,6 +1024,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load: true);
+        tree.BackPointerSegment = backPtrSegment;
 
         var sf = table.Definition.SpatialField;
         var fieldInfo = new SpatialFieldInfo(

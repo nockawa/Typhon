@@ -8,8 +8,8 @@ internal unsafe partial class SpatialRTree<TStore>
     /// Insert into a full leaf, triggering an R*-overlap-minimizing split.
     /// Handles cascading splits up to the root.
     /// </summary>
-    private (bool success, int leafChunkId, int slotIndex) InsertWithSplit(long entityId, ReadOnlySpan<double> coords, int fullLeafChunkId, ref DescentPath path,
-        ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
+    private (bool success, int leafChunkId, int slotIndex) InsertWithSplit(long entityId, int componentChunkId, ReadOnlySpan<double> coords,
+        int fullLeafChunkId, ref DescentPath path, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         byte* leafBase = accessor.GetChunkAddress(fullLeafChunkId, dirty: true);
         SpinWriteLock(leafBase, out var leafLatch);
@@ -21,6 +21,7 @@ internal unsafe partial class SpatialRTree<TStore>
         int maxCoords = totalEntries * _desc.CoordCount;
         Span<double> tempCoords = stackalloc double[maxCoords];
         Span<long> tempIds = stackalloc long[totalEntries];
+        Span<int> tempCompChunkIds = stackalloc int[totalEntries];
         Span<int> sortIndices = stackalloc int[totalEntries];
         Span<int> bestPerm = stackalloc int[totalEntries];
 
@@ -28,9 +29,11 @@ internal unsafe partial class SpatialRTree<TStore>
         {
             SpatialNodeHelper.ReadLeafEntryCoords(leafBase, i, tempCoords.Slice(i * _desc.CoordCount, _desc.CoordCount), _desc);
             tempIds[i] = SpatialNodeHelper.ReadLeafEntityId(leafBase, i, _desc);
+            tempCompChunkIds[i] = SpatialNodeHelper.ReadLeafCompChunkId(leafBase, i, _desc);
         }
         coords.CopyTo(tempCoords.Slice(leafCount * _desc.CoordCount, _desc.CoordCount));
         tempIds[leafCount] = entityId;
+        tempCompChunkIds[leafCount] = componentChunkId;
 
         int splitPos = FindBestSplit(tempCoords, totalEntries, sortIndices, bestPerm);
 
@@ -45,13 +48,13 @@ internal unsafe partial class SpatialRTree<TStore>
         leafLatch = GetLatch(leafBase);
         byte* rightBase = accessor.GetChunkAddress(rightChunkId, dirty: true);
 
-        // Scatter entries to left and right using bestPerm
-        ScatterLeafEntries(leafBase, fullLeafChunkId, tempCoords, tempIds, bestPerm, 0, splitPos);
+        // Scatter entries to left and right using bestPerm (includes componentChunkIds)
+        ScatterLeafEntries(leafBase, fullLeafChunkId, tempCoords, tempIds, tempCompChunkIds, bestPerm, 0, splitPos);
         SpatialNodeHelper.SetCount(leafBase, splitPos);
         SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
 
         int rightCount = totalEntries - splitPos;
-        ScatterLeafEntries(rightBase, rightChunkId, tempCoords, tempIds, bestPerm, splitPos, totalEntries);
+        ScatterLeafEntries(rightBase, rightChunkId, tempCoords, tempIds, tempCompChunkIds, bestPerm, splitPos, totalEntries);
         SpatialNodeHelper.SetCount(rightBase, rightCount);
         SpatialNodeHelper.RefitLeafMBR(rightBase, _desc);
 
@@ -76,11 +79,12 @@ internal unsafe partial class SpatialRTree<TStore>
 
     /// <summary>
     /// Scatter leaf entries from temp buffers into a node using the permutation.
-    /// If <see cref="BackPointerUpdater"/> is set, invokes it for each entry with the final (entityId, leafChunkId, slotIndex).
+    /// Writes coords, entityIds, and componentChunkIds. If <see cref="BackPointerSegment"/> is set,
+    /// updates back-pointers directly using the stored componentChunkIds (O(1) per entry, no EntityMap lookup).
     /// </summary>
-    private void ScatterLeafEntries(byte* nodeBase, int leafChunkId, Span<double> allCoords, Span<long> allIds, Span<int> perm, int permStart, int permEnd)
+    private void ScatterLeafEntries(byte* nodeBase, int leafChunkId, Span<double> allCoords, Span<long> allIds, Span<int> allCompChunkIds,
+        Span<int> perm, int permStart, int permEnd)
     {
-        var updater = BackPointerUpdater;
         for (int i = permStart; i < permEnd; i++)
         {
             int src = perm[i];
@@ -88,7 +92,30 @@ internal unsafe partial class SpatialRTree<TStore>
             SpatialNodeHelper.WriteLeafEntryCoords(nodeBase, dst,
                 allCoords.Slice(src * _desc.CoordCount, _desc.CoordCount), _desc);
             SpatialNodeHelper.WriteLeafEntityId(nodeBase, dst, allIds[src], _desc);
-            updater?.Invoke(allIds[src], leafChunkId, dst);
+            SpatialNodeHelper.WriteLeafCompChunkId(nodeBase, dst, allCompChunkIds[src], _desc);
+        }
+
+        // Update back-pointers for all scattered entries using stored componentChunkIds
+        if (BackPointerSegment != null)
+        {
+            var bpAccessor = BackPointerSegment.CreateChunkAccessor();
+            try
+            {
+                for (int i = permStart; i < permEnd; i++)
+                {
+                    int src = perm[i];
+                    int dst = i - permStart;
+                    int compChunkId = allCompChunkIds[src];
+                    if (compChunkId != 0)
+                    {
+                        SpatialBackPointerHelper.Write(ref bpAccessor, compChunkId, leafChunkId, (short)dst);
+                    }
+                }
+            }
+            finally
+            {
+                bpAccessor.Dispose();
+            }
         }
     }
 
