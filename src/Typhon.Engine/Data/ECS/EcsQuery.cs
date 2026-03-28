@@ -678,11 +678,33 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private HashSet<EntityId> ExecuteSpatial()
     {
         var state = _spatialTable.SpatialIndex;
-        var tree = state.Tree;
         var result = new HashSet<EntityId>();
         var tx = _tx;
 
-        // Run spatial query based on type
+        // Fan out to both trees (SD1 guarantees no overlap). With per-component-type mode, only one is non-null.
+        if (state.StaticTree != null)
+        {
+            QuerySingleTree(state.StaticTree, state, result);
+        }
+        if (state.DynamicTree != null)
+        {
+            QuerySingleTree(state.DynamicTree, state, result);
+        }
+
+        // Opaque WHERE post-filter
+        var filter = _whereFilter;
+        if (filter != null)
+        {
+            result.RemoveWhere(id => !filter(id, tx));
+        }
+
+        return result;
+    }
+
+    /// <summary>Query a single R-Tree and collect matching EntityIds into the result set.</summary>
+    private void QuerySingleTree(SpatialRTree<PersistentStore> tree, SpatialIndexState state, HashSet<EntityId> result)
+    {
+        var tx = _tx;
         switch (_spatialQueryType)
         {
             case SpatialQueryType.AABB:
@@ -738,15 +760,6 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 break;
             }
         }
-
-        // Opaque WHERE post-filter
-        var filter = _whereFilter;
-        if (filter != null)
-        {
-            result.RemoveWhere(id => !filter(id, tx));
-        }
-
-        return result;
     }
 
     /// <summary>Evaluate pending spawns against the compiled WhereField predicate.</summary>

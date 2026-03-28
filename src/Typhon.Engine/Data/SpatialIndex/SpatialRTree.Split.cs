@@ -105,6 +105,18 @@ internal unsafe partial class SpatialRTree<TStore>
             var bpAccessor = BackPointerSegment.CreateChunkAccessor();
             try
             {
+                // Read TreeSelector from the first valid entry (same for all entries in this tree)
+                byte treeSelector = 0;
+                for (int i = permStart; i < permEnd; i++)
+                {
+                    int compChunkId = allCompChunkIds[perm[i]];
+                    if (compChunkId != 0)
+                    {
+                        treeSelector = SpatialBackPointerHelper.Read(ref bpAccessor, compChunkId).TreeSelector;
+                        break;
+                    }
+                }
+
                 for (int i = permStart; i < permEnd; i++)
                 {
                     int src = perm[i];
@@ -112,7 +124,7 @@ internal unsafe partial class SpatialRTree<TStore>
                     int compChunkId = allCompChunkIds[src];
                     if (compChunkId != 0)
                     {
-                        SpatialBackPointerHelper.Write(ref bpAccessor, compChunkId, leafChunkId, (short)dst);
+                        SpatialBackPointerHelper.Write(ref bpAccessor, compChunkId, leafChunkId, (short)dst, treeSelector);
                     }
                 }
             }

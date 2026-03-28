@@ -686,7 +686,8 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             sf.SizeInComponentStorage,
             sf.SpatialFieldType,
             sf.SpatialMargin,
-            sf.SpatialCellSize);
+            sf.SpatialCellSize,
+            sf.SpatialMode);
 
         var variant = fieldInfo.ToVariant();
         var descriptor = SpatialNodeDescriptor.ForVariant(variant);
@@ -718,7 +719,17 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
         var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load, changeSet);
         tree.BackPointerSegment = backPtrSegment;
-        SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
+
+        SpatialRTree<PersistentStore> staticTree = null, dynamicTree = null;
+        if (fieldInfo.Mode == SpatialMode.Static)
+        {
+            staticTree = tree;
+        }
+        else
+        {
+            dynamicTree = tree;
+        }
+        SpatialIndex = new SpatialIndexState(staticTree, dynamicTree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 
     /// <summary>

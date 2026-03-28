@@ -5,12 +5,13 @@ namespace Typhon.Engine;
 /// <summary>
 /// Zero-allocation spatial query handle for hot-loop usage (physics, AI, tick-frequency queries).
 /// Obtained from <c>tx.SpatialQuery&lt;T&gt;()</c>. All methods return <c>ref struct</c> enumerators.
+/// Delegates to <see cref="SpatialIndexState.ActiveTree"/> (exactly one tree is non-null per component type).
 /// </summary>
 internal readonly ref struct SpatialQuery<T> where T : unmanaged
 {
     private readonly SpatialRTree<PersistentStore> _tree;
 
-    internal SpatialQuery(SpatialRTree<PersistentStore> tree) => _tree = tree;
+    internal SpatialQuery(SpatialIndexState state) => _tree = state.ActiveTree;
 
     /// <summary>AABB overlap query. Coords: [min0, min1, ..., max0, max1, ...]. categoryMask=0 means no filtering.</summary>
     public SpatialRTree<PersistentStore>.AABBQueryEnumerator AABB(ReadOnlySpan<double> coords, uint categoryMask = 0)

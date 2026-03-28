@@ -736,7 +736,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Uses dirtyBits snapshot (still in scope from DirtyBitmap.Snapshot above).
             // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup, and the containment check
             // uses the fat AABB stored in the tree node. Only the final position matters.
-            if (table.SpatialIndex != null)
+            if (table.SpatialIndex != null && table.SpatialIndex.FieldInfo.Mode == SpatialMode.Dynamic)
             {
                 ProcessSpatialEntries(table, dirtyBits);
             }
@@ -915,7 +915,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         // Hoist accessor creation before the entity loop (same pattern as B+Tree batch index maintenance)
         var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
-        var treeAccessor = state.Tree.Segment.CreateChunkAccessor(changeSet);
+        var treeAccessor = state.ActiveTree.Segment.CreateChunkAccessor(changeSet);
         var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
         int dirtyCount = 0;
         int escapeCount = 0;
@@ -979,11 +979,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var fi = state.FieldInfo;
         string key = $"spatial.{table.Definition.Name}";
 
-        // Tree SPIs + config packed into Int5: treeSPI, backPtrSPI, variant|stride, margin bits, hmSPI (0 if no hashmap)
+        // Tree SPIs + config packed into Int5: treeSPI, backPtrSPI, variant|mode|stride, margin bits, hmSPI (0 if no hashmap)
+        var activeTree = state.ActiveTree;
         MMF.Bootstrap.Set(key, BootstrapDictionary.Value.FromInt5(
-            state.Tree.Segment.RootPageIndex,
+            activeTree.Segment.RootPageIndex,
             state.BackPointerSegment.RootPageIndex,
-            (int)state.Tree.Variant | (state.Descriptor.Stride << 8),
+            (int)activeTree.Variant | ((int)fi.Mode << 4) | (state.Descriptor.Stride << 8),
             BitConverter.SingleToInt32Bits(fi.Margin),
             state.OccupancyMap?.Segment.RootPageIndex ?? 0));
 
@@ -1006,7 +1007,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         int backPtrSPI = val.GetInt(1);
         int variantStride = val.GetInt(2);
 
-        var variant = (SpatialVariant)(variantStride & 0xFF);
+        var variant = (SpatialVariant)(variantStride & 0x0F);
+        var mode = (SpatialMode)((variantStride >> 4) & 0x0F);
         var stride = variantStride >> 8;
         var descriptor = SpatialNodeDescriptor.FromVariant(variant, stride);
 
@@ -1032,9 +1034,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             sf.SizeInComponentStorage,
             sf.SpatialFieldType,
             sf.SpatialMargin,
-            sf.SpatialCellSize);
+            sf.SpatialCellSize,
+            mode);
 
-        table.SpatialIndex = new SpatialIndexState(tree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
+        SpatialRTree<PersistentStore> staticTree = null, dynamicTree = null;
+        if (mode == SpatialMode.Static)
+        {
+            staticTree = tree;
+        }
+        else
+        {
+            dynamicTree = tree;
+        }
+        table.SpatialIndex = new SpatialIndexState(staticTree, dynamicTree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 
     private void ConstructComponentStore()

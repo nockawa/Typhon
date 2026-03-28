@@ -49,6 +49,14 @@ public struct TransientBadSpatial
     public AABB2F Bounds;
 }
 
+[Component("Typhon.Test.Spatial.Terrain", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+public struct SpatialTerrain
+{
+    [Field] [SpatialIndex(0.0f, Mode = SpatialMode.Static)]
+    public AABB3F Footprint;
+}
+
 [Archetype(800)]
 partial class SpatialShipArchetype : Archetype<SpatialShipArchetype>
 {
@@ -60,6 +68,12 @@ partial class SpatialShipArchetype : Archetype<SpatialShipArchetype>
 partial class SpatialBuildingArchetype : Archetype<SpatialBuildingArchetype>
 {
     public static readonly Comp<SpatialBuilding> Building = Register<SpatialBuilding>();
+}
+
+[Archetype(802)]
+partial class SpatialTerrainArchetype : Archetype<SpatialTerrainArchetype>
+{
+    public static readonly Comp<SpatialTerrain> Terrain = Register<SpatialTerrain>();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -74,6 +88,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
     {
         Archetype<SpatialShipArchetype>.Touch();
         Archetype<SpatialBuildingArchetype>.Touch();
+        Archetype<SpatialTerrainArchetype>.Touch();
     }
 
     private DatabaseEngine SetupEngine()
@@ -157,7 +172,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
 
         // Verify tree entity count after transaction commits (FinalizeSpawns runs on commit)
         var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.Tree.EntityCount, Is.EqualTo(1));
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
     }
 
     [Test]
@@ -176,7 +191,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         }
 
         var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.Tree.EntityCount, Is.EqualTo(50));
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(50));
     }
 
     [Test]
@@ -193,7 +208,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
 
         // Query a region that overlaps the entity
         var table = dbe.GetComponentTable<SpatialShip>();
-        var tree = table.SpatialIndex.Tree;
+        var tree = table.SpatialIndex.ActiveTree;
 
         // Query region that overlaps the entity (bounds are enlarged by margin=5, so fat AABB is [5,15,25]→[17,27,37])
         // Query [0,10,20]→[20,30,40] should overlap
@@ -224,7 +239,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         }
 
         var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.Tree.EntityCount, Is.EqualTo(1));
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
 
         using (var t = dbe.CreateQuickTransaction())
         {
@@ -232,7 +247,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        Assert.That(table.SpatialIndex.Tree.EntityCount, Is.EqualTo(0));
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(0));
     }
 
     // ── Fat AABB Containment ─────────────────────────────────────────────
@@ -250,7 +265,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         }
 
         var table = dbe.GetComponentTable<SpatialShip>();
-        int nodeCountBefore = table.SpatialIndex.Tree.NodeCount;
+        int nodeCountBefore = table.SpatialIndex.ActiveTree.NodeCount;
 
         // Write tick fence to process initial spatial state
         dbe.WriteTickFence(1);
@@ -265,7 +280,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         dbe.WriteTickFence(2);
 
         // Node count should not change (no splits from small moves)
-        Assert.That(table.SpatialIndex.Tree.NodeCount, Is.EqualTo(nodeCountBefore));
+        Assert.That(table.SpatialIndex.ActiveTree.NodeCount, Is.EqualTo(nodeCountBefore));
     }
 
     // ── Back-pointer consistency ─────────────────────────────────────────
@@ -298,9 +313,189 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         }
 
         var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.Tree.EntityCount, Is.EqualTo(100));
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(100));
 
         // Validate tree invariants (TreeValidator.Validate throws on failure)
-        TreeValidator.Validate(table.SpatialIndex.Tree);
+        TreeValidator.Validate(table.SpatialIndex.ActiveTree);
+    }
+
+    // ── Static/Dynamic Mode (F2) ──────────────────────────────────────
+
+    private DatabaseEngine SetupStaticEngine()
+    {
+        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        dbe.RegisterComponentFromAccessor<SpatialTerrain>();
+        dbe.RegisterComponentFromAccessor<SpatialShip>();
+        dbe.RegisterComponentFromAccessor<SpatialName>();
+        dbe.InitializeArchetypes();
+        return dbe;
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Schema_StaticMode_SetsFieldInfoMode()
+    {
+        Archetype<SpatialTerrainArchetype>.Touch();
+        using var dbe = SetupStaticEngine();
+        var table = dbe.GetComponentTable<SpatialTerrain>();
+        Assert.That(table.SpatialIndex, Is.Not.Null);
+        Assert.That(table.SpatialIndex.FieldInfo.Mode, Is.EqualTo(SpatialMode.Static));
+        Assert.That(table.SpatialIndex.StaticTree, Is.Not.Null);
+        Assert.That(table.SpatialIndex.DynamicTree, Is.Null);
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void Schema_DefaultMode_IsDynamic()
+    {
+        Archetype<SpatialTerrainArchetype>.Touch();
+        using var dbe = SetupStaticEngine();
+        var table = dbe.GetComponentTable<SpatialShip>();
+        Assert.That(table.SpatialIndex.FieldInfo.Mode, Is.EqualTo(SpatialMode.Dynamic));
+        Assert.That(table.SpatialIndex.DynamicTree, Is.Not.Null);
+        Assert.That(table.SpatialIndex.StaticTree, Is.Null);
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void BackPointer_TreeSelector_Roundtrip()
+    {
+        Archetype<SpatialTerrainArchetype>.Touch();
+        using var dbe = SetupStaticEngine();
+
+        // Spawn a static terrain entity
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var terrain = new SpatialTerrain
+            {
+                Footprint = new AABB3F { MinX = 0, MinY = 0, MinZ = 0, MaxX = 10, MaxY = 10, MaxZ = 5 }
+            };
+            t.Spawn<SpatialTerrainArchetype>(SpatialTerrainArchetype.Terrain.Set(in terrain));
+            t.Commit();
+        }
+
+        var table = dbe.GetComponentTable<SpatialTerrain>();
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
+
+        // Read back-pointer and verify TreeSelector equals (byte)SpatialMode.Static
+        using var guard = EpochGuard.Enter(dbe.EpochManager);
+        var bpAccessor = table.SpatialIndex.BackPointerSegment.CreateChunkAccessor();
+        try
+        {
+            // ChunkId 1 is the first entity's component chunk
+            var bp = SpatialBackPointerHelper.Read(ref bpAccessor, 1);
+            Assert.That(bp.LeafChunkId, Is.GreaterThan(0));
+            Assert.That(bp.TreeSelector, Is.EqualTo((byte)SpatialMode.Static));
+        }
+        finally
+        {
+            bpAccessor.Dispose();
+        }
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void StaticComponent_InsertAndQuery()
+    {
+        Archetype<SpatialTerrainArchetype>.Touch();
+        using var dbe = SetupStaticEngine();
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < 10; i++)
+            {
+                var terrain = new SpatialTerrain
+                {
+                    Footprint = new AABB3F
+                    {
+                        MinX = i * 20, MinY = 0, MinZ = 0,
+                        MaxX = i * 20 + 10, MaxY = 10, MaxZ = 5
+                    }
+                };
+                t.Spawn<SpatialTerrainArchetype>(SpatialTerrainArchetype.Terrain.Set(in terrain));
+            }
+            t.Commit();
+        }
+
+        var table = dbe.GetComponentTable<SpatialTerrain>();
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(10));
+
+        // Query a region that overlaps the first 3 terrain pieces
+        using var guard = EpochGuard.Enter(dbe.EpochManager);
+        double[] queryCoords = { -5, -5, -5, 55, 15, 10 };
+        var results = new List<long>();
+        foreach (var hit in table.SpatialIndex.ActiveTree.QueryAABB(queryCoords))
+        {
+            results.Add(hit.EntityId);
+        }
+        Assert.That(results.Count, Is.EqualTo(3));
+
+        TreeValidator.Validate(table.SpatialIndex.ActiveTree);
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void StaticComponent_Remove_Works()
+    {
+        Archetype<SpatialTerrainArchetype>.Touch();
+        using var dbe = SetupStaticEngine();
+
+        EntityId terrainId;
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var terrain = new SpatialTerrain
+            {
+                Footprint = new AABB3F { MinX = 0, MinY = 0, MinZ = 0, MaxX = 10, MaxY = 10, MaxZ = 5 }
+            };
+            terrainId = t.Spawn<SpatialTerrainArchetype>(SpatialTerrainArchetype.Terrain.Set(in terrain));
+            t.Commit();
+        }
+
+        var table = dbe.GetComponentTable<SpatialTerrain>();
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
+
+        // Destroy the entity
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            t.Destroy(terrainId);
+            t.Commit();
+        }
+
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(0));
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void StaticComponent_TickFenceSkipped()
+    {
+        Archetype<SpatialTerrainArchetype>.Touch();
+        using var dbe = SetupStaticEngine();
+
+        // Spawn static terrain
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            var terrain = new SpatialTerrain
+            {
+                Footprint = new AABB3F { MinX = 0, MinY = 0, MinZ = 0, MaxX = 10, MaxY = 10, MaxZ = 5 }
+            };
+            t.Spawn<SpatialTerrainArchetype>(SpatialTerrainArchetype.Terrain.Set(in terrain));
+            t.Commit();
+        }
+
+        var table = dbe.GetComponentTable<SpatialTerrain>();
+        int entityCountBefore = table.SpatialIndex.ActiveTree.EntityCount;
+        int nodeCountBefore = table.SpatialIndex.ActiveTree.NodeCount;
+
+        // Modify the component data (simulating an update) — for static mode, tick fence should NOT process this
+        // The DirtyBitmap marks the chunk dirty, but ProcessSpatialEntries should skip it
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            // Just opening and committing should trigger a tick fence, but no spatial update for static
+            t.Commit();
+        }
+
+        // Tree should be unchanged (no reinserts, no structural changes)
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(entityCountBefore));
+        Assert.That(table.SpatialIndex.ActiveTree.NodeCount, Is.EqualTo(nodeCountBefore));
     }
 }

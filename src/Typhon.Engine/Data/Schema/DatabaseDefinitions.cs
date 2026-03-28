@@ -212,6 +212,7 @@ public class DatabaseDefinitions
                 field.HasSpatialIndex = true;
                 field.SpatialMargin = spa.Margin;
                 field.SpatialCellSize = spa.CellSize;
+                field.SpatialMode = spa.Mode;
                 field.SpatialFieldType = MapToSpatialFieldType(field.Type);
             }
 

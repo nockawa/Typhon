@@ -95,7 +95,7 @@ public unsafe partial class Transaction
     {
         var table = _dbe.GetComponentTable<T>();
         Debug.Assert(table?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
-        return new SpatialQuery<T>(table.SpatialIndex.Tree);
+        return new SpatialQuery<T>(table.SpatialIndex);
     }
 
     /// <summary>

@@ -28,7 +28,7 @@ internal static unsafe partial class SpatialMaintainer
     {
         var state = table.SpatialIndex;
         var fi = state.FieldInfo;
-        var tree = state.Tree;
+        var tree = state.ActiveTree;
         var desc = state.Descriptor;
 
         // Read tight bounds from component data
@@ -53,7 +53,7 @@ internal static unsafe partial class SpatialMaintainer
             var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
             try
             {
-                SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, leafChunkId, (short)slotIndex);
+                SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, leafChunkId, (short)slotIndex, (byte)state.FieldInfo.Mode);
             }
             finally
             {
@@ -78,7 +78,7 @@ internal static unsafe partial class SpatialMaintainer
     {
         var state = table.SpatialIndex;
         var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
-        var treeAccessor = state.Tree.Segment.CreateChunkAccessor(changeSet);
+        var treeAccessor = state.ActiveTree.Segment.CreateChunkAccessor(changeSet);
         try
         {
             return UpdateSpatialCore(entityPK, componentChunkId, table, ref compAccessor, ref treeAccessor, ref bpAccessor, changeSet);
@@ -105,7 +105,7 @@ internal static unsafe partial class SpatialMaintainer
     {
         var state = table.SpatialIndex;
         var fi = state.FieldInfo;
-        var tree = state.Tree;
+        var tree = state.ActiveTree;
         var desc = state.Descriptor;
 
         // Read current tight bounds
@@ -144,7 +144,7 @@ internal static unsafe partial class SpatialMaintainer
 
         EnlargeCoords(tightCoords, fi.Margin, desc);
         var (newLeaf, newSlot) = tree.Insert(entityPK, componentChunkId, tightCoords, ref treeAccessor, changeSet);
-        SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, newLeaf, (short)newSlot);
+        SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, newLeaf, (short)newSlot, bp.TreeSelector);
 
         return true; // Escaped fat AABB → reinserted
     }
@@ -155,7 +155,6 @@ internal static unsafe partial class SpatialMaintainer
     internal static void RemoveFromSpatial(long entityPK, int componentChunkId, ComponentTable table, ChangeSet changeSet)
     {
         var state = table.SpatialIndex;
-        var tree = state.Tree;
 
         var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
         try
@@ -166,6 +165,7 @@ internal static unsafe partial class SpatialMaintainer
                 return; // Never inserted (degenerate bounds)
             }
 
+            var tree = state.GetTree(bp.TreeSelector);
             var treeAccessor = tree.Segment.CreateChunkAccessor(changeSet);
             try
             {
@@ -204,7 +204,6 @@ internal static unsafe partial class SpatialMaintainer
     internal static void SetSpatialCategory(int componentChunkId, ComponentTable table, uint newCategoryMask, ChangeSet changeSet)
     {
         var state = table.SpatialIndex;
-        var tree = state.Tree;
 
         var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
         try
@@ -215,6 +214,7 @@ internal static unsafe partial class SpatialMaintainer
                 return; // Never inserted (degenerate bounds)
             }
 
+            var tree = state.GetTree(bp.TreeSelector);
             var treeAccessor = tree.Segment.CreateChunkAccessor(changeSet);
             try
             {
@@ -437,7 +437,7 @@ internal static unsafe partial class SpatialMaintainer
             if (archState.EntityMap.TryGet(entityId.EntityKey, recordBuf, ref emAccessor))
             {
                 int swappedCompChunkId = EntityRecordAccessor.GetLocation(recordBuf, compSlot);
-                SpatialBackPointerHelper.Write(ref bpAccessor, swappedCompChunkId, leafChunkId, (short)slotIndex);
+                SpatialBackPointerHelper.Write(ref bpAccessor, swappedCompChunkId, leafChunkId, (short)slotIndex, (byte)table.SpatialIndex.FieldInfo.Mode);
             }
         }
         finally

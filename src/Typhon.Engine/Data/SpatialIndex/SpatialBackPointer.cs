@@ -13,7 +13,9 @@ internal struct SpatialBackPointer
 {
     public int LeafChunkId;
     public short SlotIndex;
-    public short Reserved;
+    /// <summary>Identifies which R-Tree this entity belongs to. Value equals <c>(byte)SpatialMode</c>.</summary>
+    public byte TreeSelector;
+    public byte Reserved;
 }
 
 /// <summary>
@@ -30,13 +32,14 @@ internal static unsafe class SpatialBackPointerHelper
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void Write<TStore>(ref ChunkAccessor<TStore> accessor, int componentChunkId, int leafChunkId, short slotIndex)
+    internal static void Write<TStore>(ref ChunkAccessor<TStore> accessor, int componentChunkId, int leafChunkId, short slotIndex, byte treeSelector)
         where TStore : struct, IPageStore
     {
         byte* ptr = accessor.GetChunkAddress(componentChunkId, dirty: true);
         var bp = (SpatialBackPointer*)ptr;
         bp->LeafChunkId = leafChunkId;
         bp->SlotIndex = slotIndex;
+        bp->TreeSelector = treeSelector;
         bp->Reserved = 0;
     }
 

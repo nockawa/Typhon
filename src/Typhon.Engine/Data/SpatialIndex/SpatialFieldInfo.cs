@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -33,8 +34,9 @@ public readonly struct SpatialFieldInfo
     public readonly float Margin;
     public readonly float CellSize;
     public readonly float InverseCellSize;
+    public readonly SpatialMode Mode;
 
-    public SpatialFieldInfo(int fieldOffset, int fieldSize, SpatialFieldType fieldType, float margin, float cellSize)
+    public SpatialFieldInfo(int fieldOffset, int fieldSize, SpatialFieldType fieldType, float margin, float cellSize, SpatialMode mode = SpatialMode.Dynamic)
     {
         FieldOffset = fieldOffset;
         FieldSize = fieldSize;
@@ -42,6 +44,7 @@ public readonly struct SpatialFieldInfo
         Margin = margin;
         CellSize = cellSize;
         InverseCellSize = cellSize > 0 ? 1.0f / cellSize : 0;
+        Mode = mode;
     }
 
     /// <summary>

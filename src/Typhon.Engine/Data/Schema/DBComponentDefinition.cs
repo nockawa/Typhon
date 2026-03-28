@@ -107,6 +107,7 @@ public class DBComponentDefinition
         public SpatialFieldType SpatialFieldType { get; set; }
         public float SpatialMargin { get; set; }
         public float SpatialCellSize { get; set; }
+        public SpatialMode SpatialMode { get; set; }
 
         public bool IsForeignKey { get; set; }
         public Type ForeignKeyTargetType { get; set; }
