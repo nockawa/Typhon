@@ -98,32 +98,61 @@ internal unsafe partial class SpatialRTree<TStore>
     /// </summary>
     private int ChooseBestChild(byte* nodeBase, ReadOnlySpan<double> coords, int count)
     {
-        int halfCoord = _desc.CoordCount / 2;
         int bestChild = 0;
         double bestEnlargement = double.MaxValue;
         double bestArea = double.MaxValue;
 
-        for (int i = 0; i < count; i++)
+        if (_desc.CoordCount == 4)
         {
-            double area = 1.0;
-            double enlargedArea = 1.0;
-
-            for (int d = 0; d < halfCoord; d++)
+            // 2D fast path: fully unrolled, no inner loop
+            double c0 = coords[0], c1 = coords[1], c2 = coords[2], c3 = coords[3];
+            for (int i = 0; i < count; i++)
             {
-                double cMin = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, d, _desc);
-                double cMax = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, d + halfCoord, _desc);
-                double eMin = Math.Min(cMin, coords[d]);
-                double eMax = Math.Max(cMax, coords[d + halfCoord]);
-                area *= (cMax - cMin);
-                enlargedArea *= (eMax - eMin);
+                double cMinX = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, 0, _desc);
+                double cMinY = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, 1, _desc);
+                double cMaxX = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, 2, _desc);
+                double cMaxY = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, 3, _desc);
+
+                double w = cMaxX - cMinX;
+                double h = cMaxY - cMinY;
+                double area = w * h;
+                double ew = Math.Max(cMaxX, c2) - Math.Min(cMinX, c0);
+                double eh = Math.Max(cMaxY, c3) - Math.Min(cMinY, c1);
+                double enlargement = ew * eh - area;
+
+                if (enlargement < bestEnlargement || (enlargement == bestEnlargement && area < bestArea))
+                {
+                    bestChild = i;
+                    bestEnlargement = enlargement;
+                    bestArea = area;
+                }
             }
-
-            double enlargement = enlargedArea - area;
-            if (enlargement < bestEnlargement || (enlargement == bestEnlargement && area < bestArea))
+        }
+        else
+        {
+            int halfCoord = _desc.CoordCount / 2;
+            for (int i = 0; i < count; i++)
             {
-                bestChild = i;
-                bestEnlargement = enlargement;
-                bestArea = area;
+                double area = 1.0;
+                double enlargedArea = 1.0;
+
+                for (int d = 0; d < halfCoord; d++)
+                {
+                    double cMin = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, d, _desc);
+                    double cMax = SpatialNodeHelper.ReadInternalCoord(nodeBase, i, d + halfCoord, _desc);
+                    double eMin = Math.Min(cMin, coords[d]);
+                    double eMax = Math.Max(cMax, coords[d + halfCoord]);
+                    area *= (cMax - cMin);
+                    enlargedArea *= (eMax - eMin);
+                }
+
+                double enlargement = enlargedArea - area;
+                if (enlargement < bestEnlargement || (enlargement == bestEnlargement && area < bestArea))
+                {
+                    bestChild = i;
+                    bestEnlargement = enlargement;
+                    bestArea = area;
+                }
             }
         }
 

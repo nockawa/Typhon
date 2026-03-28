@@ -39,7 +39,7 @@ internal unsafe partial class SpatialRTree<TStore>
         private readonly SpatialNodeDescriptor _desc;
 
         // Query bounds stored inline (max 6 doubles for 3D)
-        private readonly double _q0, _q1, _q2, _q3, _q4, _q5;
+        private fixed double _queryCoords[6];
         private readonly int _coordCount;
 
         // DFS stack of chunk IDs to visit
@@ -67,12 +67,11 @@ internal unsafe partial class SpatialRTree<TStore>
             _current = default;
             _disposed = false;
 
-            _q0 = queryCoords.Length > 0 ? queryCoords[0] : 0;
-            _q1 = queryCoords.Length > 1 ? queryCoords[1] : 0;
-            _q2 = queryCoords.Length > 2 ? queryCoords[2] : 0;
-            _q3 = queryCoords.Length > 3 ? queryCoords[3] : 0;
-            _q4 = queryCoords.Length > 4 ? queryCoords[4] : 0;
-            _q5 = queryCoords.Length > 5 ? queryCoords[5] : 0;
+            int len = Math.Min(queryCoords.Length, 6);
+            for (int i = 0; i < len; i++)
+            {
+                _queryCoords[i] = queryCoords[i];
+            }
 
             // Push root
             if (tree._rootChunkId != 0)
@@ -99,7 +98,7 @@ internal unsafe partial class SpatialRTree<TStore>
                 }
 
                 byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
-                if (EntryOverlapsQuery(leafBase, _currentLeafIndex, true))
+                if (LeafEntryOverlapsQuery(leafBase, _currentLeafIndex))
                 {
                     _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc));
                     return true;
@@ -142,7 +141,7 @@ internal unsafe partial class SpatialRTree<TStore>
                 // Internal node: push overlapping children (reverse order for DFS)
                 for (int i = count - 1; i >= 0; i--)
                 {
-                    if (EntryOverlapsQuery(nodeBase, i, false))
+                    if (InternalEntryOverlapsQuery(nodeBase, i))
                     {
                         int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
                         if (_stackTop < 256)
@@ -172,44 +171,49 @@ internal unsafe partial class SpatialRTree<TStore>
             }
         }
 
-        /// <summary>
-        /// Separating-axis AABB overlap test: for each dimension, check entry.max &ge; query.min
-        /// and entry.min &le; query.max.
-        /// </summary>
+        /// <summary>Separating-axis AABB overlap test for leaf entries.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool EntryOverlapsQuery(byte* nodeBase, int index, bool isLeaf)
+        private bool LeafEntryOverlapsQuery(byte* nodeBase, int index)
         {
-            int halfCoord = _coordCount / 2;
-
-            for (int d = 0; d < halfCoord; d++)
+            if (_coordCount == 4)
             {
-                double entryMin = isLeaf ? 
-                    SpatialNodeHelper.ReadLeafCoord(nodeBase, index, d, _desc) : SpatialNodeHelper.ReadInternalCoord(nodeBase, index, d, _desc);
-                double entryMax = isLeaf ? 
-                    SpatialNodeHelper.ReadLeafCoord(nodeBase, index, d + halfCoord, _desc) : SpatialNodeHelper.ReadInternalCoord(nodeBase, index, d + halfCoord, _desc);
-
-                double queryMin = GetQueryCoord(d);
-                double queryMax = GetQueryCoord(d + halfCoord);
-
-                if (entryMax < queryMin || entryMin > queryMax)
-                {
-                    return false;
-                }
+                // 2D fast path: fully unrolled, no loop
+                return SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 2, _desc) >= _queryCoords[0]
+                    && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 0, _desc) <= _queryCoords[2]
+                    && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 3, _desc) >= _queryCoords[1]
+                    && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 1, _desc) <= _queryCoords[3];
             }
-            return true;
+
+            // 3D fast path: fully unrolled
+            return SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 3, _desc) >= _queryCoords[0]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 0, _desc) <= _queryCoords[3]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 4, _desc) >= _queryCoords[1]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 1, _desc) <= _queryCoords[4]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 5, _desc) >= _queryCoords[2]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 2, _desc) <= _queryCoords[5];
         }
 
+        /// <summary>Separating-axis AABB overlap test for internal node entries.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private double GetQueryCoord(int index) => index switch
+        private bool InternalEntryOverlapsQuery(byte* nodeBase, int index)
         {
-            0 => _q0,
-            1 => _q1,
-            2 => _q2,
-            3 => _q3,
-            4 => _q4,
-            5 => _q5,
-            _ => 0
-        };
+            if (_coordCount == 4)
+            {
+                // 2D fast path: fully unrolled
+                return SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 2, _desc) >= _queryCoords[0]
+                    && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 0, _desc) <= _queryCoords[2]
+                    && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 3, _desc) >= _queryCoords[1]
+                    && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 1, _desc) <= _queryCoords[3];
+            }
+
+            // 3D fast path: fully unrolled
+            return SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 3, _desc) >= _queryCoords[0]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 0, _desc) <= _queryCoords[3]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 4, _desc) >= _queryCoords[1]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 1, _desc) <= _queryCoords[4]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 5, _desc) >= _queryCoords[2]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 2, _desc) <= _queryCoords[5];
+        }
 
         public void Dispose()
         {
@@ -275,8 +279,9 @@ internal unsafe partial class SpatialRTree<TStore>
         private readonly SpatialNodeDescriptor _desc;
         private readonly double _maxDist;
 
-        // Ray parameters (inline)
-        private readonly double _ox, _oy, _oz, _idx, _idy, _idz;
+        // Ray parameters stored as fixed arrays (origin + inverse direction, max 3 dimensions)
+        private fixed double _origin[3];
+        private fixed double _invDir[3];
         private readonly int _coordCount;
 
         // Min-heap of (chunkId, tEntry)
@@ -306,17 +311,15 @@ internal unsafe partial class SpatialRTree<TStore>
             _current = default;
             _disposed = false;
 
-            _ox = origin.Length > 0 ? origin[0] : 0;
-            _oy = origin.Length > 1 ? origin[1] : 0;
-            _oz = origin.Length > 2 ? origin[2] : 0;
-            _idx = direction.Length > 0 && direction[0] != 0 ? 1.0 / direction[0] : double.MaxValue;
-            _idy = direction.Length > 1 && direction[1] != 0 ? 1.0 / direction[1] : double.MaxValue;
-            _idz = direction.Length > 2 && direction[2] != 0 ? 1.0 / direction[2] : double.MaxValue;
-
-            // Reject degenerate rays (NaN/Infinity in origin or computed inverse direction)
-            bool degenerate = double.IsNaN(_ox) || double.IsNaN(_oy) || double.IsNaN(_oz)
-                || double.IsNaN(_idx) || double.IsNaN(_idy) || double.IsNaN(_idz)
-                || double.IsNaN(maxDist) || maxDist < 0;
+            int halfCoordInit = _desc.CoordCount / 2;
+            bool degenerate = double.IsNaN(maxDist) || maxDist < 0;
+            for (int d = 0; d < halfCoordInit; d++)
+            {
+                _origin[d] = d < origin.Length ? origin[d] : 0;
+                double dir = d < direction.Length ? direction[d] : 0;
+                _invDir[d] = dir != 0 ? 1.0 / dir : double.MaxValue;
+                degenerate |= double.IsNaN(_origin[d]) || double.IsNaN(_invDir[d]);
+            }
 
             if (tree._rootChunkId != 0 && !degenerate)
             {
@@ -329,14 +332,18 @@ internal unsafe partial class SpatialRTree<TStore>
 
         public bool MoveNext()
         {
-            // Hoist stackalloc buffers outside all loops — reused across leaf scan and internal node processing
+            // Hoist stackalloc buffers outside all loops
             int halfCoord = _coordCount / 2;
             Span<double> coords = stackalloc double[_coordCount];
+
+            // Build origin/invDir spans from fixed arrays (one copy per MoveNext call)
             Span<double> origin = stackalloc double[halfCoord];
             Span<double> invDir = stackalloc double[halfCoord];
-            origin[0] = _ox; invDir[0] = _idx;
-            if (halfCoord > 1) { origin[1] = _oy; invDir[1] = _idy; }
-            if (halfCoord > 2) { origin[2] = _oz; invDir[2] = _idz; }
+            for (int d = 0; d < halfCoord; d++)
+            {
+                origin[d] = _origin[d];
+                invDir[d] = _invDir[d];
+            }
 
             // Resume leaf scan if in progress
             while (_currentLeafChunkId != 0)
