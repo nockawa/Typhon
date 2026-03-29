@@ -88,6 +88,17 @@ public unsafe partial class Transaction
     public EcsQuery<TArchetype> QueryExact<TArchetype>() where TArchetype : class => new(this, polymorphic: false);
 
     /// <summary>
+    /// Create a zero-allocation spatial query handle for component type <typeparamref name="T"/>.
+    /// Requires <typeparamref name="T"/> to have a <c>[SpatialIndex]</c> field.
+    /// </summary>
+    internal SpatialQuery<T> SpatialQuery<T>() where T : unmanaged
+    {
+        var table = _dbe.GetComponentTable<T>();
+        Debug.Assert(table?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
+        return new SpatialQuery<T>(table.SpatialIndex);
+    }
+
+    /// <summary>
     /// O(1) metadata count of live entities for <typeparamref name="TArchetype"/> and descendants.
     /// Uses LinearHash.EntryCount — fast but includes entities with DiedTSN set (not yet cleaned up).
     /// For exact counts respecting visibility, use <c>Query&lt;T&gt;().Count()</c>.
@@ -1122,6 +1133,11 @@ public unsafe partial class Transaction
             }
         }
 
+        // Pre-size spatial tree segments to avoid CBS overflow during bulk insert.
+        // Each entity needs ~1/leafCapacity leaf chunks. Splits add ~30% overhead for internal nodes.
+        // Also pre-size the back-pointer segment (1 chunk per entity).
+        PreGrowSpatialSegments(_spawnedEntities.Count);
+
         using var guard = EpochGuard.Enter(_epochManager);
 
         // Hoist stackalloc outside the loop — max record size is 78B (14B header + 16 components × 4B)
@@ -1423,6 +1439,50 @@ public unsafe partial class Transaction
                         }
                     }
                 }
+
+                // Insert SV spatial indexes (Transient excluded by schema validation).
+                // Must iterate all component slots (not just svSlots) because spatial-only components// without B+Tree indexes are not in the svSlots array.
+                for (int slot = 0; slot < componentCount; slot++)
+                {
+                    if ((versionedMask & (1 << slot)) != 0)
+                    {
+                        continue; // Versioned — handled by CommitComponentCore
+                    }
+                    var table = engineState.SlotToComponentTable[slot];
+                    if (table.SpatialIndex == null)
+                    {
+                        continue;
+                    }
+                    int chunkId = entry.Loc[slot];
+                    if (chunkId == 0)
+                    {
+                        continue;
+                    }
+
+                    // Zero the back-pointer chunk before InsertSpatial. Guarantees "not inserted" state (LeafChunkId=0)
+                    // even if InsertSpatial skips due to degenerate bounds. Without this, the CBS chunk may contain
+                    // garbage from a reused page, which UpdateSpatial would misinterpret as a valid leaf position.
+                    var bpAccessor = table.SpatialIndex.BackPointerSegment.CreateChunkAccessor(_changeSet);
+                    try
+                    {
+                        SpatialBackPointerHelper.Clear(ref bpAccessor, chunkId);
+                    }
+                    finally
+                    {
+                        bpAccessor.Dispose();
+                    }
+
+                    // Create a temporary component accessor for reading spatial field data
+                    var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+                    try
+                    {
+                        SpatialMaintainer.InsertSpatial((long)entry.Id.RawValue, chunkId, table, ref compAccessor, _changeSet);
+                    }
+                    finally
+                    {
+                        compAccessor.Dispose();
+                    }
+                }
             }
         }
         finally
@@ -1447,6 +1507,73 @@ public unsafe partial class Transaction
                     trIdxAccessors[ai].Dispose();
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Pre-grow spatial tree and back-pointer CBS segments to accommodate a bulk spawn.
+    /// Prevents CBS overflow when FinalizeSpawns inserts many entities in a single commit.
+    /// </summary>
+    private void PreGrowSpatialSegments(int spawnCount)
+    {
+        if (spawnCount < 64)
+        {
+            return; // Small batch — CBS can handle organic growth
+        }
+
+        // Scan archetypes for spatial-indexed component tables (same dedup pattern as EntityMap pre-size above)
+        Span<int> seenTableIds = stackalloc int[16];
+        int seenCount = 0;
+
+        foreach (var entry in _spawnedEntities)
+        {
+            var archId = entry.Id.ArchetypeId;
+            var es = _dbe._archetypeStates[archId];
+            if (es == null)
+            {
+                continue;
+            }
+
+            for (int slot = 0; slot < es.SlotToComponentTable.Length; slot++)
+            {
+                var table = es.SlotToComponentTable[slot];
+                if (table?.SpatialIndex == null)
+                {
+                    continue;
+                }
+
+                // Dedup by table identity (use RootPageIndex as stable ID)
+                int tableId = table.ComponentSegment.RootPageIndex;
+                bool alreadySeen = false;
+                for (int i = 0; i < seenCount; i++)
+                {
+                    if (seenTableIds[i] == tableId) { alreadySeen = true; break; }
+                }
+                if (alreadySeen)
+                {
+                    continue;
+                }
+                if (seenCount < 16)
+                {
+                    seenTableIds[seenCount++] = tableId;
+                }
+
+                var state = table.SpatialIndex;
+                var tree = state.ActiveTree;
+                int leafCapacity = state.Descriptor.LeafCapacity;
+
+                // Estimate chunks needed: entities/leafCapacity leaves + 30% for internal nodes from splits + 1 metadata chunk
+                int estimatedLeaves = (spawnCount + leafCapacity - 1) / leafCapacity;
+                int estimatedTotal = tree.EntityCount > 0 ? (int)((tree.EntityCount + spawnCount) / (leafCapacity * 0.7)) + 10 : (int)(estimatedLeaves * 1.3) + 10;
+                tree.Segment.EnsureCapacity(estimatedTotal, _changeSet);
+
+                // Back-pointer segment: addressed by componentChunkId (same as component segment)
+                // Must be large enough to cover the component segment's max chunkId after spawns
+                int compCapNeeded = table.ComponentSegment.AllocatedChunkCount + spawnCount + 10;
+                state.BackPointerSegment.EnsureCapacity(compCapNeeded, _changeSet);
+            }
+
+            break; // All entries in a single spawn batch share the same archetype — one pass suffices
         }
     }
 
@@ -1555,12 +1682,12 @@ public unsafe partial class Transaction
 
                 long pk = (long)entityId.RawValue;
 
-                // Check if this archetype has SV indexed components requiring entity record lookup
+                // Check if this archetype has SV indexed or spatial-indexed components requiring entity record lookup
                 bool needsEntityRecord = false;
                 for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
                     var table = engineState.SlotToComponentTable[slot];
-                    if (table?.HasShadowableIndexes == true)
+                    if (table?.HasShadowableIndexes == true || table?.SpatialIndex != null)
                     {
                         needsEntityRecord = true;
                         break;
@@ -1598,16 +1725,22 @@ public unsafe partial class Transaction
                     {
                         MarkComponentDeleted(meta._slotToComponentType[slot], pk);
                     }
-                    else if (table.HasShadowableIndexes && hasRecord)
+                    else if ((table.HasShadowableIndexes || table.SpatialIndex != null) && hasRecord)
                     {
                         int chunkId = EntityRecordAccessor.GetLocation(readBuf, slot);
                         table.TrackDestroyedChunkId(chunkId);
 
                         // If entity was NOT written this tick (no shadow), remove index entries now using current component data value (which matches the index).
                         // If entity WAS written (shadow exists), ProcessShadowEntries handles removal using the shadow's old key (which matches the index).
-                        if (!table.ShadowBitmap.Test(chunkId))
+                        if (table.HasShadowableIndexes && !table.ShadowBitmap.Test(chunkId))
                         {
                             RemoveNonVersionedIndexEntries(table, chunkId);
+                        }
+
+                        // Remove from spatial index immediately (no shadow needed — back-pointer provides O(1) lookup).
+                        if (table.SpatialIndex != null)
+                        {
+                            SpatialMaintainer.RemoveFromSpatial(pk, chunkId, table, _changeSet);
                         }
                     }
                 }

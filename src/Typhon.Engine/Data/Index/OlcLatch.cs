@@ -21,12 +21,12 @@ internal readonly ref struct OlcLatch
 
     /// <summary>
     /// Read version. Returns 0 if locked or obsolete (caller must restart).
-    /// Volatile.Read is intentional: OLC requires acquire semantics to prevent reordering of the version read past subsequent data reads.
+    /// On x64 (TSO), loads are never reordered with other loads — no acquire barrier needed.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int ReadVersion()
     {
-        int v = Volatile.Read(ref _version);
+        int v = _version;
         return (v & 0b11) == 0 ? v : 0;  // locked (bit 0) or obsolete (bit 1) -> restart
     }
 
@@ -34,7 +34,7 @@ internal readonly ref struct OlcLatch
     /// Validate version unchanged since snapshot.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool ValidateVersion(int expected) => Volatile.Read(ref _version) == expected;
+    public bool ValidateVersion(int expected) => _version == expected;
 
     /// <summary>
     /// After acquiring the write lock, validates that no other writer modified the node between our version snapshot and our lock acquisition.
@@ -68,9 +68,9 @@ internal readonly ref struct OlcLatch
     public void WriteUnlock()
     {
         // Increment version (bits 2-31), clear locked (bit 0), preserve obsolete (bit 1)
+        // On x64 (TSO), stores are never reordered with other stores — no release barrier needed.
         int v = _version;
-        int newV = ((v >> 2) + 1) << 2 | (v & 0b10);  // version++, keep obsolete, clear lock
-        Volatile.Write(ref _version, newV);
+        _version = ((v >> 2) + 1) << 2 | (v & 0b10);  // version++, keep obsolete, clear lock
     }
 
     /// <summary>
@@ -85,7 +85,7 @@ internal readonly ref struct OlcLatch
     /// This avoids unnecessary version bumps that would cause cascading restarts.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void AbortWriteLock() => Volatile.Write(ref _version, _version & ~0b1);  // Clear locked bit (bit 0) without changing version counter or obsolete bit
+    public void AbortWriteLock() => _version = _version & ~0b1;  // Clear locked bit (bit 0) without changing version counter or obsolete bit
 
     /// <summary>Check if locked (for diagnostics only).</summary>
     public bool IsLocked => (_version & 0b1) != 0;

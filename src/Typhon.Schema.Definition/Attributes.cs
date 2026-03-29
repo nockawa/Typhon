@@ -95,3 +95,29 @@ public sealed class ArchetypeAttribute : Attribute
         Revision = revision;
     }
 }
+
+/// <summary>
+/// Controls whether a spatial-indexed component uses a static or dynamic R-Tree.
+/// Static trees skip tick-fence updates entirely; dynamic trees use fat AABBs for movement hysteresis.
+/// </summary>
+[PublicAPI]
+public enum SpatialMode : byte
+{
+    Dynamic = 0,
+    Static = 1,
+}
+
+[AttributeUsage(AttributeTargets.Field)]
+[PublicAPI]
+public sealed class SpatialIndexAttribute : Attribute
+{
+    public float Margin { get; }
+    public float CellSize { get; }
+    public SpatialMode Mode { get; set; } = SpatialMode.Dynamic;
+
+    public SpatialIndexAttribute(float margin, float cellSize = 0f)
+    {
+        Margin = margin;
+        CellSize = cellSize;
+    }
+}

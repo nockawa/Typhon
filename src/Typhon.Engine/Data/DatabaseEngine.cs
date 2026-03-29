@@ -200,6 +200,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 {
     private readonly DatabaseEngineOptions      _options;
     private readonly ILogger<DatabaseEngine>    _log;
+    internal ILogger<DatabaseEngine>            Logger => _log;
     private readonly IMemoryAllocator           _memoryAllocator;
     internal IMemoryAllocator                   MemoryAllocator => _memoryAllocator;
     internal TransientOptions                   TransientOptions => _options.Transient;
@@ -730,6 +731,18 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 ProcessShadowEntries(table);
             }
+
+            // Spatial index maintenance: iterate dirty entities, update R-Tree positions.
+            // Uses dirtyBits snapshot (still in scope from DirtyBitmap.Snapshot above).
+            // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup, and the containment check
+            // uses the fat AABB stored in the tree node. Only the final position matters.
+            if (table.SpatialIndex != null && table.SpatialIndex.FieldInfo.Mode == SpatialMode.Dynamic)
+            {
+                ProcessSpatialEntries(table, dirtyBits);
+            }
+
+            // Archive dirty bitmap into ring buffer for interest management delta queries
+            table.SpatialIndex?.InterestSystem?.DirtyRing.Archive(tickNumber, dirtyBits, dirtyBits.Length);
         }
 
         if (highestLSN > 0)
@@ -745,7 +758,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// the shadow was captured.
     /// Called at tick boundary from <see cref="WriteTickFence"/>.
     /// </summary>
-    private unsafe void ProcessShadowEntries(ComponentTable table)
+    private void ProcessShadowEntries(ComponentTable table)
     {
         var fields = table.IndexedFieldInfos;
         var buffers = table.FieldShadowBuffers;
@@ -892,6 +905,151 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 reg.View.DeltaBuffer.TryAppend(entry.EntityPK, oldKey, newKey, 0, flags, reg.ComponentTag);
             }
         }
+    }
+
+    /// <summary>
+    /// Iterate dirty entities from the tick fence snapshot and update spatial R-Tree positions.
+    /// For each dirty entity: if not destroyed, call UpdateSpatial (fat AABB containment check → possible reinsert).
+    /// </summary>
+    private unsafe void ProcessSpatialEntries(ComponentTable table, long[] dirtyBits)
+    {
+        var state = table.SpatialIndex;
+        var changeSet = MMF.CreateChangeSet();
+
+        // Hoist accessor creation before the entity loop (same pattern as B+Tree batch index maintenance)
+        var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
+        var treeAccessor = state.ActiveTree.Segment.CreateChunkAccessor(changeSet);
+        var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
+        int dirtyCount = 0;
+        int escapeCount = 0;
+        try
+        {
+            for (int wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
+            {
+                long word = dirtyBits[wordIdx];
+                while (word != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount((ulong)word);
+                    int chunkId = wordIdx * 64 + bit;
+                    word &= word - 1; // clear lowest set bit
+
+                    if (table.IsChunkDestroyed(chunkId))
+                    {
+                        continue;
+                    }
+
+                    long entityPK = 0;
+                    if (table.Definition.EntityPKOverheadSize > 0)
+                    {
+                        byte* chunkPtr = compAccessor.GetChunkAddress(chunkId);
+                        entityPK = *(long*)chunkPtr;
+                    }
+
+                    dirtyCount++;
+                    if (SpatialMaintainer.UpdateSpatialBatch(entityPK, chunkId, table, ref compAccessor, ref treeAccessor, ref bpAccessor, changeSet))
+                    {
+                        escapeCount++;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            bpAccessor.Dispose();
+            treeAccessor.Dispose();
+            compAccessor.Dispose();
+            changeSet.SaveChanges();
+        }
+
+        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB
+        if (TelemetryConfig.SpatialActive && dirtyCount > 0)
+        {
+            double escapeRate = (double)escapeCount / dirtyCount;
+            if (escapeRate > 0.10)
+            {
+                SpatialMaintainer.LogHighEscapeRate(_log, table.Definition.Name, escapeRate, escapeCount, dirtyCount);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Persist spatial index segment root page indexes to BootstrapDictionary.
+    /// Written once at component registration; segment root pages are immutable after allocation.
+    /// </summary>
+    private void SaveSpatialBootstrap(ComponentTable table)
+    {
+        var state = table.SpatialIndex;
+        var fi = state.FieldInfo;
+        string key = $"spatial.{table.Definition.Name}";
+
+        // Tree SPIs + config packed into Int5: treeSPI, backPtrSPI, variant|mode|stride, margin bits, hmSPI (0 if no hashmap)
+        var activeTree = state.ActiveTree;
+        MMF.Bootstrap.Set(key, BootstrapDictionary.Value.FromInt5(
+            activeTree.Segment.RootPageIndex,
+            state.BackPointerSegment.RootPageIndex,
+            (int)activeTree.Variant | ((int)fi.Mode << 4) | (state.Descriptor.Stride << 8),
+            BitConverter.SingleToInt32Bits(fi.Margin),
+            state.OccupancyMap?.Segment.RootPageIndex ?? 0));
+
+        MMF.SaveBootstrap();
+    }
+
+    /// <summary>
+    /// Load spatial index from BootstrapDictionary and attach to the ComponentTable.
+    /// Called during database reopen for components with [SpatialIndex].
+    /// </summary>
+    private void LoadSpatialBootstrap(ComponentTable table)
+    {
+        string key = $"spatial.{table.Definition.Name}";
+        if (!MMF.Bootstrap.TryGet(key, out var val))
+        {
+            return; // No spatial index persisted (new attribute added after last save)
+        }
+
+        int treeSPI = val.GetInt();
+        int backPtrSPI = val.GetInt(1);
+        int variantStride = val.GetInt(2);
+
+        var variant = (SpatialVariant)(variantStride & 0x0F);
+        var mode = (SpatialMode)((variantStride >> 4) & 0x0F);
+        var stride = variantStride >> 8;
+        var descriptor = SpatialNodeDescriptor.FromVariant(variant, stride);
+
+        var treeSegment = MMF.LoadChunkBasedSegment(treeSPI, descriptor.Stride);
+        var backPtrSegment = MMF.LoadChunkBasedSegment(backPtrSPI, 8);
+
+        // Load Layer 1 occupancy hashmap if persisted (Int5[4] > 0)
+        PagedHashMap<long, int, PersistentStore> occupancyMap = null;
+        int hmSPI = val.GetInt(4);
+        if (hmSPI > 0)
+        {
+            int hmStride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
+            var hmSegment = MMF.LoadChunkBasedSegment(hmSPI, hmStride);
+            occupancyMap = PagedHashMap<long, int, PersistentStore>.Open(hmSegment);
+        }
+
+        var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load: true);
+        tree.BackPointerSegment = backPtrSegment;
+
+        var sf = table.Definition.SpatialField;
+        var fieldInfo = new SpatialFieldInfo(
+            table.ComponentOverhead + sf.OffsetInComponentStorage,
+            sf.SizeInComponentStorage,
+            sf.SpatialFieldType,
+            sf.SpatialMargin,
+            sf.SpatialCellSize,
+            mode);
+
+        SpatialRTree<PersistentStore> staticTree = null, dynamicTree = null;
+        if (mode == SpatialMode.Static)
+        {
+            staticTree = tree;
+        }
+        else
+        {
+            dynamicTree = tree;
+        }
+        table.SpatialIndex = new SpatialIndexState(staticTree, dynamicTree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 
     private void ConstructComponentStore()
@@ -1622,6 +1780,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         changeSet: migrationChangeSet);
                 }
 
+                // Load spatial index from bootstrap if present
+                if (definition.SpatialField != null)
+                {
+                    LoadSpatialBootstrap(componentTable);
+                }
+
                 // Populate newly created indexes by scanning entities
                 if (newIndexFieldIds != null)
                 {
@@ -1658,6 +1822,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             if (_componentsTable != null)
             {
                 var saved = SaveInSystemSchema(componentTable);
+
+                // Persist spatial index segment SPIs in bootstrap (segment root pages are immutable after creation)
+                if (componentTable.SpatialIndex != null)
+                {
+                    SaveSpatialBootstrap(componentTable);
+                }
+
                 cs.SaveChanges();
                 MMF.FlushToDisk();
 

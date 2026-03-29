@@ -39,6 +39,15 @@ public enum FieldType
     Collection  = 16,
     Component   = 17,
 
+    AABB2F      = 18,
+    AABB3F      = 19,
+    BSphere2F   = 20,
+    BSphere3F   = 21,
+    AABB2D      = DoubleFloat | AABB2F,
+    AABB3D      = DoubleFloat | AABB3F,
+    BSphere2D   = DoubleFloat | BSphere2F,
+    BSphere3D   = DoubleFloat | BSphere3F,
+
     Unsigned    = 256,
     DoubleFloat = 512
 }
@@ -89,6 +98,15 @@ public static class DatabaseSchemaExtensions
         if (t == typeof(QuaternionF)) return (FieldType.QuaternionF, FieldType.None);
         if (t == typeof(QuaternionD)) return (FieldType.QuaternionD, FieldType.None);
 
+        if (t == typeof(AABB2F)) return (FieldType.AABB2F, FieldType.None);
+        if (t == typeof(AABB3F)) return (FieldType.AABB3F, FieldType.None);
+        if (t == typeof(BSphere2F)) return (FieldType.BSphere2F, FieldType.None);
+        if (t == typeof(BSphere3F)) return (FieldType.BSphere3F, FieldType.None);
+        if (t == typeof(AABB2D)) return (FieldType.AABB2D, FieldType.None);
+        if (t == typeof(AABB3D)) return (FieldType.AABB3D, FieldType.None);
+        if (t == typeof(BSphere2D)) return (FieldType.BSphere2D, FieldType.None);
+        if (t == typeof(BSphere3D)) return (FieldType.BSphere3D, FieldType.None);
+
         if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ComponentCollection<>))
         {
             return (FieldType.Collection, FromType(t.GenericTypeArguments[0]).field);
@@ -138,6 +156,15 @@ public static class DatabaseSchemaExtensions
 
             case FieldType.QuaternionF: return 16;
             case FieldType.QuaternionD: return 32;
+
+            case FieldType.AABB2F: return 16;
+            case FieldType.AABB3F: return 24;
+            case FieldType.BSphere2F: return 12;
+            case FieldType.BSphere3F: return 16;
+            case FieldType.AABB2D: return 32;
+            case FieldType.AABB3D: return 48;
+            case FieldType.BSphere2D: return 24;
+            case FieldType.BSphere3D: return 32;
 
             case FieldType.Collection: return 4;
             case FieldType.Component: return 8;

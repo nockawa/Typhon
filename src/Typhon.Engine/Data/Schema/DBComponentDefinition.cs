@@ -57,6 +57,9 @@ public class DBComponentDefinition
     public int IndicesCount { get; private set; }
     public int MultipleIndicesCount { get; private set; }
 
+    /// <summary>Reference to the field with <c>[SpatialIndex]</c>, or null if none.</summary>
+    public Field SpatialField { get; private set; }
+
     [DebuggerDisplay("Id: {FieldId}, Name: {Name}, Type: {Type}, OffsetInComponentStorage: {OffsetInComponentStorage}")]
     [PublicAPI]
     public class Field
@@ -99,6 +102,12 @@ public class DBComponentDefinition
         public bool IsArray => ArrayLength > 0;
             
         public int ArrayLength { get; set; }
+
+        public bool HasSpatialIndex { get; set; }
+        public SpatialFieldType SpatialFieldType { get; set; }
+        public float SpatialMargin { get; set; }
+        public float SpatialCellSize { get; set; }
+        public SpatialMode SpatialMode { get; set; }
 
         public bool IsForeignKey { get; set; }
         public Type ForeignKeyTargetType { get; set; }
@@ -193,6 +202,11 @@ public class DBComponentDefinition
                 {
                     ++MultipleIndicesCount;
                 }
+            }
+
+            if (field.HasSpatialIndex)
+            {
+                SpatialField = field;
             }
 
             if (lastField == null || lastField.OffsetInComponentStorage < field.OffsetInComponentStorage)

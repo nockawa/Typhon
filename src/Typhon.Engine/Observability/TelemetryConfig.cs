@@ -254,6 +254,16 @@ public static class TelemetryConfig
     public static readonly bool EcsActive;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // SPATIAL INDEX TELEMETRY
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Whether spatial index telemetry is enabled in configuration.</summary>
+    public static readonly bool SpatialEnabled;
+
+    /// <summary>Combined flag: true only if global AND spatial telemetry are enabled. Use in spatial hot paths.</summary>
+    public static readonly bool SpatialActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // CONFIGURATION SOURCE TRACKING (for diagnostics)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -323,6 +333,11 @@ public static class TelemetryConfig
         var ecsSection = section.GetSection("ECS");
         EcsEnabled = ecsSection.GetValue("Enabled", false);
         EcsActive = Enabled && EcsEnabled;
+
+        // Spatial Index
+        var spatialSection = section.GetSection("Spatial");
+        SpatialEnabled = spatialSection.GetValue("Enabled", false);
+        SpatialActive = Enabled && SpatialEnabled;
     }
 
     private static (IConfiguration config, string loadedPath) BuildConfiguration()

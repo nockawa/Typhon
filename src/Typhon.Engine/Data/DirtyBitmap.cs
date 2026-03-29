@@ -16,7 +16,7 @@ namespace Typhon.Engine;
 /// </remarks>
 internal sealed class DirtyBitmap
 {
-    private volatile long[] _bits;
+    private long[] _bits;
     private readonly Lock _growLock = new();
 
     internal DirtyBitmap(int initialCapacity)
@@ -60,7 +60,7 @@ internal sealed class DirtyBitmap
         return (prev & mask) != 0;
     }
 
-    /// <summary>Check if a bit is set without modifying state. Thread-safe (volatile read).</summary>
+    /// <summary>Check if a bit is set without modifying state. On x64, long reads are naturally atomic.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool Test(int chunkId)
     {
@@ -72,7 +72,7 @@ internal sealed class DirtyBitmap
         }
 
         long mask = 1L << (chunkId & 63);
-        return (Volatile.Read(ref bits[wordIndex]) & mask) != 0;
+        return (bits[wordIndex] & mask) != 0;
     }
 
     /// <summary>Reset all bits to zero. Not thread-safe — call only when no concurrent writers are active.</summary>
@@ -89,7 +89,7 @@ internal sealed class DirtyBitmap
         return Interlocked.Exchange(ref _bits, new long[current.Length]);
     }
 
-    /// <summary>Returns true if any bit is set (fast skip for tick fence).</summary>
+    /// <summary>Returns true if any bit is set (fast skip for tick fence). On x64, long reads are naturally atomic.</summary>
     internal bool HasDirty
     {
         get
@@ -97,7 +97,7 @@ internal sealed class DirtyBitmap
             var bits = _bits;
             for (var i = 0; i < bits.Length; i++)
             {
-                if (Volatile.Read(ref bits[i]) != 0)
+                if (bits[i] != 0)
                 {
                     return true;
                 }
