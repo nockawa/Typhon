@@ -205,7 +205,7 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
     // Calibration
     // ═══════════════════════════════════════════════════════════════
 
-    private static long? CalibrationSleepThreshold;
+    internal static long? CalibrationSleepThreshold;
     internal static void ResetCalibrationSleepThreshold() => CalibrationSleepThreshold = null;
     
     /// <summary>

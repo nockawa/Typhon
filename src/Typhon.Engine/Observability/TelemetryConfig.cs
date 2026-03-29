@@ -264,6 +264,28 @@ public static class TelemetryConfig
     public static readonly bool SpatialActive;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // SCHEDULER TELEMETRY
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Whether Scheduler component telemetry is enabled in configuration.</summary>
+    public static readonly bool SchedulerEnabled;
+
+    /// <summary>Whether to track per-system transition latency (deps-satisfied to first-chunk-grab).</summary>
+    public static readonly bool SchedulerTrackTransitionLatency;
+
+    /// <summary>Whether to track per-worker active/idle time breakdown.</summary>
+    public static readonly bool SchedulerTrackWorkerUtilization;
+
+    /// <summary>Whether to track straggler gap (parallel efficiency metric for Patate systems).</summary>
+    public static readonly bool SchedulerTrackStragglerGap;
+
+    /// <summary>
+    /// Combined flag: true only if global AND scheduler telemetry are enabled.
+    /// Gates deep metrics (straggler gap, per-worker utilization). The ring buffer itself is always on.
+    /// </summary>
+    public static readonly bool SchedulerActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // CONFIGURATION SOURCE TRACKING (for diagnostics)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -338,6 +360,14 @@ public static class TelemetryConfig
         var spatialSection = section.GetSection("Spatial");
         SpatialEnabled = spatialSection.GetValue("Enabled", false);
         SpatialActive = Enabled && SpatialEnabled;
+
+        // Scheduler
+        var schedSection = section.GetSection("Scheduler");
+        SchedulerEnabled = schedSection.GetValue("Enabled", false);
+        SchedulerTrackTransitionLatency = schedSection.GetValue("TrackTransitionLatency", true);
+        SchedulerTrackWorkerUtilization = schedSection.GetValue("TrackWorkerUtilization", true);
+        SchedulerTrackStragglerGap = schedSection.GetValue("TrackStragglerGap", true);
+        SchedulerActive = Enabled && SchedulerEnabled;
     }
 
     private static (IConfiguration config, string loadedPath) BuildConfiguration()
@@ -421,6 +451,10 @@ public static class TelemetryConfig
 
            ECS: Active={EcsActive}
              Enabled={EcsEnabled}
+
+           Scheduler: Active={SchedulerActive}
+             Enabled={SchedulerEnabled}, TransitionLatency={SchedulerTrackTransitionLatency},
+             WorkerUtilization={SchedulerTrackWorkerUtilization}, StragglerGap={SchedulerTrackStragglerGap}
          """;
 
     /// <summary>
@@ -457,6 +491,11 @@ public static class TelemetryConfig
         if (EcsActive)
         {
             active.Add("ECS");
+        }
+
+        if (SchedulerActive)
+        {
+            active.Add("Scheduler");
         }
 
         return active.Count > 0

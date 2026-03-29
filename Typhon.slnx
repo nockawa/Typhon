@@ -1,8 +1,4 @@
 <Solution>
-    <Configurations>
-        <BuildType Name="Debug" />
-        <BuildType Name="Release" />
-    </Configurations>
     <Folder Name="/Solution Items/">
         <File Path=".editorconfig" />
         <File Path=".gitignore" />
