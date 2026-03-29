@@ -14,8 +14,14 @@ public enum SystemType
     Patate,
 
     /// <summary>
+    /// Single-worker entity iteration system. Processes an input source (View/Query) on one worker.
+    /// Used for small result sets, cross-entity logic, and lightweight per-entity work.
+    /// </summary>
+    Simple,
+
+    /// <summary>
     /// Lightweight single-invocation system. Executes inline on the dispatching worker (D3).
-    /// Used for input processing, cleanup, timers, and small cross-entity logic.
+    /// Used for input processing, cleanup, timers, and non-entity work.
     /// </summary>
     Callback
 }

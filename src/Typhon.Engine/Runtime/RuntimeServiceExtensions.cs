@@ -36,7 +36,7 @@ public static class RuntimeServiceExtensions
             var builder = new DagBuilder();
             buildDag(builder);
             var (systems, topo) = builder.Build();
-            return new DagScheduler(systems, topo, options, rr.Runtime, logger);
+            return new DagScheduler(systems, topo, options, rr.Runtime, logger: logger);
         });
 
         return services;

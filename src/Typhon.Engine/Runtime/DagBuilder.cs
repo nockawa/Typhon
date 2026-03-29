@@ -25,7 +25,8 @@ public sealed class DagBuilder
     /// <param name="name">Unique name identifying this system.</param>
     /// <param name="action">Delegate invoked once per tick on a single worker.</param>
     /// <param name="priority">Scheduling priority (enforcement deferred to #201).</param>
-    public DagBuilder AddCallback(string name, Action action, SystemPriority priority = SystemPriority.Normal)
+    public DagBuilder AddCallback(string name, Action<TickContext> action, SystemPriority priority = SystemPriority.Normal,
+        Func<bool> runIf = null)
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(action);
@@ -44,6 +45,40 @@ public sealed class DagBuilder
             Index = idx,
             Priority = priority,
             CallbackAction = action,
+            RunIf = runIf,
+            TotalChunks = 1
+        });
+        return this;
+    }
+
+    /// <summary>
+    /// Adds a Simple system (single-worker entity iteration).
+    /// </summary>
+    /// <param name="name">Unique name identifying this system.</param>
+    /// <param name="action">Delegate invoked once per tick on a single worker.</param>
+    /// <param name="priority">Scheduling priority (enforcement deferred to #201).</param>
+    /// <param name="runIf">Optional predicate — if false, system is skipped.</param>
+    public DagBuilder AddSimple(string name, Action<TickContext> action, SystemPriority priority = SystemPriority.Normal,
+        Func<bool> runIf = null)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(action);
+
+        if (_nameToIndex.ContainsKey(name))
+        {
+            throw new InvalidOperationException($"System '{name}' already exists in the DAG.");
+        }
+
+        var idx = _systems.Count;
+        _nameToIndex[name] = idx;
+        _systems.Add(new SystemDefinition
+        {
+            Name = name,
+            Type = SystemType.Simple,
+            Index = idx,
+            Priority = priority,
+            CallbackAction = action,
+            RunIf = runIf,
             TotalChunks = 1
         });
         return this;
@@ -53,10 +88,12 @@ public sealed class DagBuilder
     /// Adds a Patate system (multi-worker chunk-parallel execution).
     /// </summary>
     /// <param name="name">Unique name identifying this system.</param>
-    /// <param name="chunkAction">Delegate called per chunk with (chunkIndex, totalChunks). Must be thread-safe.</param>
+    /// <param name="chunkAction">Delegate called per chunk with (context, chunkIndex, totalChunks). Must be thread-safe.</param>
     /// <param name="totalChunks">Number of chunks to distribute across workers.</param>
     /// <param name="priority">Scheduling priority (enforcement deferred to #201).</param>
-    public DagBuilder AddPatate(string name, Action<int, int> chunkAction, int totalChunks, SystemPriority priority = SystemPriority.Normal)
+    /// <param name="runIf">Optional predicate — if false, system is skipped.</param>
+    public DagBuilder AddPatate(string name, Action<TickContext, int, int> chunkAction, int totalChunks,
+        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null)
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(chunkAction);
@@ -80,6 +117,7 @@ public sealed class DagBuilder
             Index = idx,
             Priority = priority,
             PatateChunkAction = chunkAction,
+            RunIf = runIf,
             TotalChunks = totalChunks
         });
         return this;

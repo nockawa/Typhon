@@ -40,14 +40,14 @@ public class DagSchedulerCpuTests
         const int targetTicks = 200;
 
         var builder = new DagBuilder()
-            .AddCallback("Input", () => { })
-            .AddPatate("Heavy", (chunk, total) =>
+            .AddCallback("Input", _ => { })
+            .AddPatate("Heavy", (_, chunk, total) =>
             {
                 // ~500µs per chunk busy-spin
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddCallback("Output", () => { })
+            .AddCallback("Output", _ => { })
             .AddEdge("Input", "Heavy")
             .AddEdge("Heavy", "Output");
 
@@ -111,7 +111,7 @@ public class DagSchedulerCpuTests
         const int durationSeconds = 3;
 
         var builder = new DagBuilder()
-            .AddCallback("Noop", () => { });
+            .AddCallback("Noop", _ => { });
 
         var (systems, topo) = builder.Build();
         using var scheduler = new DagScheduler(systems, topo, new RuntimeOptions
@@ -167,28 +167,28 @@ public class DagSchedulerCpuTests
 
         // Wide DAG: Input → 4 parallel Patate systems (50 chunks each) → Output
         var builder = new DagBuilder()
-            .AddCallback("Input", () => { })
-            .AddPatate("Physics", (c, t) =>
+            .AddCallback("Input", _ => { })
+            .AddPatate("Physics", (_, c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000; // ~200µs
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("AI", (c, t) =>
+            .AddPatate("AI", (_, c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("Movement", (c, t) =>
+            .AddPatate("Movement", (_, c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("Animation", (c, t) =>
+            .AddPatate("Animation", (_, c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddCallback("Output", () => { })
+            .AddCallback("Output", _ => { })
             .AddEdge("Input", "Physics")
             .AddEdge("Input", "AI")
             .AddEdge("Input", "Movement")

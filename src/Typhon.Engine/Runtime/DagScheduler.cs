@@ -39,6 +39,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly int _workerCount;
     private readonly RuntimeOptions _options;
     private readonly int[] _topologicalOrder;
+    private readonly EventQueueBase[] _eventQueues;
 
     // ═══════════════════════════════════════════════════════════════
     // Per-system mutable state (reset each tick)
@@ -144,9 +145,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <param name="topologicalOrder">Topological order from <see cref="DagBuilder.Build"/>.</param>
     /// <param name="options">Runtime configuration.</param>
     /// <param name="parent">Parent resource node (typically <see cref="IResourceRegistry.Runtime"/>).</param>
+    /// <param name="eventQueues">Event queues to reset at each tick start. Can be empty.</param>
     /// <param name="logger">Optional logger for diagnostics.</param>
-    public DagScheduler(SystemDefinition[] systems, int[] topologicalOrder, RuntimeOptions options, IResource parent, ILogger logger = null) : 
-        base("DagScheduler", parent)
+    public DagScheduler(SystemDefinition[] systems, int[] topologicalOrder, RuntimeOptions options, IResource parent, EventQueueBase[] eventQueues = null, 
+        ILogger logger = null) : base("DagScheduler", parent)
     {
         ArgumentNullException.ThrowIfNull(systems);
         ArgumentNullException.ThrowIfNull(topologicalOrder);
@@ -156,6 +158,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         _topologicalOrder = topologicalOrder;
         _systemCount = systems.Length;
         _options = options;
+        _eventQueues = eventQueues ?? [];
         _logger = logger ?? NullLogger.Instance;
         _workerCount = options.ResolveWorkerCount();
 
@@ -319,12 +322,23 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         // 1. Reset per-system state
         ResetTickState();
 
-        // 2. Mark root systems ready
+        // 2. Mark root systems ready (evaluate runIf for roots before waking workers)
         var readyNow = Stopwatch.GetTimestamp();
         foreach (var root in _rootSystems)
         {
             _currentTickSystemMetrics[root].ReadyTick = readyNow;
-            MarkSystemReady(root);
+            var sys = _systems[root];
+            if (sys.RunIf != null && !sys.RunIf())
+            {
+                _currentTickSystemMetrics[root].WasSkipped = true;
+                // Skip root — dispatch its successors immediately.
+                // Safe to call here: workers haven't woken yet.
+                OnSystemComplete(root, -1, false);
+            }
+            else
+            {
+                MarkSystemReady(root);
+            }
         }
 
         // 3. Activate tick — bump generation + signal workers (D7)
@@ -358,10 +372,15 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     private void ExecuteTickSingleThreaded(long tickStartTimestamp)
     {
-        // Reset
+        // Reset metrics and event queues
         for (var i = 0; i < _systemCount; i++)
         {
             _currentTickSystemMetrics[i] = default;
+        }
+
+        foreach (var queue in _eventQueues)
+        {
+            queue.Reset();
         }
 
         // Execute in topological order
@@ -373,19 +392,28 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var readyTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].ReadyTick = readyTick;
 
+            // Evaluate runIf
+            if (sys.RunIf != null && !sys.RunIf())
+            {
+                _currentTickSystemMetrics[sysIdx].WasSkipped = true;
+                continue;
+            }
+
             var startTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick = startTick;
 
-            if (sys.Type == SystemType.Callback)
-            {
-                sys.CallbackAction();
-            }
-            else // Patate — execute all chunks sequentially
+            var ctx = new TickContext { TickNumber = _currentTickNumber };
+
+            if (sys.Type == SystemType.Patate)
             {
                 for (var chunk = 0; chunk < sys.TotalChunks; chunk++)
                 {
-                    sys.PatateChunkAction(chunk, sys.TotalChunks);
+                    sys.PatateChunkAction(ctx, chunk, sys.TotalChunks);
                 }
+            }
+            else // Callback or Simple — single invocation
+            {
+                sys.CallbackAction(ctx);
             }
 
             var endTick = Stopwatch.GetTimestamp();
@@ -522,17 +550,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     {
         var sys = _systems[sysIdx];
 
-        if (sys.Type == SystemType.Callback)
-        {
-            ProcessCallback(sysIdx, workerId, trackUtilization);
-        }
-        else
+        if (sys.Type == SystemType.Patate)
         {
             ProcessPatate(sysIdx, workerId, trackUtilization);
         }
+        else // Callback or Simple — same single-invocation path
+        {
+            ProcessCallbackOrSimple(sysIdx, workerId, trackUtilization);
+        }
     }
 
-    private void ProcessCallback(int sysIdx, int workerId, bool trackUtilization)
+    private void ProcessCallbackOrSimple(int sysIdx, int workerId, bool trackUtilization)
     {
         // Atomic claim: only one worker wins
         if (Interlocked.CompareExchange(ref _isReady[sysIdx], 0, 1) != 1)
@@ -540,10 +568,13 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             return;
         }
 
+        // runIf was already evaluated at dispatch time (OnSystemComplete or root marking).
+        // If we're here, the system should execute.
+        var ctx = new TickContext { TickNumber = _currentTickNumber };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
 
-        _systems[sysIdx].CallbackAction();
+        _systems[sysIdx].CallbackAction(ctx);
 
         var workEnd = Stopwatch.GetTimestamp();
         if (trackUtilization)
@@ -558,8 +589,8 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     private void ProcessPatate(int sysIdx, int workerId, bool trackUtilization)
     {
+        // runIf was already evaluated at dispatch time. If we're here, the system should execute.
         var sys = _systems[sysIdx];
-        ref var metrics = ref _currentTickSystemMetrics[sysIdx];
 
         while (true)
         {
@@ -574,8 +605,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 RecordFirstChunkGrab(sysIdx, Stopwatch.GetTimestamp());
             }
 
+            var ctx = new TickContext { TickNumber = _currentTickNumber };
             var workStart = Stopwatch.GetTimestamp();
-            sys.PatateChunkAction(chunk, sys.TotalChunks);
+            sys.PatateChunkAction(ctx, chunk, sys.TotalChunks);
             var workEnd = Stopwatch.GetTimestamp();
 
             if (trackUtilization)
@@ -612,9 +644,16 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 _currentTickSystemMetrics[succIdx].ReadyTick = Stopwatch.GetTimestamp();
                 var succ = _systems[succIdx];
 
-                if (succ.Type == SystemType.Callback)
+                // Evaluate runIf here — before any worker can grab chunks.
+                // This is thread-safe: only one thread decrements the last dependency to zero.
+                if (succ.RunIf != null && !succ.RunIf())
                 {
-                    // D3: inline continuation
+                    _currentTickSystemMetrics[succIdx].WasSkipped = true;
+                    OnSystemComplete(succIdx, workerId, trackUtilization);
+                }
+                else if (succ.Type == SystemType.Callback || succ.Type == SystemType.Simple)
+                {
+                    // D3: inline continuation for single-invocation successors
                     ExecuteInline(succIdx, workerId, trackUtilization);
                 }
                 else
@@ -627,12 +666,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     private void ExecuteInline(int sysIdx, int workerId, bool trackUtilization)
     {
-        var sys = _systems[sysIdx];
-
+        // runIf was already evaluated by the caller (OnSystemComplete).
+        var ctx = new TickContext { TickNumber = _currentTickNumber };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
 
-        sys.CallbackAction();
+        _systems[sysIdx].CallbackAction(ctx);
 
         var workEnd = Stopwatch.GetTimestamp();
         if (trackUtilization)
@@ -685,6 +724,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         }
 
         _systemsRemaining.Value = _systemCount;
+
+        // Reset event queues at tick start
+        foreach (var queue in _eventQueues)
+        {
+            queue.Reset();
+        }
 
         // Reset per-worker utilization counters
         if (TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackWorkerUtilization)
