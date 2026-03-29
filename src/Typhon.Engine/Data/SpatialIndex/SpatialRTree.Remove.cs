@@ -31,6 +31,7 @@ internal unsafe partial class SpatialRTree<TStore>
         latch.WriteUnlock();
 
         _entityCount--;
+        _mutationVersion++;
 
         if (lastIndex == 0)
         {

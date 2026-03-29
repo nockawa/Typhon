@@ -12,6 +12,20 @@ internal readonly struct SpatialQueryResult
     public SpatialQueryResult(long entityId) => EntityId = entityId;
 }
 
+/// <summary>Query result that includes both EntityId and ComponentChunkId. Used by trigger system to populate occupant bitmaps without a second lookup.</summary>
+internal readonly struct SpatialOccupantResult
+{
+    public readonly long EntityId;
+    public readonly int ComponentChunkId;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public SpatialOccupantResult(long entityId, int componentChunkId)
+    {
+        EntityId = entityId;
+        ComponentChunkId = componentChunkId;
+    }
+}
+
 /// <summary>Stack buffer for DFS traversal of the R-Tree during AABB queries.</summary>
 [InlineArray(256)]
 internal struct QueryStackBuffer
@@ -220,6 +234,207 @@ internal unsafe partial class SpatialRTree<TStore>
             }
 
             // 3D fast path: fully unrolled
+            return SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 3, _desc) >= _queryCoords[0]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 0, _desc) <= _queryCoords[3]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 4, _desc) >= _queryCoords[1]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 1, _desc) <= _queryCoords[4]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 5, _desc) >= _queryCoords[2]
+                && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 2, _desc) <= _queryCoords[5];
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                _accessor.Dispose();
+            }
+        }
+    }
+
+    // ── Occupant Query (EntityId + ComponentChunkId) ─────────────────────
+
+    /// <summary>
+    /// Query all entities whose fat AABB overlaps the given query box, returning both EntityId and ComponentChunkId per hit.
+    /// Used by the trigger system to populate occupant bitmaps indexed by componentChunkId without a second lookup.
+    /// </summary>
+    internal OccupantQueryEnumerator QueryAABBOccupants(ReadOnlySpan<double> queryCoords, ChangeSet changeSet = null, uint categoryMask = 0)
+        => new(this, queryCoords, changeSet, categoryMask);
+
+    /// <summary>
+    /// Ref struct enumerator identical to <see cref="AABBQueryEnumerator"/> except it yields <see cref="SpatialOccupantResult"/>
+    /// (EntityId + ComponentChunkId). The additional componentChunkId read is from an adjacent SOA array — same cache line.
+    /// </summary>
+    internal ref struct OccupantQueryEnumerator
+    {
+        private readonly SpatialRTree<TStore> _tree;
+        private ChunkAccessor<TStore> _accessor;
+        private readonly SpatialNodeDescriptor _desc;
+        private fixed double _queryCoords[6];
+        private readonly int _coordCount;
+        private readonly uint _categoryMask;
+        private QueryStackBuffer _stack;
+        private int _stackTop;
+        private int _currentLeafChunkId;
+        private int _currentLeafIndex;
+        private int _currentLeafCount;
+        private SpatialOccupantResult _current;
+        private bool _disposed;
+
+        internal OccupantQueryEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> queryCoords, ChangeSet changeSet, uint categoryMask = 0)
+        {
+            _tree = tree;
+            _desc = tree._desc;
+            _coordCount = _desc.CoordCount;
+            _accessor = tree._segment.CreateChunkAccessor(changeSet);
+            _stackTop = 0;
+            _currentLeafChunkId = 0;
+            _currentLeafIndex = -1;
+            _currentLeafCount = 0;
+            _current = default;
+            _disposed = false;
+            _categoryMask = categoryMask;
+
+            int len = Math.Min(queryCoords.Length, 6);
+            for (int i = 0; i < len; i++)
+            {
+                _queryCoords[i] = queryCoords[i];
+            }
+
+            if (tree._rootChunkId != 0)
+            {
+                _stack[0] = tree._rootChunkId;
+                _stackTop = 1;
+            }
+        }
+
+        public SpatialOccupantResult Current => _current;
+
+        public OccupantQueryEnumerator GetEnumerator() => this;
+
+        public bool MoveNext()
+        {
+            while (_currentLeafChunkId != 0)
+            {
+                _currentLeafIndex++;
+                if (_currentLeafIndex >= _currentLeafCount)
+                {
+                    _currentLeafChunkId = 0;
+                    break;
+                }
+
+                byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
+                if (LeafEntryOverlapsQuery(leafBase, _currentLeafIndex))
+                {
+                    if (_categoryMask != 0
+                        && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    {
+                        continue;
+                    }
+                    _current = new SpatialOccupantResult(
+                        SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
+                        SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
+                    return true;
+                }
+            }
+
+            while (_stackTop > 0)
+            {
+                int chunkId = _stack[--_stackTop];
+                byte* nodeBase = _accessor.GetChunkAddress(chunkId);
+
+                var latch = GetLatch(nodeBase);
+                int version = latch.ReadVersion();
+                if (version == 0)
+                {
+                    RestartFromRoot();
+                    continue;
+                }
+
+                bool isLeaf = SpatialNodeHelper.IsLeaf(nodeBase);
+                int count = SpatialNodeHelper.GetCount(nodeBase);
+
+                if (!latch.ValidateVersion(version))
+                {
+                    RestartFromRoot();
+                    continue;
+                }
+
+                if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
+                {
+                    continue;
+                }
+
+                if (isLeaf)
+                {
+                    _currentLeafChunkId = chunkId;
+                    _currentLeafIndex = -1;
+                    _currentLeafCount = count;
+                    return MoveNext();
+                }
+
+                for (int i = count - 1; i >= 0; i--)
+                {
+                    if (InternalEntryOverlapsQuery(nodeBase, i))
+                    {
+                        int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
+                        if (_stackTop < 256)
+                        {
+                            _stack[_stackTop++] = childId;
+                        }
+                    }
+                }
+
+                if (!latch.ValidateVersion(version))
+                {
+                    RestartFromRoot();
+                }
+            }
+
+            return false;
+        }
+
+        private void RestartFromRoot()
+        {
+            _stackTop = 0;
+            _currentLeafChunkId = 0;
+            if (_tree._rootChunkId != 0)
+            {
+                _stack[0] = _tree._rootChunkId;
+                _stackTop = 1;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool LeafEntryOverlapsQuery(byte* nodeBase, int index)
+        {
+            if (_coordCount == 4)
+            {
+                return SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 2, _desc) >= _queryCoords[0]
+                    && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 0, _desc) <= _queryCoords[2]
+                    && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 3, _desc) >= _queryCoords[1]
+                    && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 1, _desc) <= _queryCoords[3];
+            }
+
+            return SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 3, _desc) >= _queryCoords[0]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 0, _desc) <= _queryCoords[3]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 4, _desc) >= _queryCoords[1]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 1, _desc) <= _queryCoords[4]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 5, _desc) >= _queryCoords[2]
+                && SpatialNodeHelper.ReadLeafCoord(nodeBase, index, 2, _desc) <= _queryCoords[5];
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool InternalEntryOverlapsQuery(byte* nodeBase, int index)
+        {
+            if (_coordCount == 4)
+            {
+                return SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 2, _desc) >= _queryCoords[0]
+                    && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 0, _desc) <= _queryCoords[2]
+                    && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 3, _desc) >= _queryCoords[1]
+                    && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 1, _desc) <= _queryCoords[3];
+            }
+
             return SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 3, _desc) >= _queryCoords[0]
                 && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 0, _desc) <= _queryCoords[3]
                 && SpatialNodeHelper.ReadInternalCoord(nodeBase, index, 4, _desc) >= _queryCoords[1]

@@ -146,6 +146,7 @@ internal unsafe partial class SpatialRTree<TStore>
                         tree._depth = depth;
 
                         tree.SyncMetadata(ref accessor);
+                        tree._mutationVersion = 1;
                     }
                     finally
                     {

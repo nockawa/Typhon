@@ -79,6 +79,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--trigger-direct"))
+            {
+                TriggerDirect.Run(args);
+                return;
+            }
+
             if (args.Contains("--profile-spawn"))
             {
                 SpawnProfile.Run();

@@ -83,6 +83,7 @@ internal unsafe partial class SpatialRTree<TStore>
             leafLatch.WriteUnlock();
 
             _entityCount++;
+            _mutationVersion++;
             RefitAncestors(ref path, ref accessor);
             SyncMetadata(ref accessor);
             return (true, nodeChunkId, leafCount);

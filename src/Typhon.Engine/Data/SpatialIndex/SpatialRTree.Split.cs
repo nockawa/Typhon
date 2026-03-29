@@ -76,6 +76,7 @@ internal unsafe partial class SpatialRTree<TStore>
         PropagateSplit(fullLeafChunkId, rightChunkId, ref path, ref accessor, changeSet);
 
         _entityCount++;
+        _mutationVersion++;
         SyncMetadata(ref accessor);
         return (true, newEntityLeaf, newEntitySlot);
     }

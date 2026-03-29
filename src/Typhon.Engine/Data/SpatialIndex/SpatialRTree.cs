@@ -77,6 +77,9 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     private int _entityCount;
     private int _depth;
 
+    /// <summary>Monotonic counter incremented on every Insert/Remove. Used by trigger system for static cache invalidation.</summary>
+    private int _mutationVersion;
+
     /// <summary>
     /// Back-pointer CBS for O(1) leaf lookup. When set, split scatter updates back-pointers directly
     /// using componentChunkIds stored in leaf entries. Null for standalone unit tests.
@@ -97,6 +100,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     internal int NodeCount => _nodeCount;
     internal int EntityCount => _entityCount;
     internal int Depth => _depth;
+    internal int MutationVersion => _mutationVersion;
 
     /// <summary>
     /// Create a new R-Tree or load an existing one from the segment.

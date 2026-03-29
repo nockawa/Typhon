@@ -319,6 +319,37 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         TreeValidator.Validate(table.SpatialIndex.ActiveTree);
     }
 
+    // ── Bulk spawn (regression test for #192) ──────────────────────────
+
+    [Test]
+    [CancelAfter(10000)]
+    public void BulkSpawn_2000Entities_SingleTransaction_NoOverflow()
+    {
+        using var dbe = SetupEngine();
+
+        using (var t = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < 2000; i++)
+            {
+                var ship = new SpatialShip
+                {
+                    Bounds = new AABB3F
+                    {
+                        MinX = (i % 50) * 20, MinY = (i / 50) * 20, MinZ = 0,
+                        MaxX = (i % 50) * 20 + 2, MaxY = (i / 50) * 20 + 2, MaxZ = 2
+                    },
+                    Speed = 1.0f
+                };
+                t.Spawn<SpatialShipArchetype>(SpatialShipArchetype.Ship.Set(in ship), SpatialShipArchetype.Name.Set(new SpatialName { Id = i }));
+            }
+            t.Commit();
+        }
+
+        var table = dbe.GetComponentTable<SpatialShip>();
+        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(2000));
+        TreeValidator.Validate(table.SpatialIndex.ActiveTree);
+    }
+
     // ── Static/Dynamic Mode (F2) ──────────────────────────────────────
 
     private DatabaseEngine SetupStaticEngine()
