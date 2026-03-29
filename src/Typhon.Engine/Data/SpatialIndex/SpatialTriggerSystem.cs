@@ -349,13 +349,22 @@ internal sealed unsafe class SpatialTriggerSystem
     {
         if (_scratchBitmap == null || _scratchBitmap.Length < wordCount)
         {
-            _scratchBitmap = new long[wordCount];
+            if (_scratchBitmap != null)
+            {
+                ArrayPool<long>.Shared.Return(_scratchBitmap);
+            }
+            _scratchBitmap = ArrayPool<long>.Shared.Rent(wordCount);
         }
         int lookupSize = maxChunkId + 1;
         if (_entityLookup == null || _entityLookup.Length < lookupSize)
         {
-            _entityLookup = new long[lookupSize];
-            _prevEntityLookup = new long[lookupSize];
+            if (_entityLookup != null)
+            {
+                ArrayPool<long>.Shared.Return(_entityLookup);
+                ArrayPool<long>.Shared.Return(_prevEntityLookup);
+            }
+            _entityLookup = ArrayPool<long>.Shared.Rent(lookupSize);
+            _prevEntityLookup = ArrayPool<long>.Shared.Rent(lookupSize);
         }
         _scratchCapacity = wordCount;
     }

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -321,7 +322,11 @@ internal sealed unsafe class SpatialInterestSystem
     {
         if (_accumScratch == null || _accumScratch.Length < wordCount)
         {
-            _accumScratch = new long[wordCount];
+            if (_accumScratch != null)
+            {
+                ArrayPool<long>.Shared.Return(_accumScratch);
+            }
+            _accumScratch = ArrayPool<long>.Shared.Rent(wordCount);
         }
     }
 

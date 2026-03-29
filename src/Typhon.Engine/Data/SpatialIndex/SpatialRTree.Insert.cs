@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace Typhon.Engine;
 
@@ -79,11 +80,18 @@ internal unsafe partial class SpatialRTree<TStore>
             // Room available: append at leafCount position
             WriteLeafEntry(leafBase, leafCount, entityId, componentChunkId, coords, categoryMask);
             SpatialNodeHelper.SetCount(leafBase, leafCount + 1);
-            SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
+            if (leafCount == 0)
+            {
+                SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
+            }
+            else
+            {
+                SpatialNodeHelper.ExpandLeafMBR(leafBase, leafCount, categoryMask, _desc);
+            }
             leafLatch.WriteUnlock();
 
-            _entityCount++;
-            _mutationVersion++;
+            Interlocked.Increment(ref _entityCount);
+            Interlocked.Increment(ref _mutationVersion);
             RefitAncestors(ref path, ref accessor);
             SyncMetadata(ref accessor);
             return (true, nodeChunkId, leafCount);

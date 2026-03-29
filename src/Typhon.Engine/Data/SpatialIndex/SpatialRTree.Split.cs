@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 namespace Typhon.Engine;
 
@@ -44,7 +45,7 @@ internal unsafe partial class SpatialRTree<TStore>
         // invalidating all previously obtained byte* pointers. Re-obtain after.
         int parentChunkId = SpatialNodeHelper.GetParentChunkId(leafBase);
         int rightChunkId = AllocNode(true, parentChunkId, ref accessor, changeSet);
-        _nodeCount++;
+        Interlocked.Increment(ref _nodeCount);
 
         // Re-obtain pointers after potential segment growth
         leafBase = accessor.GetChunkAddress(fullLeafChunkId, dirty: true);
@@ -411,7 +412,7 @@ internal unsafe partial class SpatialRTree<TStore>
         // invalidating all previously obtained byte* pointers. Re-obtain after.
         int parentChunkId = SpatialNodeHelper.GetParentChunkId(nodeBase);
         int rightChunkId = AllocNode(false, parentChunkId, ref accessor, changeSet);
-        _nodeCount++;
+        Interlocked.Increment(ref _nodeCount);
 
         // Re-obtain pointers after potential segment growth
         nodeBase = accessor.GetChunkAddress(nodeChunkId, dirty: true);
@@ -456,7 +457,7 @@ internal unsafe partial class SpatialRTree<TStore>
     private void CreateNewRoot(int leftChunkId, int rightChunkId, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
         int newRootChunkId = AllocNode(false, 0, ref accessor, changeSet);
-        _nodeCount++;
+        Interlocked.Increment(ref _nodeCount);
         byte* newRootBase = accessor.GetChunkAddress(newRootChunkId, dirty: true);
 
         // Insert old root as child 0

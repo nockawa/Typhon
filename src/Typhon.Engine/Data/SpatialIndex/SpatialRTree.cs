@@ -80,6 +80,9 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// <summary>Monotonic counter incremented on every Insert/Remove. Used by trigger system for static cache invalidation.</summary>
     private int _mutationVersion;
 
+    /// <summary>Lock protecting SyncMetadata writes to chunk 0 against concurrent mutations.</summary>
+    private readonly Lock _metadataLock = new();
+
     /// <summary>
     /// Back-pointer CBS for O(1) leaf lookup. When set, split scatter updates back-pointers directly
     /// using componentChunkIds stored in leaf entries. Null for standalone unit tests.
@@ -177,15 +180,18 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
         return chunkId;
     }
 
-    /// <summary>Write tree metadata to chunk 0.</summary>
+    /// <summary>Write tree metadata to chunk 0. Lock-protected against concurrent mutations.</summary>
     private void SyncMetadata(ref ChunkAccessor<TStore> accessor)
     {
-        byte* meta = accessor.GetChunkAddress(0, dirty: true);
-        *(int*)(meta + MetaRootOffset) = _rootChunkId;
-        *(int*)(meta + MetaNodeCountOffset) = _nodeCount;
-        *(int*)(meta + MetaEntityCountOffset) = _entityCount;
-        *(int*)(meta + MetaDepthOffset) = _depth;
-        *(byte*)(meta + MetaVariantOffset) = (byte)_variant;
+        lock (_metadataLock)
+        {
+            byte* meta = accessor.GetChunkAddress(0, dirty: true);
+            *(int*)(meta + MetaRootOffset) = _rootChunkId;
+            *(int*)(meta + MetaNodeCountOffset) = _nodeCount;
+            *(int*)(meta + MetaEntityCountOffset) = _entityCount;
+            *(int*)(meta + MetaDepthOffset) = _depth;
+            *(byte*)(meta + MetaVariantOffset) = (byte)_variant;
+        }
     }
 
     /// <summary>Load tree metadata from chunk 0.</summary>
@@ -260,7 +266,17 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
         while (true)
         {
             byte* currentBase = accessor.GetChunkAddress(currentChunkId);
+
+            // OLC-validate the child read to avoid chasing a stale parent pointer after concurrent split
+            var childLatch = GetLatch(currentBase);
+            int childVersion = childLatch.ReadVersion();
             int parentChunkId = SpatialNodeHelper.GetParentChunkId(currentBase);
+            if (!childLatch.ValidateVersion(childVersion))
+            {
+                // Child was concurrently modified (split changed parent pointer) — re-read
+                continue;
+            }
+
             if (parentChunkId == 0)
             {
                 break;

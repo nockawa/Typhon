@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
@@ -182,6 +183,10 @@ internal unsafe partial class SpatialRTree<TStore>
                         if (_stackTop < 256)
                         {
                             _stack[_stackTop++] = childId;
+                        }
+                        else
+                        {
+                            Debug.Fail("Spatial query DFS stack overflow — results may be incomplete");
                         }
                     }
                 }
@@ -390,6 +395,10 @@ internal unsafe partial class SpatialRTree<TStore>
                         {
                             _stack[_stackTop++] = childId;
                         }
+                        else
+                        {
+                            Debug.Fail("Spatial query DFS stack overflow — results may be incomplete");
+                        }
                     }
                 }
 
@@ -576,104 +585,103 @@ internal unsafe partial class SpatialRTree<TStore>
             int halfCoord = _coordCount / 2;
             Span<double> coords = stackalloc double[_coordCount];
 
-            // Build origin/invDir spans from fixed arrays (one copy per MoveNext call)
-            Span<double> origin = stackalloc double[halfCoord];
-            Span<double> invDir = stackalloc double[halfCoord];
-            for (int d = 0; d < halfCoord; d++)
+            // Pin fixed arrays directly — avoids stackalloc + copy per MoveNext() call
+            fixed (double* pOrigin = _origin)
+            fixed (double* pInvDir = _invDir)
             {
-                origin[d] = _origin[d];
-                invDir[d] = _invDir[d];
-            }
+                var origin = new ReadOnlySpan<double>(pOrigin, halfCoord);
+                var invDir = new ReadOnlySpan<double>(pInvDir, halfCoord);
 
-            // Resume leaf scan if in progress
-            while (_currentLeafChunkId != 0)
-            {
-                _currentLeafIndex++;
-                if (_currentLeafIndex >= _currentLeafCount)
+                // Resume leaf scan if in progress
+                while (_currentLeafChunkId != 0)
                 {
-                    _currentLeafChunkId = 0;
-                    break;
+                    _currentLeafIndex++;
+                    if (_currentLeafIndex >= _currentLeafCount)
+                    {
+                        _currentLeafChunkId = 0;
+                        break;
+                    }
+
+                    byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
+                    SpatialNodeHelper.ReadLeafEntryCoords(leafBase, _currentLeafIndex, coords, _desc);
+
+                    var (hit, t) = SpatialGeometry.RayAABBIntersect(origin, invDir, coords, _coordCount);
+                    if (hit && t <= _maxDist)
+                    {
+                        if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                        {
+                            continue;
+                        }
+                        _current = new SpatialQueryResult(
+                            SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
+                            SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
+                        return true;
+                    }
                 }
 
-                byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
-                SpatialNodeHelper.ReadLeafEntryCoords(leafBase, _currentLeafIndex, coords, _desc);
-
-                var (hit, t) = SpatialGeometry.RayAABBIntersect(origin, invDir, coords, _coordCount);
-                if (hit && t <= _maxDist)
+                // Priority queue traversal
+                while (_heapSize > 0)
                 {
-                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    double nextDist = _heapDists[0];
+                    if (nextDist > _maxDist)
+                    {
+                        break; // Early termination
+                    }
+
+                    int chunkId = HeapPop();
+                    byte* nodeBase = _accessor.GetChunkAddress(chunkId);
+
+                    var latch = GetLatch(nodeBase);
+                    int version = latch.ReadVersion();
+                    if (version == 0)
+                    {
+                        RestartFromRoot();
+                        continue;
+                    }
+
+                    bool isLeaf = SpatialNodeHelper.IsLeaf(nodeBase);
+                    int count = SpatialNodeHelper.GetCount(nodeBase);
+
+                    if (!latch.ValidateVersion(version))
+                    {
+                        RestartFromRoot();
+                        continue;
+                    }
+
+                    // Node-level category mask pruning
+                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
                     {
                         continue;
                     }
-                    _current = new SpatialQueryResult(
-                        SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
-                        SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
-                    return true;
-                }
-            }
 
-            // Priority queue traversal
-            while (_heapSize > 0)
-            {
-                double nextDist = _heapDists[0];
-                if (nextDist > _maxDist)
-                {
-                    break; // Early termination
-                }
-
-                int chunkId = HeapPop();
-                byte* nodeBase = _accessor.GetChunkAddress(chunkId);
-
-                var latch = GetLatch(nodeBase);
-                int version = latch.ReadVersion();
-                if (version == 0)
-                {
-                    RestartFromRoot();
-                    continue;
-                }
-
-                bool isLeaf = SpatialNodeHelper.IsLeaf(nodeBase);
-                int count = SpatialNodeHelper.GetCount(nodeBase);
-
-                if (!latch.ValidateVersion(version))
-                {
-                    RestartFromRoot();
-                    continue;
-                }
-
-                // Node-level category mask pruning
-                if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
-                {
-                    continue;
-                }
-
-                if (isLeaf)
-                {
-                    _currentLeafChunkId = chunkId;
-                    _currentLeafIndex = -1;
-                    _currentLeafCount = count;
-                    return MoveNext();
-                }
-
-                // Internal node: push children with their ray entry distances
-                for (int i = 0; i < count; i++)
-                {
-                    SpatialNodeHelper.ReadInternalEntryCoords(nodeBase, i, coords, _desc);
-                    var (hit, t) = SpatialGeometry.RayAABBIntersect(origin, invDir, coords, _coordCount);
-                    if (hit && t <= _maxDist && _heapSize < 64)
+                    if (isLeaf)
                     {
-                        int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
-                        HeapPush(childId, t);
+                        _currentLeafChunkId = chunkId;
+                        _currentLeafIndex = -1;
+                        _currentLeafCount = count;
+                        return MoveNext();
+                    }
+
+                    // Internal node: push children with their ray entry distances
+                    for (int i = 0; i < count; i++)
+                    {
+                        SpatialNodeHelper.ReadInternalEntryCoords(nodeBase, i, coords, _desc);
+                        var (hit, t) = SpatialGeometry.RayAABBIntersect(origin, invDir, coords, _coordCount);
+                        if (hit && t <= _maxDist && _heapSize < 64)
+                        {
+                            int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
+                            HeapPush(childId, t);
+                        }
+                    }
+
+                    if (!latch.ValidateVersion(version))
+                    {
+                        RestartFromRoot();
                     }
                 }
 
-                if (!latch.ValidateVersion(version))
-                {
-                    RestartFromRoot();
-                }
-            }
-
-            return false;
+                return false;
+            } // fixed (_origin, _invDir)
         }
 
         private void RestartFromRoot()
@@ -828,135 +836,141 @@ internal unsafe partial class SpatialRTree<TStore>
             // Hoist reusable coord buffer outside all loops
             Span<double> coords = stackalloc double[_desc.CoordCount];
 
-            // Build plane span from fixed array — copy once per MoveNext call (required because
-            // fixed arrays in ref structs can't produce a stable pointer across the method body)
-            Span<double> planeSpan = stackalloc double[_planeDataLen];
+            // Pin fixed plane array directly — avoids stackalloc + copy per MoveNext() call
             fixed (double* p = _planes)
             {
-                new ReadOnlySpan<double>(p, _planeDataLen).CopyTo(planeSpan);
-            }
+                var planeSpan = new ReadOnlySpan<double>(p, _planeDataLen);
 
-            // Resume leaf scan
-            while (_currentLeafChunkId != 0)
-            {
-                _currentLeafIndex++;
-                if (_currentLeafIndex >= _currentLeafCount)
+                // Resume leaf scan
+                while (_currentLeafChunkId != 0)
                 {
-                    _currentLeafChunkId = 0;
-                    break;
-                }
-
-                if (_currentLeafFullyInside)
-                {
-                    // INSIDE optimization: yield without plane tests (but still check category mask)
-                    byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
-                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    _currentLeafIndex++;
+                    if (_currentLeafIndex >= _currentLeafCount)
                     {
-                        continue;
+                        _currentLeafChunkId = 0;
+                        break;
                     }
-                    _current = new SpatialQueryResult(
-                        SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
-                        SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
-                    return true;
-                }
 
-                // Test individual entry against frustum
-                byte* lb = _accessor.GetChunkAddress(_currentLeafChunkId);
-                SpatialNodeHelper.ReadLeafEntryCoords(lb, _currentLeafIndex, coords, _desc);
-
-                int cls = SpatialGeometry.ClassifyAABBAgainstPlanes(coords, planeSpan, _planeCount, _dimCount);
-                if (cls != SpatialGeometry.FrustumOutside)
-                {
-                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(lb, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
+                    if (_currentLeafFullyInside)
                     {
-                        continue;
-                    }
-                    _current = new SpatialQueryResult(
-                        SpatialNodeHelper.ReadLeafEntityId(lb, _currentLeafIndex, _desc),
-                        SpatialNodeHelper.ReadLeafCompChunkId(lb, _currentLeafIndex, _desc));
-                    return true;
-                }
-            }
-
-            // DFS traversal
-            while (_stackTop > 0)
-            {
-                int encoded = _stack[--_stackTop];
-                bool fullyInside = (encoded & unchecked((int)0x80000000)) != 0;
-                int chunkId = encoded & 0x7FFFFFFF;
-
-                byte* nodeBase = _accessor.GetChunkAddress(chunkId);
-
-                var latch = GetLatch(nodeBase);
-                int version = latch.ReadVersion();
-                if (version == 0)
-                {
-                    RestartFromRoot();
-                    continue;
-                }
-
-                bool isLeaf = SpatialNodeHelper.IsLeaf(nodeBase);
-                int count = SpatialNodeHelper.GetCount(nodeBase);
-
-                if (!latch.ValidateVersion(version))
-                {
-                    RestartFromRoot();
-                    continue;
-                }
-
-                // Node-level category mask pruning
-                if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
-                {
-                    continue;
-                }
-
-                if (isLeaf)
-                {
-                    _currentLeafChunkId = chunkId;
-                    _currentLeafIndex = -1;
-                    _currentLeafCount = count;
-                    _currentLeafFullyInside = fullyInside;
-                    return MoveNext();
-                }
-
-                if (fullyInside)
-                {
-                    // All children are fully inside — push with fullyInside flag
-                    for (int i = count - 1; i >= 0; i--)
-                    {
-                        int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
-                        if (_stackTop < 256)
-                        {
-                            _stack[_stackTop++] = childId | unchecked((int)0x80000000); // bit 31 = fully inside
-                        }
-                    }
-                }
-                else
-                {
-                    // Classify each child
-                    for (int i = count - 1; i >= 0; i--)
-                    {
-                        SpatialNodeHelper.ReadInternalEntryCoords(nodeBase, i, coords, _desc);
-                        int cls = SpatialGeometry.ClassifyAABBAgainstPlanes(coords, planeSpan, _planeCount, _dimCount);
-                        if (cls == SpatialGeometry.FrustumOutside)
+                        // INSIDE optimization: yield without plane tests (but still check category mask)
+                        byte* leafBase = _accessor.GetChunkAddress(_currentLeafChunkId);
+                        if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(leafBase, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
                         {
                             continue;
                         }
-                        int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
-                        if (_stackTop < 256)
+                        _current = new SpatialQueryResult(
+                            SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
+                            SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
+                        return true;
+                    }
+
+                    // Test individual entry against frustum
+                    byte* lb = _accessor.GetChunkAddress(_currentLeafChunkId);
+                    SpatialNodeHelper.ReadLeafEntryCoords(lb, _currentLeafIndex, coords, _desc);
+
+                    int cls = SpatialGeometry.ClassifyAABBAgainstPlanes(coords, planeSpan, _planeCount, _dimCount);
+                    if (cls != SpatialGeometry.FrustumOutside)
+                    {
+                        if (_categoryMask != 0 && (SpatialNodeHelper.ReadLeafCategoryMask(lb, _currentLeafIndex, _desc) & _categoryMask) != _categoryMask)
                         {
-                            _stack[_stackTop++] = cls == SpatialGeometry.FrustumInside ? childId | unchecked((int)0x80000000) : childId;
+                            continue;
                         }
+                        _current = new SpatialQueryResult(
+                            SpatialNodeHelper.ReadLeafEntityId(lb, _currentLeafIndex, _desc),
+                            SpatialNodeHelper.ReadLeafCompChunkId(lb, _currentLeafIndex, _desc));
+                        return true;
                     }
                 }
 
-                if (!latch.ValidateVersion(version))
+                // DFS traversal
+                while (_stackTop > 0)
                 {
-                    RestartFromRoot();
-                }
-            }
+                    int encoded = _stack[--_stackTop];
+                    bool fullyInside = (encoded & unchecked((int)0x80000000)) != 0;
+                    int chunkId = encoded & 0x7FFFFFFF;
 
-            return false;
+                    byte* nodeBase = _accessor.GetChunkAddress(chunkId);
+
+                    var latch = GetLatch(nodeBase);
+                    int version = latch.ReadVersion();
+                    if (version == 0)
+                    {
+                        RestartFromRoot();
+                        continue;
+                    }
+
+                    bool isLeaf = SpatialNodeHelper.IsLeaf(nodeBase);
+                    int count = SpatialNodeHelper.GetCount(nodeBase);
+
+                    if (!latch.ValidateVersion(version))
+                    {
+                        RestartFromRoot();
+                        continue;
+                    }
+
+                    // Node-level category mask pruning
+                    if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
+                    {
+                        continue;
+                    }
+
+                    if (isLeaf)
+                    {
+                        _currentLeafChunkId = chunkId;
+                        _currentLeafIndex = -1;
+                        _currentLeafCount = count;
+                        _currentLeafFullyInside = fullyInside;
+                        return MoveNext();
+                    }
+
+                    if (fullyInside)
+                    {
+                        // All children are fully inside — push with fullyInside flag
+                        for (int i = count - 1; i >= 0; i--)
+                        {
+                            int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
+                            if (_stackTop < 256)
+                            {
+                                _stack[_stackTop++] = childId | unchecked((int)0x80000000); // bit 31 = fully inside
+                            }
+                            else
+                            {
+                                Debug.Fail("Spatial frustum query DFS stack overflow — results may be incomplete");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Classify each child
+                        for (int i = count - 1; i >= 0; i--)
+                        {
+                            SpatialNodeHelper.ReadInternalEntryCoords(nodeBase, i, coords, _desc);
+                            int cls = SpatialGeometry.ClassifyAABBAgainstPlanes(coords, planeSpan, _planeCount, _dimCount);
+                            if (cls == SpatialGeometry.FrustumOutside)
+                            {
+                                continue;
+                            }
+                            int childId = SpatialNodeHelper.ReadInternalChildId(nodeBase, i, _desc);
+                            if (_stackTop < 256)
+                            {
+                                _stack[_stackTop++] = cls == SpatialGeometry.FrustumInside ? childId | unchecked((int)0x80000000) : childId;
+                            }
+                            else
+                            {
+                                Debug.Fail("Spatial frustum query DFS stack overflow — results may be incomplete");
+                            }
+                        }
+                    }
+
+                    if (!latch.ValidateVersion(version))
+                    {
+                        RestartFromRoot();
+                    }
+                }
+
+                return false;
+            } // fixed (_planes)
         }
 
         private void RestartFromRoot()
@@ -1060,7 +1074,14 @@ internal unsafe partial class SpatialRTree<TStore>
             radius *= 2.0;
         }
 
-        return 0;
+        // Iteration limit reached — return whatever candidates we have from the last pass
+        int finalCount = Math.Min(lastCount, k);
+        finalCount = Math.Min(finalCount, results.Length);
+        for (int i = 0; i < finalCount; i++)
+        {
+            results[i] = candidates[i];
+        }
+        return finalCount;
     }
 
     // ── Count Queries ────────────────────────────────────────────────────
@@ -1217,6 +1238,10 @@ internal unsafe partial class SpatialRTree<TStore>
                             {
                                 stack[stackTop++] = childId | fullyContainedFlag;
                             }
+                            else
+                            {
+                                Debug.Fail("Spatial count query DFS stack overflow — results may be incomplete");
+                            }
                         }
                     }
                     else
@@ -1250,6 +1275,10 @@ internal unsafe partial class SpatialRTree<TStore>
                                     {
                                         stack[stackTop++] = childId;
                                     }
+                                }
+                                else
+                                {
+                                    Debug.Fail("Spatial count query DFS stack overflow — results may be incomplete");
                                 }
                             }
                         }
@@ -1285,6 +1314,10 @@ internal unsafe partial class SpatialRTree<TStore>
                                     {
                                         stack[stackTop++] = childId;
                                     }
+                                }
+                                else
+                                {
+                                    Debug.Fail("Spatial count query DFS stack overflow — results may be incomplete");
                                 }
                             }
                         }

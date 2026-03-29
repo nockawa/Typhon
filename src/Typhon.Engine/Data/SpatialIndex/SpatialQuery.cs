@@ -30,7 +30,8 @@ internal readonly ref struct SpatialQuery<T> where T : unmanaged
     public SpatialRTree<PersistentStore>.FrustumEnumerator Frustum(ReadOnlySpan<double> planes, int planeCount, uint categoryMask = 0) =>
         _tree.QueryFrustum(planes, planeCount, categoryMask: categoryMask);
 
-    /// <summary>k-nearest-neighbors query. Results written to caller-provided buffer sorted by ascending squared distance.</summary>
+    /// <summary>k-nearest-neighbor candidates via iterative radius expansion. The <c>distSq</c> field is 0 — callers must
+    /// recompute actual distances from component data (the tree stores fat AABBs, not tight bounds) and sort if needed.</summary>
     public int Nearest(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results, uint categoryMask = 0)
         => _tree.QueryKNN(center, k, results, categoryMask: categoryMask);
 

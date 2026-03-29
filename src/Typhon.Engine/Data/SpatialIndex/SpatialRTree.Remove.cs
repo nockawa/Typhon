@@ -1,3 +1,5 @@
+using System.Threading;
+
 namespace Typhon.Engine;
 
 internal unsafe partial class SpatialRTree<TStore>
@@ -30,8 +32,8 @@ internal unsafe partial class SpatialRTree<TStore>
         SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
         latch.WriteUnlock();
 
-        _entityCount--;
-        _mutationVersion++;
+        Interlocked.Decrement(ref _entityCount);
+        Interlocked.Increment(ref _mutationVersion);
 
         if (lastIndex == 0)
         {
@@ -79,11 +81,12 @@ internal unsafe partial class SpatialRTree<TStore>
             }
             SpatialNodeHelper.SetCount(parentBase, lastIdx);
             SpatialNodeHelper.RefitInternalMBR(parentBase, _desc);
+            RefitInternalUnionMask(parentBase, ref accessor);
         }
 
         parentLatch.WriteUnlock();
         _segment.FreeChunk(leafChunkId);
-        _nodeCount--;
+        Interlocked.Decrement(ref _nodeCount);
 
         int newParentCount = parentCount - 1;
 
@@ -102,7 +105,7 @@ internal unsafe partial class SpatialRTree<TStore>
             SpatialNodeHelper.SetParentChunkId(newRootBase, 0);
 
             _segment.FreeChunk(_rootChunkId);
-            _nodeCount--;
+            Interlocked.Decrement(ref _nodeCount);
             _rootChunkId = remainingChild;
             _depth--;
         }

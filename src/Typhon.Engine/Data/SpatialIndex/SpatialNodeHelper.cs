@@ -263,6 +263,33 @@ internal static unsafe class SpatialNodeHelper
     }
 
     /// <summary>
+    /// Incrementally expand the NodeMBR and UnionCategoryMask to include a single new leaf entry.
+    /// O(CoordCount) instead of O(N × CoordCount) — used after appending one entry to a non-empty leaf.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void ExpandLeafMBR(byte* nodeBase, int entryIndex, uint categoryMask, in SpatialNodeDescriptor desc)
+    {
+        int halfCoord = desc.CoordCount / 2;
+        for (int c = 0; c < halfCoord; c++)
+        {
+            double v = ReadLeafCoord(nodeBase, entryIndex, c, desc);
+            if (v < ReadNodeMBRCoord(nodeBase, c, desc))
+            {
+                WriteNodeMBRCoord(nodeBase, c, v, desc);
+            }
+        }
+        for (int c = halfCoord; c < desc.CoordCount; c++)
+        {
+            double v = ReadLeafCoord(nodeBase, entryIndex, c, desc);
+            if (v > ReadNodeMBRCoord(nodeBase, c, desc))
+            {
+                WriteNodeMBRCoord(nodeBase, c, v, desc);
+            }
+        }
+        WriteUnionCategoryMask(nodeBase, ReadUnionCategoryMask(nodeBase, desc) | categoryMask, desc);
+    }
+
+    /// <summary>
     /// Recompute NodeMBR as the exact union of all internal entries' coordinates.
     /// </summary>
     public static void RefitInternalMBR(byte* nodeBase, in SpatialNodeDescriptor desc)
