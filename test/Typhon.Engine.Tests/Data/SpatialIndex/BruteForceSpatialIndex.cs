@@ -179,5 +179,9 @@ internal class BruteForceSpatialIndex
         return all.GetRange(0, Math.Min(k, all.Count));
     }
 
+    internal int CountInAABB(ReadOnlySpan<double> queryCoords, uint categoryMask = 0) => QueryAABB(queryCoords, categoryMask).Count;
+
+    internal int CountInRadius(ReadOnlySpan<double> center, double radius, uint categoryMask = 0) => QueryRadius(center, radius, categoryMask).Count;
+
     internal int Count => _entries.Count;
 }

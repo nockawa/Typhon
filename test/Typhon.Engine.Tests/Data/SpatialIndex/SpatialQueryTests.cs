@@ -364,4 +364,171 @@ public class SpatialQueryTests
         double distSq = SpatialGeometry.SquaredDistanceToCenter(point, aabb, 4);
         Assert.That(distSq, Is.EqualTo(1300.0).Within(0.001));
     }
+
+    // ── Count Queries ────────────────────────────────────────────────────
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CountInAABB_MatchesBruteForce()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var (tree, oracle, _) = CreateTreeAndOracle(pmmf, 200);
+
+        Span<double> queryCoords = stackalloc double[] { 200, 200, 800, 800 };
+        int treeCount = tree.CountInAABB(queryCoords);
+        int oracleCount = oracle.CountInAABB(queryCoords);
+
+        Assert.That(treeCount, Is.EqualTo(oracleCount));
+        Assert.That(treeCount, Is.GreaterThan(0), "Query should match some entities");
+        guard.Dispose();
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CountInAABB_EmptyRegion_ReturnsZero()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var (tree, _, _) = CreateTreeAndOracle(pmmf, 50);
+
+        Span<double> queryCoords = stackalloc double[] { 5000, 5000, 6000, 6000 };
+        Assert.That(tree.CountInAABB(queryCoords), Is.EqualTo(0));
+        guard.Dispose();
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CountInAABB_WholeWorld_ReturnsEntityCount()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var (tree, _, _) = CreateTreeAndOracle(pmmf, 200);
+
+        // Region encompassing all entities (data is in 0..1010 range)
+        Span<double> queryCoords = stackalloc double[] { -1, -1, 2000, 2000 };
+        Assert.That(tree.CountInAABB(queryCoords), Is.EqualTo(200));
+        guard.Dispose();
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CountInRadius_MatchesBruteForce()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var (tree, oracle, _) = CreateTreeAndOracle(pmmf, 200);
+
+        Span<double> center = stackalloc double[] { 500, 500 };
+        double radius = 200;
+
+        int treeCount = tree.CountInRadius(center, radius);
+        int oracleCount = oracle.CountInRadius(center, radius);
+
+        Assert.That(treeCount, Is.EqualTo(oracleCount));
+        Assert.That(treeCount, Is.GreaterThan(0), "Query should match some entities");
+        guard.Dispose();
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CountInRadius_EmptyRegion_ReturnsZero()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var (tree, _, _) = CreateTreeAndOracle(pmmf, 50);
+
+        Span<double> center = stackalloc double[] { 5000, 5000 };
+        Assert.That(tree.CountInRadius(center, 10), Is.EqualTo(0));
+        guard.Dispose();
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CountInAABB_WithCategoryMask_ReducesCount()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(SpatialVariant.R2Df32);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 64, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, SpatialVariant.R2Df32);
+        var oracle = new BruteForceSpatialIndex(desc.CoordCount);
+        var rng = new Random(42);
+
+        var accessor = segment.CreateChunkAccessor();
+        try
+        {
+            uint maskA = 0x01;
+            uint maskB = 0x02;
+
+            for (int i = 0; i < 200; i++)
+            {
+                double v = rng.NextDouble() * 1000;
+                double v2 = rng.NextDouble() * 1000;
+                double size = rng.NextDouble() * 10 + 1;
+                Span<double> coords = stackalloc double[] { v, v2, v + size, v2 + size };
+
+                // Alternate category masks: even = A, odd = B
+                uint mask = (i % 2 == 0) ? maskA : maskB;
+                tree.Insert(i + 1, coords, ref accessor, categoryMask: mask);
+                oracle.Insert(i + 1, coords, mask);
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        Span<double> queryCoords = stackalloc double[] { 200, 200, 800, 800 };
+
+        int totalCount = tree.CountInAABB(queryCoords);
+        int countA = tree.CountInAABB(queryCoords, categoryMask: 0x01);
+        int countB = tree.CountInAABB(queryCoords, categoryMask: 0x02);
+        int oracleCountA = oracle.CountInAABB(queryCoords, 0x01);
+        int oracleCountB = oracle.CountInAABB(queryCoords, 0x02);
+
+        Assert.That(countA, Is.EqualTo(oracleCountA), "Category A count should match oracle");
+        Assert.That(countB, Is.EqualTo(oracleCountB), "Category B count should match oracle");
+        Assert.That(countA + countB, Is.EqualTo(totalCount), "Disjoint masks should sum to total");
+        Assert.That(countA, Is.LessThan(totalCount), "Category filter should reduce count");
+        guard.Dispose();
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CountInAABB_MatchesQueryResultLength()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var (tree, _, _) = CreateTreeAndOracle(pmmf, 200);
+
+        Span<double> queryCoords = stackalloc double[] { 200, 200, 800, 800 };
+
+        // Count via CountInAABB
+        int countResult = tree.CountInAABB(queryCoords);
+
+        // Count via iterating QueryAABB
+        int queryResult = 0;
+        foreach (var _ in tree.QueryAABB(queryCoords))
+        {
+            queryResult++;
+        }
+
+        Assert.That(countResult, Is.EqualTo(queryResult), "CountInAABB must equal QueryAABB iteration count");
+        guard.Dispose();
+    }
 }

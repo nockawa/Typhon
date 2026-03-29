@@ -33,4 +33,12 @@ internal readonly ref struct SpatialQuery<T> where T : unmanaged
     /// <summary>k-nearest-neighbors query. Results written to caller-provided buffer sorted by ascending squared distance.</summary>
     public int Nearest(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results, uint categoryMask = 0)
         => _tree.QueryKNN(center, k, results, categoryMask: categoryMask);
+
+    /// <summary>Count entities whose fat AABB overlaps the query box. Uses subtree counting shortcut for fully-contained regions.</summary>
+    public int CountInAABB(ReadOnlySpan<double> coords, uint categoryMask = 0)
+        => _tree.CountInAABB(coords, categoryMask: categoryMask);
+
+    /// <summary>Count entities whose fat AABB overlaps the bounding box of the sphere.</summary>
+    public int CountInRadius(ReadOnlySpan<double> center, double radius, uint categoryMask = 0)
+        => _tree.CountInRadius(center, radius, categoryMask: categoryMask);
 }

@@ -234,7 +234,211 @@ public unsafe class SpatialQueryBenchmarks
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// 3. GAME TICK MIXED WORKLOAD
+// 3. COUNT vs FULL QUERY BENCHMARKS
+// ═══════════════════════════════════════════════════════════════════════
+
+/// <summary>
+/// Compares CountInAABB vs full QueryAABB across different containment ratios.
+/// The subtree counting shortcut fires when child MBRs are fully contained in the query box.
+/// </summary>
+[SimpleJob(warmupCount: 3, iterationCount: 10)]
+[JsonExporterAttribute.Full]
+[BenchmarkCategory("SpatialRTree", "Count")]
+public unsafe class SpatialCountBenchmarks
+{
+    private ServiceCollection _sc;
+    private ServiceProvider _sp;
+    private ManagedPagedMMF _pmmf;
+    private EpochManager _em;
+    private SpatialRTree<PersistentStore> _tree;
+
+    [Params(1_000, 10_000, 100_000)]
+    public int EntityCount;
+
+    [GlobalSetup]
+    public void GlobalSetup()
+    {
+        _sc = new ServiceCollection();
+        _sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+            .AddResourceRegistry().AddMemoryAllocator().AddEpochManager()
+            .AddScopedManagedPagedMemoryMappedFile(o =>
+            {
+                o.DatabaseName = "SpatCount";
+                o.DatabaseCacheSize = (ulong)(128L * 1024 * PagedMMF.PageSize);
+                o.OverrideDatabaseCacheMinSize = true;
+            });
+    }
+
+    [IterationSetup]
+    public void IterationSetup()
+    {
+        _sp = _sc.BuildServiceProvider();
+        _sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        _pmmf = _sp.GetRequiredService<ManagedPagedMMF>();
+        _em = _sp.GetRequiredService<EpochManager>();
+
+        using var guard = EpochGuard.Enter(_em);
+        var desc = SpatialNodeDescriptor.ForVariant(SpatialVariant.R2Df32);
+        var seg = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 512, desc.Stride);
+        _tree = new SpatialRTree<PersistentStore>(seg, SpatialVariant.R2Df32);
+        var rng = new Random(42);
+        var accessor = seg.CreateChunkAccessor();
+        try
+        {
+            // Entities uniformly distributed in [0..10000, 0..10000], size ~5
+            for (int i = 0; i < EntityCount; i++)
+            {
+                double x = rng.NextDouble() * 10000, y = rng.NextDouble() * 10000;
+                // Alternate category masks: even=0x01, odd=0x02
+                uint mask = (i % 2 == 0) ? 0x01u : 0x02u;
+                _tree.Insert(i + 1, stackalloc double[] { x, y, x + 5, y + 5 }, ref accessor, categoryMask: mask);
+            }
+        }
+        finally { accessor.Dispose(); }
+    }
+
+    [IterationCleanup]
+    public void IterationCleanup()
+    {
+        _tree = null;
+        _em?.Dispose(); _pmmf?.Dispose(); _sp?.Dispose();
+    }
+
+    // ── Small box (~1% of area): mostly partial overlaps, few fully-contained subtrees ──
+
+    [Benchmark]
+    public int Count_SmallBox()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            double cx = (q % 10) * 1000 + 450;
+            total += _tree.CountInAABB(stackalloc double[] { cx, 4500, cx + 100, 5500 });
+        }
+        return total;
+    }
+
+    [Benchmark]
+    public int Query_SmallBox()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            double cx = (q % 10) * 1000 + 450;
+            foreach (var _ in _tree.QueryAABB(stackalloc double[] { cx, 4500, cx + 100, 5500 }))
+            {
+                total++;
+            }
+        }
+        return total;
+    }
+
+    // ── Large box (~25% of area): many fully-contained subtrees ──
+
+    [Benchmark]
+    public int Count_LargeBox()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            total += _tree.CountInAABB(stackalloc double[] { 0, 0, 5000, 5000 });
+        }
+        return total;
+    }
+
+    [Benchmark]
+    public int Query_LargeBox()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            foreach (var _ in _tree.QueryAABB(stackalloc double[] { 0, 0, 5000, 5000 }))
+            {
+                total++;
+            }
+        }
+        return total;
+    }
+
+    // ── Whole world (100%): maximum subtree shortcut, every node fully contained ──
+
+    [Benchmark]
+    public int Count_WholeWorld()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            total += _tree.CountInAABB(stackalloc double[] { -1, -1, 10001, 10001 });
+        }
+        return total;
+    }
+
+    [Benchmark]
+    public int Query_WholeWorld()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            foreach (var _ in _tree.QueryAABB(stackalloc double[] { -1, -1, 10001, 10001 }))
+            {
+                total++;
+            }
+        }
+        return total;
+    }
+
+    // ── Count with category mask (~50% filter): subtree shortcut for geometry, still scan for category ──
+
+    [Benchmark]
+    public int Count_LargeBox_CategoryMask()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            total += _tree.CountInAABB(stackalloc double[] { 0, 0, 5000, 5000 }, categoryMask: 0x01);
+        }
+        return total;
+    }
+
+    [Benchmark]
+    public int Query_LargeBox_CategoryMask()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            foreach (var _ in _tree.QueryAABB(stackalloc double[] { 0, 0, 5000, 5000 }, categoryMask: 0x01))
+            {
+                total++;
+            }
+        }
+        return total;
+    }
+
+    // ── Miss all: disjoint query region, pure pruning ──
+
+    [Benchmark]
+    public int Count_MissAll()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            total += _tree.CountInAABB(stackalloc double[] { 20000, 20000, 20100, 20100 });
+        }
+        return total;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 4. GAME TICK MIXED WORKLOAD
 // ═══════════════════════════════════════════════════════════════════════
 
 [SimpleJob(warmupCount: 2, iterationCount: 5)]
