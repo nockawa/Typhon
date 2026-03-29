@@ -91,8 +91,6 @@ tx.Commit();
        alt="Typhon Architecture Layers">
 </a>
 
-For detailed architecture, see the [Overview Documentation](claude/overview/).
-
 ## Development Status
 
 Typhon is in **active development** targeting an alpha release. Current state:
