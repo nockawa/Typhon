@@ -234,7 +234,161 @@ public unsafe class SpatialQueryBenchmarks
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// 3. COUNT vs FULL QUERY BENCHMARKS
+// 3. COMPOUND QUERY (two-pass) BENCHMARKS
+// ═══════════════════════════════════════════════════════════════════════
+
+/// <summary>
+/// Measures post-filter waste: spatial query with/without category mask → simulated component read.
+/// The two-pass pattern: (1) spatial+category query reduces candidates, (2) caller reads component data
+/// via ComponentChunkId and applies a predicate. Category masks cut the post-filter set dramatically.
+/// </summary>
+[SimpleJob(warmupCount: 3, iterationCount: 10)]
+[JsonExporterAttribute.Full]
+[BenchmarkCategory("SpatialRTree", "Compound")]
+public unsafe class SpatialCompoundQueryBenchmarks
+{
+    private ServiceCollection _sc;
+    private ServiceProvider _sp;
+    private ManagedPagedMMF _pmmf;
+    private EpochManager _em;
+    private SpatialRTree<PersistentStore> _tree;
+
+    [Params(1_000, 10_000)]
+    public int EntityCount;
+
+    [GlobalSetup]
+    public void GlobalSetup()
+    {
+        _sc = new ServiceCollection();
+        _sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+            .AddResourceRegistry().AddMemoryAllocator().AddEpochManager()
+            .AddScopedManagedPagedMemoryMappedFile(o =>
+            {
+                o.DatabaseName = "SpatCompound";
+                o.DatabaseCacheSize = (ulong)(128L * 1024 * PagedMMF.PageSize);
+                o.OverrideDatabaseCacheMinSize = true;
+            });
+    }
+
+    [IterationSetup]
+    public void IterationSetup()
+    {
+        _sp = _sc.BuildServiceProvider();
+        _sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        _pmmf = _sp.GetRequiredService<ManagedPagedMMF>();
+        _em = _sp.GetRequiredService<EpochManager>();
+
+        using var guard = EpochGuard.Enter(_em);
+        var desc = SpatialNodeDescriptor.ForVariant(SpatialVariant.R2Df32);
+        var seg = _pmmf.AllocateChunkBasedSegment(PageBlockType.None, 512, desc.Stride);
+        _tree = new SpatialRTree<PersistentStore>(seg, SpatialVariant.R2Df32);
+        var rng = new Random(42);
+        var accessor = seg.CreateChunkAccessor();
+        try
+        {
+            // 4 categories: 25% each (Enemy=0x01, Ally=0x02, Projectile=0x04, Terrain=0x08)
+            uint[] masks = [0x01, 0x02, 0x04, 0x08];
+            for (int i = 0; i < EntityCount; i++)
+            {
+                double x = rng.NextDouble() * 10000, y = rng.NextDouble() * 10000;
+                _tree.Insert(i + 1, i + 1, stackalloc double[] { x, y, x + 5, y + 5 }, ref accessor,
+                    categoryMask: masks[i % 4]);
+            }
+        }
+        finally { accessor.Dispose(); }
+    }
+
+    [IterationCleanup]
+    public void IterationCleanup()
+    {
+        _tree = null;
+        _em?.Dispose(); _pmmf?.Dispose(); _sp?.Dispose();
+    }
+
+    // ── Baseline: full query (no mask), enumerate all, apply post-filter ──
+
+    [Benchmark(Baseline = true)]
+    public int NoMask_PostFilter()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int accepted = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            foreach (var hit in _tree.QueryAABB(stackalloc double[] { 0, 0, 5000, 5000 }))
+            {
+                // Simulate: "is this an enemy?" post-filter without category mask
+                // Uses ComponentChunkId to index into simulated component array
+                if (hit.ComponentChunkId % 4 == 0) // ~25% pass rate
+                {
+                    accepted++;
+                }
+            }
+        }
+        return accepted;
+    }
+
+    // ── Two-pass: category mask pre-filters, then component post-filter ──
+
+    [Benchmark]
+    public int WithMask_PostFilter()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int accepted = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            // Pass 1: tree does spatial + category filtering (only enemies: 0x01)
+            foreach (var hit in _tree.QueryAABB(stackalloc double[] { 0, 0, 5000, 5000 }, categoryMask: 0x01))
+            {
+                // Pass 2: component-level predicate on the reduced set
+                if (hit.ComponentChunkId % 2 == 0) // ~50% of enemies pass
+                {
+                    accepted++;
+                }
+            }
+        }
+        return accepted;
+    }
+
+    // ── Two-mask intersection: enemies AND alive (conjunctive) ──
+
+    [Benchmark]
+    public int ConjunctiveMask_PostFilter()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int accepted = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            // Category mask 0x01 matches entities inserted with mask 0x01
+            // Only the enemy-category entities pass the tree filter
+            foreach (var hit in _tree.QueryAABB(stackalloc double[] { 0, 0, 5000, 5000 }, categoryMask: 0x01))
+            {
+                // Simulate reading health via ComponentChunkId and filtering
+                if (hit.ComponentChunkId > 10)
+                {
+                    accepted++;
+                }
+            }
+        }
+        return accepted;
+    }
+
+    // ── Count-only: no materialization at all ──
+
+    [Benchmark]
+    public int CountOnly_NoPostFilter()
+    {
+        using var guard = EpochGuard.Enter(_em);
+        int total = 0;
+        for (int q = 0; q < 100; q++)
+        {
+            total += _tree.CountInAABB(stackalloc double[] { 0, 0, 5000, 5000 }, categoryMask: 0x01);
+        }
+        return total;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 4. COUNT vs FULL QUERY BENCHMARKS
 // ═══════════════════════════════════════════════════════════════════════
 
 /// <summary>

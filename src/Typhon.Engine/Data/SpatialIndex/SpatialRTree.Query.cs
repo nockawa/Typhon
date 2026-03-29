@@ -3,13 +3,19 @@ using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
-/// <summary>AABB query result: the EntityId of an entity whose fat AABB overlaps the query box.</summary>
+/// <summary>AABB query result: the EntityId and ComponentChunkId of an entity whose fat AABB overlaps the query box.
+/// ComponentChunkId enables direct CBS access for two-pass compound queries without an EntityMap lookup.</summary>
 internal readonly struct SpatialQueryResult
 {
     public readonly long EntityId;
+    public readonly int ComponentChunkId;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SpatialQueryResult(long entityId) => EntityId = entityId;
+    public SpatialQueryResult(long entityId, int componentChunkId)
+    {
+        EntityId = entityId;
+        ComponentChunkId = componentChunkId;
+    }
 }
 
 /// <summary>Query result that includes both EntityId and ComponentChunkId. Used by trigger system to populate occupant bitmaps without a second lookup.</summary>
@@ -121,7 +127,9 @@ internal unsafe partial class SpatialRTree<TStore>
                     {
                         continue;
                     }
-                    _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc));
+                    _current = new SpatialQueryResult(
+                        SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
+                        SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
                     return true;
                 }
             }
@@ -597,7 +605,9 @@ internal unsafe partial class SpatialRTree<TStore>
                     {
                         continue;
                     }
-                    _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc));
+                    _current = new SpatialQueryResult(
+                        SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
+                        SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
                     return true;
                 }
             }
@@ -844,7 +854,9 @@ internal unsafe partial class SpatialRTree<TStore>
                     {
                         continue;
                     }
-                    _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc));
+                    _current = new SpatialQueryResult(
+                        SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
+                        SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
                     return true;
                 }
 
@@ -859,7 +871,9 @@ internal unsafe partial class SpatialRTree<TStore>
                     {
                         continue;
                     }
-                    _current = new SpatialQueryResult(SpatialNodeHelper.ReadLeafEntityId(lb, _currentLeafIndex, _desc));
+                    _current = new SpatialQueryResult(
+                        SpatialNodeHelper.ReadLeafEntityId(lb, _currentLeafIndex, _desc),
+                        SpatialNodeHelper.ReadLeafCompChunkId(lb, _currentLeafIndex, _desc));
                     return true;
                 }
             }

@@ -531,4 +531,99 @@ public class SpatialQueryTests
         Assert.That(countResult, Is.EqualTo(queryResult), "CountInAABB must equal QueryAABB iteration count");
         guard.Dispose();
     }
+
+    // ── Compound Queries (two-pass pattern) ──────────────────────────────
+
+    [Test]
+    [CancelAfter(5000)]
+    public void QueryResult_ExposesComponentChunkId()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(SpatialVariant.R2Df32);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 64, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, SpatialVariant.R2Df32);
+
+        // Insert entities with known componentChunkIds
+        var accessor = segment.CreateChunkAccessor();
+        try
+        {
+            tree.Insert(entityId: 100, componentChunkId: 42, stackalloc double[] { 10, 10, 20, 20 }, ref accessor);
+            tree.Insert(entityId: 200, componentChunkId: 99, stackalloc double[] { 50, 50, 60, 60 }, ref accessor);
+        }
+        finally { accessor.Dispose(); }
+
+        // Query should return both EntityId and ComponentChunkId
+        var results = new List<(long entityId, int compChunkId)>();
+        foreach (var hit in tree.QueryAABB(stackalloc double[] { 0, 0, 100, 100 }))
+        {
+            results.Add((hit.EntityId, hit.ComponentChunkId));
+        }
+
+        Assert.That(results, Has.Count.EqualTo(2));
+        Assert.That(results, Has.Some.Matches<(long entityId, int compChunkId)>(r => r.entityId == 100 && r.compChunkId == 42));
+        Assert.That(results, Has.Some.Matches<(long entityId, int compChunkId)>(r => r.entityId == 200 && r.compChunkId == 99));
+        guard.Dispose();
+    }
+
+    [Test]
+    [CancelAfter(5000)]
+    public void CompoundQuery_TwoPassPattern_CategoryMaskThenComponentFilter()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+
+        var desc = SpatialNodeDescriptor.ForVariant(SpatialVariant.R2Df32);
+        var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 64, desc.Stride);
+        var tree = new SpatialRTree<PersistentStore>(segment, SpatialVariant.R2Df32);
+
+        // Simulate game entities: category 0x01 = enemies, 0x02 = allies
+        // "Health" encoded as entityId % 100 (simulated component data, no real CBS needed)
+        var accessor = segment.CreateChunkAccessor();
+        var rng = new Random(42);
+        int entityCount = 200;
+        try
+        {
+            for (int i = 0; i < entityCount; i++)
+            {
+                double x = rng.NextDouble() * 1000, y = rng.NextDouble() * 1000;
+                uint mask = (i % 3 == 0) ? 0x01u : 0x02u; // 1/3 enemies, 2/3 allies
+                tree.Insert(i + 1, i + 1, stackalloc double[] { x, y, x + 5, y + 5 }, ref accessor, categoryMask: mask);
+            }
+        }
+        finally { accessor.Dispose(); }
+
+        // Two-pass compound query: "enemies near center with health > 50"
+        // Pass 1: spatial + category mask (done by the tree)
+        // Pass 2: component predicate on the reduced set (done by caller using ComponentChunkId)
+        Span<double> queryCoords = stackalloc double[] { 200, 200, 800, 800 };
+
+        int spatialHits = 0;
+        int postFilterHits = 0;
+
+        foreach (var hit in tree.QueryAABB(queryCoords, categoryMask: 0x01))
+        {
+            spatialHits++;
+
+            // Pass 2: simulate reading component data via ComponentChunkId
+            // In real code: byte* compData = componentCBS.GetChunkAddress(hit.ComponentChunkId);
+            // Here we simulate: "health > 50" as entityId % 100 > 50
+            Assert.That(hit.ComponentChunkId, Is.GreaterThan(0), "ComponentChunkId should be set");
+            int simulatedHealth = (int)(hit.EntityId % 100);
+            if (simulatedHealth > 50)
+            {
+                postFilterHits++;
+            }
+        }
+
+        // Verify the two-pass pattern filters progressively
+        int totalEnemies = tree.CountInAABB(queryCoords, categoryMask: 0x01);
+        Assert.That(spatialHits, Is.EqualTo(totalEnemies), "Pass 1 should match CountInAABB");
+        Assert.That(postFilterHits, Is.LessThanOrEqualTo(spatialHits), "Pass 2 should reduce or equal pass 1");
+        Assert.That(spatialHits, Is.GreaterThan(0), "Should have some spatial hits");
+        guard.Dispose();
+    }
 }
