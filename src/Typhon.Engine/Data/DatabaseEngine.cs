@@ -740,6 +740,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 ProcessSpatialEntries(table, dirtyBits);
             }
+
+            // Archive dirty bitmap into ring buffer for interest management delta queries
+            table.SpatialIndex?.InterestSystem?.DirtyRing.Archive(tickNumber, dirtyBits, dirtyBits.Length);
         }
 
         if (highestLSN > 0)
@@ -1003,7 +1006,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             return; // No spatial index persisted (new attribute added after last save)
         }
 
-        int treeSPI = val.GetInt(0);
+        int treeSPI = val.GetInt();
         int backPtrSPI = val.GetInt(1);
         int variantStride = val.GetInt(2);
 
