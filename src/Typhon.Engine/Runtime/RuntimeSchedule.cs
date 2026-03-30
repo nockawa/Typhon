@@ -94,7 +94,7 @@ public sealed class RuntimeSchedule
     /// <summary>
     /// Registers a Patate system — multi-worker chunk-parallel execution.
     /// </summary>
-    public RuntimeSchedule Patate(string name, Action<TickContext, int, int> chunkAction, int totalChunks, string after = null, string[] afterAll = null,
+    public RuntimeSchedule Patate(string name, Action<int, int> chunkAction, int totalChunks, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
     {
         ThrowIfBuilt();
@@ -308,7 +308,7 @@ public sealed class RuntimeSchedule
         public string Name;
         public SystemType Type;
         public Action<TickContext> CallbackAction;
-        public Action<TickContext, int, int> PatateChunkAction;
+        public Action<int, int> PatateChunkAction;
         public int TotalChunks = 1;
         public SystemPriority Priority;
         public Func<bool> RunIf;

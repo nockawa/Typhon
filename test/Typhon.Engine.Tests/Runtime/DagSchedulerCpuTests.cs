@@ -41,7 +41,7 @@ public class DagSchedulerCpuTests
 
         var builder = new DagBuilder()
             .AddCallback("Input", _ => { })
-            .AddPatate("Heavy", (_, chunk, total) =>
+            .AddPatate("Heavy", (chunk, total) =>
             {
                 // ~500µs per chunk busy-spin
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2000;
@@ -168,22 +168,22 @@ public class DagSchedulerCpuTests
         // Wide DAG: Input → 4 parallel Patate systems (50 chunks each) → Output
         var builder = new DagBuilder()
             .AddCallback("Input", _ => { })
-            .AddPatate("Physics", (_, c, t) =>
+            .AddPatate("Physics", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000; // ~200µs
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("AI", (_, c, t) =>
+            .AddPatate("AI", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("Movement", (_, c, t) =>
+            .AddPatate("Movement", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("Animation", (_, c, t) =>
+            .AddPatate("Animation", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }

@@ -92,6 +92,22 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly long[] _workerIdleTicks;
 
     // ═══════════════════════════════════════════════════════════════
+    // Tick lifecycle hooks (set by TyphonRuntime)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Called at tick start (before root dispatch). Creates UoW.</summary>
+    internal Action<DagScheduler> TickStartCallback;
+
+    /// <summary>Called at tick end (after all systems complete). Flushes/disposes UoW.</summary>
+    internal Action<DagScheduler> TickEndCallback;
+
+    /// <summary>Called before a Callback/Simple system executes. Creates per-system Transaction. Returns TickContext.</summary>
+    internal Func<int, TickContext> SystemStartCallback;
+
+    /// <summary>Called after a Callback/Simple system completes. Commits/disposes per-system Transaction.</summary>
+    internal Action<int, bool> SystemEndCallback;
+
+    // ═══════════════════════════════════════════════════════════════
     // Logging
     // ═══════════════════════════════════════════════════════════════
 
@@ -322,7 +338,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         // 1. Reset per-system state
         ResetTickState();
 
-        // 2. Mark root systems ready (evaluate runIf for roots before waking workers)
+        // 2. Tick start hook (TyphonRuntime creates UoW)
+        TickStartCallback?.Invoke(this);
+
+        // 3. Mark root systems ready (evaluate runIf for roots before waking workers)
         var readyNow = Stopwatch.GetTimestamp();
         foreach (var root in _rootSystems)
         {
@@ -357,9 +376,13 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         _tickInProgress = 0;
         _tickStartSignal.Reset(); // Workers will block again on next between-tick wait
+
+        // 5. Tick end hook (TyphonRuntime flushes/disposes UoW)
+        TickEndCallback?.Invoke(this);
+
         var tickEndTimestamp = Stopwatch.GetTimestamp();
 
-        // 5. Record telemetry
+        // 6. Record telemetry
         //    Note: _nextTickTimestamp is updated by GetNextTick() which the base timer loop
         //    calls immediately after this method returns. Workers briefly see a stale value
         //    (~100ns) and spin, then GetNextTick publishes the correct target and they sleep.
@@ -383,6 +406,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             queue.Reset();
         }
 
+        // Tick start hook
+        TickStartCallback?.Invoke(this);
+
         // Execute in topological order
         for (var i = 0; i < _topologicalOrder.Length; i++)
         {
@@ -402,24 +428,27 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var startTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick = startTick;
 
-            var ctx = new TickContext { TickNumber = _currentTickNumber };
-
             if (sys.Type == SystemType.Patate)
             {
                 for (var chunk = 0; chunk < sys.TotalChunks; chunk++)
                 {
-                    sys.PatateChunkAction(ctx, chunk, sys.TotalChunks);
+                    sys.PatateChunkAction(chunk, sys.TotalChunks);
                 }
             }
             else // Callback or Simple — single invocation
             {
+                var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber };
                 sys.CallbackAction(ctx);
+                SystemEndCallback?.Invoke(sysIdx, true);
             }
 
             var endTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].LastChunkDoneTick = endTick;
             _currentTickSystemMetrics[sysIdx].WorkersTouched = 1;
         }
+
+        // Tick end hook
+        TickEndCallback?.Invoke(this);
 
         var tickEndTimestamp = Stopwatch.GetTimestamp();
         ComputeAndRecordTelemetry(tickStartTimestamp, tickEndTimestamp);
@@ -569,21 +598,36 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         }
 
         // runIf was already evaluated at dispatch time (OnSystemComplete or root marking).
-        // If we're here, the system should execute.
-        var ctx = new TickContext { TickNumber = _currentTickNumber };
+        // System lifecycle hook: create per-system Transaction (called on the worker thread)
+        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
 
-        _systems[sysIdx].CallbackAction(ctx);
-
-        var workEnd = Stopwatch.GetTimestamp();
-        if (trackUtilization)
+        var success = true;
+        try
         {
-            _workerActiveTicks[workerId] += workEnd - workStart;
+            _systems[sysIdx].CallbackAction(ctx);
+        }
+        catch
+        {
+            success = false;
+            throw;
+        }
+        finally
+        {
+            // System lifecycle hook: commit/dispose per-system Transaction
+            SystemEndCallback?.Invoke(sysIdx, success);
+
+            var workEnd = Stopwatch.GetTimestamp();
+            if (trackUtilization)
+            {
+                _workerActiveTicks[workerId] += workEnd - workStart;
+            }
+
+            RecordSystemDone(sysIdx, workEnd);
+            _currentTickSystemMetrics[sysIdx].WorkersTouched = 1;
         }
 
-        RecordSystemDone(sysIdx, workEnd);
-        _currentTickSystemMetrics[sysIdx].WorkersTouched = 1;
         OnSystemComplete(sysIdx, workerId, trackUtilization);
     }
 
@@ -605,9 +649,8 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 RecordFirstChunkGrab(sysIdx, Stopwatch.GetTimestamp());
             }
 
-            var ctx = new TickContext { TickNumber = _currentTickNumber };
             var workStart = Stopwatch.GetTimestamp();
-            sys.PatateChunkAction(ctx, chunk, sys.TotalChunks);
+            sys.PatateChunkAction(chunk, sys.TotalChunks);
             var workEnd = Stopwatch.GetTimestamp();
 
             if (trackUtilization)
@@ -667,20 +710,33 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private void ExecuteInline(int sysIdx, int workerId, bool trackUtilization)
     {
         // runIf was already evaluated by the caller (OnSystemComplete).
-        var ctx = new TickContext { TickNumber = _currentTickNumber };
+        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
 
-        _systems[sysIdx].CallbackAction(ctx);
-
-        var workEnd = Stopwatch.GetTimestamp();
-        if (trackUtilization)
+        var success = true;
+        try
         {
-            _workerActiveTicks[workerId] += workEnd - workStart;
+            _systems[sysIdx].CallbackAction(ctx);
         }
+        catch
+        {
+            success = false;
+            throw;
+        }
+        finally
+        {
+            SystemEndCallback?.Invoke(sysIdx, success);
 
-        RecordSystemDone(sysIdx, workEnd);
-        _currentTickSystemMetrics[sysIdx].WorkersTouched = 1;
+            var workEnd = Stopwatch.GetTimestamp();
+            if (trackUtilization)
+            {
+                _workerActiveTicks[workerId] += workEnd - workStart;
+            }
+
+            RecordSystemDone(sysIdx, workEnd);
+            _currentTickSystemMetrics[sysIdx].WorkersTouched = 1;
+        }
 
         // Recursively dispatch successors
         OnSystemComplete(sysIdx, workerId, trackUtilization);

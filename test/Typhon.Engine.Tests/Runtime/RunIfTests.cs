@@ -125,7 +125,7 @@ public class RunIfTests
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 4, BaseTickRate = 1000 })
             .Callback("Input", _ => { })
-            .Patate("Physics", (_, chunk, total) =>
+            .Patate("Physics", (chunk, total) =>
             {
                 Interlocked.Increment(ref chunkCount);
             }, 100, after: "Input", runIf: () => false)

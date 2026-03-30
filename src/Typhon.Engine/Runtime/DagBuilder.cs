@@ -88,12 +88,11 @@ public sealed class DagBuilder
     /// Adds a Patate system (multi-worker chunk-parallel execution).
     /// </summary>
     /// <param name="name">Unique name identifying this system.</param>
-    /// <param name="chunkAction">Delegate called per chunk with (context, chunkIndex, totalChunks). Must be thread-safe.</param>
+    /// <param name="chunkAction">Delegate called per chunk with (chunkIndex, totalChunks). Must be thread-safe.</param>
     /// <param name="totalChunks">Number of chunks to distribute across workers.</param>
     /// <param name="priority">Scheduling priority (enforcement deferred to #201).</param>
     /// <param name="runIf">Optional predicate — if false, system is skipped.</param>
-    public DagBuilder AddPatate(string name, Action<TickContext, int, int> chunkAction, int totalChunks,
-        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null)
+    public DagBuilder AddPatate(string name, Action<int, int> chunkAction, int totalChunks, SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null)
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(chunkAction);

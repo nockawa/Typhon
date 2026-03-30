@@ -104,7 +104,7 @@ public class RuntimeScheduleTests
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 })
             .Callback("Input", _ => { })
             .Simple("GameRules", _ => { }, after: "Input")
-            .Patate("Physics", (_, c, t) => { }, 50, after: "Input")
+            .Patate("Physics", (c, t) => { }, 50, after: "Input")
             .Callback("Output", _ => { }, afterAll: ["GameRules", "Physics"])
             .Build(_registry.Runtime);
 
@@ -201,7 +201,7 @@ public class RuntimeScheduleTests
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 4, BaseTickRate = 1000 })
             .Callback("Input", _ => { })
-            .Patate("Physics", (_, chunk, total) =>
+            .Patate("Physics", (chunk, total) =>
             {
                 Interlocked.Increment(ref chunkCount);
             }, 50, after: "Input")

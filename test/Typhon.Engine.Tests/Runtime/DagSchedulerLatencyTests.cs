@@ -110,7 +110,7 @@ public class DagSchedulerLatencyTests
         // B's transition latency = time from A completing to first B chunk grabbed
         var builder = new DagBuilder()
             .AddCallback("A", _ => Thread.SpinWait(100))
-            .AddPatate("B", (_, chunk, total) => Thread.SpinWait(50), 50)
+            .AddPatate("B", (chunk, total) => Thread.SpinWait(50), 50)
             .AddCallback("C", _ => Thread.SpinWait(10))
             .AddEdge("A", "B")
             .AddEdge("B", "C");
@@ -178,9 +178,9 @@ public class DagSchedulerLatencyTests
         //           → AI(Patate,100) ──────────────────────────────┘
         var builder = new DagBuilder()
             .AddCallback("Input", _ => Thread.SpinWait(100))
-            .AddPatate("Movement", (_, c, t) => Thread.SpinWait(50), 200)
-            .AddPatate("AI", (_, c, t) => Thread.SpinWait(80), 100)
-            .AddPatate("Physics", (_, c, t) => Thread.SpinWait(40), 200)
+            .AddPatate("Movement", (c, t) => Thread.SpinWait(50), 200)
+            .AddPatate("AI", (c, t) => Thread.SpinWait(80), 100)
+            .AddPatate("Physics", (c, t) => Thread.SpinWait(40), 200)
             .AddCallback("Combat", _ => Thread.SpinWait(60))
             .AddCallback("Output", _ => Thread.SpinWait(10))
             .AddEdge("Input", "Movement")

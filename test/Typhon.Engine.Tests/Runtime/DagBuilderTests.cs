@@ -7,7 +7,7 @@ namespace Typhon.Engine.Tests.Runtime;
 public class DagBuilderTests
 {
     private static readonly Action<TickContext> NoOp = _ => { };
-    private static readonly Action<TickContext, int, int> NoOpChunk = (_, _, _) => { };
+    private static readonly Action<int, int> NoOpChunk = (_, _) => { };
 
     [Test]
     public void LinearChain_CorrectPredecessorsAndSuccessors()

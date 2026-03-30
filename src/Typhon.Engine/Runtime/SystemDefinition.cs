@@ -33,10 +33,11 @@ public sealed class SystemDefinition
     public Action<TickContext> CallbackAction { get; init; }
 
     /// <summary>
-    /// Delegate for Patate systems. Called per chunk with (context, chunkIndex, totalChunks).
+    /// Delegate for Patate systems. Called per chunk with (chunkIndex, totalChunks).
     /// Multiple workers call this concurrently with distinct chunk indices.
+    /// No TickContext — Patate's entity access goes through Gather/Scatter pipelines.
     /// </summary>
-    public Action<TickContext, int, int> PatateChunkAction { get; init; }
+    public Action<int, int> PatateChunkAction { get; init; }
 
     // ═══════════════════════════════════════════════════════════════
     // DAG structure (set by DagBuilder.Build)

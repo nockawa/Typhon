@@ -210,7 +210,7 @@ public class DagSchedulerTests
         const int totalChunks = 100;
 
         var builder = new DagBuilder()
-            .AddPatate("Physics", (_, chunk, total) =>
+            .AddPatate("Physics", (chunk, total) =>
             {
                 Interlocked.Increment(ref chunkCounter);
             }, totalChunks);
@@ -231,7 +231,7 @@ public class DagSchedulerTests
         const int totalChunks = 100;
 
         var builder = new DagBuilder()
-            .AddPatate("Physics", (_, chunk, total) =>
+            .AddPatate("Physics", (chunk, total) =>
             {
                 if (captured == 0)
                 {
@@ -242,7 +242,7 @@ public class DagSchedulerTests
 
         // Use a Callback successor to signal first tick done
         var builder2 = new DagBuilder()
-            .AddPatate("Physics", (_, chunk, total) =>
+            .AddPatate("Physics", (chunk, total) =>
             {
                 if (captured == 0)
                 {
@@ -291,7 +291,7 @@ public class DagSchedulerTests
         const int chunksPerTick = 20;
 
         var builder = new DagBuilder()
-            .AddPatate("Work", (_, chunk, total) =>
+            .AddPatate("Work", (chunk, total) =>
             {
                 Interlocked.Increment(ref totalChunksProcessed);
             }, chunksPerTick);
@@ -380,7 +380,7 @@ public class DagSchedulerTests
         const int totalChunks = 10;
 
         var builder = new DagBuilder()
-            .AddPatate("Work", (_, chunk, total) =>
+            .AddPatate("Work", (chunk, total) =>
             {
                 if (captured == 0)
                 {
@@ -422,7 +422,7 @@ public class DagSchedulerTests
 
         var builder = new DagBuilder()
             .AddCallback("Input", _ => Interlocked.Increment(ref inputExecuted))
-            .AddPatate("Physics", (_, chunk, total) => Interlocked.Increment(ref physicsChunks), totalChunks)
+            .AddPatate("Physics", (chunk, total) => Interlocked.Increment(ref physicsChunks), totalChunks)
             .AddCallback("Output", _ => Interlocked.Increment(ref outputExecuted))
             .AddEdge("Input", "Physics")
             .AddEdge("Physics", "Output");
