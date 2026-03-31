@@ -109,6 +109,14 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Called after a CallbackSystem/QuerySystem completes. Commits/disposes per-system Transaction.</summary>
     internal Action<int, bool> SystemEndCallback;
 
+    /// <summary>
+    /// Optional callback to enrich <see cref="TickTelemetry"/> with additional metrics (e.g., subscription Output phase).
+    /// Called during <see cref="ComputeAndRecordTelemetry"/> before recording.
+    /// </summary>
+    internal EnrichTelemetryDelegate TelemetryEnrichCallback;
+
+    internal delegate void EnrichTelemetryDelegate(ref TickTelemetry telemetry);
+
     // ═══════════════════════════════════════════════════════════════
     // Logging
     // ═══════════════════════════════════════════════════════════════

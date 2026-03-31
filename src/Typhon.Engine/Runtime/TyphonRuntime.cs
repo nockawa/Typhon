@@ -46,6 +46,15 @@ public sealed class TyphonRuntime : IDisposable
     private float _currentDeltaTime;
 
     // ═══════════════════════════════════════════════════════════════
+    // Subscription server
+    // ═══════════════════════════════════════════════════════════════
+
+    private readonly PublishedViewRegistry _publishedViewRegistry = new();
+    private readonly ClientConnectionManager _clientConnectionManager = new();
+    private SubscriptionOutputPhase _subscriptionOutputPhase;
+    private TcpSubscriptionServer _tcpServer;
+
+    // ═══════════════════════════════════════════════════════════════
     // Lifecycle events
     // ═══════════════════════════════════════════════════════════════
 
@@ -116,25 +125,54 @@ public sealed class TyphonRuntime : IDisposable
 
         ResolveChangeFilters(scheduler);
 
+        // Initialize subscription infrastructure
+        var subOptions = options.SubscriptionServer ?? new SubscriptionServerOptions();
+        _subscriptionOutputPhase = new SubscriptionOutputPhase(engine, _publishedViewRegistry, _clientConnectionManager, subOptions, logger);
+
         // Wire tick lifecycle hooks
         Scheduler.TickStartCallback = OnTickStartInternal;
         Scheduler.TickEndCallback = OnTickEndInternal;
         Scheduler.SystemStartCallback = OnSystemStartInternal;
         Scheduler.SystemEndCallback = OnSystemEndInternal;
+
+        // Wire subscription telemetry enrichment
+        Scheduler.TelemetryEnrichCallback = (ref t) =>
+        {
+            if (_subscriptionOutputPhase != null)
+            {
+                t.OutputPhaseMs = _subscriptionOutputPhase.LastOutputPhaseMs;
+                t.SubscriptionDeltasPushed = _subscriptionOutputPhase.LastDeltasPushed;
+                t.SubscriptionOverflowCount = _subscriptionOutputPhase.LastOverflowCount;
+            }
+        };
     }
 
     // ═══════════════════════════════════════════════════════════════
     // Lifecycle
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>Starts the scheduler (worker threads + tick driver).</summary>
-    public void Start() => Scheduler.Start();
+    /// <summary>Starts the scheduler (worker threads + tick driver) and the subscription server (if configured).</summary>
+    public void Start()
+    {
+        Scheduler.Start();
+
+        // Start TCP subscription server if a port is configured
+        var subOptions = _options.SubscriptionServer;
+        if (subOptions != null && subOptions.Port > 0)
+        {
+            _tcpServer = new TcpSubscriptionServer(subOptions, _clientConnectionManager, _subscriptionOutputPhase, _logger);
+            _tcpServer.Start();
+        }
+    }
 
     /// <summary>
-    /// Gracefully shuts down the runtime. Fires <see cref="OnShutdown"/>, then stops the scheduler.
+    /// Gracefully shuts down the runtime. Stops the subscription server, fires <see cref="OnShutdown"/>, then stops the scheduler.
     /// </summary>
     public void Shutdown()
     {
+        // Stop accepting new connections and flush remaining data
+        _tcpServer?.Shutdown();
+
         // Execute OnShutdown callback with a dedicated transaction
         if (OnShutdown != null)
         {
@@ -155,7 +193,51 @@ public sealed class TyphonRuntime : IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() => Scheduler.Dispose();
+    public void Dispose()
+    {
+        _tcpServer?.Dispose();
+        Scheduler.Dispose();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Subscription API
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Publish a shared View for client subscriptions. All subscribers see the same data; the delta is serialized once and memcpy'd.
+    /// </summary>
+    /// <remarks>
+    /// <para>The View must be a dedicated instance — it must NOT be used as a system input. Published Views are refreshed only during
+    /// the Output phase; using the same View as system input would consume ring buffer entries needed by subscriptions.</para>
+    /// </remarks>
+    /// <param name="name">Human-readable name clients use to identify this subscription.</param>
+    /// <param name="view">A dedicated ViewBase instance for subscriptions.</param>
+    /// <param name="priority">Subscription priority for overload throttling.</param>
+    /// <returns>The published View handle.</returns>
+    public PublishedView PublishView(string name, ViewBase view, SubscriptionPriority priority = SubscriptionPriority.Normal) =>
+        _publishedViewRegistry.RegisterShared(name, view, priority);
+
+    /// <summary>
+    /// Publish a per-client View factory. A new View is created per subscriber, parameterized by <see cref="ClientContext"/>.
+    /// </summary>
+    /// <param name="name">Human-readable name clients use to identify this subscription.</param>
+    /// <param name="factory">Factory that creates a View for each subscribing client.</param>
+    /// <param name="priority">Subscription priority for overload throttling.</param>
+    /// <returns>The published View handle.</returns>
+    public PublishedView PublishView(string name, Func<ClientContext, ViewBase> factory, SubscriptionPriority priority = SubscriptionPriority.Normal) =>
+        _publishedViewRegistry.RegisterPerClient(name, factory, priority);
+
+    /// <summary>
+    /// Set a client's subscription set. Replaces the previous set atomically. The transition is applied during the next tick's Output phase.
+    /// </summary>
+    /// <remarks>If called multiple times within a tick, the last call wins.</remarks>
+    public void SetSubscriptions(ClientConnection client, params PublishedView[] views) => client.SetSubscriptions(views);
+
+    /// <summary>The published View registry (for diagnostics and testing).</summary>
+    public PublishedViewRegistry PublishedViews => _publishedViewRegistry;
+
+    /// <summary>The client connection manager (for diagnostics and testing).</summary>
+    internal ClientConnectionManager ClientConnections => _clientConnectionManager;
 
     // ═══════════════════════════════════════════════════════════════
     // Side-transaction factory
@@ -188,6 +270,15 @@ public sealed class TyphonRuntime : IDisposable
                 {
                     throw new InvalidOperationException($"System '{sys.Name}': InputFactory returned null. The View must be created before the runtime starts.");
                 }
+
+                if (_systemViews[i].IsPublished)
+                {
+                    throw new InvalidOperationException(
+                        $"System '{sys.Name}': Input View (ViewId={_systemViews[i].ViewId}) is already published for subscriptions. " +
+                        "Published Views must be separate instances from system input Views. Create a new View with the same query.");
+                }
+
+                _systemViews[i].IsSystemInput = true;
             }
 
             // Resolve changeFilter component types → ComponentTable references
@@ -398,7 +489,16 @@ public sealed class TyphonRuntime : IDisposable
 
         // #197: Tick fence — snapshot SV DirtyBitmaps, process shadow entries, update spatial indexes.
         // This captures which entities were written this tick for next tick's change-filtered system inputs.
+        // Also fires NotifyViews for indexed field changes via ProcessShadowEntries, populating
+        // published View ring buffers with the complete set of change entries.
         Engine.WriteTickFence(scheduler.CurrentTickNumber);
+
+        // #199: Output phase — subscription deltas.
+        // Runs AFTER WriteTickFence so that:
+        //   1. Ring buffer has ALL entries (commit-time + shadow-time) for correct View membership
+        //   2. PreviousTickDirtyBitmap has this tick's dirty chunks for Modified detection
+        //   3. All state is quiescent (no concurrent writers)
+        _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber);
     }
 
     private TickContext OnSystemStartInternal(int sysIdx)

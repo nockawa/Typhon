@@ -45,6 +45,12 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     public bool IsDisposed => _disposed != 0;
     internal ViewDeltaRingBuffer DeltaBuffer { get; }
     ViewDeltaRingBuffer IView.DeltaBuffer => DeltaBuffer;
+
+    /// <summary>True if this View has been published for client subscriptions via <c>PublishView()</c>.</summary>
+    public bool IsPublished { get; internal set; }
+
+    /// <summary>True if this View is used as a system input in the DAG scheduler.</summary>
+    public bool IsSystemInput { get; internal set; }
     public int Count => _entityIds.Count;
     public long LastRefreshTSN => _lastRefreshTSN;
     public bool HasOverflow => _overflowDetected;

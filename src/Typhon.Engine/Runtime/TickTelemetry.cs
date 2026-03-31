@@ -37,4 +37,13 @@ public struct TickTelemetry
 
     /// <summary>Number of systems that actually executed (not skipped) this tick.</summary>
     public int ActiveSystemCount;
+
+    /// <summary>Wall-clock duration of the subscription Output phase, in milliseconds. Zero if no subscriptions.</summary>
+    public float OutputPhaseMs;
+
+    /// <summary>Total entity deltas pushed to all clients this tick (Added + Modified + Removed across all Views).</summary>
+    public int SubscriptionDeltasPushed;
+
+    /// <summary>Number of send buffer overflows this tick (clients that missed deltas and need resync).</summary>
+    public int SubscriptionOverflowCount;
 }

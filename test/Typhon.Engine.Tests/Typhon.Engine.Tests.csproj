@@ -22,29 +22,26 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <PackageReference Include="MemoryPack" Version="1.21.4" />
         <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.5" />
         <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.5" />
         <PackageReference Include="NUnit" Version="4.5.1" />
         <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
         <PackageReference Include="Serilog" Version="4.3.1" />
-        <PackageReference Include="Serilog.Enrichers.Thread" Version="4.0.0"/>
-        <PackageReference Include="Serilog.Extensions.Logging" Version="10.0.0"/>
-        <PackageReference Include="Serilog.Sinks.Seq" Version="9.0.0"/>
+        <PackageReference Include="Serilog.Enrichers.Thread" Version="4.0.0" />
+        <PackageReference Include="Serilog.Extensions.Logging" Version="10.0.0" />
+        <PackageReference Include="Serilog.Sinks.Seq" Version="9.0.0" />
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj"/>
+        <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
     </ItemGroup>
 
     <ItemGroup>
         <!-- Reference the Roslyn analyzer for ChunkAccessor enforcement -->
-        <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj"
-                          ReferenceOutputAssembly="false"
-                          OutputItemType="Analyzer"/>
-        <ProjectReference Include="..\..\src\Typhon.Generators\Typhon.Generators.csproj"
-                          ReferenceOutputAssembly="false"
-                          OutputItemType="Analyzer"/>
+        <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj" ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
+        <ProjectReference Include="..\..\src\Typhon.Generators\Typhon.Generators.csproj" ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
     </ItemGroup>
 
 </Project>

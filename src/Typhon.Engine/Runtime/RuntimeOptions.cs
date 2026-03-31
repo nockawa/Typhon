@@ -29,6 +29,12 @@ public class RuntimeOptions
     public int TelemetryRingCapacity { get; set; } = 1024;
 
     /// <summary>
+    /// Subscription server configuration. Set to non-null to enable the TCP subscription server.
+    /// If null, no subscription server is started (subscriptions disabled).
+    /// </summary>
+    public SubscriptionServerOptions SubscriptionServer { get; set; }
+
+    /// <summary>
     /// Resolves the effective worker count, applying the auto-detect formula if <see cref="WorkerCount"/> is -1.
     /// </summary>
     internal int ResolveWorkerCount() => WorkerCount == -1 ? Math.Max(1, Environment.ProcessorCount - 4) : WorkerCount;

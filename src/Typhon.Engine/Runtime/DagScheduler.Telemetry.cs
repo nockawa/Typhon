@@ -82,6 +82,9 @@ public sealed partial class DagScheduler
             ActiveSystemCount = activeSystemCount
         };
 
+        // Enrich with subscription metrics (Output phase duration, deltas pushed, overflows)
+        TelemetryEnrichCallback?.Invoke(ref tickTelemetry);
+
         _telemetryRing.Record(in tickTelemetry, _currentTickSystemMetrics.AsSpan(0, _systemCount));
 
         // Warn on overrun
