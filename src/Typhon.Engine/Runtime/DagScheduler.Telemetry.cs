@@ -39,11 +39,11 @@ public sealed partial class DagScheduler
                 sm.TransitionLatencyUs = TicksToUs(sm.FirstChunkGrabTick - sm.ReadyTick);
                 sm.DurationUs = TicksToUs(sm.LastChunkDoneTick - sm.FirstChunkGrabTick);
 
-                // Deep mode: straggler gap for Patate systems
+                // Deep mode: straggler gap for Pipeline systems
                 if (TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackStragglerGap)
                 {
                     var sys = _systems[i];
-                    if (sys.Type == SystemType.Patate && sys.TotalChunks > 1 && sm.WorkersTouched > 0)
+                    if (sys.Type == SystemType.PipelineSystem && sys.TotalChunks > 1 && sm.WorkersTouched > 0)
                     {
                         // Theoretical duration with perfect parallelism:
                         // total work divided evenly across participating workers
@@ -56,15 +56,18 @@ public sealed partial class DagScheduler
                             // Use a simpler metric: chunk_work × totalChunks / parallelism (but we don't know chunk_work).
                             // Fall back to: gap = 0 when only 1 worker touched it, otherwise report raw duration as-is.
                             // For v1, just record duration. The straggler gap will be more meaningful when we have
-                            // per-chunk timing data from actual Patate integration.
-                            sm.StragglerGapUs = 0f; // Placeholder — refined in Patate integration (#196)
+                            // per-chunk timing data from actual Pipeline integration.
+                            sm.StragglerGapUs = 0f; // Placeholder — refined in Pipeline integration (#196)
                         }
                     }
                 }
             }
             else
             {
-                sm.WasSkipped = true;
+                if (sm.SkipReason == SkipReason.NotSkipped)
+                {
+                    sm.SkipReason = SkipReason.RunIfFalse;
+                }
             }
         }
 

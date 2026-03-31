@@ -28,8 +28,8 @@ public class DagSchedulerCpuTests
 
     /// <summary>
     /// Measures CPU waste when workers have nothing to do within a tick.
-    /// Narrow DAG: Input(Callback) → HeavyWork(Patate, 4 chunks, ~1ms each) → Output(Callback).
-    /// With N workers, N-4 workers spin idle during the Patate phase.
+    /// Narrow DAG: Input(CallbackSystem) → HeavyWork(PipelineSystem, 4 chunks, ~1ms each) → Output(CallbackSystem).
+    /// With N workers, N-4 workers spin idle during the Pipeline phase.
     /// </summary>
     [Test]
     public void Report_CpuWaste_NarrowDag_WithinTick()
@@ -40,14 +40,14 @@ public class DagSchedulerCpuTests
         const int targetTicks = 200;
 
         var builder = new DagBuilder()
-            .AddCallback("Input", _ => { })
-            .AddPatate("Heavy", (chunk, total) =>
+            .AddCallbackSystem("Input", _ => { })
+            .AddPipelineSystem("Heavy", (chunk, total) =>
             {
                 // ~500µs per chunk busy-spin
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddCallback("Output", _ => { })
+            .AddCallbackSystem("Output", _ => { })
             .AddEdge("Input", "Heavy")
             .AddEdge("Heavy", "Output");
 
@@ -111,7 +111,7 @@ public class DagSchedulerCpuTests
         const int durationSeconds = 3;
 
         var builder = new DagBuilder()
-            .AddCallback("Noop", _ => { });
+            .AddCallbackSystem("Noop", _ => { });
 
         var (systems, topo) = builder.Build();
         using var scheduler = new DagScheduler(systems, topo, new RuntimeOptions
@@ -165,30 +165,30 @@ public class DagSchedulerCpuTests
         const int tickRate = 200;
         const int targetTicks = 200;
 
-        // Wide DAG: Input → 4 parallel Patate systems (50 chunks each) → Output
+        // Wide DAG: Input → 4 parallel Pipeline systems (50 chunks each) → Output
         var builder = new DagBuilder()
-            .AddCallback("Input", _ => { })
-            .AddPatate("Physics", (c, t) =>
+            .AddCallbackSystem("Input", _ => { })
+            .AddPipelineSystem("Physics", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000; // ~200µs
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("AI", (c, t) =>
+            .AddPipelineSystem("AI", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("Movement", (c, t) =>
+            .AddPipelineSystem("Movement", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddPatate("Animation", (c, t) =>
+            .AddPipelineSystem("Animation", (c, t) =>
             {
                 var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 5000;
                 while (Stopwatch.GetTimestamp() < end) { }
             }, chunks)
-            .AddCallback("Output", _ => { })
+            .AddCallbackSystem("Output", _ => { })
             .AddEdge("Input", "Physics")
             .AddEdge("Input", "AI")
             .AddEdge("Input", "Movement")

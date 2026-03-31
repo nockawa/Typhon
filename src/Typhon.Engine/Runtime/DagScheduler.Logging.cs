@@ -1,3 +1,4 @@
+using System;
 using Microsoft.Extensions.Logging;
 
 namespace Typhon.Engine;
@@ -19,4 +20,8 @@ public sealed partial class DagScheduler
     [LoggerMessage(Level = LogLevel.Warning,
         Message = "Tick {TickNumber} overran: {ActualMs:F2}ms > {TargetMs:F2}ms (ratio: {Ratio:F2})")]
     private partial void LogTickOverrun(long tickNumber, float actualMs, float targetMs, float ratio);
+
+    [LoggerMessage(Level = LogLevel.Error,
+        Message = "System {SystemIndex} '{SystemName}' threw an exception during execution")]
+    private partial void LogSystemException(int systemIndex, string systemName, Exception exception);
 }

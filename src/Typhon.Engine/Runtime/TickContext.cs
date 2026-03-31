@@ -4,17 +4,17 @@ using System;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Context passed to Callback and Simple system delegates during tick execution.
+/// Context passed to CallbackSystem and QuerySystem delegates during tick execution.
 /// Provides a valid <see cref="Transaction"/> for entity operations and a factory for side-transactions.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Each Callback/Simple system receives its own TickContext with a dedicated <see cref="Transaction"/>
+/// Each CallbackSystem/QuerySystem receives its own TickContext with a dedicated <see cref="Transaction"/>
 /// created on the worker thread (respecting Transaction's single-thread affinity).
 /// The Transaction is committed automatically after the system completes — systems must NOT commit or dispose it.
 /// </para>
 /// <para>
-/// Patate systems do NOT receive TickContext — they use <c>Action&lt;int, int&gt;</c> and access entity data
+/// Pipeline systems do NOT receive TickContext — they use <c>Action&lt;int, int&gt;</c> and access entity data
 /// through Gather/Scatter pipelines (separate mechanism).
 /// </para>
 /// </remarks>
@@ -23,6 +23,9 @@ public struct TickContext
 {
     /// <summary>Monotonically increasing tick number (0-based).</summary>
     public long TickNumber { get; init; }
+
+    /// <summary>Elapsed time in seconds since the previous tick. Zero on the first tick.</summary>
+    public float DeltaTime { get; init; }
 
     /// <summary>
     /// Transaction for this system's entity operations (Spawn, Open, OpenMut, Query, etc.).

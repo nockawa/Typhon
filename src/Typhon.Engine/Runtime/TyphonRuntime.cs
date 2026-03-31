@@ -2,6 +2,7 @@ using JetBrains.Annotations;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
+using System.Diagnostics;
 
 namespace Typhon.Engine;
 
@@ -11,11 +12,11 @@ namespace Typhon.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Each tick: creates a UoW (Deferred) → for each Callback/Simple system, creates a Transaction on the executing worker
+/// Each tick: creates a UoW (Deferred) → for each CallbackSystem/QuerySystem, creates a Transaction on the executing worker
 /// thread (respecting thread affinity) → commits after each system → flushes UoW at tick end.
 /// </para>
 /// <para>
-/// Patate systems do not receive Transactions — their entity access goes through Gather/Scatter pipelines.
+/// Pipeline systems do not receive Transactions — their entity access goes through Gather/Scatter pipelines.
 /// </para>
 /// </remarks>
 [PublicAPI]
@@ -33,6 +34,10 @@ public sealed class TyphonRuntime : IDisposable
 
     // First-tick flag
     private bool _firstTickExecuted;
+
+    // DeltaTime tracking
+    private long _previousTickTimestamp;
+    private float _currentDeltaTime;
 
     // ═══════════════════════════════════════════════════════════════
     // Lifecycle events
@@ -126,6 +131,7 @@ public sealed class TyphonRuntime : IDisposable
             var ctx = new TickContext
             {
                 TickNumber = Scheduler.CurrentTickNumber,
+                DeltaTime = 0f,
                 Transaction = tx,
                 CreateSideTransaction = CreateSideTransactionInternal
             };
@@ -158,6 +164,10 @@ public sealed class TyphonRuntime : IDisposable
 
     private void OnTickStartInternal(DagScheduler scheduler)
     {
+        var now = Stopwatch.GetTimestamp();
+        _currentDeltaTime = _previousTickTimestamp > 0 ? (float)((now - _previousTickTimestamp) / (double)Stopwatch.Frequency) : 0f;
+        _previousTickTimestamp = now;
+
         // Create UoW for this tick (Deferred — batch all system commits, single WAL flush at end)
         _currentUow = Engine.CreateUnitOfWork();
 
@@ -168,6 +178,7 @@ public sealed class TyphonRuntime : IDisposable
             var ctx = new TickContext
             {
                 TickNumber = scheduler.CurrentTickNumber,
+                DeltaTime = _currentDeltaTime,
                 Transaction = tx,
                 CreateSideTransaction = CreateSideTransactionInternal
             };
@@ -211,6 +222,7 @@ public sealed class TyphonRuntime : IDisposable
         return new TickContext
         {
             TickNumber = Scheduler.CurrentTickNumber,
+            DeltaTime = _currentDeltaTime,
             Transaction = tx,
             CreateSideTransaction = CreateSideTransactionInternal
         };

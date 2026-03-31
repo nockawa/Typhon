@@ -38,7 +38,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
         using var dbe = SetupEngine();
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("Noop", _ => { });
+            schedule.CallbackSystem("Noop", _ => { });
         }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
 
         Assert.That(runtime.Engine, Is.SameAs(dbe));
@@ -51,7 +51,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
         using var dbe = SetupEngine();
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("Noop", _ => { });
+            schedule.CallbackSystem("Noop", _ => { });
         }, new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 });
 
         runtime.Start();
@@ -70,7 +70,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("Check", ctx =>
+            schedule.CallbackSystem("Check", ctx =>
             {
                 if (captured == 0)
                 {
@@ -98,7 +98,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
             schedule
-                .Callback("Spawner", ctx =>
+                .CallbackSystem("Spawner", ctx =>
                 {
                     if (captured == 0)
                     {
@@ -107,7 +107,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
                         spawnedId = ctx.Transaction.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
                     }
                 })
-                .Callback("Reader", ctx =>
+                .CallbackSystem("Reader", ctx =>
                 {
                     if (captured == 0 && !spawnedId.IsNull)
                     {
@@ -137,7 +137,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("System", ctx =>
+            schedule.CallbackSystem("System", ctx =>
             {
                 var tick = Interlocked.Increment(ref ticksSeen);
                 if (tick == 1)
@@ -180,7 +180,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("System", ctx =>
+            schedule.CallbackSystem("System", ctx =>
             {
                 var tick = Interlocked.Increment(ref ticksSeen);
                 if (tick == 1)
@@ -210,7 +210,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("Noop", _ => { });
+            schedule.CallbackSystem("Noop", _ => { });
         }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
 
         runtime.OnFirstTick += _ => Interlocked.Increment(ref firstTickCount);
@@ -230,7 +230,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("Noop", _ => { });
+            schedule.CallbackSystem("Noop", _ => { });
         }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
 
         runtime.OnFirstTick += ctx =>
@@ -260,7 +260,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("Noop", _ => { });
+            schedule.CallbackSystem("Noop", _ => { });
         }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
 
         runtime.OnShutdown += _ => shutdownCalled = true;
@@ -281,7 +281,7 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("Spawner", ctx =>
+            schedule.CallbackSystem("Spawner", ctx =>
             {
                 if (captured == 0)
                 {
@@ -301,10 +301,10 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
     }
 
     [Test]
-    public void PatateSystem_DoesNotReceiveTransaction()
+    public void PipelineSystem_DoesNotReceiveTransaction()
     {
-        // Patate systems use Action<int, int> — no TickContext, no Transaction.
-        // This test simply verifies Patate systems execute alongside Callback systems
+        // Pipeline systems use Action<int, int> — no TickContext, no Transaction.
+        // This test simply verifies Pipeline systems execute alongside CallbackSystem systems
         // in a TyphonRuntime (the type system prevents Transaction access).
         using var dbe = SetupEngine();
         var chunkCount = 0;
@@ -313,8 +313,8 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
             schedule
-                .Callback("Input", _ => Interlocked.Increment(ref callbackExecuted))
-                .Patate("Work", (chunk, total) => Interlocked.Increment(ref chunkCount), 10, after: "Input");
+                .CallbackSystem("Input", _ => Interlocked.Increment(ref callbackExecuted))
+                .PipelineSystem("Work", (chunk, total) => Interlocked.Increment(ref chunkCount), 10, after: "Input");
         }, new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 });
 
         runtime.Start();

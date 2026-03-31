@@ -24,5 +24,11 @@ public enum SkipReason : byte
     Throttled = 4,
 
     /// <summary>System was shed by overload management (#201).</summary>
-    Shed = 5
+    Shed = 5,
+
+    /// <summary>System threw an exception during execution.</summary>
+    Exception = 6,
+
+    /// <summary>System was skipped because a predecessor system failed with an exception.</summary>
+    DependencyFailed = 7
 }

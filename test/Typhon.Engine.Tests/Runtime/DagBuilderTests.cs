@@ -13,9 +13,9 @@ public class DagBuilderTests
     public void LinearChain_CorrectPredecessorsAndSuccessors()
     {
         var (systems, topo) = new DagBuilder()
-            .AddCallback("A", NoOp)
-            .AddCallback("B", NoOp)
-            .AddCallback("C", NoOp)
+            .AddCallbackSystem("A", NoOp)
+            .AddCallbackSystem("B", NoOp)
+            .AddCallbackSystem("C", NoOp)
             .AddEdge("A", "B")
             .AddEdge("B", "C")
             .Build();
@@ -42,11 +42,11 @@ public class DagBuilderTests
     public void FanOutFanIn_CorrectEdgeStructure()
     {
         var (systems, topo) = new DagBuilder()
-            .AddCallback("A", NoOp)
-            .AddCallback("B", NoOp)
-            .AddCallback("C", NoOp)
-            .AddCallback("D", NoOp)
-            .AddCallback("E", NoOp)
+            .AddCallbackSystem("A", NoOp)
+            .AddCallbackSystem("B", NoOp)
+            .AddCallbackSystem("C", NoOp)
+            .AddCallbackSystem("D", NoOp)
+            .AddCallbackSystem("E", NoOp)
             .AddEdge("A", "B")
             .AddEdge("A", "C")
             .AddEdge("A", "D")
@@ -75,9 +75,9 @@ public class DagBuilderTests
     public void CycleDetection_ThrowsOnCycle()
     {
         var builder = new DagBuilder()
-            .AddCallback("A", NoOp)
-            .AddCallback("B", NoOp)
-            .AddCallback("C", NoOp)
+            .AddCallbackSystem("A", NoOp)
+            .AddCallbackSystem("B", NoOp)
+            .AddCallbackSystem("C", NoOp)
             .AddEdge("A", "B")
             .AddEdge("B", "C")
             .AddEdge("C", "A");
@@ -89,16 +89,16 @@ public class DagBuilderTests
     public void DuplicateNames_Throws()
     {
         var builder = new DagBuilder()
-            .AddCallback("A", NoOp);
+            .AddCallbackSystem("A", NoOp);
 
-        Assert.Throws<InvalidOperationException>(() => builder.AddCallback("A", NoOp));
+        Assert.Throws<InvalidOperationException>(() => builder.AddCallbackSystem("A", NoOp));
     }
 
     [Test]
     public void SingleNode_NoEdges_Succeeds()
     {
         var (systems, topo) = new DagBuilder()
-            .AddCallback("Only", NoOp)
+            .AddCallbackSystem("Only", NoOp)
             .Build();
 
         Assert.That(systems, Has.Length.EqualTo(1));
@@ -118,25 +118,25 @@ public class DagBuilderTests
     }
 
     [Test]
-    public void PatateSystem_PreservesChunkCount()
+    public void PipelineSystem_PreservesChunkCount()
     {
         var (systems, _) = new DagBuilder()
-            .AddPatate("Physics", NoOpChunk, 200)
+            .AddPipelineSystem("Physics", NoOpChunk, 200)
             .Build();
 
-        Assert.That(systems[0].Type, Is.EqualTo(SystemType.Patate));
+        Assert.That(systems[0].Type, Is.EqualTo(SystemType.PipelineSystem));
         Assert.That(systems[0].TotalChunks, Is.EqualTo(200));
-        Assert.That(systems[0].PatateChunkAction, Is.Not.Null);
+        Assert.That(systems[0].PipelineChunkAction, Is.Not.Null);
     }
 
     [Test]
     public void CallbackSystem_HasTotalChunksOne()
     {
         var (systems, _) = new DagBuilder()
-            .AddCallback("Input", NoOp)
+            .AddCallbackSystem("Input", NoOp)
             .Build();
 
-        Assert.That(systems[0].Type, Is.EqualTo(SystemType.Callback));
+        Assert.That(systems[0].Type, Is.EqualTo(SystemType.CallbackSystem));
         Assert.That(systems[0].TotalChunks, Is.EqualTo(1));
         Assert.That(systems[0].CallbackAction, Is.Not.Null);
     }
@@ -145,7 +145,7 @@ public class DagBuilderTests
     public void EdgeToUnknownSystem_Throws()
     {
         var builder = new DagBuilder()
-            .AddCallback("A", NoOp);
+            .AddCallbackSystem("A", NoOp);
 
         Assert.Throws<InvalidOperationException>(() => builder.AddEdge("A", "B"));
     }
@@ -154,7 +154,7 @@ public class DagBuilderTests
     public void EdgeFromUnknownSystem_Throws()
     {
         var builder = new DagBuilder()
-            .AddCallback("A", NoOp);
+            .AddCallbackSystem("A", NoOp);
 
         Assert.Throws<InvalidOperationException>(() => builder.AddEdge("X", "A"));
     }
@@ -163,9 +163,9 @@ public class DagBuilderTests
     public void SystemIndex_AssignedSequentially()
     {
         var (systems, _) = new DagBuilder()
-            .AddCallback("A", NoOp)
-            .AddPatate("B", NoOpChunk, 10)
-            .AddCallback("C", NoOp)
+            .AddCallbackSystem("A", NoOp)
+            .AddPipelineSystem("B", NoOpChunk, 10)
+            .AddCallbackSystem("C", NoOp)
             .Build();
 
         Assert.That(systems[0].Index, Is.EqualTo(0));
@@ -177,8 +177,8 @@ public class DagBuilderTests
     public void Priority_PreservedInSystemDefinition()
     {
         var (systems, _) = new DagBuilder()
-            .AddCallback("Critical", NoOp, SystemPriority.Critical)
-            .AddPatate("Low", NoOpChunk, 10, SystemPriority.Low)
+            .AddCallbackSystem("Critical", NoOp, SystemPriority.Critical)
+            .AddPipelineSystem("Low", NoOpChunk, 10, SystemPriority.Low)
             .Build();
 
         Assert.That(systems[0].Priority, Is.EqualTo(SystemPriority.Critical));
@@ -190,10 +190,10 @@ public class DagBuilderTests
     {
         // Diamond: A → (B, C) → D
         var (_, topo) = new DagBuilder()
-            .AddCallback("A", NoOp)
-            .AddCallback("B", NoOp)
-            .AddCallback("C", NoOp)
-            .AddCallback("D", NoOp)
+            .AddCallbackSystem("A", NoOp)
+            .AddCallbackSystem("B", NoOp)
+            .AddCallbackSystem("C", NoOp)
+            .AddCallbackSystem("D", NoOp)
             .AddEdge("A", "B")
             .AddEdge("A", "C")
             .AddEdge("B", "D")

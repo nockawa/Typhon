@@ -29,9 +29,9 @@ public class RuntimeScheduleTests
         var captured = 0;
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 })
-            .Callback("A", _ => { if (captured == 0) { executionOrder.Add("A"); } })
-            .Callback("B", _ => { if (captured == 0) { executionOrder.Add("B"); } }, after: "A")
-            .Callback("C", _ =>
+            .CallbackSystem("A", _ => { if (captured == 0) { executionOrder.Add("A"); } })
+            .CallbackSystem("B", _ => { if (captured == 0) { executionOrder.Add("B"); } }, after: "A")
+            .CallbackSystem("C", _ =>
             {
                 if (captured == 0)
                 {
@@ -56,10 +56,10 @@ public class RuntimeScheduleTests
         var captured = 0;
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 })
-            .Callback("A", _ => { if (captured == 0) { executed.Add("A"); } })
-            .Callback("B", _ => { if (captured == 0) { executed.Add("B"); } }, after: "A")
-            .Callback("C", _ => { if (captured == 0) { executed.Add("C"); } }, after: "A")
-            .Callback("D", _ =>
+            .CallbackSystem("A", _ => { if (captured == 0) { executed.Add("A"); } })
+            .CallbackSystem("B", _ => { if (captured == 0) { executed.Add("B"); } }, after: "A")
+            .CallbackSystem("C", _ => { if (captured == 0) { executed.Add("C"); } }, after: "A")
+            .CallbackSystem("D", _ =>
             {
                 if (captured == 0)
                 {
@@ -83,17 +83,17 @@ public class RuntimeScheduleTests
     public void FluentBuilder_DuplicateNames_Throws()
     {
         var schedule = RuntimeSchedule.Create()
-            .Callback("A", _ => { });
+            .CallbackSystem("A", _ => { });
 
         Assert.Throws<InvalidOperationException>(() =>
-            schedule.Callback("A", _ => { }).Build(_registry.Runtime));
+            schedule.CallbackSystem("A", _ => { }).Build(_registry.Runtime));
     }
 
     [Test]
     public void FluentBuilder_MissingAfterTarget_Throws()
     {
         var schedule = RuntimeSchedule.Create()
-            .Callback("A", _ => { }, after: "NonExistent");
+            .CallbackSystem("A", _ => { }, after: "NonExistent");
 
         Assert.Throws<InvalidOperationException>(() => schedule.Build(_registry.Runtime));
     }
@@ -102,10 +102,10 @@ public class RuntimeScheduleTests
     public void FluentBuilder_MixedSystemTypes_AllRegistered()
     {
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 })
-            .Callback("Input", _ => { })
-            .Simple("GameRules", _ => { }, after: "Input")
-            .Patate("Physics", (c, t) => { }, 50, after: "Input")
-            .Callback("Output", _ => { }, afterAll: ["GameRules", "Physics"])
+            .CallbackSystem("Input", _ => { })
+            .QuerySystem("GameRules", _ => { }, after: "Input")
+            .PipelineSystem("Physics", (c, t) => { }, 50, after: "Input")
+            .CallbackSystem("Output", _ => { }, afterAll: ["GameRules", "Physics"])
             .Build(_registry.Runtime);
 
         Assert.That(scheduler.SystemCount, Is.EqualTo(4));
@@ -116,12 +116,12 @@ public class RuntimeScheduleTests
     {
         // Build and inspect — use DagBuilder directly to access SystemDefinition
         var dagBuilder = new DagBuilder();
-        dagBuilder.AddSimple("AI", _ => { }, SystemPriority.Normal);
+        dagBuilder.AddQuerySystem("AI", _ => { }, SystemPriority.Normal);
         var (systems, _) = dagBuilder.Build();
 
         // Set overload params via RuntimeSchedule's Build path
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 })
-            .Simple("AI", _ => { }, priority: SystemPriority.Low,
+            .QuerySystem("AI", _ => { }, priority: SystemPriority.Low,
                 tickDivisor: 2, throttledTickDivisor: 5, canShed: true)
             .Build(_registry.Runtime);
 
@@ -136,8 +136,8 @@ public class RuntimeScheduleTests
         var damageQueue = schedule.CreateEventQueue<int>("DamageEvents");
 
         using var scheduler = schedule
-            .Callback("Combat", _ => damageQueue.Push(42), after: null)
-            .Simple("LootDrop", _ =>
+            .CallbackSystem("Combat", _ => damageQueue.Push(42), after: null)
+            .QuerySystem("LootDrop", _ =>
             {
                 Span<int> events = stackalloc int[16];
                 damageQueue.Drain(events);
@@ -163,7 +163,7 @@ public class RuntimeScheduleTests
         var pushCount = 0;
 
         using var scheduler = schedule
-            .Callback("Producer", _ =>
+            .CallbackSystem("Producer", _ =>
             {
                 // Push 3 items per tick
                 queue.Push(1);
@@ -187,7 +187,7 @@ public class RuntimeScheduleTests
     public void Build_CalledTwice_Throws()
     {
         var schedule = RuntimeSchedule.Create()
-            .Callback("A", _ => { });
+            .CallbackSystem("A", _ => { });
 
         schedule.Build(_registry.Runtime).Dispose();
 
@@ -195,17 +195,17 @@ public class RuntimeScheduleTests
     }
 
     [Test]
-    public void FluentBuilder_Patate_WithDependencies()
+    public void FluentBuilder_PipelineSystem_WithDependencies()
     {
         var chunkCount = 0;
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 4, BaseTickRate = 1000 })
-            .Callback("Input", _ => { })
-            .Patate("Physics", (chunk, total) =>
+            .CallbackSystem("Input", _ => { })
+            .PipelineSystem("Physics", (chunk, total) =>
             {
                 Interlocked.Increment(ref chunkCount);
             }, 50, after: "Input")
-            .Callback("Output", _ => { }, after: "Physics")
+            .CallbackSystem("Output", _ => { }, after: "Physics")
             .Build(_registry.Runtime);
 
         scheduler.Start();

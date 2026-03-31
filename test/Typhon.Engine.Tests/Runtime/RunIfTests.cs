@@ -35,10 +35,10 @@ public class RunIfTests
         var captured = 0;
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 })
-            .Callback("A", _ => { if (captured == 0) { executed.Add("A"); } })
-            .Callback("B", _ => { if (captured == 0) { executed.Add("B"); } },
+            .CallbackSystem("A", _ => { if (captured == 0) { executed.Add("A"); } })
+            .CallbackSystem("B", _ => { if (captured == 0) { executed.Add("B"); } },
                 after: "A", runIf: () => false)
-            .Callback("C", _ =>
+            .CallbackSystem("C", _ =>
             {
                 if (captured == 0)
                 {
@@ -64,7 +64,7 @@ public class RunIfTests
         var captured = 0;
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 })
-            .Callback("A", _ =>
+            .CallbackSystem("A", _ =>
             {
                 if (captured == 0)
                 {
@@ -87,7 +87,7 @@ public class RunIfTests
         var executed = 0;
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 })
-            .Callback("A", _ => Interlocked.Increment(ref executed))
+            .CallbackSystem("A", _ => Interlocked.Increment(ref executed))
             .Build(_registry.Runtime);
 
         scheduler.Start();
@@ -101,8 +101,8 @@ public class RunIfTests
     public void RunIfFalse_TelemetryRecordsSkipped()
     {
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 })
-            .Callback("A", _ => { })
-            .Callback("B", _ => { }, after: "A", runIf: () => false)
+            .CallbackSystem("A", _ => { })
+            .CallbackSystem("B", _ => { }, after: "A", runIf: () => false)
             .Build(_registry.Runtime);
 
         scheduler.Start();
@@ -117,19 +117,19 @@ public class RunIfTests
     }
 
     [Test]
-    public void RunIfFalse_PatateSystem_Skipped()
+    public void RunIfFalse_PipelineSystem_Skipped()
     {
         var chunkCount = 0;
         var outputExecuted = new ConcurrentBag<string>();
         var captured = 0;
 
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 4, BaseTickRate = 1000 })
-            .Callback("Input", _ => { })
-            .Patate("Physics", (chunk, total) =>
+            .CallbackSystem("Input", _ => { })
+            .PipelineSystem("Physics", (chunk, total) =>
             {
                 Interlocked.Increment(ref chunkCount);
             }, 100, after: "Input", runIf: () => false)
-            .Callback("Output", _ =>
+            .CallbackSystem("Output", _ =>
             {
                 if (captured == 0)
                 {
@@ -143,8 +143,8 @@ public class RunIfTests
         SpinWait.SpinUntil(() => scheduler.CurrentTickNumber >= 1, TimeSpan.FromSeconds(5));
         scheduler.Shutdown();
 
-        Assert.That(chunkCount, Is.EqualTo(0), "Patate system with runIf:false should process zero chunks");
-        Assert.That(outputExecuted, Does.Contain("Output"), "Output should execute after skipped Patate");
+        Assert.That(chunkCount, Is.EqualTo(0), "PipelineSystem with runIf:false should process zero chunks");
+        Assert.That(outputExecuted, Does.Contain("Output"), "Output should execute after skipped PipelineSystem");
     }
 
     [Test]
@@ -155,8 +155,8 @@ public class RunIfTests
 
         // B runs only on odd ticks
         using var scheduler = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 })
-            .Callback("A", _ => Interlocked.Increment(ref ticksSeen))
-            .Callback("B", _ => Interlocked.Increment(ref bExecutions),
+            .CallbackSystem("A", _ => Interlocked.Increment(ref ticksSeen))
+            .CallbackSystem("B", _ => Interlocked.Increment(ref bExecutions),
                 after: "A", runIf: () => ticksSeen % 2 == 1)
             .Build(_registry.Runtime);
 

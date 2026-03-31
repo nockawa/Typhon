@@ -4,7 +4,7 @@ using System;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Immutable definition of a system node in the meta-DAG.
+/// Immutable definition of a system node in the system DAG.
 /// Created by <see cref="DagBuilder"/> and consumed by <see cref="DagScheduler"/>.
 /// </summary>
 [PublicAPI]
@@ -13,7 +13,7 @@ public sealed class SystemDefinition
     /// <summary>Unique name identifying this system in the DAG.</summary>
     public string Name { get; init; }
 
-    /// <summary>Execution model: Patate (multi-worker chunks), Simple (single-worker entities), or Callback (inline).</summary>
+    /// <summary>Execution model: PipelineSystem (multi-worker chunks), QuerySystem (single-worker entities), or CallbackSystem (inline).</summary>
     public SystemType Type { get; init; }
 
     /// <summary>Position in the systems array. Set by <see cref="DagBuilder.Build"/>.</summary>
@@ -27,17 +27,17 @@ public sealed class SystemDefinition
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Delegate for Callback and Simple systems. Invoked once per tick on a single worker.
+    /// Delegate for CallbackSystem and QuerySystem systems. Invoked once per tick on a single worker.
     /// Receives <see cref="TickContext"/> with tick-level information.
     /// </summary>
     public Action<TickContext> CallbackAction { get; init; }
 
     /// <summary>
-    /// Delegate for Patate systems. Called per chunk with (chunkIndex, totalChunks).
+    /// Delegate for Pipeline systems. Called per chunk with (chunkIndex, totalChunks).
     /// Multiple workers call this concurrently with distinct chunk indices.
-    /// No TickContext — Patate's entity access goes through Gather/Scatter pipelines.
+    /// No TickContext — Pipeline's entity access goes through Gather/Scatter pipelines.
     /// </summary>
-    public Action<int, int> PatateChunkAction { get; init; }
+    public Action<int, int> PipelineChunkAction { get; init; }
 
     // ═══════════════════════════════════════════════════════════════
     // DAG structure (set by DagBuilder.Build)
@@ -50,9 +50,9 @@ public sealed class SystemDefinition
     public int PredecessorCount { get; internal set; }
 
     /// <summary>
-    /// Number of work chunks for Patate systems. Determines parallelism granularity.
-    /// For Callback/Simple systems this is always 1.
-    /// Mutable because Patate chunk count may change per tick based on query result set size.
+    /// Number of work chunks for Pipeline systems. Determines parallelism granularity.
+    /// For CallbackSystem/QuerySystem systems this is always 1.
+    /// Mutable because Pipeline chunk count may change per tick based on query result set size.
     /// </summary>
     public int TotalChunks { get; set; } = 1;
 

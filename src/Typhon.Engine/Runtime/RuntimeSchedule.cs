@@ -14,7 +14,7 @@ namespace Typhon.Engine;
 /// <c>runIf:</c> predicates, typed event queues, and overload parameters.
 /// </para>
 /// <para>
-/// Usage: <c>RuntimeSchedule.Create().Callback(...).Patate(...).Build(parent)</c>
+/// Usage: <c>RuntimeSchedule.Create().CallbackSystem(...).PipelineSystem(...).Build(parent)</c>
 /// </para>
 /// </remarks>
 [PublicAPI]
@@ -43,9 +43,9 @@ public sealed class RuntimeSchedule
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Registers a Callback system — lightweight single-invocation, no entity input.
+    /// Registers a CallbackSystem — lightweight single-invocation, no entity input.
     /// </summary>
-    public RuntimeSchedule Callback(string name, Action<TickContext> action, string after = null, string[] afterAll = null, 
+    public RuntimeSchedule CallbackSystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null)
     {
         ThrowIfBuilt();
@@ -55,7 +55,7 @@ public sealed class RuntimeSchedule
         _registrations.Add(new SystemRegistration
         {
             Name = name,
-            Type = SystemType.Callback,
+            Type = SystemType.CallbackSystem,
             CallbackAction = action,
             Priority = priority,
             RunIf = runIf,
@@ -66,9 +66,9 @@ public sealed class RuntimeSchedule
     }
 
     /// <summary>
-    /// Registers a Simple system — single-worker entity iteration.
+    /// Registers a QuerySystem — single-worker entity iteration.
     /// </summary>
-    public RuntimeSchedule Simple(string name, Action<TickContext> action, string after = null, string[] afterAll = null, 
+    public RuntimeSchedule QuerySystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
     {
         ThrowIfBuilt();
@@ -78,7 +78,7 @@ public sealed class RuntimeSchedule
         _registrations.Add(new SystemRegistration
         {
             Name = name,
-            Type = SystemType.Simple,
+            Type = SystemType.QuerySystem,
             CallbackAction = action,
             Priority = priority,
             RunIf = runIf,
@@ -92,9 +92,9 @@ public sealed class RuntimeSchedule
     }
 
     /// <summary>
-    /// Registers a Patate system — multi-worker chunk-parallel execution.
+    /// Registers a PipelineSystem — multi-worker chunk-parallel execution.
     /// </summary>
-    public RuntimeSchedule Patate(string name, Action<int, int> chunkAction, int totalChunks, string after = null, string[] afterAll = null,
+    public RuntimeSchedule PipelineSystem(string name, Action<int, int> chunkAction, int totalChunks, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
     {
         ThrowIfBuilt();
@@ -104,8 +104,8 @@ public sealed class RuntimeSchedule
         _registrations.Add(new SystemRegistration
         {
             Name = name,
-            Type = SystemType.Patate,
-            PatateChunkAction = chunkAction,
+            Type = SystemType.PipelineSystem,
+            PipelineChunkAction = chunkAction,
             TotalChunks = totalChunks,
             Priority = priority,
             RunIf = runIf,
@@ -116,6 +116,110 @@ public sealed class RuntimeSchedule
             CanShed = canShed
         });
         return this;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Class-based system registration
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>Register a class-based CallbackSystem.</summary>
+    public RuntimeSchedule Add(CallbackSystem system)
+    {
+        ThrowIfBuilt();
+        ArgumentNullException.ThrowIfNull(system);
+
+        var builder = new SystemBuilder();
+        Typhon.Engine.CallbackSystem.InvokeConfigure(system, builder);
+        ValidateBuilderName(builder, nameof(Typhon.Engine.CallbackSystem));
+
+        _registrations.Add(new SystemRegistration
+        {
+            Name = builder._name,
+            Type = SystemType.CallbackSystem,
+            CallbackAction = ctx => Typhon.Engine.CallbackSystem.InvokeExecute(system, ctx),
+            Priority = builder._priority,
+            RunIf = builder._runIf,
+            After = builder._after,
+            AfterAll = builder._afterAll,
+            TickDivisor = builder._tickDivisor,
+            ThrottledTickDivisor = builder._throttledTickDivisor,
+            CanShed = builder._canShed,
+            ChangeFilter = builder._changeFilter,
+            Parallel = builder._parallel
+        });
+        return this;
+    }
+
+    /// <summary>Register a class-based QuerySystem.</summary>
+    public RuntimeSchedule Add(QuerySystem system)
+    {
+        ThrowIfBuilt();
+        ArgumentNullException.ThrowIfNull(system);
+
+        var builder = new SystemBuilder();
+        Typhon.Engine.QuerySystem.InvokeConfigure(system, builder);
+        ValidateBuilderName(builder, nameof(Typhon.Engine.QuerySystem));
+
+        _registrations.Add(new SystemRegistration
+        {
+            Name = builder._name,
+            Type = SystemType.QuerySystem,
+            CallbackAction = ctx => Typhon.Engine.QuerySystem.InvokeExecute(system, ctx),
+            Priority = builder._priority,
+            RunIf = builder._runIf,
+            After = builder._after,
+            AfterAll = builder._afterAll,
+            TickDivisor = builder._tickDivisor,
+            ThrottledTickDivisor = builder._throttledTickDivisor,
+            CanShed = builder._canShed,
+            ChangeFilter = builder._changeFilter,
+            Parallel = builder._parallel
+        });
+        return this;
+    }
+
+    /// <summary>Register a class-based PipelineSystem. Not yet supported — execution model pending Patate design.</summary>
+    public RuntimeSchedule Add(PipelineSystem system)
+    {
+        ThrowIfBuilt();
+        ArgumentNullException.ThrowIfNull(system);
+        throw new NotSupportedException("PipelineSystem registration not yet supported — execution model pending Patate design.");
+    }
+
+    /// <summary>Register a CompoundSystem. Expands all sub-systems into the schedule.</summary>
+    public RuntimeSchedule Add(CompoundSystem compound)
+    {
+        ThrowIfBuilt();
+        ArgumentNullException.ThrowIfNull(compound);
+
+        CompoundSystem.InvokeConfigure(compound);
+        foreach (var sys in compound._systems)
+        {
+            switch (sys)
+            {
+                case CallbackSystem cb:
+                    Add(cb);
+                    break;
+                case QuerySystem qs:
+                    Add(qs);
+                    break;
+                case PipelineSystem ps:
+                    Add(ps);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown system type in CompoundSystem: {sys.GetType().Name}");
+            }
+        }
+
+        return this;
+    }
+
+    private static void ValidateBuilderName(SystemBuilder builder, string systemTypeName)
+    {
+        if (builder._name == null)
+        {
+            throw new InvalidOperationException($"{systemTypeName} must have a name. Call b.Name(...) in Configure.");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -186,6 +290,33 @@ public sealed class RuntimeSchedule
     public DagScheduler Build(IResource parent, ILogger logger = null)
     {
         ThrowIfBuilt();
+
+        // ── Build-time validation ──
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reg in _registrations)
+        {
+            if (!seenNames.Add(reg.Name))
+            {
+                throw new InvalidOperationException($"Duplicate system name: '{reg.Name}'.");
+            }
+
+            if (reg.Type == SystemType.CallbackSystem)
+            {
+                if (reg.ChangeFilter is { Length: > 0 })
+                {
+                    throw new InvalidOperationException(
+                        $"System '{reg.Name}': ChangeFilter is not valid for CallbackSystem. " +
+                        "CallbackSystem is proactive and does not have a View input.");
+                }
+
+                if (reg.Parallel)
+                {
+                    throw new InvalidOperationException(
+                        $"System '{reg.Name}': Parallel is not valid for CallbackSystem.");
+                }
+            }
+        }
+
         _built = true;
 
         var dagBuilder = new DagBuilder();
@@ -195,14 +326,14 @@ public sealed class RuntimeSchedule
         {
             switch (reg.Type)
             {
-                case SystemType.Callback:
-                    dagBuilder.AddCallback(reg.Name, reg.CallbackAction, reg.Priority, reg.RunIf);
+                case SystemType.CallbackSystem:
+                    dagBuilder.AddCallbackSystem(reg.Name, reg.CallbackAction, reg.Priority, reg.RunIf);
                     break;
-                case SystemType.Simple:
-                    dagBuilder.AddSimple(reg.Name, reg.CallbackAction, reg.Priority, reg.RunIf);
+                case SystemType.QuerySystem:
+                    dagBuilder.AddQuerySystem(reg.Name, reg.CallbackAction, reg.Priority, reg.RunIf);
                     break;
-                case SystemType.Patate:
-                    dagBuilder.AddPatate(reg.Name, reg.PatateChunkAction, reg.TotalChunks, reg.Priority, reg.RunIf);
+                case SystemType.PipelineSystem:
+                    dagBuilder.AddPipelineSystem(reg.Name, reg.PipelineChunkAction, reg.TotalChunks, reg.Priority, reg.RunIf);
                     break;
             }
         }
@@ -308,7 +439,7 @@ public sealed class RuntimeSchedule
         public string Name;
         public SystemType Type;
         public Action<TickContext> CallbackAction;
-        public Action<int, int> PatateChunkAction;
+        public Action<int, int> PipelineChunkAction;
         public int TotalChunks = 1;
         public SystemPriority Priority;
         public Func<bool> RunIf;
@@ -317,5 +448,7 @@ public sealed class RuntimeSchedule
         public int TickDivisor = 1;
         public int ThrottledTickDivisor = 1;
         public bool CanShed;
+        public Type[] ChangeFilter;
+        public bool Parallel;
     }
 }

@@ -56,9 +56,9 @@ public class DagSchedulerTests
         var captured = 0;
 
         var builder = new DagBuilder()
-            .AddCallback("A", _ => { if (captured == 0) { executionOrder.Add("A"); } })
-            .AddCallback("B", _ => { if (captured == 0) { executionOrder.Add("B"); } })
-            .AddCallback("C", _ =>
+            .AddCallbackSystem("A", _ => { if (captured == 0) { executionOrder.Add("A"); } })
+            .AddCallbackSystem("B", _ => { if (captured == 0) { executionOrder.Add("B"); } })
+            .AddCallbackSystem("C", _ =>
             {
                 if (captured == 0)
                 {
@@ -82,10 +82,10 @@ public class DagSchedulerTests
         var captured = 0;
 
         var builder = new DagBuilder()
-            .AddCallback("Root", _ => { if (captured == 0) { executed.Add("Root"); } })
-            .AddCallback("B", _ => { if (captured == 0) { executed.Add("B"); } })
-            .AddCallback("C", _ => { if (captured == 0) { executed.Add("C"); } })
-            .AddCallback("D", _ =>
+            .AddCallbackSystem("Root", _ => { if (captured == 0) { executed.Add("Root"); } })
+            .AddCallbackSystem("B", _ => { if (captured == 0) { executed.Add("B"); } })
+            .AddCallbackSystem("C", _ => { if (captured == 0) { executed.Add("C"); } })
+            .AddCallbackSystem("D", _ =>
             {
                 if (captured == 0)
                 {
@@ -120,14 +120,14 @@ public class DagSchedulerTests
         var captured = 0;
 
         var builder = new DagBuilder()
-            .AddCallback("A", _ =>
+            .AddCallbackSystem("A", _ =>
             {
                 if (captured == 0)
                 {
                     timestamps["A"] = Stopwatch.GetTimestamp();
                 }
             })
-            .AddCallback("B", _ =>
+            .AddCallbackSystem("B", _ =>
             {
                 if (captured == 0)
                 {
@@ -135,7 +135,7 @@ public class DagSchedulerTests
                     timestamps["B"] = Stopwatch.GetTimestamp();
                 }
             })
-            .AddCallback("C", _ =>
+            .AddCallbackSystem("C", _ =>
             {
                 if (captured == 0)
                 {
@@ -143,7 +143,7 @@ public class DagSchedulerTests
                     timestamps["C"] = Stopwatch.GetTimestamp();
                 }
             })
-            .AddCallback("D", _ =>
+            .AddCallbackSystem("D", _ =>
             {
                 if (captured == 0)
                 {
@@ -169,15 +169,15 @@ public class DagSchedulerTests
     [Test]
     public void Callback_InlineContinuation_D3()
     {
-        // A → B → C (all Callback)
+        // A → B → C (all CallbackSystem)
         // With inline continuation (D3), B and C should run on the same thread
         var threadIds = new ConcurrentDictionary<string, int>();
         var captured = 0;
 
         var builder = new DagBuilder()
-            .AddCallback("A", _ => { if (captured == 0) { threadIds["A"] = Environment.CurrentManagedThreadId; } })
-            .AddCallback("B", _ => { if (captured == 0) { threadIds["B"] = Environment.CurrentManagedThreadId; } })
-            .AddCallback("C", _ =>
+            .AddCallbackSystem("A", _ => { if (captured == 0) { threadIds["A"] = Environment.CurrentManagedThreadId; } })
+            .AddCallbackSystem("B", _ => { if (captured == 0) { threadIds["B"] = Environment.CurrentManagedThreadId; } })
+            .AddCallbackSystem("C", _ =>
             {
                 if (captured == 0)
                 {
@@ -192,25 +192,25 @@ public class DagSchedulerTests
         RunOneTick(scheduler);
 
         Assert.That(threadIds, Has.Count.EqualTo(3));
-        // B is a Callback successor of A → inlined (D3)
-        // C is a Callback successor of B → inlined (D3)
+        // B is a CallbackSystem successor of A → inlined (D3)
+        // C is a CallbackSystem successor of B → inlined (D3)
         Assert.That(threadIds["B"], Is.EqualTo(threadIds["C"]),
             "Inline continuation: B and C should run on the same thread");
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Patate systems
+    // Pipeline systems
     // ═══════════════════════════════════════════════════════════════
 
     [Test]
-    public void PatateSystem_AllChunksProcessed()
+    public void PipelineSystem_AllChunksProcessed()
     {
         var chunkCounter = 0;
         var ticksSeen = 0;
         const int totalChunks = 100;
 
         var builder = new DagBuilder()
-            .AddPatate("Physics", (chunk, total) =>
+            .AddPipelineSystem("Physics", (chunk, total) =>
             {
                 Interlocked.Increment(ref chunkCounter);
             }, totalChunks);
@@ -224,14 +224,14 @@ public class DagSchedulerTests
     }
 
     [Test]
-    public void PatateSystem_MultiWorkerDistribution()
+    public void PipelineSystem_MultiWorkerDistribution()
     {
         var workerThreadIds = new ConcurrentBag<int>();
         var captured = 0;
         const int totalChunks = 100;
 
         var builder = new DagBuilder()
-            .AddPatate("Physics", (chunk, total) =>
+            .AddPipelineSystem("Physics", (chunk, total) =>
             {
                 if (captured == 0)
                 {
@@ -240,9 +240,9 @@ public class DagSchedulerTests
                 }
             }, totalChunks);
 
-        // Use a Callback successor to signal first tick done
+        // Use a CallbackSystem successor to signal first tick done
         var builder2 = new DagBuilder()
-            .AddPatate("Physics", (chunk, total) =>
+            .AddPipelineSystem("Physics", (chunk, total) =>
             {
                 if (captured == 0)
                 {
@@ -273,7 +273,7 @@ public class DagSchedulerTests
         var tickCount = 0;
 
         var builder = new DagBuilder()
-            .AddCallback("Counter", _ => Interlocked.Increment(ref tickCount));
+            .AddCallbackSystem("Counter", _ => Interlocked.Increment(ref tickCount));
 
         using var scheduler = CreateScheduler(builder, workerCount: 2);
         scheduler.Start();
@@ -281,17 +281,17 @@ public class DagSchedulerTests
         scheduler.Shutdown();
 
         Assert.That(tickCount, Is.GreaterThanOrEqualTo(10),
-            "Callback should execute once per tick");
+            "CallbackSystem should execute once per tick");
     }
 
     [Test]
-    public void PatateSystem_ChunksResetEachTick()
+    public void PipelineSystem_ChunksResetEachTick()
     {
         var totalChunksProcessed = 0;
         const int chunksPerTick = 20;
 
         var builder = new DagBuilder()
-            .AddPatate("Work", (chunk, total) =>
+            .AddPipelineSystem("Work", (chunk, total) =>
             {
                 Interlocked.Increment(ref totalChunksProcessed);
             }, chunksPerTick);
@@ -314,7 +314,7 @@ public class DagSchedulerTests
     public void Shutdown_Clean()
     {
         var builder = new DagBuilder()
-            .AddCallback("A", _ => { });
+            .AddCallbackSystem("A", _ => { });
 
         using var scheduler = CreateScheduler(builder, workerCount: 4);
         scheduler.Start();
@@ -336,11 +336,11 @@ public class DagSchedulerTests
 
         // Complex DAG: A → (B, C) → D → E
         var builder = new DagBuilder()
-            .AddCallback("A", _ => { if (captured == 0) { executionOrder.Add("A"); } })
-            .AddCallback("B", _ => { if (captured == 0) { executionOrder.Add("B"); } })
-            .AddCallback("C", _ => { if (captured == 0) { executionOrder.Add("C"); } })
-            .AddCallback("D", _ => { if (captured == 0) { executionOrder.Add("D"); } })
-            .AddCallback("E", _ =>
+            .AddCallbackSystem("A", _ => { if (captured == 0) { executionOrder.Add("A"); } })
+            .AddCallbackSystem("B", _ => { if (captured == 0) { executionOrder.Add("B"); } })
+            .AddCallbackSystem("C", _ => { if (captured == 0) { executionOrder.Add("C"); } })
+            .AddCallbackSystem("D", _ => { if (captured == 0) { executionOrder.Add("D"); } })
+            .AddCallbackSystem("E", _ =>
             {
                 if (captured == 0)
                 {
@@ -373,14 +373,14 @@ public class DagSchedulerTests
     }
 
     [Test]
-    public void SingleThreadedMode_PatateSystem_AllChunksProcessed()
+    public void SingleThreadedMode_PipelineSystem_AllChunksProcessed()
     {
         var processedChunks = new List<int>();
         var captured = 0;
         const int totalChunks = 10;
 
         var builder = new DagBuilder()
-            .AddPatate("Work", (chunk, total) =>
+            .AddPipelineSystem("Work", (chunk, total) =>
             {
                 if (captured == 0)
                 {
@@ -408,22 +408,22 @@ public class DagSchedulerTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Mixed DAG (Callback + Patate)
+    // Mixed DAG (CallbackSystem + PipelineSystem)
     // ═══════════════════════════════════════════════════════════════
 
     [Test]
-    public void MixedDAG_CallbackAndPatate_CorrectExecution()
+    public void MixedDAG_CallbackAndPipeline_CorrectExecution()
     {
-        // Input(Callback) → Physics(Patate,50) → Output(Callback)
+        // Input(CallbackSystem) → Physics(PipelineSystem,50) → Output(CallbackSystem)
         var inputExecuted = 0;
         var outputExecuted = 0;
         var physicsChunks = 0;
         const int totalChunks = 50;
 
         var builder = new DagBuilder()
-            .AddCallback("Input", _ => Interlocked.Increment(ref inputExecuted))
-            .AddPatate("Physics", (chunk, total) => Interlocked.Increment(ref physicsChunks), totalChunks)
-            .AddCallback("Output", _ => Interlocked.Increment(ref outputExecuted))
+            .AddCallbackSystem("Input", _ => Interlocked.Increment(ref inputExecuted))
+            .AddPipelineSystem("Physics", (chunk, total) => Interlocked.Increment(ref physicsChunks), totalChunks)
+            .AddCallbackSystem("Output", _ => Interlocked.Increment(ref outputExecuted))
             .AddEdge("Input", "Physics")
             .AddEdge("Physics", "Output");
 
@@ -443,7 +443,7 @@ public class DagSchedulerTests
     public void Telemetry_TickDuration_Recorded()
     {
         var builder = new DagBuilder()
-            .AddCallback("A", _ => Thread.SpinWait(1000));
+            .AddCallbackSystem("A", _ => Thread.SpinWait(1000));
 
         using var scheduler = CreateScheduler(builder, workerCount: 2);
         scheduler.Start();
@@ -463,8 +463,8 @@ public class DagSchedulerTests
     {
         // A → B: B's transition latency should be > 0
         var builder = new DagBuilder()
-            .AddCallback("A", _ => Thread.SpinWait(500))
-            .AddCallback("B", _ => { })
+            .AddCallbackSystem("A", _ => Thread.SpinWait(500))
+            .AddCallbackSystem("B", _ => { })
             .AddEdge("A", "B");
 
         using var scheduler = CreateScheduler(builder, workerCount: 2);
@@ -485,9 +485,9 @@ public class DagSchedulerTests
     public void Telemetry_SystemCount_MatchesDag()
     {
         var builder = new DagBuilder()
-            .AddCallback("A", _ => { })
-            .AddCallback("B", _ => { })
-            .AddCallback("C", _ => { })
+            .AddCallbackSystem("A", _ => { })
+            .AddCallbackSystem("B", _ => { })
+            .AddCallbackSystem("C", _ => { })
             .AddEdge("A", "B")
             .AddEdge("B", "C");
 

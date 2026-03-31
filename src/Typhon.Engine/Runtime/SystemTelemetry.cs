@@ -38,8 +38,11 @@ public struct SystemTelemetry
     /// <summary>Number of distinct workers that processed chunks for this system.</summary>
     public int WorkersTouched;
 
-    /// <summary>True if this system was skipped this tick (e.g., runIf returned false).</summary>
-    public bool WasSkipped;
+    /// <summary>Reason the system was skipped, or <see cref="SkipReason.NotSkipped"/> if it executed normally.</summary>
+    public SkipReason SkipReason;
+
+    /// <summary>True if this system was skipped this tick.</summary>
+    public readonly bool WasSkipped => SkipReason != SkipReason.NotSkipped;
 
     // ═══════ Internal timestamps (Stopwatch ticks, not part of public API) ═══════
 

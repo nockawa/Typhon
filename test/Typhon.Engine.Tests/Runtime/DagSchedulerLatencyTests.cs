@@ -28,20 +28,20 @@ public class DagSchedulerLatencyTests
     }
 
     /// <summary>
-    /// Measures inter-system transition latency for inline Callback→Callback chains (D3).
+    /// Measures inter-system transition latency for inline CallbackSystem→CallbackSystem chains (D3).
     /// POC target: 0.1-0.4µs. This should be even faster since no SimulateWork.
     /// </summary>
     [Test]
     public void Report_InlineCallbackTransitionLatency()
     {
-        // Linear chain: A → B → C → D → E (all Callbacks)
+        // Linear chain: A → B → C → D → E (all CallbackSystems)
         // B through E are inline continuations — transition latency should be near zero
         var builder = new DagBuilder()
-            .AddCallback("A", _ => Thread.SpinWait(10))
-            .AddCallback("B", _ => Thread.SpinWait(10))
-            .AddCallback("C", _ => Thread.SpinWait(10))
-            .AddCallback("D", _ => Thread.SpinWait(10))
-            .AddCallback("E", _ => Thread.SpinWait(10))
+            .AddCallbackSystem("A", _ => Thread.SpinWait(10))
+            .AddCallbackSystem("B", _ => Thread.SpinWait(10))
+            .AddCallbackSystem("C", _ => Thread.SpinWait(10))
+            .AddCallbackSystem("D", _ => Thread.SpinWait(10))
+            .AddCallbackSystem("E", _ => Thread.SpinWait(10))
             .AddEdge("A", "B")
             .AddEdge("B", "C")
             .AddEdge("C", "D")
@@ -85,7 +85,7 @@ public class DagSchedulerLatencyTests
         var max = latencies[idx - 1];
         var mean = latencies.Take(idx).Average();
 
-        TestContext.Out.WriteLine("═══ Inline Callback→Callback Transition Latency (D3) ═══");
+        TestContext.Out.WriteLine("═══ Inline CallbackSystem→CallbackSystem Transition Latency (D3) ═══");
         TestContext.Out.WriteLine($"  Samples: {idx} ({measuredTicks} ticks × 4 systems)");
         TestContext.Out.WriteLine($"  Mean:    {mean:F3} µs");
         TestContext.Out.WriteLine($"  P50:     {p50:F3} µs");
@@ -100,18 +100,18 @@ public class DagSchedulerLatencyTests
     }
 
     /// <summary>
-    /// Measures inter-system transition latency when a Patate successor must be discovered
+    /// Measures inter-system transition latency when a PipelineSystem successor must be discovered
     /// via FindReadySystem scan (not inlined). This is the slower path.
     /// </summary>
     [Test]
-    public void Report_DiscoveryPatateTransitionLatency()
+    public void Report_DiscoveryPipelineTransitionLatency()
     {
-        // A(Callback) → B(Patate,50 chunks) → C(Callback)
+        // A(CallbackSystem) → B(PipelineSystem,50 chunks) → C(CallbackSystem)
         // B's transition latency = time from A completing to first B chunk grabbed
         var builder = new DagBuilder()
-            .AddCallback("A", _ => Thread.SpinWait(100))
-            .AddPatate("B", (chunk, total) => Thread.SpinWait(50), 50)
-            .AddCallback("C", _ => Thread.SpinWait(10))
+            .AddCallbackSystem("A", _ => Thread.SpinWait(100))
+            .AddPipelineSystem("B", (chunk, total) => Thread.SpinWait(50), 50)
+            .AddCallbackSystem("C", _ => Thread.SpinWait(10))
             .AddEdge("A", "B")
             .AddEdge("B", "C");
 
@@ -130,9 +130,9 @@ public class DagSchedulerLatencyTests
         var ring = scheduler.Telemetry;
         var measuredTicks = Math.Min(200, ring.TotalTicksRecorded - 20);
 
-        // System B (index 1) — Patate successor discovered via scan
+        // System B (index 1) — PipelineSystem successor discovered via scan
         var latenciesB = new double[measuredTicks];
-        // System C (index 2) — Callback successor of Patate (inline)
+        // System C (index 2) — CallbackSystem successor of PipelineSystem (inline)
         var latenciesC = new double[measuredTicks];
         var idx = 0;
 
@@ -147,15 +147,15 @@ public class DagSchedulerLatencyTests
         Array.Sort(latenciesB, 0, idx);
         Array.Sort(latenciesC, 0, idx);
 
-        TestContext.Out.WriteLine("═══ Discovery Path: Callback → Patate Transition Latency ═══");
+        TestContext.Out.WriteLine("═══ Discovery Path: CallbackSystem → PipelineSystem Transition Latency ═══");
         TestContext.Out.WriteLine($"  Samples:      {idx} ticks");
-        TestContext.Out.WriteLine($"  B (Patate discovered via scan):");
+        TestContext.Out.WriteLine($"  B (PipelineSystem discovered via scan):");
         TestContext.Out.WriteLine($"    Mean:  {latenciesB.Take(idx).Average():F3} µs");
         TestContext.Out.WriteLine($"    P50:   {latenciesB[(int)(idx * 0.50)]:F3} µs");
         TestContext.Out.WriteLine($"    P90:   {latenciesB[(int)(idx * 0.90)]:F3} µs");
         TestContext.Out.WriteLine($"    P99:   {latenciesB[(int)(idx * 0.99)]:F3} µs");
         TestContext.Out.WriteLine($"    Max:   {latenciesB[idx - 1]:F3} µs");
-        TestContext.Out.WriteLine($"  C (Callback inlined after Patate):");
+        TestContext.Out.WriteLine($"  C (CallbackSystem inlined after PipelineSystem):");
         TestContext.Out.WriteLine($"    Mean:  {latenciesC.Take(idx).Average():F3} µs");
         TestContext.Out.WriteLine($"    P50:   {latenciesC[(int)(idx * 0.50)]:F3} µs");
         TestContext.Out.WriteLine($"    P90:   {latenciesC[(int)(idx * 0.90)]:F3} µs");
@@ -165,7 +165,7 @@ public class DagSchedulerLatencyTests
         TestContext.Out.WriteLine();
 
         Assert.That(latenciesB[(int)(idx * 0.90)], Is.LessThan(1.0),
-            "P90 Patate discovery transition must be < 1.0µs");
+            "P90 PipelineSystem discovery transition must be < 1.0µs");
     }
 
     /// <summary>
@@ -174,15 +174,15 @@ public class DagSchedulerLatencyTests
     [Test]
     public void Report_RealisticGameDAGLatencies()
     {
-        // Input(CB) → Movement(Patate,200) → Physics(Patate,200) → Combat(CB) → Output(CB)
-        //           → AI(Patate,100) ──────────────────────────────┘
+        // Input(CB) → Movement(Pipeline,200) → Physics(Pipeline,200) → Combat(CB) → Output(CB)
+        //           → AI(Pipeline,100) ────────────────────────────┘
         var builder = new DagBuilder()
-            .AddCallback("Input", _ => Thread.SpinWait(100))
-            .AddPatate("Movement", (c, t) => Thread.SpinWait(50), 200)
-            .AddPatate("AI", (c, t) => Thread.SpinWait(80), 100)
-            .AddPatate("Physics", (c, t) => Thread.SpinWait(40), 200)
-            .AddCallback("Combat", _ => Thread.SpinWait(60))
-            .AddCallback("Output", _ => Thread.SpinWait(10))
+            .AddCallbackSystem("Input", _ => Thread.SpinWait(100))
+            .AddPipelineSystem("Movement", (c, t) => Thread.SpinWait(50), 200)
+            .AddPipelineSystem("AI", (c, t) => Thread.SpinWait(80), 100)
+            .AddPipelineSystem("Physics", (c, t) => Thread.SpinWait(40), 200)
+            .AddCallbackSystem("Combat", _ => Thread.SpinWait(60))
+            .AddCallbackSystem("Output", _ => Thread.SpinWait(10))
             .AddEdge("Input", "Movement")
             .AddEdge("Input", "AI")
             .AddEdge("Movement", "Physics")
@@ -252,7 +252,7 @@ public class DagSchedulerLatencyTests
     {
         // Minimal DAG — just measure tick timing accuracy
         var builder = new DagBuilder()
-            .AddCallback("Noop", _ => { });
+            .AddCallbackSystem("Noop", _ => { });
 
         var (systems, topo) = builder.Build();
         using var scheduler = new DagScheduler(systems, topo, new RuntimeOptions

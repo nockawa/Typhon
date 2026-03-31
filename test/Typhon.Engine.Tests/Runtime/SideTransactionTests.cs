@@ -40,7 +40,7 @@ class SideTransactionTests : TestBase<SideTransactionTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("System", ctx =>
+            schedule.CallbackSystem("System", ctx =>
             {
                 if (captured == 0)
                 {
@@ -76,7 +76,7 @@ class SideTransactionTests : TestBase<SideTransactionTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("System", ctx =>
+            schedule.CallbackSystem("System", ctx =>
             {
                 if (captured == 0)
                 {
@@ -111,7 +111,7 @@ class SideTransactionTests : TestBase<SideTransactionTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("System", ctx =>
+            schedule.CallbackSystem("System", ctx =>
             {
                 if (captured == 0)
                 {
@@ -143,7 +143,7 @@ class SideTransactionTests : TestBase<SideTransactionTests>
 
         using var runtime = TyphonRuntime.Create(dbe, schedule =>
         {
-            schedule.Callback("System", ctx =>
+            schedule.CallbackSystem("System", ctx =>
             {
                 if (captured == 0)
                 {

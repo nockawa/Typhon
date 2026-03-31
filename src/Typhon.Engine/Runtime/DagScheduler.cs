@@ -9,7 +9,7 @@ using System.Threading;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Production DAG scheduler for the Typhon Runtime. Executes a static meta-DAG of systems on a pool of worker threads, with any-worker dispatch and
+/// Production DAG scheduler for the Typhon Runtime. Executes a static system DAG on a pool of worker threads, with any-worker dispatch and
 /// inline continuation.
 /// </summary>
 /// <remarks>
@@ -49,6 +49,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly CacheLinePaddedInt[] _remainingChunks;
     private readonly CacheLinePaddedInt[] _remainingDeps;
     private readonly int[] _isReady;
+    private readonly bool[] _systemFailed;
 
     // Reset templates (immutable after construction)
     private readonly int[] _templateDeps;
@@ -101,10 +102,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Called at tick end (after all systems complete). Flushes/disposes UoW.</summary>
     internal Action<DagScheduler> TickEndCallback;
 
-    /// <summary>Called before a Callback/Simple system executes. Creates per-system Transaction. Returns TickContext.</summary>
+    /// <summary>Called before a CallbackSystem/QuerySystem executes. Creates per-system Transaction. Returns TickContext.</summary>
     internal Func<int, TickContext> SystemStartCallback;
 
-    /// <summary>Called after a Callback/Simple system completes. Commits/disposes per-system Transaction.</summary>
+    /// <summary>Called after a CallbackSystem/QuerySystem completes. Commits/disposes per-system Transaction.</summary>
     internal Action<int, bool> SystemEndCallback;
 
     // ═══════════════════════════════════════════════════════════════
@@ -206,6 +207,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         _remainingChunks = new CacheLinePaddedInt[_systemCount];
         _remainingDeps = new CacheLinePaddedInt[_systemCount];
         _isReady = new int[_systemCount];
+        _systemFailed = new bool[_systemCount];
 
         // Build reset templates
         _templateDeps = new int[_systemCount];
@@ -349,7 +351,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var sys = _systems[root];
             if (sys.RunIf != null && !sys.RunIf())
             {
-                _currentTickSystemMetrics[root].WasSkipped = true;
+                _currentTickSystemMetrics[root].SkipReason = SkipReason.RunIfFalse;
                 // Skip root — dispatch its successors immediately.
                 // Safe to call here: workers haven't woken yet.
                 OnSystemComplete(root, -1, false);
@@ -395,11 +397,13 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     private void ExecuteTickSingleThreaded(long tickStartTimestamp)
     {
-        // Reset metrics and event queues
+        // Reset metrics, event queues, and failure flags
         for (var i = 0; i < _systemCount; i++)
         {
             _currentTickSystemMetrics[i] = default;
         }
+
+        Array.Clear(_systemFailed);
 
         foreach (var queue in _eventQueues)
         {
@@ -418,28 +422,58 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var readyTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].ReadyTick = readyTick;
 
+            // Check if a predecessor failed
+            if (_systemFailed[sysIdx])
+            {
+                _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.DependencyFailed;
+                // Propagate failure to successors
+                foreach (var succ in sys.Successors)
+                {
+                    _systemFailed[succ] = true;
+                }
+
+                continue;
+            }
+
             // Evaluate runIf
             if (sys.RunIf != null && !sys.RunIf())
             {
-                _currentTickSystemMetrics[sysIdx].WasSkipped = true;
+                _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.RunIfFalse;
                 continue;
             }
 
             var startTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick = startTick;
 
-            if (sys.Type == SystemType.Patate)
+            if (sys.Type == SystemType.PipelineSystem)
             {
                 for (var chunk = 0; chunk < sys.TotalChunks; chunk++)
                 {
-                    sys.PatateChunkAction(chunk, sys.TotalChunks);
+                    sys.PipelineChunkAction(chunk, sys.TotalChunks);
                 }
             }
-            else // Callback or Simple — single invocation
+            else // CallbackSystem or QuerySystem — single invocation
             {
-                var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber };
-                sys.CallbackAction(ctx);
-                SystemEndCallback?.Invoke(sysIdx, true);
+                var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
+                var success = true;
+                try
+                {
+                    sys.CallbackAction(ctx);
+                }
+                catch (Exception ex)
+                {
+                    success = false;
+                    _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+                    _systemFailed[sysIdx] = true;
+                    LogSystemException(sysIdx, sys.Name, ex);
+                    // Propagate failure to successors
+                    foreach (var succ in sys.Successors)
+                    {
+                        _systemFailed[succ] = true;
+                    }
+                }
+
+                SystemEndCallback?.Invoke(sysIdx, success);
             }
 
             var endTick = Stopwatch.GetTimestamp();
@@ -557,7 +591,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 continue;
             }
 
-            if (_systems[i].Type == SystemType.Patate)
+            if (_systems[i].Type == SystemType.PipelineSystem)
             {
                 // Only return if chunks remain
                 if (_nextChunk[i].Value < _systems[i].TotalChunks)
@@ -567,7 +601,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
             else
             {
-                // Callback: return index, CAS claim happens in ProcessSystem
+                // CallbackSystem/QuerySystem: return index, CAS claim happens in ProcessSystem
                 return i;
             }
         }
@@ -579,17 +613,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     {
         var sys = _systems[sysIdx];
 
-        if (sys.Type == SystemType.Patate)
+        if (sys.Type == SystemType.PipelineSystem)
         {
-            ProcessPatate(sysIdx, workerId, trackUtilization);
+            ProcessPipeline(sysIdx, workerId, trackUtilization);
         }
-        else // Callback or Simple — same single-invocation path
+        else // CallbackSystem or QuerySystem — same single-invocation path
         {
-            ProcessCallbackOrSimple(sysIdx, workerId, trackUtilization);
+            ProcessCallbackOrQuery(sysIdx, workerId, trackUtilization);
         }
     }
 
-    private void ProcessCallbackOrSimple(int sysIdx, int workerId, bool trackUtilization)
+    private void ProcessCallbackOrQuery(int sysIdx, int workerId, bool trackUtilization)
     {
         // Atomic claim: only one worker wins
         if (Interlocked.CompareExchange(ref _isReady[sysIdx], 0, 1) != 1)
@@ -599,7 +633,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         // runIf was already evaluated at dispatch time (OnSystemComplete or root marking).
         // System lifecycle hook: create per-system Transaction (called on the worker thread)
-        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber };
+        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
 
@@ -608,10 +642,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         {
             _systems[sysIdx].CallbackAction(ctx);
         }
-        catch
+        catch (Exception ex)
         {
             success = false;
-            throw;
+            _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+            _systemFailed[sysIdx] = true;
+            LogSystemException(sysIdx, _systems[sysIdx].Name, ex);
         }
         finally
         {
@@ -631,7 +667,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         OnSystemComplete(sysIdx, workerId, trackUtilization);
     }
 
-    private void ProcessPatate(int sysIdx, int workerId, bool trackUtilization)
+    private void ProcessPipeline(int sysIdx, int workerId, bool trackUtilization)
     {
         // runIf was already evaluated at dispatch time. If we're here, the system should execute.
         var sys = _systems[sysIdx];
@@ -650,7 +686,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workStart = Stopwatch.GetTimestamp();
-            sys.PatateChunkAction(chunk, sys.TotalChunks);
+            sys.PipelineChunkAction(chunk, sys.TotalChunks);
             var workEnd = Stopwatch.GetTimestamp();
 
             if (trackUtilization)
@@ -681,20 +717,32 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var successors = _systems[sysIdx].Successors;
         foreach (var succIdx in successors)
         {
+            // Propagate failure: writing true to a bool is idempotent and atomic on x86
+            if (_systemFailed[sysIdx])
+            {
+                _systemFailed[succIdx] = true;
+            }
+
             var depsLeft = Interlocked.Decrement(ref _remainingDeps[succIdx].Value);
             if (depsLeft == 0)
             {
                 _currentTickSystemMetrics[succIdx].ReadyTick = Stopwatch.GetTimestamp();
                 var succ = _systems[succIdx];
 
-                // Evaluate runIf here — before any worker can grab chunks.
-                // This is thread-safe: only one thread decrements the last dependency to zero.
-                if (succ.RunIf != null && !succ.RunIf())
+                // Check if any predecessor failed — skip this system entirely
+                if (_systemFailed[succIdx])
                 {
-                    _currentTickSystemMetrics[succIdx].WasSkipped = true;
+                    _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.DependencyFailed;
                     OnSystemComplete(succIdx, workerId, trackUtilization);
                 }
-                else if (succ.Type == SystemType.Callback || succ.Type == SystemType.Simple)
+                // Evaluate runIf here — before any worker can grab chunks.
+                // This is thread-safe: only one thread decrements the last dependency to zero.
+                else if (succ.RunIf != null && !succ.RunIf())
+                {
+                    _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.RunIfFalse;
+                    OnSystemComplete(succIdx, workerId, trackUtilization);
+                }
+                else if (succ.Type == SystemType.CallbackSystem || succ.Type == SystemType.QuerySystem)
                 {
                     // D3: inline continuation for single-invocation successors
                     ExecuteInline(succIdx, workerId, trackUtilization);
@@ -710,7 +758,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private void ExecuteInline(int sysIdx, int workerId, bool trackUtilization)
     {
         // runIf was already evaluated by the caller (OnSystemComplete).
-        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber };
+        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
 
@@ -719,10 +767,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         {
             _systems[sysIdx].CallbackAction(ctx);
         }
-        catch
+        catch (Exception ex)
         {
             success = false;
-            throw;
+            _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+            _systemFailed[sysIdx] = true;
+            LogSystemException(sysIdx, _systems[sysIdx].Name, ex);
         }
         finally
         {
@@ -780,6 +830,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         }
 
         _systemsRemaining.Value = _systemCount;
+        Array.Clear(_systemFailed);
 
         // Reset event queues at tick start
         foreach (var queue in _eventQueues)
