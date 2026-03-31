@@ -13,6 +13,7 @@ using System.Linq.Expressions;
 using Typhon.Schema.Definition;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
+[assembly: InternalsVisibleTo("Typhon.Client.Tests")]
 [assembly: InternalsVisibleTo("Typhon.Benchmark")]
 [assembly: InternalsVisibleTo("Typhon.MonitoringDemo")]
 [assembly: InternalsVisibleTo("Typhon.ARPG.Shell")]

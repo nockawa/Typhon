@@ -1,6 +1,6 @@
 using MemoryPack;
 
-namespace Typhon.Engine;
+namespace Typhon.Protocol;
 
 /// <summary>
 /// Subscription lifecycle event: subscribe, unsubscribe, sync complete, or resync.

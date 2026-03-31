@@ -1,6 +1,6 @@
 using MemoryPack;
 
-namespace Typhon.Engine;
+namespace Typhon.Protocol;
 
 /// <summary>
 /// Top-level message pushed to each client once per tick. Contains subscription lifecycle events and per-View data deltas.

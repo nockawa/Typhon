@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using Typhon.Protocol;
 
 namespace Typhon.Engine.Tests.Runtime;
 

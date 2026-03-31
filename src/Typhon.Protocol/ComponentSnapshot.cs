@@ -1,6 +1,6 @@
 using MemoryPack;
 
-namespace Typhon.Engine;
+namespace Typhon.Protocol;
 
 /// <summary>
 /// Full snapshot of a single component's data. Used in <see cref="EntityDelta"/> for Added entities.

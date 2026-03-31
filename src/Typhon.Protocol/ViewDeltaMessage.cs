@@ -1,6 +1,6 @@
 using MemoryPack;
 
-namespace Typhon.Engine;
+namespace Typhon.Protocol;
 
 /// <summary>
 /// Per-View changes for a single tick. Absent from <see cref="TickDeltaMessage.Views"/> if the View had no changes.

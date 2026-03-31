@@ -2,6 +2,7 @@ using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using Typhon.Engine;
+using Typhon.Protocol;
 
 namespace Typhon.Engine.Tests;
 

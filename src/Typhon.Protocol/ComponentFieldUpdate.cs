@@ -1,6 +1,6 @@
 using MemoryPack;
 
-namespace Typhon.Engine;
+namespace Typhon.Protocol;
 
 /// <summary>
 /// Per-component change data for a Modified entity. Carries a field dirty bitmask and the values of changed fields.

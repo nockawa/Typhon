@@ -1,6 +1,7 @@
 using MemoryPack;
 using NUnit.Framework;
 using Typhon.Engine;
+using Typhon.Protocol;
 
 namespace Typhon.Engine.Tests;
 

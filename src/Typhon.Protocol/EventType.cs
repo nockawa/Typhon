@@ -1,4 +1,4 @@
-namespace Typhon.Engine;
+namespace Typhon.Protocol;
 
 /// <summary>
 /// Type of subscription lifecycle event sent to a client.

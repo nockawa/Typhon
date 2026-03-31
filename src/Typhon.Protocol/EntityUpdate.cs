@@ -1,6 +1,6 @@
 using MemoryPack;
 
-namespace Typhon.Engine;
+namespace Typhon.Protocol;
 
 /// <summary>
 /// Incremental update for a Modified entity. Contains only the components that changed.
@@ -8,7 +8,7 @@ namespace Typhon.Engine;
 [MemoryPackable]
 public partial struct EntityUpdate
 {
-    /// <summary>Entity identifier (raw value of <see cref="EntityId"/>).</summary>
+    /// <summary>Entity identifier (raw value of EntityId).</summary>
     public long Id;
 
     /// <summary>Components that changed this tick, each with field-level dirty bits and values.</summary>
