@@ -331,6 +331,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Telemetry ring buffer for diagnostic inspection.</summary>
     public TickTelemetryRing Telemetry => _telemetryRing;
 
+    /// <summary>Returns a ref to the current tick's SystemTelemetry for the given system index. Used by TyphonRuntime to write entity counts.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ref SystemTelemetry GetCurrentSystemMetrics(int sysIdx) => ref _currentTickSystemMetrics[sysIdx];
+
     /// <summary>Number of worker threads.</summary>
     public int WorkerCount => _workerCount;
 

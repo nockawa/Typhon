@@ -35,6 +35,15 @@ public struct SystemTelemetry
     /// </summary>
     public float StragglerGapUs;
 
+    /// <summary>Number of entities this system processed (from <c>TickContext.Entities</c>). Zero for CallbackSystems.</summary>
+    public int EntitiesProcessed;
+
+    /// <summary>
+    /// Entities in the View but excluded by change filter this tick. Zero if no change filter applied.
+    /// Computed as <c>View.Count - EntitiesProcessed</c> for change-filtered systems.
+    /// </summary>
+    public int EntitiesSkippedByChangeFilter;
+
     /// <summary>Number of distinct workers that processed chunks for this system.</summary>
     public int WorkersTouched;
 

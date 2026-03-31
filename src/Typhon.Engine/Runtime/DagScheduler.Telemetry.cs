@@ -27,6 +27,7 @@ public sealed partial class DagScheduler
         _previousTickStart = tickStart;
 
         var activeSystemCount = 0;
+        var totalEntitiesProcessed = 0;
 
         for (var i = 0; i < _systemCount; i++)
         {
@@ -36,6 +37,7 @@ public sealed partial class DagScheduler
             if (sm.FirstChunkGrabTick > 0 && sm.ReadyTick > 0)
             {
                 activeSystemCount++;
+                totalEntitiesProcessed += sm.EntitiesProcessed;
                 sm.TransitionLatencyUs = TicksToUs(sm.FirstChunkGrabTick - sm.ReadyTick);
                 sm.DurationUs = TicksToUs(sm.LastChunkDoneTick - sm.FirstChunkGrabTick);
 
@@ -79,7 +81,8 @@ public sealed partial class DagScheduler
             OverrunRatio = overrunRatio,
             TickIntervalMs = tickIntervalMs,
             ActiveWorkerCount = _workerCount,
-            ActiveSystemCount = activeSystemCount
+            ActiveSystemCount = activeSystemCount,
+            TotalEntitiesProcessed = totalEntitiesProcessed
         };
 
         // Enrich with subscription metrics (Output phase duration, deltas pushed, overflows)

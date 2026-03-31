@@ -510,7 +510,8 @@ public sealed class TyphonRuntime : IDisposable
 
         // #197: Build entity set based on input View and change filter
         IReadOnlyCollection<EntityId> entities;
-        if (_systemViews[sysIdx] != null && _systemChangeFilterTables[sysIdx] != null)
+        var hasChangeFilter = _systemViews[sysIdx] != null && _systemChangeFilterTables[sysIdx] != null;
+        if (hasChangeFilter)
         {
             var list = BuildFilteredEntitySet(sysIdx);
             _systemEntityLists[sysIdx] = list;
@@ -525,6 +526,15 @@ public sealed class TyphonRuntime : IDisposable
         else
         {
             entities = PooledEntityList.Empty;
+        }
+
+        // #198: Record entity counts into per-system telemetry
+        ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
+        var entityCount = entities is PooledEntityList pel ? pel.Count : 0;
+        metrics.EntitiesProcessed = entityCount;
+        if (hasChangeFilter && _systemViews[sysIdx] != null)
+        {
+            metrics.EntitiesSkippedByChangeFilter = _systemViews[sysIdx].Count - entityCount;
         }
 
         return new TickContext

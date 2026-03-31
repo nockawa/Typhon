@@ -38,6 +38,9 @@ public struct TickTelemetry
     /// <summary>Number of systems that actually executed (not skipped) this tick.</summary>
     public int ActiveSystemCount;
 
+    /// <summary>Total entities processed across all systems this tick.</summary>
+    public int TotalEntitiesProcessed;
+
     /// <summary>Wall-clock duration of the subscription Output phase, in milliseconds. Zero if no subscriptions.</summary>
     public float OutputPhaseMs;
 

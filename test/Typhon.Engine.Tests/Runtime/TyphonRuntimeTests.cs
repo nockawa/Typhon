@@ -324,4 +324,81 @@ class TyphonRuntimeTests : TestBase<TyphonRuntimeTests>
         Assert.That(callbackExecuted, Is.GreaterThanOrEqualTo(1));
         Assert.That(chunkCount, Is.GreaterThanOrEqualTo(10));
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // #198: Entity count telemetry
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Telemetry_EntitiesProcessed_RecordedForQuerySystem()
+    {
+        using var dbe = SetupEngine();
+
+        // Pre-spawn 3 entities so the View is non-empty
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                var pos = new EcsPosition(i, 0, 0);
+                var vel = new EcsVelocity(0, 0, 0);
+                tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+            }
+
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        var view = txView.Query<EcsUnit>().ToView();
+
+        var executeCount = 0;
+
+        using var runtime = TyphonRuntime.Create(dbe, schedule =>
+        {
+            schedule.QuerySystem("Counter", ctx =>
+            {
+                Interlocked.Increment(ref executeCount);
+            }, input: () => view);
+        }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
+
+        runtime.Start();
+        SpinWait.SpinUntil(() => executeCount >= 2, TimeSpan.FromSeconds(5));
+        runtime.Shutdown();
+
+        var ring = runtime.Telemetry;
+        Assert.That(ring.TotalTicksRecorded, Is.GreaterThanOrEqualTo(2));
+
+        // Check per-system entity count
+        var systems = ring.GetSystemMetrics(ring.NewestTick);
+        Assert.That(systems[0].EntitiesProcessed, Is.EqualTo(3),
+            "QuerySystem should report 3 entities processed");
+
+        // Check tick-level aggregate
+        ref readonly var tick = ref ring.GetTick(ring.NewestTick);
+        Assert.That(tick.TotalEntitiesProcessed, Is.EqualTo(3),
+            "Tick should report 3 total entities processed");
+
+        view.Dispose();
+    }
+
+    [Test]
+    public void Telemetry_CallbackSystem_ZeroEntities()
+    {
+        using var dbe = SetupEngine();
+        var executeCount = 0;
+
+        using var runtime = TyphonRuntime.Create(dbe, schedule =>
+        {
+            schedule.CallbackSystem("Noop", _ => Interlocked.Increment(ref executeCount));
+        }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
+
+        runtime.Start();
+        SpinWait.SpinUntil(() => executeCount >= 2, TimeSpan.FromSeconds(5));
+        runtime.Shutdown();
+
+        var ring = runtime.Telemetry;
+        var systems = ring.GetSystemMetrics(ring.NewestTick);
+
+        Assert.That(systems[0].EntitiesProcessed, Is.EqualTo(0),
+            "CallbackSystem should report 0 entities (no input View)");
+    }
 }
