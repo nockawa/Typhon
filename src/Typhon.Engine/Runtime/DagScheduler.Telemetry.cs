@@ -73,6 +73,21 @@ public sealed partial class DagScheduler
             }
         }
 
+        // Update overload state machine
+        var previousLevel = _overloadDetector.CurrentLevel;
+        var levelChanged = _overloadDetector.Update(overrunRatio);
+        _tickMultiplier = _overloadDetector.TickMultiplier;
+
+        if (levelChanged)
+        {
+            LogOverloadLevelChanged(previousLevel, _overloadDetector.CurrentLevel, _currentTickNumber);
+
+            if (_overloadDetector.CurrentLevel == OverloadLevel.PlayerShedding && previousLevel != OverloadLevel.PlayerShedding)
+            {
+                OnCriticalOverloadCallback?.Invoke();
+            }
+        }
+
         var tickTelemetry = new TickTelemetry
         {
             TickNumber = _currentTickNumber,
@@ -82,7 +97,9 @@ public sealed partial class DagScheduler
             TickIntervalMs = tickIntervalMs,
             ActiveWorkerCount = _workerCount,
             ActiveSystemCount = activeSystemCount,
-            TotalEntitiesProcessed = totalEntitiesProcessed
+            TotalEntitiesProcessed = totalEntitiesProcessed,
+            CurrentLevel = _overloadDetector.CurrentLevel,
+            TickMultiplier = _tickMultiplier
         };
 
         // Enrich with subscription metrics (Output phase duration, deltas pushed, overflows)

@@ -82,6 +82,13 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly long _tickIntervalTicks;
 
     // ═══════════════════════════════════════════════════════════════
+    // Overload management
+    // ═══════════════════════════════════════════════════════════════
+
+    private readonly OverloadDetector _overloadDetector;
+    private int _tickMultiplier = 1;
+
+    // ═══════════════════════════════════════════════════════════════
     // Telemetry
     // ═══════════════════════════════════════════════════════════════
 
@@ -117,6 +124,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     internal delegate void EnrichTelemetryDelegate(ref TickTelemetry telemetry);
 
+    /// <summary>Called when overload level transitions to <see cref="OverloadLevel.PlayerShedding"/>.</summary>
+    internal Action OnCriticalOverloadCallback;
+
     // ═══════════════════════════════════════════════════════════════
     // Logging
     // ═══════════════════════════════════════════════════════════════
@@ -138,7 +148,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             return long.MaxValue;
         }
 
-        _nextTickTimestamp += _tickIntervalTicks;
+        _nextTickTimestamp += _tickIntervalTicks * _tickMultiplier;
         return _nextTickTimestamp;
     }
 
@@ -226,6 +236,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             _templateDeps[i] = systems[i].PredecessorCount;
             _templateChunks[i] = systems[i].TotalChunks;
         }
+
+        // Overload detection
+        _overloadDetector = new OverloadDetector(options.Overload, options.BaseTickRate);
 
         // Telemetry
         var ringCapacity = options.TelemetryRingCapacity;
@@ -335,6 +348,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref SystemTelemetry GetCurrentSystemMetrics(int sysIdx) => ref _currentTickSystemMetrics[sysIdx];
 
+    /// <summary>Current overload response level.</summary>
+    public OverloadLevel CurrentOverloadLevel => _overloadDetector.CurrentLevel;
+
     /// <summary>Number of worker threads.</summary>
     public int WorkerCount => _workerCount;
 
@@ -376,7 +392,16 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
             else
             {
-                MarkSystemReady(root);
+                var overloadSkip = CheckOverloadSkip(root);
+                if (overloadSkip != SkipReason.NotSkipped)
+                {
+                    _currentTickSystemMetrics[root].SkipReason = overloadSkip;
+                    OnSystemComplete(root, -1, false);
+                }
+                else
+                {
+                    MarkSystemReady(root);
+                }
             }
         }
 
@@ -464,6 +489,15 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             {
                 _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.EmptyInput;
                 continue;
+            }
+
+            {
+                var overloadSkip = CheckOverloadSkip(sysIdx);
+                if (overloadSkip != SkipReason.NotSkipped)
+                {
+                    _currentTickSystemMetrics[sysIdx].SkipReason = overloadSkip;
+                    continue;
+                }
             }
 
             var startTick = Stopwatch.GetTimestamp();
@@ -771,14 +805,23 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.EmptyInput;
                     OnSystemComplete(succIdx, workerId, trackUtilization);
                 }
-                else if (succ.Type == SystemType.CallbackSystem || succ.Type == SystemType.QuerySystem)
-                {
-                    // D3: inline continuation for single-invocation successors
-                    ExecuteInline(succIdx, workerId, trackUtilization);
-                }
                 else
                 {
-                    MarkSystemReady(succIdx);
+                    var overloadSkip = CheckOverloadSkip(succIdx);
+                    if (overloadSkip != SkipReason.NotSkipped)
+                    {
+                        _currentTickSystemMetrics[succIdx].SkipReason = overloadSkip;
+                        OnSystemComplete(succIdx, workerId, trackUtilization);
+                    }
+                    else if (succ.Type == SystemType.CallbackSystem || succ.Type == SystemType.QuerySystem)
+                    {
+                        // D3: inline continuation for single-invocation successors
+                        ExecuteInline(succIdx, workerId, trackUtilization);
+                    }
+                    else
+                    {
+                        MarkSystemReady(succIdx);
+                    }
                 }
             }
         }
@@ -819,6 +862,46 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         // Recursively dispatch successors
         OnSystemComplete(sysIdx, workerId, trackUtilization);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Overload skip check
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Checks whether a system should be skipped due to tick divisor or overload throttling/shedding.
+    /// Returns <see cref="SkipReason.NotSkipped"/> if the system should execute normally.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private SkipReason CheckOverloadSkip(int sysIdx)
+    {
+        var sys = Systems[sysIdx];
+
+        // Baseline TickDivisor (active even at Normal load)
+        if (sys.TickDivisor > 1 && _currentTickNumber % sys.TickDivisor != 0)
+        {
+            return SkipReason.Throttled;
+        }
+
+        var level = _overloadDetector.CurrentLevel;
+        if (level == OverloadLevel.Normal)
+        {
+            return SkipReason.NotSkipped;
+        }
+
+        // Level 1+: Shed Low-priority systems with CanShed
+        if (sys.Priority == SystemPriority.Low && sys.CanShed)
+        {
+            return SkipReason.Shed;
+        }
+
+        // Level 1+: Throttle Normal-priority systems via ThrottledTickDivisor
+        if (sys.Priority == SystemPriority.Normal && sys.ThrottledTickDivisor > 1 && _currentTickNumber % sys.ThrottledTickDivisor != 0)
+        {
+            return SkipReason.Throttled;
+        }
+
+        return SkipReason.NotSkipped;
     }
 
     // ═══════════════════════════════════════════════════════════════

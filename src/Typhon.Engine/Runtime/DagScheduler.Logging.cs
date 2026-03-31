@@ -24,4 +24,8 @@ public sealed partial class DagScheduler
     [LoggerMessage(Level = LogLevel.Error,
         Message = "System {SystemIndex} '{SystemName}' threw an exception during execution")]
     private partial void LogSystemException(int systemIndex, string systemName, Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "Overload level changed: {PreviousLevel} -> {NewLevel} at tick {TickNumber}")]
+    private partial void LogOverloadLevelChanged(OverloadLevel previousLevel, OverloadLevel newLevel, long tickNumber);
 }

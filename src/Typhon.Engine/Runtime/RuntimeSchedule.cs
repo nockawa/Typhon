@@ -46,7 +46,7 @@ public sealed class RuntimeSchedule
     /// Registers a CallbackSystem — lightweight single-invocation, no entity input.
     /// </summary>
     public RuntimeSchedule CallbackSystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
-        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null)
+        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
     {
         ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(name);
@@ -60,7 +60,10 @@ public sealed class RuntimeSchedule
             Priority = priority,
             RunIf = runIf,
             After = after,
-            AfterAll = afterAll
+            AfterAll = afterAll,
+            TickDivisor = tickDivisor,
+            ThrottledTickDivisor = throttledTickDivisor,
+            CanShed = canShed
         });
         return this;
     }

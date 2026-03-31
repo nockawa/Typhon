@@ -84,6 +84,12 @@ public sealed class TyphonRuntime : IDisposable
     /// <summary>Number of ticks executed so far.</summary>
     public long CurrentTickNumber => Scheduler.CurrentTickNumber;
 
+    /// <summary>Current overload response level.</summary>
+    public OverloadLevel CurrentOverloadLevel => Scheduler.CurrentOverloadLevel;
+
+    /// <summary>Fires when overload reaches <see cref="OverloadLevel.PlayerShedding"/>. Game code decides what to do (migrate, disconnect, split).</summary>
+    public event Action<TyphonRuntime> OnCriticalOverload;
+
     // ═══════════════════════════════════════════════════════════════
     // Factory
     // ═══════════════════════════════════════════════════════════════
@@ -145,6 +151,8 @@ public sealed class TyphonRuntime : IDisposable
                 t.SubscriptionOverflowCount = _subscriptionOutputPhase.LastOverflowCount;
             }
         };
+
+        Scheduler.OnCriticalOverloadCallback = () => OnCriticalOverload?.Invoke(this);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -498,7 +506,7 @@ public sealed class TyphonRuntime : IDisposable
         //   1. Ring buffer has ALL entries (commit-time + shadow-time) for correct View membership
         //   2. PreviousTickDirtyBitmap has this tick's dirty chunks for Modified detection
         //   3. All state is quiescent (no concurrent writers)
-        _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber);
+        _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber, Scheduler.CurrentOverloadLevel);
     }
 
     private TickContext OnSystemStartInternal(int sysIdx)

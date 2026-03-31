@@ -35,6 +35,11 @@ public class RuntimeOptions
     public SubscriptionServerOptions SubscriptionServer { get; set; }
 
     /// <summary>
+    /// Overload detection and response configuration. Always active with sensible defaults.
+    /// </summary>
+    public OverloadOptions Overload { get; set; } = new();
+
+    /// <summary>
     /// Resolves the effective worker count, applying the auto-detect formula if <see cref="WorkerCount"/> is -1.
     /// </summary>
     internal int ResolveWorkerCount() => WorkerCount == -1 ? Math.Max(1, Environment.ProcessorCount - 4) : WorkerCount;

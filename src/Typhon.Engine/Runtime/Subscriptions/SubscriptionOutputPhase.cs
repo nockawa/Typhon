@@ -56,7 +56,7 @@ internal sealed partial class SubscriptionOutputPhase
     /// <summary>
     /// Execute the Output phase for a tick. Called from <see cref="TyphonRuntime.OnTickEndInternal"/> after WriteTickFence.
     /// </summary>
-    internal void Execute(long tickNumber)
+    internal void Execute(long tickNumber, OverloadLevel overloadLevel = OverloadLevel.Normal)
     {
         var publishedViews = _viewRegistry.PublishedViews;
         if (publishedViews.Length == 0)
@@ -129,6 +129,12 @@ internal sealed partial class SubscriptionOutputPhase
         foreach (var published in publishedViews)
         {
             if (!published.IsShared || published.SubscriberCount == 0)
+            {
+                continue;
+            }
+
+            // Overload throttling: skip non-Critical views based on level and priority
+            if (ShouldSkipSubscription(published, overloadLevel, tickNumber))
             {
                 continue;
             }
@@ -530,6 +536,37 @@ internal sealed partial class SubscriptionOutputPhase
                 state.NeedsResync = true;
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Overload throttling
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Determines whether a published View's deltas should be skipped this tick due to overload.
+    /// Views are still refreshed (ring buffers drained) — only delta building/pushing is skipped.
+    /// </summary>
+    private static bool ShouldSkipSubscription(PublishedView view, OverloadLevel level, long tickNumber)
+    {
+        if (level == OverloadLevel.Normal || view.Priority == SubscriptionPriority.Critical)
+        {
+            return false;
+        }
+
+        if (view.Priority == SubscriptionPriority.Low)
+        {
+            // Low: every 2nd tick at Level 1, every 4th tick at Level 2+
+            var divisor = level >= OverloadLevel.ScopeReduction ? 4 : 2;
+            return tickNumber % divisor != 0;
+        }
+
+        if (view.Priority == SubscriptionPriority.Normal && level >= OverloadLevel.ScopeReduction)
+        {
+            // Normal: every 2nd tick at Level 2+
+            return tickNumber % 2 != 0;
+        }
+
+        return false;
     }
 
     // ═══════════════════════════════════════════════════════════════

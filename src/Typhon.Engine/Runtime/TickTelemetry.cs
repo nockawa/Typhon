@@ -49,4 +49,13 @@ public struct TickTelemetry
 
     /// <summary>Number of send buffer overflows this tick (clients that missed deltas and need resync).</summary>
     public int SubscriptionOverflowCount;
+
+    /// <summary>Current overload response level for this tick.</summary>
+    public OverloadLevel CurrentLevel;
+
+    /// <summary>Tick rate multiplier (1 = normal, 2+ = modulated under Level 3).</summary>
+    public int TickMultiplier;
+
+    /// <summary>Total entities deferred (budget-capped) across all systems this tick. Zero until Level 2 enforcement.</summary>
+    public int TotalEntitiesDeferred;
 }
