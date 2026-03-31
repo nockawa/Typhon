@@ -33,7 +33,8 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     // Immutable DAG structure
     // ═══════════════════════════════════════════════════════════════
 
-    private readonly SystemDefinition[] _systems;
+    internal SystemDefinition[] Systems { get; }
+
     private readonly int _systemCount;
     private readonly int[] _rootSystems;
     private readonly int _workerCount;
@@ -171,7 +172,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         ArgumentNullException.ThrowIfNull(topologicalOrder);
         ArgumentNullException.ThrowIfNull(options);
 
-        _systems = systems;
+        Systems = systems;
         _topologicalOrder = topologicalOrder;
         _systemCount = systems.Length;
         _options = options;
@@ -343,17 +344,22 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         // 2. Tick start hook (TyphonRuntime creates UoW)
         TickStartCallback?.Invoke(this);
 
-        // 3. Mark root systems ready (evaluate runIf for roots before waking workers)
+        // 3. Mark root systems ready (evaluate runIf and ReactiveSkip for roots before waking workers)
         var readyNow = Stopwatch.GetTimestamp();
         foreach (var root in _rootSystems)
         {
             _currentTickSystemMetrics[root].ReadyTick = readyNow;
-            var sys = _systems[root];
+            var sys = Systems[root];
             if (sys.RunIf != null && !sys.RunIf())
             {
                 _currentTickSystemMetrics[root].SkipReason = SkipReason.RunIfFalse;
                 // Skip root — dispatch its successors immediately.
                 // Safe to call here: workers haven't woken yet.
+                OnSystemComplete(root, -1, false);
+            }
+            else if (sys.ReactiveSkip != null && sys.ReactiveSkip())
+            {
+                _currentTickSystemMetrics[root].SkipReason = SkipReason.EmptyInput;
                 OnSystemComplete(root, -1, false);
             }
             else
@@ -417,7 +423,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         for (var i = 0; i < _topologicalOrder.Length; i++)
         {
             var sysIdx = _topologicalOrder[i];
-            var sys = _systems[sysIdx];
+            var sys = Systems[sysIdx];
 
             var readyTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].ReadyTick = readyTick;
@@ -439,6 +445,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             if (sys.RunIf != null && !sys.RunIf())
             {
                 _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.RunIfFalse;
+                continue;
+            }
+
+            if (sys.ReactiveSkip != null && sys.ReactiveSkip())
+            {
+                _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.EmptyInput;
                 continue;
             }
 
@@ -591,10 +603,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 continue;
             }
 
-            if (_systems[i].Type == SystemType.PipelineSystem)
+            if (Systems[i].Type == SystemType.PipelineSystem)
             {
                 // Only return if chunks remain
-                if (_nextChunk[i].Value < _systems[i].TotalChunks)
+                if (_nextChunk[i].Value < Systems[i].TotalChunks)
                 {
                     return i;
                 }
@@ -611,7 +623,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     private void ProcessSystem(int sysIdx, int workerId, bool trackUtilization)
     {
-        var sys = _systems[sysIdx];
+        var sys = Systems[sysIdx];
 
         if (sys.Type == SystemType.PipelineSystem)
         {
@@ -640,14 +652,14 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var success = true;
         try
         {
-            _systems[sysIdx].CallbackAction(ctx);
+            Systems[sysIdx].CallbackAction(ctx);
         }
         catch (Exception ex)
         {
             success = false;
             _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
             _systemFailed[sysIdx] = true;
-            LogSystemException(sysIdx, _systems[sysIdx].Name, ex);
+            LogSystemException(sysIdx, Systems[sysIdx].Name, ex);
         }
         finally
         {
@@ -670,7 +682,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private void ProcessPipeline(int sysIdx, int workerId, bool trackUtilization)
     {
         // runIf was already evaluated at dispatch time. If we're here, the system should execute.
-        var sys = _systems[sysIdx];
+        var sys = Systems[sysIdx];
 
         while (true)
         {
@@ -714,7 +726,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         Interlocked.Decrement(ref _systemsRemaining.Value);
 
         // D2: any-worker dispatch — iterate successors
-        var successors = _systems[sysIdx].Successors;
+        var successors = Systems[sysIdx].Successors;
         foreach (var succIdx in successors)
         {
             // Propagate failure: writing true to a bool is idempotent and atomic on x86
@@ -727,7 +739,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             if (depsLeft == 0)
             {
                 _currentTickSystemMetrics[succIdx].ReadyTick = Stopwatch.GetTimestamp();
-                var succ = _systems[succIdx];
+                var succ = Systems[succIdx];
 
                 // Check if any predecessor failed — skip this system entirely
                 if (_systemFailed[succIdx])
@@ -740,6 +752,11 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 else if (succ.RunIf != null && !succ.RunIf())
                 {
                     _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.RunIfFalse;
+                    OnSystemComplete(succIdx, workerId, trackUtilization);
+                }
+                else if (succ.ReactiveSkip != null && succ.ReactiveSkip())
+                {
+                    _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.EmptyInput;
                     OnSystemComplete(succIdx, workerId, trackUtilization);
                 }
                 else if (succ.Type == SystemType.CallbackSystem || succ.Type == SystemType.QuerySystem)
@@ -765,14 +782,14 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var success = true;
         try
         {
-            _systems[sysIdx].CallbackAction(ctx);
+            Systems[sysIdx].CallbackAction(ctx);
         }
         catch (Exception ex)
         {
             success = false;
             _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
             _systemFailed[sysIdx] = true;
-            LogSystemException(sysIdx, _systems[sysIdx].Name, ex);
+            LogSystemException(sysIdx, Systems[sysIdx].Name, ex);
         }
         finally
         {

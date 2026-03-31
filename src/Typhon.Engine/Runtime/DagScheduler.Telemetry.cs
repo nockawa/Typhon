@@ -42,7 +42,7 @@ public sealed partial class DagScheduler
                 // Deep mode: straggler gap for Pipeline systems
                 if (TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackStragglerGap)
                 {
-                    var sys = _systems[i];
+                    var sys = Systems[i];
                     if (sys.Type == SystemType.PipelineSystem && sys.TotalChunks > 1 && sm.WorkersTouched > 0)
                     {
                         // Theoretical duration with perfect parallelism:

@@ -2,7 +2,9 @@ using JetBrains.Annotations;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Numerics;
 
 namespace Typhon.Engine;
 
@@ -31,6 +33,10 @@ public sealed class TyphonRuntime : IDisposable
     // Per-system transaction tracking. Only one worker processes a given system index at a time (CAS on _isReady ensures single claimer), so no contention
     // on these slots.
     private readonly Transaction[] _systemTransactions;
+
+    private readonly ViewBase[] _systemViews;                      // Resolved View per system (null if no input)
+    private readonly ComponentTable[][] _systemChangeFilterTables; // ComponentTables for changeFilter types (null if no filter)
+    private readonly PooledEntityList[] _systemEntityLists;        // For returning ArrayPool buffers
 
     // First-tick flag
     private bool _firstTickExecuted;
@@ -104,6 +110,11 @@ public sealed class TyphonRuntime : IDisposable
         _options = options;
         _logger = logger ?? NullLogger.Instance;
         _systemTransactions = new Transaction[scheduler.SystemCount];
+        _systemViews = new ViewBase[scheduler.SystemCount];
+        _systemChangeFilterTables = new ComponentTable[scheduler.SystemCount][];
+        _systemEntityLists = new PooledEntityList[scheduler.SystemCount];
+
+        ResolveChangeFilters(scheduler);
 
         // Wire tick lifecycle hooks
         Scheduler.TickStartCallback = OnTickStartInternal;
@@ -133,7 +144,8 @@ public sealed class TyphonRuntime : IDisposable
                 TickNumber = Scheduler.CurrentTickNumber,
                 DeltaTime = 0f,
                 Transaction = tx,
-                CreateSideTransaction = CreateSideTransactionInternal
+                CreateSideTransaction = CreateSideTransactionInternal,
+                Entities = PooledEntityList.Empty
             };
             OnShutdown.Invoke(ctx);
             tx.Commit();
@@ -159,6 +171,178 @@ public sealed class TyphonRuntime : IDisposable
     private Transaction CreateSideTransactionInternal(DurabilityMode durability) => Engine.CreateQuickTransaction(durability);
 
     // ═══════════════════════════════════════════════════════════════
+    // #197: Change filter resolution
+    // ═══════════════════════════════════════════════════════════════
+
+    private void ResolveChangeFilters(DagScheduler scheduler)
+    {
+        for (var i = 0; i < scheduler.SystemCount; i++)
+        {
+            var sys = scheduler.Systems[i];
+
+            // Resolve input View
+            if (sys.InputFactory != null)
+            {
+                _systemViews[i] = sys.InputFactory();
+                if (_systemViews[i] == null)
+                {
+                    throw new InvalidOperationException($"System '{sys.Name}': InputFactory returned null. The View must be created before the runtime starts.");
+                }
+            }
+
+            // Resolve changeFilter component types → ComponentTable references
+            if (sys.ChangeFilterTypes is { Length: > 0 })
+            {
+                var tables = new ComponentTable[sys.ChangeFilterTypes.Length];
+                for (var j = 0; j < sys.ChangeFilterTypes.Length; j++)
+                {
+                    var ct = Engine.GetComponentTable(sys.ChangeFilterTypes[j]);
+                    if (ct == null)
+                    {
+                        throw new InvalidOperationException(
+                            $"System '{sys.Name}': ChangeFilter type '{sys.ChangeFilterTypes[j].Name}' is not a registered component type.");
+                    }
+
+                    if (ct.StorageMode == Schema.Definition.StorageMode.Versioned)
+                    {
+                        throw new InvalidOperationException(
+                            $"System '{sys.Name}': ChangeFilter type '{sys.ChangeFilterTypes[j].Name}' uses Versioned storage mode, " +
+                            "which does not support dirty tracking. ChangeFilter requires SingleVersion or Transient storage.");
+                    }
+
+                    tables[j] = ct;
+                }
+
+                _systemChangeFilterTables[i] = tables;
+
+                // Build ReactiveSkip closure: returns true when no dirty entities exist for this system's change filter.
+                // Uses PreviousTickHadDirtyEntities (reliable, works regardless of EntityPK overhead).
+                var filterTables = tables;
+                sys.ReactiveSkip = () =>
+                {
+                    for (var t = 0; t < filterTables.Length; t++)
+                    {
+                        if (filterTables[t].PreviousTickHadDirtyEntities)
+                        {
+                            return false; // Dirty entities exist — don't skip
+                        }
+                    }
+
+                    return true; // No dirty entities — skip
+                };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Build the filtered entity set for a system with change filter.
+    /// Iterates the raw dirty bitmap from the previous tick, reads entity PKs from chunk offset 0, and intersects with the View's entity set. OR logic
+    /// across multiple changeFilter tables.
+    /// Falls back to full View when PK resolution is unavailable (first tick, or SV without indexed fields).
+    /// </summary>
+    private unsafe PooledEntityList BuildFilteredEntitySet(int sysIdx)
+    {
+        var view = _systemViews[sysIdx];
+        var filterTables = _systemChangeFilterTables[sysIdx];
+
+        // Collect dirty entity PKs that are in the View (OR across all changeFilter tables)
+        var dirtyInView = new HashSet<long>();
+
+        for (var t = 0; t < filterTables.Length; t++)
+        {
+            var table = filterTables[t];
+            if (!table.PreviousTickHadDirtyEntities)
+            {
+                continue;
+            }
+
+            var bitmap = table.PreviousTickDirtyBitmap;
+            if (bitmap == null)
+            {
+                // First tick — fall back to full View
+                return BuildFullViewEntitySet(sysIdx);
+            }
+
+            // PK at chunk offset 0 is only written during spawn for SV components with indexed fields.
+            if (table.IndexedFieldInfos == null || table.IndexedFieldInfos.Length == 0)
+            {
+                // Cannot resolve chunkId → PK — fall back to full View
+                return BuildFullViewEntitySet(sysIdx);
+            }
+
+            // Iterate bitmap → chunkId → PK → View intersection (same pattern as ProcessSpatialEntries)
+            var accessor = table.ComponentSegment.CreateChunkAccessor();
+            try
+            {
+                for (var wordIdx = 0; wordIdx < bitmap.Length; wordIdx++)
+                {
+                    var word = bitmap[wordIdx];
+                    while (word != 0)
+                    {
+                        var bit = BitOperations.TrailingZeroCount((ulong)word);
+                        var chunkId = wordIdx * 64 + bit;
+                        word &= word - 1;
+
+                        if (table.IsChunkDestroyed(chunkId))
+                        {
+                            continue;
+                        }
+
+                        var chunkPtr = accessor.GetChunkAddress(chunkId);
+                        var entityPK = *(long*)chunkPtr;
+
+                        if (view.Contains(entityPK))
+                        {
+                            dirtyInView.Add(entityPK);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+
+        if (dirtyInView.Count == 0)
+        {
+            return PooledEntityList.Empty;
+        }
+
+        var list = PooledEntityList.Rent(dirtyInView.Count);
+        var span = list.AsSpan();
+        var idx = 0;
+        foreach (var pk in dirtyInView)
+        {
+            span[idx++] = EntityId.FromRaw(pk);
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// Build entity set from full View (no change filter — all entities).
+    /// </summary>
+    private PooledEntityList BuildFullViewEntitySet(int sysIdx)
+    {
+        var view = _systemViews[sysIdx];
+        if (view.Count == 0)
+        {
+            return PooledEntityList.Empty;
+        }
+
+        var list = PooledEntityList.Rent(view.Count);
+        var span = list.AsSpan();
+        var idx = 0;
+        foreach (var pk in view)
+        {
+            span[idx++] = EntityId.FromRaw(pk);
+        }
+
+        return list;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Tick lifecycle hooks (called by DagScheduler)
     // ═══════════════════════════════════════════════════════════════
 
@@ -180,7 +364,8 @@ public sealed class TyphonRuntime : IDisposable
                 TickNumber = scheduler.CurrentTickNumber,
                 DeltaTime = _currentDeltaTime,
                 Transaction = tx,
-                CreateSideTransaction = CreateSideTransactionInternal
+                CreateSideTransaction = CreateSideTransactionInternal,
+                Entities = PooledEntityList.Empty
             };
 
             try
@@ -210,6 +395,10 @@ public sealed class TyphonRuntime : IDisposable
             _currentUow?.Dispose();
             _currentUow = null;
         }
+
+        // #197: Tick fence — snapshot SV DirtyBitmaps, process shadow entries, update spatial indexes.
+        // This captures which entities were written this tick for next tick's change-filtered system inputs.
+        Engine.WriteTickFence(scheduler.CurrentTickNumber);
     }
 
     private TickContext OnSystemStartInternal(int sysIdx)
@@ -219,12 +408,32 @@ public sealed class TyphonRuntime : IDisposable
         var tx = _currentUow.CreateTransaction();
         _systemTransactions[sysIdx] = tx;
 
+        // #197: Build entity set based on input View and change filter
+        IReadOnlyCollection<EntityId> entities;
+        if (_systemViews[sysIdx] != null && _systemChangeFilterTables[sysIdx] != null)
+        {
+            var list = BuildFilteredEntitySet(sysIdx);
+            _systemEntityLists[sysIdx] = list;
+            entities = list;
+        }
+        else if (_systemViews[sysIdx] != null)
+        {
+            var list = BuildFullViewEntitySet(sysIdx);
+            _systemEntityLists[sysIdx] = list;
+            entities = list;
+        }
+        else
+        {
+            entities = PooledEntityList.Empty;
+        }
+
         return new TickContext
         {
             TickNumber = Scheduler.CurrentTickNumber,
             DeltaTime = _currentDeltaTime,
             Transaction = tx,
-            CreateSideTransaction = CreateSideTransactionInternal
+            CreateSideTransaction = CreateSideTransactionInternal,
+            Entities = entities
         };
     }
 
@@ -251,6 +460,10 @@ public sealed class TyphonRuntime : IDisposable
         {
             tx.Dispose();
             _systemTransactions[sysIdx] = null;
+
+            // #197: Return pooled entity list to ArrayPool
+            _systemEntityLists[sysIdx].Return();
+            _systemEntityLists[sysIdx] = default;
         }
     }
 }

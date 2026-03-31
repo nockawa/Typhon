@@ -69,7 +69,8 @@ public sealed class RuntimeSchedule
     /// Registers a QuerySystem — single-worker entity iteration.
     /// </summary>
     public RuntimeSchedule QuerySystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
-        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
+        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
+        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
     {
         ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(name);
@@ -82,6 +83,8 @@ public sealed class RuntimeSchedule
             CallbackAction = action,
             Priority = priority,
             RunIf = runIf,
+            InputFactory = input,
+            ChangeFilter = changeFilter,
             After = after,
             AfterAll = afterAll,
             TickDivisor = tickDivisor,
@@ -95,7 +98,8 @@ public sealed class RuntimeSchedule
     /// Registers a PipelineSystem — multi-worker chunk-parallel execution.
     /// </summary>
     public RuntimeSchedule PipelineSystem(string name, Action<int, int> chunkAction, int totalChunks, string after = null, string[] afterAll = null,
-        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
+        SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
+        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
     {
         ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(name);
@@ -109,6 +113,8 @@ public sealed class RuntimeSchedule
             TotalChunks = totalChunks,
             Priority = priority,
             RunIf = runIf,
+            InputFactory = input,
+            ChangeFilter = changeFilter,
             After = after,
             AfterAll = afterAll,
             TickDivisor = tickDivisor,
@@ -129,14 +135,14 @@ public sealed class RuntimeSchedule
         ArgumentNullException.ThrowIfNull(system);
 
         var builder = new SystemBuilder();
-        Typhon.Engine.CallbackSystem.InvokeConfigure(system, builder);
+        Engine.CallbackSystem.InvokeConfigure(system, builder);
         ValidateBuilderName(builder, nameof(Typhon.Engine.CallbackSystem));
 
         _registrations.Add(new SystemRegistration
         {
             Name = builder._name,
             Type = SystemType.CallbackSystem,
-            CallbackAction = ctx => Typhon.Engine.CallbackSystem.InvokeExecute(system, ctx),
+            CallbackAction = ctx => Engine.CallbackSystem.InvokeExecute(system, ctx),
             Priority = builder._priority,
             RunIf = builder._runIf,
             After = builder._after,
@@ -144,6 +150,7 @@ public sealed class RuntimeSchedule
             TickDivisor = builder._tickDivisor,
             ThrottledTickDivisor = builder._throttledTickDivisor,
             CanShed = builder._canShed,
+            InputFactory = builder._inputFactory,
             ChangeFilter = builder._changeFilter,
             Parallel = builder._parallel
         });
@@ -157,14 +164,14 @@ public sealed class RuntimeSchedule
         ArgumentNullException.ThrowIfNull(system);
 
         var builder = new SystemBuilder();
-        Typhon.Engine.QuerySystem.InvokeConfigure(system, builder);
+        Engine.QuerySystem.InvokeConfigure(system, builder);
         ValidateBuilderName(builder, nameof(Typhon.Engine.QuerySystem));
 
         _registrations.Add(new SystemRegistration
         {
             Name = builder._name,
             Type = SystemType.QuerySystem,
-            CallbackAction = ctx => Typhon.Engine.QuerySystem.InvokeExecute(system, ctx),
+            CallbackAction = ctx => Engine.QuerySystem.InvokeExecute(system, ctx),
             Priority = builder._priority,
             RunIf = builder._runIf,
             After = builder._after,
@@ -172,6 +179,7 @@ public sealed class RuntimeSchedule
             TickDivisor = builder._tickDivisor,
             ThrottledTickDivisor = builder._throttledTickDivisor,
             CanShed = builder._canShed,
+            InputFactory = builder._inputFactory,
             ChangeFilter = builder._changeFilter,
             Parallel = builder._parallel
         });
@@ -305,8 +313,13 @@ public sealed class RuntimeSchedule
                 if (reg.ChangeFilter is { Length: > 0 })
                 {
                     throw new InvalidOperationException(
-                        $"System '{reg.Name}': ChangeFilter is not valid for CallbackSystem. " +
-                        "CallbackSystem is proactive and does not have a View input.");
+                        $"System '{reg.Name}': ChangeFilter is not valid for CallbackSystem. CallbackSystem is proactive and does not have a View input.");
+                }
+
+                if (reg.InputFactory != null)
+                {
+                    throw new InvalidOperationException(
+                        $"System '{reg.Name}': Input is not valid for CallbackSystem. CallbackSystem is proactive and does not process entities from a View.");
                 }
 
                 if (reg.Parallel)
@@ -314,6 +327,12 @@ public sealed class RuntimeSchedule
                     throw new InvalidOperationException(
                         $"System '{reg.Name}': Parallel is not valid for CallbackSystem.");
                 }
+            }
+
+            if (reg.ChangeFilter is { Length: > 0 } && reg.InputFactory == null)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': ChangeFilter requires an Input View. Specify input: () => view alongside changeFilter.");
             }
         }
 
@@ -403,7 +422,7 @@ public sealed class RuntimeSchedule
             systems[sysIdx].ConsumesQueueIndices = indices;
         }
 
-        // Phase 5: Store overload params from registrations
+        // Phase 5: Store overload params, input, and change filter from registrations
         foreach (var reg in _registrations)
         {
             if (!nameToIndex.TryGetValue(reg.Name, out var sysIdx))
@@ -416,6 +435,8 @@ public sealed class RuntimeSchedule
             systems[sysIdx].TickDivisor = reg.TickDivisor;
             systems[sysIdx].ThrottledTickDivisor = reg.ThrottledTickDivisor;
             systems[sysIdx].CanShed = reg.CanShed;
+            systems[sysIdx].InputFactory = reg.InputFactory;
+            systems[sysIdx].ChangeFilterTypes = reg.ChangeFilter;
         }
 
         // Phase 6: Create scheduler
@@ -448,6 +469,7 @@ public sealed class RuntimeSchedule
         public int TickDivisor = 1;
         public int ThrottledTickDivisor = 1;
         public bool CanShed;
+        public Func<ViewBase> InputFactory;
         public Type[] ChangeFilter;
         public bool Parallel;
     }

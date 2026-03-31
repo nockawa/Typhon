@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System;
+using System.Collections.Generic;
 
 namespace Typhon.Engine;
 
@@ -34,6 +35,17 @@ public struct TickContext
     /// Null when running without a DatabaseEngine (standalone scheduler tests).
     /// </summary>
     public Transaction Transaction { get; init; }
+
+    /// <summary>
+    /// Filtered entity set for this system's execution.
+    /// <list type="bullet">
+    /// <item><description>CallbackSystem: empty (no entity input)</description></item>
+    /// <item><description>QuerySystem/PipelineSystem without changeFilter: full View entity set</description></item>
+    /// <item><description>QuerySystem/PipelineSystem with changeFilter: dirty entities ∪ Added (only entities whose filtered components were written since last tick)</description></item>
+    /// </list>
+    /// The backing array is pooled — do not hold references beyond the system's Execute scope.
+    /// </summary>
+    public IReadOnlyCollection<EntityId> Entities { get; init; }
 
     /// <summary>
     /// Creates a side-transaction with the specified durability mode.

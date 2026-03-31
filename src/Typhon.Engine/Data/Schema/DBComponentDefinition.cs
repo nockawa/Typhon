@@ -45,11 +45,10 @@ public class DBComponentDefinition
     public int ComponentStorageSize { get; private set; }
 
     /// <summary>
-    /// Size of the inline entityPK in the chunk overhead (8 bytes for SV/Transient with indexed fields, 0 otherwise).
-    /// Non-versioned index values are chunkIds — the entityPK must be stored inline to enable index-based entity resolution
-    /// without the CompRevTable that Versioned components use.
+    /// Size of the inline entityPK in the chunk overhead (8 bytes for all SV/Transient components, 0 for Versioned).
+    /// Non-versioned components store the entityPK at chunk offset 0 to enable chunkId → entityPK resolution.
     /// </summary>
-    public int EntityPKOverheadSize => (StorageMode != StorageMode.Versioned && IndicesCount > 0) ? sizeof(long) : 0;
+    public int EntityPKOverheadSize => StorageMode != StorageMode.Versioned ? sizeof(long) : 0;
 
     public int ComponentStorageOverhead => EntityPKOverheadSize + MultipleIndicesCount * sizeof(int);
     public int ComponentStorageTotalSize => ComponentStorageSize + ComponentStorageOverhead;

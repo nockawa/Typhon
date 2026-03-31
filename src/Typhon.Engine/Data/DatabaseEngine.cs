@@ -593,13 +593,24 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         foreach (var table in _componentTableByType.Values)
         {
-            if (table.StorageMode == StorageMode.Versioned || table.DirtyBitmap == null || !table.DirtyBitmap.HasDirty)
+            if (table.StorageMode == StorageMode.Versioned || table.DirtyBitmap == null)
             {
+                continue;
+            }
+
+            if (!table.DirtyBitmap.HasDirty)
+            {
+                table.PreviousTickDirtyBitmap = null;
+                table.PreviousTickHadDirtyEntities = false;
                 continue;
             }
 
             // Snapshot DirtyBitmap — atomic swap, clears bitmap for next tick
             var dirtyBits = table.DirtyBitmap.Snapshot();
+
+            // The runtime iterates set bits at dispatch time (same pattern as ProcessSpatialEntries).
+            table.PreviousTickDirtyBitmap = dirtyBits;
+            table.PreviousTickHadDirtyEntities = true;
 
             // WAL serialization: SV only — Transient has no WAL persistence, skip straight to shadow processing.
             if (table.StorageMode == StorageMode.SingleVersion && WalManager != null)
@@ -1666,6 +1677,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         var storageMode = storageModeOverride ?? definition.StorageMode;
+
+        // Apply storage mode override to definition so computed properties (EntityPKOverheadSize, etc.) reflect the override.
+        // NOTE: this must happen BEFORE ComponentTable construction so the segment layout includes the correct overhead.
+        if (storageModeOverride.HasValue && definition.StorageMode != storageModeOverride.Value)
+        {
+            definition.StorageMode = storageModeOverride.Value;
+        }
 
         ComponentTable componentTable;
 

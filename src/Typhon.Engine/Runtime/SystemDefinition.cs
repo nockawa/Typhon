@@ -90,9 +90,19 @@ public sealed class SystemDefinition
     public int[] ConsumesQueueIndices { get; internal set; } = [];
 
     // ═══════════════════════════════════════════════════════════════
-    // Change filter (stored for #197, not enforced yet)
+    // View input and change filter (#197)
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>Component indices for dirty-bitset filtering. Empty means no filter (process all).</summary>
-    public int[] ChangeFilterComponentIndices { get; init; } = [];
+    /// <summary>Factory returning the View that provides this system's entity input. Null for CallbackSystems.</summary>
+    public Func<ViewBase> InputFactory { get; set; }
+
+    /// <summary>Component types for change-filtered reactive input. Null/empty means no filter (process all). OR logic: entity included if any filtered component was written.</summary>
+    public Type[] ChangeFilterTypes { get; set; }
+
+    /// <summary>
+    /// Reactive skip predicate evaluated after <see cref="RunIf"/> passes. Returns true if the system should be skipped
+    /// because its change-filtered input is empty (no dirty entities and no newly added entities).
+    /// Set by <see cref="TyphonRuntime"/> at init — not configured by game code.
+    /// </summary>
+    public Func<bool> ReactiveSkip { get; set; }
 }

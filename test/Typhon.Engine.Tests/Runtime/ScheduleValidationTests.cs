@@ -67,13 +67,14 @@ class ScheduleValidationTests
     }
 
     [Test]
-    public void Build_ChangeFilterOnQuerySystem_DoesNotThrow()
+    public void Build_ChangeFilterWithoutInput_Throws()
     {
         var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
         schedule.Add(new QueryWithChangeFilter());
 
-        using var scheduler = schedule.Build(_registry.Runtime);
-        Assert.That(scheduler.SystemCount, Is.EqualTo(1));
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            schedule.Build(_registry.Runtime));
+        Assert.That(ex.Message, Does.Contain("ChangeFilter requires an Input View"));
     }
 
     [Test]
