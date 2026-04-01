@@ -48,6 +48,12 @@ public struct TickContext
     public IReadOnlyCollection<EntityId> Entities { get; init; }
 
     /// <summary>
+    /// Event queues this system consumes. Null if the system has no consumed queues.
+    /// Cast to <c>EventQueue&lt;T&gt;</c> and call <c>Drain(span)</c> or <c>AsSpan()</c> to read events.
+    /// </summary>
+    public EventQueueBase[] ConsumedQueues { get; init; }
+
+    /// <summary>
     /// Creates a side-transaction with the specified durability mode.
     /// Side-transactions commit independently and are NOT visible to the main tick Transaction (snapshot isolation — the main Transaction's TSN is fixed at
     /// creation).

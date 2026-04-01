@@ -37,6 +37,7 @@ public sealed class TyphonRuntime : IDisposable
     private readonly ViewBase[] _systemViews;                      // Resolved View per system (null if no input)
     private readonly ComponentTable[][] _systemChangeFilterTables; // ComponentTables for changeFilter types (null if no filter)
     private readonly PooledEntityList[] _systemEntityLists;        // For returning ArrayPool buffers
+    private readonly EventQueueBase[][] _systemConsumedQueues;     // Pre-allocated consumed queue refs per system (null if none)
 
     // First-tick flag
     private bool _firstTickExecuted;
@@ -87,6 +88,9 @@ public sealed class TyphonRuntime : IDisposable
     /// <summary>Current overload response level.</summary>
     public OverloadLevel CurrentOverloadLevel => Scheduler.CurrentOverloadLevel;
 
+    /// <summary>Static DAG system definitions (name, type, priority, dependencies).</summary>
+    public SystemDefinition[] Systems => Scheduler.Systems;
+
     /// <summary>Fires when overload reaches <see cref="OverloadLevel.PlayerShedding"/>. Game code decides what to do (migrate, disconnect, split).</summary>
     public event Action<TyphonRuntime> OnCriticalOverload;
 
@@ -128,6 +132,7 @@ public sealed class TyphonRuntime : IDisposable
         _systemViews = new ViewBase[scheduler.SystemCount];
         _systemChangeFilterTables = new ComponentTable[scheduler.SystemCount][];
         _systemEntityLists = new PooledEntityList[scheduler.SystemCount];
+        _systemConsumedQueues = new EventQueueBase[scheduler.SystemCount][];
 
         ResolveChangeFilters(scheduler);
 
@@ -328,6 +333,35 @@ public sealed class TyphonRuntime : IDisposable
                     }
 
                     return true; // No dirty entities — skip
+                };
+            }
+
+            // Pre-allocate consumed queue refs (zero allocation per tick)
+            if (sys.ConsumesQueueIndices is { Length: > 0 })
+            {
+                var consumed = new EventQueueBase[sys.ConsumesQueueIndices.Length];
+                for (var j = 0; j < sys.ConsumesQueueIndices.Length; j++)
+                {
+                    consumed[j] = scheduler.GetEventQueue(sys.ConsumesQueueIndices[j]);
+                }
+
+                _systemConsumedQueues[i] = consumed;
+
+                // Extend ReactiveSkip: don't skip if any consumed queue has events
+                var originalSkip = sys.ReactiveSkip;
+                var queueRefs = consumed;
+                sys.ReactiveSkip = () =>
+                {
+                    for (var q = 0; q < queueRefs.Length; q++)
+                    {
+                        if (!queueRefs[q].IsEmpty)
+                        {
+                            return false; // Events pending — don't skip
+                        }
+                    }
+
+                    // No events — fall through to original skip check (dirty entities) or default skip
+                    return originalSkip == null || originalSkip();
                 };
             }
         }
@@ -551,7 +585,8 @@ public sealed class TyphonRuntime : IDisposable
             DeltaTime = _currentDeltaTime,
             Transaction = tx,
             CreateSideTransaction = CreateSideTransactionInternal,
-            Entities = entities
+            Entities = entities,
+            ConsumedQueues = _systemConsumedQueues[sysIdx]
         };
     }
 

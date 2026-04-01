@@ -33,7 +33,8 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     // Immutable DAG structure
     // ═══════════════════════════════════════════════════════════════
 
-    internal SystemDefinition[] Systems { get; }
+    /// <summary>Static DAG system definitions (name, type, priority, dependencies). Immutable after construction.</summary>
+    public SystemDefinition[] Systems { get; }
 
     private readonly int _systemCount;
     private readonly int[] _rootSystems;
@@ -347,6 +348,13 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Returns a ref to the current tick's SystemTelemetry for the given system index. Used by TyphonRuntime to write entity counts.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref SystemTelemetry GetCurrentSystemMetrics(int sysIdx) => ref _currentTickSystemMetrics[sysIdx];
+
+    /// <summary>Returns the event queue at the given index. Used by TyphonRuntime to populate TickContext.ConsumedQueues.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal EventQueueBase GetEventQueue(int index) => _eventQueues[index];
+
+    /// <summary>Number of event queues registered.</summary>
+    internal int EventQueueCount => _eventQueues.Length;
 
     /// <summary>Current overload response level.</summary>
     public OverloadLevel CurrentOverloadLevel => _overloadDetector.CurrentLevel;

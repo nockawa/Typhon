@@ -73,9 +73,16 @@ public sealed partial class DagScheduler
             }
         }
 
+        // Capture event queue depth for telemetry and overload detection
+        var queueDepth = 0;
+        for (var i = 0; i < _eventQueues.Length; i++)
+        {
+            queueDepth += _eventQueues[i].Count;
+        }
+
         // Update overload state machine
         var previousLevel = _overloadDetector.CurrentLevel;
-        var levelChanged = _overloadDetector.Update(overrunRatio);
+        var levelChanged = _overloadDetector.Update(overrunRatio, queueDepth);
         _tickMultiplier = _overloadDetector.TickMultiplier;
 
         if (levelChanged)
@@ -99,7 +106,8 @@ public sealed partial class DagScheduler
             ActiveSystemCount = activeSystemCount,
             TotalEntitiesProcessed = totalEntitiesProcessed,
             CurrentLevel = _overloadDetector.CurrentLevel,
-            TickMultiplier = _tickMultiplier
+            TickMultiplier = _tickMultiplier,
+            EventQueueDepth = queueDepth
         };
 
         // Enrich with subscription metrics (Output phase duration, deltas pushed, overflows)

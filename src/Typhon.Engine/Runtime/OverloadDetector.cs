@@ -17,6 +17,8 @@ internal sealed class OverloadDetector
     private int _consecutiveOverrunTicks;
     private int _consecutiveUnderrunTicks;
     private int _multiplierIndex; // Index into _allowedMultipliers
+    private int _previousQueueDepth;
+    private int _consecutiveQueueGrowthTicks;
 
     /// <summary>Current overload level.</summary>
     public OverloadLevel CurrentLevel { get; private set; }
@@ -53,14 +55,36 @@ internal sealed class OverloadDetector
     }
 
     /// <summary>
-    /// Update overload state based on this tick's overrun ratio. Called once per tick by the timer thread.
+    /// Update overload state based on this tick's overrun ratio and event queue depth.
+    /// Called once per tick by the timer thread.
     /// </summary>
     /// <returns>True if the level changed this tick.</returns>
-    public bool Update(float overrunRatio)
+    public bool Update(float overrunRatio, int eventQueueDepth = 0)
     {
         var previousLevel = CurrentLevel;
 
-        if (overrunRatio > _options.OverrunThreshold)
+        // Signal 1: Overrun ratio
+        var overrunning = overrunRatio > _options.OverrunThreshold;
+
+        // Signal 2: Queue depth growth (sustained backlog)
+        var queueGrowing = false;
+        if (_options.QueueGrowthTicks > 0 && eventQueueDepth > _previousQueueDepth && _previousQueueDepth >= 0)
+        {
+            _consecutiveQueueGrowthTicks++;
+            if (_consecutiveQueueGrowthTicks >= _options.QueueGrowthTicks)
+            {
+                queueGrowing = true;
+            }
+        }
+        else
+        {
+            _consecutiveQueueGrowthTicks = 0;
+        }
+
+        _previousQueueDepth = eventQueueDepth;
+
+        // Escalation: either signal triggers
+        if (overrunning || queueGrowing)
         {
             _consecutiveOverrunTicks++;
             _consecutiveUnderrunTicks = 0;

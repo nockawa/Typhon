@@ -58,4 +58,7 @@ public struct TickTelemetry
 
     /// <summary>Total entities deferred (budget-capped) across all systems this tick. Zero until Level 2 enforcement.</summary>
     public int TotalEntitiesDeferred;
+
+    /// <summary>Total pending events across all event queues at tick end. Sustained growth indicates backlog.</summary>
+    public int EventQueueDepth;
 }

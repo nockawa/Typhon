@@ -35,4 +35,10 @@ public sealed class OverloadOptions
     /// Hard floor for tick rate under modulation, in Hz. Default: 10 (100ms per tick).
     /// </summary>
     public int MinTickRateHz { get; set; } = 10;
+
+    /// <summary>
+    /// Consecutive ticks of growing event queue depth before it counts as an overload escalation signal.
+    /// Default: 5. Set to 0 to disable queue depth monitoring.
+    /// </summary>
+    public int QueueGrowthTicks { get; set; } = 5;
 }
