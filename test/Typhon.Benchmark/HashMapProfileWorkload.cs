@@ -183,12 +183,12 @@ static class HashMapProfileWorkload
     static (long addMs, long lookupMs) BenchMapInt(int[] keys, int[] lookupKeys, IResource parent, IMemoryAllocator alloc)
     {
         // Warmup
-        var m = new HashMap<int, int>("W", parent, alloc);
+        var m = new HashMap<int, int>();
         for (int i = 0; i < N; i++) m.TryAdd(keys[i], i);
         for (int i = 0; i < N; i++) m.TryGetValue(lookupKeys[i], out _);
         m.Dispose();
 
-        using var map = new HashMap<int, int>("B", parent, alloc);
+        using var map = new HashMap<int, int>();
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
@@ -239,12 +239,12 @@ static class HashMapProfileWorkload
 
     static (long addMs, long lookupMs) BenchMapGuid(Guid[] keys, Guid[] lookupKeys, IResource parent, IMemoryAllocator alloc)
     {
-        var m = new HashMap<Guid, int>("W", parent, alloc);
+        var m = new HashMap<Guid, int>();
         for (int i = 0; i < N; i++) m.TryAdd(keys[i], i);
         for (int i = 0; i < N; i++) m.TryGetValue(lookupKeys[i], out _);
         m.Dispose();
 
-        using var map = new HashMap<Guid, int>("B", parent, alloc);
+        using var map = new HashMap<Guid, int>();
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
@@ -293,11 +293,11 @@ static class HashMapProfileWorkload
 
     static (long mixedMs, long lookupMs) BenchMapIntMixed(int[] keys, int[] lookupKeys, MixedOp[] ops, IResource parent, IMemoryAllocator alloc)
     {
-        var m = new HashMap<int, int>("W", parent, alloc);
+        var m = new HashMap<int, int>();
         MapMixedInt(m, keys, ops, N);
         m.Dispose();
 
-        using var map = new HashMap<int, int>("B", parent, alloc);
+        using var map = new HashMap<int, int>();
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {
@@ -344,11 +344,11 @@ static class HashMapProfileWorkload
 
     static (long mixedMs, long lookupMs) BenchMapGuidMixed(Guid[] keys, Guid[] lookupKeys, MixedOp[] ops, IResource parent, IMemoryAllocator alloc)
     {
-        var m = new HashMap<Guid, int>("W", parent, alloc);
+        var m = new HashMap<Guid, int>();
         MapMixedGuid(m, keys, ops, N);
         m.Dispose();
 
-        using var map = new HashMap<Guid, int>("B", parent, alloc);
+        using var map = new HashMap<Guid, int>();
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < Iterations; iter++)
         {

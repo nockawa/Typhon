@@ -62,8 +62,8 @@ public class HashMapBenchmarks
         // Pre-populate for lookup benchmarks
         _dictPopulated = new Dictionary<int, int>(N);
         _hashSetPopulated = new HashSet<int>(N);
-        _mapPopulated = new HashMap<int, int>("BenchMap", _parentResource, _memoryAllocator, 64);
-        _setPopulated = new HashMap<int>("BenchSet", _parentResource, _memoryAllocator, 64);
+        _mapPopulated = new HashMap<int, int>(64);
+        _setPopulated = new HashMap<int>(64);
 
         for (int i = 0; i < N; i++)
         {
@@ -101,7 +101,7 @@ public class HashMapBenchmarks
     [BenchmarkCategory("Add")]
     public HashMap<int, int> Map_Add()
     {
-        var map = new HashMap<int, int>("B", _parentResource, _memoryAllocator, 64);
+        var map = new HashMap<int, int>(64);
         for (int i = 0; i < N; i++)
         {
             map.TryAdd(_keys[i], i);
@@ -129,7 +129,7 @@ public class HashMapBenchmarks
     [BenchmarkCategory("Add")]
     public HashMap<int> Set_Add()
     {
-        var set = new HashMap<int>("B", _parentResource, _memoryAllocator, 64);
+        var set = new HashMap<int>(64);
         for (int i = 0; i < N; i++)
         {
             set.TryAdd(_keys[i]);

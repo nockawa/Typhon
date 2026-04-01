@@ -1,7 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 
 namespace Typhon.Engine;
 
@@ -9,98 +10,40 @@ namespace Typhon.Engine;
 /// High-performance in-memory hash set using open addressing with linear probing.
 /// Single flat entry array — no chains, no overflow, no pointer indirection.
 /// Backward-shift deletion avoids tombstone accumulation.
-/// Replaces <see cref="HashSet{T}"/> on hot paths.
+/// POH (Pinned Object Heap) allocation + software prefetch on resize.
 /// </summary>
-public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable<TKey>
+public unsafe class HashMap<TKey> : IDisposable where TKey : unmanaged, IEquatable<TKey>
 {
     private const double MaxLoadFactor = 0.75;
+    private const int PrefetchLookahead = 8;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Fields
-    // ═══════════════════════════════════════════════════════════════════════
-
-    private readonly IMemoryAllocator _allocator;
-    private readonly int _entryStride; // bytes per entry: (4 + sizeof(TKey)) aligned to 4
-
-    private PinnedMemoryBlock _block;
+    private readonly int _entryStride;
     private byte* _entries;
-    private int _capacity;     // power of 2
-    private int _mask;         // _capacity - 1
+    private byte[] _pohArray; // POH array reference — prevents GC collection
+    private int _capacity;
+    private int _mask;
     private int _count;
     private int _resizeThreshold;
-    private bool _disposed;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Constructor
-    // ═══════════════════════════════════════════════════════════════════════
-
-    public HashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 64)
+    public HashMap(int initialCapacity = 64)
     {
-        ArgumentNullException.ThrowIfNull(parent);
-        ArgumentNullException.ThrowIfNull(allocator);
-
         _capacity = Math.Max(4, initialCapacity);
         if (!BitOperations.IsPow2(_capacity))
         {
             _capacity = (int)BitOperations.RoundUpToPowerOf2((uint)_capacity);
         }
 
-        Id = id ?? Guid.NewGuid().ToString();
-        Parent = parent;
-        Owner = parent.Owner;
-        CreatedAt = DateTime.UtcNow;
-        _allocator = allocator;
-
-        _entryStride = (4 + sizeof(TKey) + 3) & ~3; // 4-byte aligned
+        _entryStride = (4 + sizeof(TKey) + 3) & ~3;
         _mask = _capacity - 1;
         _resizeThreshold = (int)(_capacity * MaxLoadFactor);
 
-        _block = allocator.AllocatePinned($"{id}/Entries", this, _capacity * _entryStride, true, 64);
-        _entries = _block.DataAsPointer;
-
-        parent.RegisterChild(this);
+        _pohArray = GC.AllocateArray<byte>(_capacity * _entryStride, pinned: true);
+        _entries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(_pohArray));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // IResource
-    // ═══════════════════════════════════════════════════════════════════════
-
-    public string Id { get; }
-    public ResourceType Type => ResourceType.None;
-    public IResource Parent { get; }
-
-    public IEnumerable<IResource> Children
-    {
-        get
-        {
-            if (_block != null)
-            {
-                yield return _block;
-            }
-        }
-    }
-
-    public DateTime CreatedAt { get; }
-    public IResourceRegistry Owner { get; }
-    public bool RegisterChild(IResource child) => false;
-    public bool RemoveChild(IResource resource) => false;
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Properties
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Number of keys in the set.</summary>
     public int Count => _count;
-
-    /// <summary>Current internal capacity (power of 2). Grows automatically when load factor exceeds 0.75.</summary>
     public int Capacity => _capacity;
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Public API
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Add <paramref name="key"/> to the set if not already present.</summary>
-    /// <returns><c>true</c> if the key was added; <c>false</c> if it already existed.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryAdd(TKey key)
     {
@@ -140,7 +83,6 @@ public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable
         }
     }
 
-    /// <summary>Check whether <paramref name="key"/> exists in the set.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(TKey key)
     {
@@ -172,8 +114,6 @@ public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable
         }
     }
 
-    /// <summary>Remove <paramref name="key"/> from the set. Uses backward-shift deletion to maintain probe chains.</summary>
-    /// <returns><c>true</c> if the key was found and removed; <c>false</c> if it was not present.</returns>
     public bool TryRemove(TKey key)
     {
         uint hash = HashUtils.ComputeHash(key);
@@ -206,14 +146,12 @@ public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable
         }
     }
 
-    /// <summary>Remove all keys from the set. Does not shrink the underlying buffer.</summary>
     public void Clear()
     {
         new Span<byte>(_entries, _capacity * _entryStride).Clear();
         _count = 0;
     }
 
-    /// <summary>Grow internal capacity so the set can hold at least <paramref name="minimumEntries"/> without resizing.</summary>
     public void EnsureCapacity(int minimumEntries)
     {
         int needed = (int)(minimumEntries / MaxLoadFactor) + 1;
@@ -224,14 +162,8 @@ public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Enumerator
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Returns a <see langword="ref struct"/> enumerator over all keys in the set.</summary>
     public Enumerator GetEnumerator() => new(this);
 
-    /// <summary>Value-type enumerator. Iterates occupied entry slots in memory order.</summary>
     public ref struct Enumerator
     {
         private readonly HashMap<TKey> _map;
@@ -261,27 +193,20 @@ public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Dispose
-    // ═══════════════════════════════════════════════════════════════════════
-
     public void Dispose()
     {
-        if (_disposed)
+        if (_entries == null)
         {
             return;
         }
 
-        _disposed = true;
-        _block?.Dispose();
-        _block = null;
+        _pohArray = null;
         _entries = null;
-        Parent.RemoveChild(this);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Private — backward shift deletion
-    // ═══════════════════════════════════════════════════════════════════════
+    // ═══════════════════════════════════════════════════════════════
+    // Private
+    // ═══════════════════════════════════════════════════════════════
 
     private void BackwardShiftDelete(int idx)
     {
@@ -314,19 +239,30 @@ public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable
         *(uint*)(_entries + (long)idx * stride) = 0;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Private — resize
-    // ═══════════════════════════════════════════════════════════════════════
-
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private void Resize(int newCapacity)
     {
-        var newBlock = _allocator.AllocatePinned($"{Id}/Entries", this, newCapacity * _entryStride, true, 64);
-        byte* newEntries = newBlock.DataAsPointer;
-        int newMask = newCapacity - 1;
         int stride = _entryStride;
+        int newMask = newCapacity - 1;
+        int newSize = newCapacity * stride;
 
+        // POH allocation: pre-zeroed pages from OS, nearly free for large buffers
+        var newPoh = GC.AllocateArray<byte>(newSize, pinned: true);
+        byte* newEntries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(newPoh));
+
+        // Rehash with software prefetch to hide write latency
         for (int i = 0; i < _capacity; i++)
         {
+            if (i + PrefetchLookahead < _capacity)
+            {
+                byte* future = _entries + (long)(i + PrefetchLookahead) * stride;
+                uint fh = *(uint*)future;
+                if (fh != 0)
+                {
+                    Sse.Prefetch0(newEntries + (long)((int)(fh & (uint)newMask)) * stride);
+                }
+            }
+
             byte* entry = _entries + (long)i * stride;
             uint h = *(uint*)entry;
             if (h != 0)
@@ -340,13 +276,12 @@ public unsafe class HashMap<TKey> : IResource where TKey : unmanaged, IEquatable
             }
         }
 
-        var oldBlock = _block;
-        _block = newBlock;
+        // Release old POH array (GC collects it)
+
         _entries = newEntries;
+        _pohArray = newPoh;
         _capacity = newCapacity;
         _mask = newMask;
         _resizeThreshold = (int)(newCapacity * MaxLoadFactor);
-
-        oldBlock.Dispose();
     }
 }
