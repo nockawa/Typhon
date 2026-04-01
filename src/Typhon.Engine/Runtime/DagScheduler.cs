@@ -128,6 +128,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Called when overload level transitions to <see cref="OverloadLevel.PlayerShedding"/>.</summary>
     internal Action OnCriticalOverloadCallback;
 
+    // ── Parallel QuerySystem callbacks (set by TyphonRuntime) ──
+
+    /// <summary>Called once before parallel QuerySystem chunk dispatch. Builds entity set, returns totalChunks (0 = skip).</summary>
+    internal Func<int, int> ParallelQueryPrepareCallback;
+
+    /// <summary>Called per chunk: creates Transaction on worker thread, slices entities, calls Execute, commits.</summary>
+    internal Action<int, int, int> ParallelQueryChunkCallback;
+
+    /// <summary>Called once after all chunks complete (or on skip). Returns pooled entity list.</summary>
+    internal Action<int> ParallelQueryCleanupCallback;
+
     // ═══════════════════════════════════════════════════════════════
     // Logging
     // ═══════════════════════════════════════════════════════════════
@@ -406,6 +417,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     _currentTickSystemMetrics[root].SkipReason = overloadSkip;
                     OnSystemComplete(root, -1, false);
                 }
+                else if (sys.IsParallelQuery)
+                {
+                    DispatchParallelQuery(root, -1, false);
+                }
                 else
                 {
                     MarkSystemReady(root);
@@ -511,14 +526,64 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var startTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick = startTick;
 
-            if (sys.Type == SystemType.PipelineSystem)
+            if (sys.IsParallelQuery)
+            {
+                var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
+                if (totalChunks <= 0)
+                {
+                    ParallelQueryCleanupCallback?.Invoke(sysIdx);
+                }
+                else
+                {
+                    Systems[sysIdx].TotalChunks = totalChunks;
+                    var chunkFailed = false;
+                    for (var chunk = 0; chunk < totalChunks; chunk++)
+                    {
+                        try
+                        {
+                            ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, totalChunks);
+                        }
+                        catch (Exception ex)
+                        {
+                            chunkFailed = true;
+                            _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+                            _systemFailed[sysIdx] = true;
+                            LogSystemException(sysIdx, sys.Name, ex);
+                            foreach (var succ in sys.Successors)
+                            {
+                                _systemFailed[succ] = true;
+                            }
+                        }
+                    }
+
+                    ParallelQueryCleanupCallback?.Invoke(sysIdx);
+                    if (chunkFailed)
+                    {
+                        // Failure already propagated above
+                    }
+                }
+            }
+            else if (sys.Type == SystemType.PipelineSystem)
             {
                 for (var chunk = 0; chunk < sys.TotalChunks; chunk++)
                 {
-                    sys.PipelineChunkAction(chunk, sys.TotalChunks);
+                    try
+                    {
+                        sys.PipelineChunkAction(chunk, sys.TotalChunks);
+                    }
+                    catch (Exception ex)
+                    {
+                        _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+                        _systemFailed[sysIdx] = true;
+                        LogSystemException(sysIdx, sys.Name, ex);
+                        foreach (var succ in sys.Successors)
+                        {
+                            _systemFailed[succ] = true;
+                        }
+                    }
                 }
             }
-            else // CallbackSystem or QuerySystem — single invocation
+            else // CallbackSystem or non-parallel QuerySystem — single invocation
             {
                 var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
                 var success = true;
@@ -544,7 +609,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
             var endTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].LastChunkDoneTick = endTick;
-            _currentTickSystemMetrics[sysIdx].WorkersTouched = 1;
+            _currentTickSystemMetrics[sysIdx].WorkersTouched = sys.IsParallelQuery ? sys.TotalChunks : 1;
         }
 
         // Tick end hook
@@ -657,9 +722,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 continue;
             }
 
-            if (Systems[i].Type == SystemType.PipelineSystem)
+            if (Systems[i].Type == SystemType.PipelineSystem || Systems[i].IsParallelQuery)
             {
-                // Only return if chunks remain
+                // Multi-chunk system: only return if chunks remain
                 if (_nextChunk[i].Value < Systems[i].TotalChunks)
                 {
                     return i;
@@ -667,7 +732,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
             else
             {
-                // CallbackSystem/QuerySystem: return index, CAS claim happens in ProcessSystem
+                // CallbackSystem/non-parallel QuerySystem: return index, CAS claim happens in ProcessSystem
                 return i;
             }
         }
@@ -679,11 +744,15 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     {
         var sys = Systems[sysIdx];
 
-        if (sys.Type == SystemType.PipelineSystem)
+        if (sys.IsParallelQuery)
+        {
+            ProcessParallelQuery(sysIdx, workerId, trackUtilization);
+        }
+        else if (sys.Type == SystemType.PipelineSystem)
         {
             ProcessPipeline(sysIdx, workerId, trackUtilization);
         }
-        else // CallbackSystem or QuerySystem — same single-invocation path
+        else // CallbackSystem or non-parallel QuerySystem — same single-invocation path
         {
             ProcessCallbackOrQuery(sysIdx, workerId, trackUtilization);
         }
@@ -740,6 +809,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         while (true)
         {
+            // Early-exit: stop grabbing chunks if a prior chunk already failed — remaining work would be discarded
+            if (_systemFailed[sysIdx])
+            {
+                break;
+            }
+
             var chunk = Interlocked.Increment(ref _nextChunk[sysIdx].Value) - 1;
             if (chunk >= sys.TotalChunks)
             {
@@ -752,7 +827,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workStart = Stopwatch.GetTimestamp();
-            sys.PipelineChunkAction(chunk, sys.TotalChunks);
+            try
+            {
+                sys.PipelineChunkAction(chunk, sys.TotalChunks);
+            }
+            catch (Exception ex)
+            {
+                _systemFailed[sysIdx] = true;
+                _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+                LogSystemException(sysIdx, sys.Name, ex);
+            }
+
             var workEnd = Stopwatch.GetTimestamp();
 
             if (trackUtilization)
@@ -769,6 +854,90 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 break;
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Parallel QuerySystem dispatch
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Multi-worker chunk dispatch for parallel QuerySystems. Each worker grabs chunks via atomic counter.
+    /// Unlike <see cref="ProcessPipeline"/>, each chunk has its own Transaction lifecycle (managed by the chunk callback).
+    /// </summary>
+    private void ProcessParallelQuery(int sysIdx, int workerId, bool trackUtilization)
+    {
+        var sys = Systems[sysIdx];
+        while (true)
+        {
+            // Early-exit: stop grabbing chunks if a prior chunk already failed — remaining work would be discarded
+            if (_systemFailed[sysIdx])
+            {
+                break;
+            }
+
+            var chunk = Interlocked.Increment(ref _nextChunk[sysIdx].Value) - 1;
+            if (chunk >= sys.TotalChunks)
+            {
+                break;
+            }
+
+            if (chunk == 0)
+            {
+                RecordFirstChunkGrab(sysIdx, Stopwatch.GetTimestamp());
+            }
+
+            var workStart = Stopwatch.GetTimestamp();
+            try
+            {
+                ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, sys.TotalChunks);
+            }
+            catch (Exception ex)
+            {
+                _systemFailed[sysIdx] = true;
+                _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+                LogSystemException(sysIdx, sys.Name, ex);
+            }
+
+            var workEnd = Stopwatch.GetTimestamp();
+
+            if (trackUtilization)
+            {
+                _workerActiveTicks[workerId] += workEnd - workStart;
+            }
+
+            // D8: countdown — last completer dispatches successors and runs cleanup
+            var remaining = Interlocked.Decrement(ref _remainingChunks[sysIdx].Value);
+            if (remaining == 0)
+            {
+                RecordSystemDone(sysIdx, workEnd);
+                _currentTickSystemMetrics[sysIdx].WorkersTouched = sys.TotalChunks;
+                ParallelQueryCleanupCallback?.Invoke(sysIdx);
+                OnSystemComplete(sysIdx, workerId, trackUtilization);
+                break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Prepares and dispatches a parallel QuerySystem. Called from <see cref="OnSystemComplete"/> (successor dispatch)
+    /// or root system marking. Runs the prepare callback to compute chunk count, then either marks the system ready
+    /// for multi-worker chunk grabbing or handles the zero-entity skip case.
+    /// </summary>
+    private void DispatchParallelQuery(int sysIdx, int workerId, bool trackUtilization)
+    {
+        var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
+        if (totalChunks <= 0)
+        {
+            // Empty entity set — skip, dispatch successors
+            ParallelQueryCleanupCallback?.Invoke(sysIdx);
+            OnSystemComplete(sysIdx, workerId, trackUtilization);
+            return;
+        }
+
+        Systems[sysIdx].TotalChunks = totalChunks;
+        _remainingChunks[sysIdx].Value = totalChunks;
+        // MEMORY: relies on x86 TSO for store ordering — needs release/acquire barrier on ARM
+        MarkSystemReady(sysIdx);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -820,6 +989,11 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     {
                         _currentTickSystemMetrics[succIdx].SkipReason = overloadSkip;
                         OnSystemComplete(succIdx, workerId, trackUtilization);
+                    }
+                    else if (succ.IsParallelQuery)
+                    {
+                        // Parallel QuerySystem: prepare entity set, then mark ready for multi-worker chunk grab
+                        DispatchParallelQuery(succIdx, workerId, trackUtilization);
                     }
                     else if (succ.Type == SystemType.CallbackSystem || succ.Type == SystemType.QuerySystem)
                     {

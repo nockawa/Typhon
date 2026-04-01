@@ -88,6 +88,17 @@ class ScheduleValidationTests
     }
 
     [Test]
+    public void Build_ParallelWithoutInput_Throws()
+    {
+        var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
+        schedule.Add(new QueryWithParallelNoInput());
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            schedule.Build(_registry.Runtime));
+        Assert.That(ex.Message, Does.Contain("Parallel requires an Input View"));
+    }
+
+    [Test]
     public void Build_UniqueNames_Succeeds()
     {
         var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
@@ -156,6 +167,19 @@ class ScheduleValidationTests
         {
             b.Name("ParallelQuery");
             b.Parallel();
+            b.Input(() => null); // Dummy — InputFactory stored but not called during Build
+        }
+
+        protected override void Execute(TickContext ctx) { }
+    }
+
+    class QueryWithParallelNoInput : QuerySystem
+    {
+        protected override void Configure(SystemBuilder b)
+        {
+            b.Name("BadParallelQuery");
+            b.Parallel();
+            // No Input — should be rejected
         }
 
         protected override void Execute(TickContext ctx) { }

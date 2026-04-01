@@ -60,6 +60,9 @@ public struct PooledEntityList : IReadOnlyCollection<EntityId>
     /// <summary>Direct access to the backing array for bulk population. Valid indices: 0..<see cref="Count"/>-1.</summary>
     internal Span<EntityId> AsSpan() => _array.AsSpan(0, _count);
 
+    /// <summary>Direct access to the backing array. Used by <see cref="PooledEntitySlice"/> for zero-copy parallel chunk slicing.</summary>
+    internal EntityId[] BackingArray => _array;
+
     /// <summary>
     /// Return the backing array to the pool. Safe to call multiple times (idempotent).
     /// Must be called after the system's Execute completes.

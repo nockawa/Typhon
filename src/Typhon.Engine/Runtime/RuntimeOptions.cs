@@ -40,6 +40,14 @@ public class RuntimeOptions
     public OverloadOptions Overload { get; set; } = new();
 
     /// <summary>
+    /// Minimum number of entities per chunk for parallel QuerySystem dispatch.
+    /// Controls granularity: fewer entities per chunk = more parallelism but more overhead (Transaction creation per chunk).
+    /// Entity sets smaller than this value still use the parallel chunk path with <c>totalChunks=1</c>.
+    /// Default: 64.
+    /// </summary>
+    public int ParallelQueryMinChunkSize { get; set; } = 64;
+
+    /// <summary>
     /// Resolves the effective worker count, applying the auto-detect formula if <see cref="WorkerCount"/> is -1.
     /// </summary>
     internal int ResolveWorkerCount() => WorkerCount == -1 ? Math.Max(1, Environment.ProcessorCount - 4) : WorkerCount;

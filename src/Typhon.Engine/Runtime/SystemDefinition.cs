@@ -105,4 +105,15 @@ public sealed class SystemDefinition
     /// Set by <see cref="TyphonRuntime"/> at init — not configured by game code.
     /// </summary>
     public Func<bool> ReactiveSkip { get; set; }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Parallel query dispatch
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// True if this QuerySystem uses parallel chunk dispatch across workers.
+    /// When true, Execute is called once per chunk with a per-chunk Transaction and entity slice.
+    /// Set by <see cref="RuntimeSchedule"/> from <see cref="SystemBuilder.Parallel"/>.
+    /// </summary>
+    public bool IsParallelQuery { get; set; }
 }

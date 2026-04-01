@@ -73,7 +73,7 @@ public sealed class RuntimeSchedule
     /// </summary>
     public RuntimeSchedule QuerySystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
-        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
+        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false, bool parallel = false)
     {
         ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(name);
@@ -92,7 +92,8 @@ public sealed class RuntimeSchedule
             AfterAll = afterAll,
             TickDivisor = tickDivisor,
             ThrottledTickDivisor = throttledTickDivisor,
-            CanShed = canShed
+            CanShed = canShed,
+            Parallel = parallel
         });
         return this;
     }
@@ -332,6 +333,18 @@ public sealed class RuntimeSchedule
                 }
             }
 
+            if (reg.Type == SystemType.PipelineSystem && reg.Parallel)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': Parallel is not valid for PipelineSystem. PipelineSystem has its own chunk-parallel execution model.");
+            }
+
+            if (reg.Parallel && reg.InputFactory == null)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': Parallel requires an Input View. Specify b.Input(() => view) alongside b.Parallel().");
+            }
+
             if (reg.ChangeFilter is { Length: > 0 } && reg.InputFactory == null)
             {
                 throw new InvalidOperationException(
@@ -425,6 +438,20 @@ public sealed class RuntimeSchedule
             systems[sysIdx].ConsumesQueueIndices = indices;
         }
 
+        // Phase 4b: Validate parallel QuerySystem constraints (must run after queue wiring)
+        foreach (var reg in _registrations)
+        {
+            if (reg.Parallel && nameToIndex.TryGetValue(reg.Name, out var pIdx))
+            {
+                if (systems[pIdx].ConsumesQueueIndices is { Length: > 0 })
+                {
+                    throw new InvalidOperationException(
+                        $"System '{reg.Name}': Parallel QuerySystem cannot consume event queues. " +
+                        "Event queue drain is single-consumer. Move event processing to a separate non-parallel system upstream.");
+                }
+            }
+        }
+
         // Phase 5: Store overload params, input, and change filter from registrations
         foreach (var reg in _registrations)
         {
@@ -440,6 +467,7 @@ public sealed class RuntimeSchedule
             systems[sysIdx].CanShed = reg.CanShed;
             systems[sysIdx].InputFactory = reg.InputFactory;
             systems[sysIdx].ChangeFilterTypes = reg.ChangeFilter;
+            systems[sysIdx].IsParallelQuery = reg.Parallel;
         }
 
         // Phase 6: Create scheduler

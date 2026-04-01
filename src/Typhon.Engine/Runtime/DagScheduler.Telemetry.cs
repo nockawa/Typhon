@@ -41,11 +41,11 @@ public sealed partial class DagScheduler
                 sm.TransitionLatencyUs = TicksToUs(sm.FirstChunkGrabTick - sm.ReadyTick);
                 sm.DurationUs = TicksToUs(sm.LastChunkDoneTick - sm.FirstChunkGrabTick);
 
-                // Deep mode: straggler gap for Pipeline systems
+                // Deep mode: straggler gap for multi-chunk systems (Pipeline and parallel QuerySystem)
                 if (TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackStragglerGap)
                 {
                     var sys = Systems[i];
-                    if (sys.Type == SystemType.PipelineSystem && sys.TotalChunks > 1 && sm.WorkersTouched > 0)
+                    if ((sys.Type == SystemType.PipelineSystem || sys.IsParallelQuery) && sys.TotalChunks > 1 && sm.WorkersTouched > 0)
                     {
                         // Theoretical duration with perfect parallelism:
                         // total work divided evenly across participating workers

@@ -38,6 +38,7 @@ public sealed class TyphonRuntime : IDisposable
     private readonly ComponentTable[][] _systemChangeFilterTables; // ComponentTables for changeFilter types (null if no filter)
     private readonly PooledEntityList[] _systemEntityLists;        // For returning ArrayPool buffers
     private readonly EventQueueBase[][] _systemConsumedQueues;     // Pre-allocated consumed queue refs per system (null if none)
+    private readonly PooledEntityList[] _parallelEntityLists;      // Full entity set for parallel QuerySystem chunk slicing
 
     // First-tick flag
     private bool _firstTickExecuted;
@@ -133,6 +134,7 @@ public sealed class TyphonRuntime : IDisposable
         _systemChangeFilterTables = new ComponentTable[scheduler.SystemCount][];
         _systemEntityLists = new PooledEntityList[scheduler.SystemCount];
         _systemConsumedQueues = new EventQueueBase[scheduler.SystemCount][];
+        _parallelEntityLists = new PooledEntityList[scheduler.SystemCount];
 
         ResolveChangeFilters(scheduler);
 
@@ -145,6 +147,9 @@ public sealed class TyphonRuntime : IDisposable
         Scheduler.TickEndCallback = OnTickEndInternal;
         Scheduler.SystemStartCallback = OnSystemStartInternal;
         Scheduler.SystemEndCallback = OnSystemEndInternal;
+        Scheduler.ParallelQueryPrepareCallback = OnParallelQueryPrepare;
+        Scheduler.ParallelQueryChunkCallback = OnParallelQueryChunk;
+        Scheduler.ParallelQueryCleanupCallback = OnParallelQueryCleanup;
 
         // Wire subscription telemetry enrichment
         Scheduler.TelemetryEnrichCallback = (ref t) =>
@@ -473,6 +478,116 @@ public sealed class TyphonRuntime : IDisposable
         }
 
         return list;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Parallel QuerySystem callbacks (called by DagScheduler)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Prepare phase: builds the full entity set from the system's View (full or change-filtered) and computes the chunk count.
+    /// Called on the thread that triggered dispatch (predecessor completer or root marker).
+    /// </summary>
+    private int OnParallelQueryPrepare(int sysIdx)
+    {
+        // Build entity set — same logic as OnSystemStartInternal
+        PooledEntityList entityList;
+        var hasChangeFilter = _systemViews[sysIdx] != null && _systemChangeFilterTables[sysIdx] != null;
+        if (hasChangeFilter)
+        {
+            entityList = BuildFilteredEntitySet(sysIdx);
+        }
+        else if (_systemViews[sysIdx] != null)
+        {
+            entityList = BuildFullViewEntitySet(sysIdx);
+        }
+        else
+        {
+            entityList = PooledEntityList.Empty;
+        }
+
+        _parallelEntityLists[sysIdx] = entityList;
+
+        // Record telemetry
+        ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
+        metrics.EntitiesProcessed = entityList.Count;
+        if (hasChangeFilter && _systemViews[sysIdx] != null)
+        {
+            metrics.EntitiesSkippedByChangeFilter = _systemViews[sysIdx].Count - entityList.Count;
+        }
+
+        if (entityList.Count == 0)
+        {
+            return 0;
+        }
+
+        // Compute chunk count: min(workerCount, ceil(entityCount / minChunkSize))
+        var workerCount = Scheduler.WorkerCount;
+        var minChunkSize = _options.ParallelQueryMinChunkSize;
+        var maxChunks = Math.Max(1, (entityList.Count + minChunkSize - 1) / minChunkSize);
+        return Math.Min(workerCount, maxChunks);
+    }
+
+    /// <summary>
+    /// Chunk execution: creates a per-chunk Transaction on the calling worker thread, slices the entity set, builds a TickContext, and invokes the system's
+    /// Execute method. Commits or rolls back the Transaction.
+    /// </summary>
+    private void OnParallelQueryChunk(int sysIdx, int chunkIndex, int totalChunks)
+    {
+        var fullList = _parallelEntityLists[sysIdx];
+        var totalEntities = fullList.Count;
+
+        // Balanced partitioning: first `remainder` chunks get one extra entity
+        var baseSize = totalEntities / totalChunks;
+        var remainder = totalEntities % totalChunks;
+        var start = chunkIndex * baseSize + Math.Min(chunkIndex, remainder);
+        var count = baseSize + (chunkIndex < remainder ? 1 : 0);
+
+        // Create per-chunk Transaction on THIS worker thread (respects thread affinity)
+        var tx = _currentUow.CreateTransaction();
+        var success = true;
+        try
+        {
+            var slice = new PooledEntitySlice(fullList.BackingArray, start, count);
+            var ctx = new TickContext
+            {
+                TickNumber = Scheduler.CurrentTickNumber,
+                DeltaTime = _currentDeltaTime,
+                Transaction = tx,
+                CreateSideTransaction = CreateSideTransactionInternal,
+                Entities = slice,
+                ConsumedQueues = null // Parallel QuerySystems cannot consume event queues
+            };
+
+            Scheduler.Systems[sysIdx].CallbackAction(ctx);
+        }
+        catch
+        {
+            success = false;
+            throw; // Re-throw — DagScheduler's ProcessParallelQuery handles logging + _systemFailed
+        }
+        finally
+        {
+            if (success)
+            {
+                tx.Commit();
+            }
+            else
+            {
+                tx.Rollback();
+            }
+
+            tx.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Cleanup: returns the full entity list to the ArrayPool. Called by the last chunk completer or on skip (zero entities).
+    /// </summary>
+    private void OnParallelQueryCleanup(int sysIdx)
+    {
+        _parallelEntityLists[sysIdx].Return();
+        _parallelEntityLists[sysIdx] = default;
     }
 
     // ═══════════════════════════════════════════════════════════════
