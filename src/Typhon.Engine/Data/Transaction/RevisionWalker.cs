@@ -1,5 +1,8 @@
 // unset
 
+using System;
+using System.Runtime.CompilerServices;
+
 namespace Typhon.Engine;
 
 /// <summary>
@@ -14,14 +17,56 @@ internal static class RevisionChainReader
     /// <param name="compRevTableAccessor">Accessor for reading revision table chunks.</param>
     /// <param name="compRevFirstChunkId">First chunk ID of the entity's revision chain.</param>
     /// <param name="transactionTSN">The reader's snapshot TSN — entries with TSN &gt; this are invisible.</param>
+    /// <param name="skipTimeout">Skip Stopwatch.GetTimestamp overhead for uncontended read paths (PTA).</param>
     /// <returns>
     /// <see cref="RevisionReadStatus.Success"/> with revision metadata on success;
     /// <see cref="RevisionReadStatus.SnapshotInvisible"/> if no committed entry is visible;
     /// <see cref="RevisionReadStatus.Deleted"/> if the latest visible entry is a tombstone (ComponentChunkId == 0).
     /// </returns>
-    internal static Result<ComponentInfo.CompRevInfo, RevisionReadStatus> WalkChain(ref ChunkAccessor<PersistentStore> compRevTableAccessor, int compRevFirstChunkId, 
-        long transactionTSN)
+    internal static Result<ComponentInfo.CompRevInfo, RevisionReadStatus> WalkChain(ref ChunkAccessor<PersistentStore> compRevTableAccessor, int compRevFirstChunkId,
+        long transactionTSN, bool skipTimeout = false)
     {
+        // ── Fast path: single-entry chain (common case for steady-state entities) ──
+        // Avoids RevisionEnumerator construction, lock acquisition, WaitContext/Deadline creation.
+        // Safe when skipTimeout=true (PTA path, no concurrent writers).
+        if (skipTimeout)
+        {
+            ref var header = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
+            if (header.ItemCount == 1)
+            {
+                // Single entry — read it directly from the root chunk
+                var chunkContent = compRevTableAccessor.GetChunkAsSpan(compRevFirstChunkId, false);
+                var elements = chunkContent.Slice(Unsafe.SizeOf<CompRevStorageHeader>()).Cast<byte, CompRevStorageElement>();
+                ref var element = ref elements[header.FirstItemIndex];
+
+                if (!element.IsVoid)
+                {
+                    bool isCommitted = (element.TSN > 0) && !element.IsolationFlag;
+                    if (isCommitted && element.TSN <= transactionTSN)
+                    {
+                        var compRevInfo = new ComponentInfo.CompRevInfo
+                        {
+                            Operations = ComponentInfo.OperationType.Undefined,
+                            CompRevTableFirstChunkId = compRevFirstChunkId,
+                            CurCompContentChunkId = element.ComponentChunkId,
+                            CurRevisionIndex = header.FirstItemIndex,
+                            PrevCompContentChunkId = 0,
+                            PrevRevisionIndex = -1,
+                            ReadCommitSequence = header.CommitSequence,
+                            ReadRevisionIndex = header.FirstItemIndex
+                        };
+
+                        return element.ComponentChunkId == 0
+                            ? new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo, RevisionReadStatus.Deleted)
+                            : new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo);
+                    }
+                }
+
+                // Single entry but not visible — fall through to full walk (shouldn't happen for committed entities with valid TSN)
+            }
+        }
+
+        // ── Full walk: handles multi-entry chains, voided entries, non-monotonic TSN ordering ──
         short prevCompRevisionIndex = -1;
         short curCompRevisionIndex = -1;
         int prevCompChunkId = 0;
@@ -33,7 +78,7 @@ internal static class RevisionChainReader
         int readCommitSequence;
 
         {
-            using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true);
+            using var enumerator = new RevisionEnumerator(ref compRevTableAccessor, compRevFirstChunkId, false, true, skipTimeout);
             readCommitSequence = compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId).CommitSequence;
             int totalCommitted = 0;
             int visibleOrdinal = 0;
@@ -82,24 +127,26 @@ internal static class RevisionChainReader
             return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.SnapshotInvisible);
         }
 
-        var compRevInfo = new ComponentInfo.CompRevInfo
         {
-            Operations = ComponentInfo.OperationType.Undefined,
-            CompRevTableFirstChunkId = compRevFirstChunkId,
-            CurCompContentChunkId = curCompChunkId,
-            CurRevisionIndex = curCompRevisionIndex,
-            PrevCompContentChunkId = prevCompChunkId,
-            PrevRevisionIndex = prevCompRevisionIndex,
-            ReadCommitSequence = readCommitSequence,
-            ReadRevisionIndex = curCompRevisionIndex
-        };
+            var compRevInfo = new ComponentInfo.CompRevInfo
+            {
+                Operations = ComponentInfo.OperationType.Undefined,
+                CompRevTableFirstChunkId = compRevFirstChunkId,
+                CurCompContentChunkId = curCompChunkId,
+                CurRevisionIndex = curCompRevisionIndex,
+                PrevCompContentChunkId = prevCompChunkId,
+                PrevRevisionIndex = prevCompRevisionIndex,
+                ReadCommitSequence = readCommitSequence,
+                ReadRevisionIndex = curCompRevisionIndex
+            };
 
-        // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted
-        if (curCompChunkId == 0)
-        {
-            return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo, RevisionReadStatus.Deleted);
+            // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted
+            if (curCompChunkId == 0)
+            {
+                return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo, RevisionReadStatus.Deleted);
+            }
+
+            return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo);
         }
-
-        return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo);
     }
 }

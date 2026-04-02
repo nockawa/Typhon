@@ -64,7 +64,8 @@ internal ref struct RevisionEnumerator : IDisposable
         return true;
     }
 
-    public unsafe RevisionEnumerator(ref ChunkAccessor<PersistentStore> compRevTableAccessor, int compRevFirstChunkId, bool exclusiveAccess, bool goToFirstItem)
+    public unsafe RevisionEnumerator(ref ChunkAccessor<PersistentStore> compRevTableAccessor, int compRevFirstChunkId, bool exclusiveAccess, bool goToFirstItem,
+        bool skipTimeout = false)
     {
         _compRevTableAccessor = ref compRevTableAccessor;
         _exclusiveAccess = exclusiveAccess;
@@ -73,7 +74,8 @@ internal ref struct RevisionEnumerator : IDisposable
         _ownsLock = !_header.Control.IsLockedByCurrentThread;
         if (_ownsLock)
         {
-            var wc = WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
+            // skipTimeout: PTA read path — chain lock is uncontended, use infinite deadline to skip Stopwatch.GetTimestamp overhead
+            var wc = skipTimeout ? new WaitContext(Deadline.Infinite, default) : WaitContext.FromTimeout(TimeoutOptions.Current.RevisionChainLockTimeout);
             if (!_header.Control.Enter(_exclusiveAccess, ref wc))
             {
                 ThrowHelper.ThrowLockTimeout("RevisionChain/Enumerate", TimeoutOptions.Current.RevisionChainLockTimeout);

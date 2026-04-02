@@ -21,6 +21,7 @@ public sealed class SystemBuilder
     internal int _throttledTickDivisor = 1;
     internal bool _canShed;
     internal bool _parallel;
+    internal bool _writesVersioned;
 
     /// <summary>Set the system's unique name in the DAG.</summary>
     public void Name(string name) => _name = name;
@@ -54,4 +55,7 @@ public sealed class SystemBuilder
 
     /// <summary>Enable automatic chunk-parallel execution across workers. QuerySystem only.</summary>
     public void Parallel() => _parallel = true;
+
+    /// <summary>Declare that this parallel QuerySystem writes Versioned components. Forces per-chunk Transaction fallback instead of the optimized PointInTimeAccessor path.</summary>
+    public void WritesVersioned() => _writesVersioned = true;
 }

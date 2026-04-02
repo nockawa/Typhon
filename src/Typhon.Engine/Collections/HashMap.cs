@@ -46,6 +46,12 @@ public unsafe class HashMap<TKey> : IDisposable, IEnumerable<TKey> where TKey : 
     public int Count => _count;
     public int Capacity => _capacity;
 
+    /// <summary>Raw pointer to the entries array. Stable (POH allocation).</summary>
+    internal byte* EntriesPtr => _entries;
+
+    /// <summary>Stride in bytes between consecutive entries.</summary>
+    internal int EntryStride => _entryStride;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryAdd(TKey key)
     {

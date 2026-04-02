@@ -39,7 +39,9 @@ public sealed class TyphonRuntime : IDisposable
     private readonly PooledEntityList[] _systemEntityLists;        // For returning ArrayPool buffers
     private readonly EventQueueBase[][] _systemConsumedQueues;     // Pre-allocated consumed queue refs per system (null if none)
     private readonly PooledEntityList[] _parallelEntityLists;      // Full entity set for parallel QuerySystem chunk slicing
-    private readonly HashMap<long>[] _multiTableFilterSets;       // Cached dedup sets for multi-table BuildFilteredEntitySet (avoids per-tick alloc)
+    private readonly HashMap<long>[] _multiTableFilterSets;        // Cached dedup sets for multi-table BuildFilteredEntitySet (avoids per-tick alloc)
+    private readonly PointInTimeAccessor _parallelAccessor;        // Single reusable PTA — Attach()ed before each non-Versioned parallel system
+    private readonly PartitionEntityView[] _partitionViews;        // Pre-allocated per-worker partition views (reused across systems since dispatch is sequential)
 
     // First-tick flag
     private bool _firstTickExecuted;
@@ -137,6 +139,12 @@ public sealed class TyphonRuntime : IDisposable
         _systemConsumedQueues = new EventQueueBase[scheduler.SystemCount][];
         _parallelEntityLists = new PooledEntityList[scheduler.SystemCount];
         _multiTableFilterSets = new HashMap<long>[scheduler.SystemCount];
+        _parallelAccessor = new PointInTimeAccessor();
+        _partitionViews = new PartitionEntityView[scheduler.WorkerCount];
+        for (var w = 0; w < scheduler.WorkerCount; w++)
+        {
+            _partitionViews[w] = new PartitionEntityView();
+        }
 
         ResolveChangeFilters(scheduler);
 
@@ -217,6 +225,9 @@ public sealed class TyphonRuntime : IDisposable
     {
         _tcpServer?.Dispose();
         Scheduler.Dispose();
+
+        // Dispose the shared PTA AFTER scheduler — workers must be fully stopped before we flush their per-thread EntityAccessors' ChangeSets.
+        _parallelAccessor?.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -563,17 +574,86 @@ public sealed class TyphonRuntime : IDisposable
 
     // ═══════════════════════════════════════════════════════════════
     // Parallel QuerySystem callbacks (called by DagScheduler)
+    //
+    // Four dispatch paths based on (WritesVersioned × HasChangeFilter):
+    //   Path 1: Full, Non-Versioned  — O(1) prepare, PTA + PartitionEntityView (zero-copy)
+    //   Path 2: Filtered, Non-Versioned — O(dirty) prepare, PTA + PooledEntitySlice
+    //   Path 3: Full, Versioned (fallback) — O(N) prepare, per-chunk Transaction
+    //   Path 4: Filtered, Versioned (fallback) — O(dirty) prepare, per-chunk Transaction
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Prepare phase: builds the full entity set from the system's View (full or change-filtered) and computes the chunk count.
-    /// Called on the thread that triggered dispatch (predecessor completer or root marker).
+    /// Prepare phase: selects the dispatch path based on WritesVersioned and change filter presence.
+    /// For non-Versioned systems, creates/advances a long-lived PointInTimeAccessor.
+    /// For the full non-Versioned path (Path 1), NO entity list is materialized — O(1).
     /// </summary>
     private int OnParallelQueryPrepare(int sysIdx)
     {
-        // Build entity set — same logic as OnSystemStartInternal
+        var sys = Scheduler.Systems[sysIdx];
+        var hasView = _systemViews[sysIdx] != null;
+        var hasChangeFilter = hasView && _systemChangeFilterTables[sysIdx] != null;
+
+        if (sys.WritesVersioned)
+        {
+            // Paths 3 & 4: Versioned fallback — materialize entity list, per-chunk Transactions
+            return PrepareVersionedFallback(sysIdx, hasChangeFilter);
+        }
+
+        // Paths 1 & 2: Non-Versioned — use PointInTimeAccessor
+        if (hasChangeFilter)
+        {
+            return PrepareFilteredNonVersioned(sysIdx);
+        }
+
+        return PrepareFullNonVersioned(sysIdx);
+    }
+
+    /// <summary>Path 1: Full View, Non-Versioned. O(1) prepare — no entity list materialization.</summary>
+    private int PrepareFullNonVersioned(int sysIdx)
+    {
+        var view = _systemViews[sysIdx];
+        if (view == null || view.Count == 0)
+        {
+            return 0;
+        }
+
+        // Attach the shared PTA — gets a fresh TSN, resets per-thread accessors (warm caches preserved)
+        _parallelAccessor.Attach(Engine, Scheduler.WorkerCount);
+
+        ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
+        metrics.EntitiesProcessed = view.Count;
+
+        return ComputeChunkCount(view.Count);
+    }
+
+    /// <summary>Path 2: Change-filtered, Non-Versioned. O(dirty) prepare — materialize dirty list, use PTA for access.</summary>
+    private int PrepareFilteredNonVersioned(int sysIdx)
+    {
+        var entityList = BuildFilteredEntitySet(sysIdx);
+        _parallelEntityLists[sysIdx] = entityList;
+
+        // Attach the shared PTA — gets a fresh TSN, resets per-thread accessors (warm caches preserved)
+        _parallelAccessor.Attach(Engine, Scheduler.WorkerCount);
+
+        ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
+        metrics.EntitiesProcessed = entityList.Count;
+        if (_systemViews[sysIdx] != null)
+        {
+            metrics.EntitiesSkippedByChangeFilter = _systemViews[sysIdx].Count - entityList.Count;
+        }
+
+        if (entityList.Count == 0)
+        {
+            return 0;
+        }
+
+        return ComputeChunkCount(entityList.Count);
+    }
+
+    /// <summary>Paths 3 & 4: Versioned fallback — materialize entity list (same as original path).</summary>
+    private int PrepareVersionedFallback(int sysIdx, bool hasChangeFilter)
+    {
         PooledEntityList entityList;
-        var hasChangeFilter = _systemViews[sysIdx] != null && _systemChangeFilterTables[sysIdx] != null;
         if (hasChangeFilter)
         {
             entityList = BuildFilteredEntitySet(sysIdx);
@@ -589,7 +669,6 @@ public sealed class TyphonRuntime : IDisposable
 
         _parallelEntityLists[sysIdx] = entityList;
 
-        // Record telemetry
         ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
         metrics.EntitiesProcessed = entityList.Count;
         if (hasChangeFilter && _systemViews[sysIdx] != null)
@@ -602,18 +681,84 @@ public sealed class TyphonRuntime : IDisposable
             return 0;
         }
 
-        // Compute chunk count: min(workerCount, ceil(entityCount / minChunkSize))
+        return ComputeChunkCount(entityList.Count);
+    }
+
+    private int ComputeChunkCount(int entityCount)
+    {
         var workerCount = Scheduler.WorkerCount;
         var minChunkSize = _options.ParallelQueryMinChunkSize;
-        var maxChunks = Math.Max(1, (entityList.Count + minChunkSize - 1) / minChunkSize);
+        var maxChunks = Math.Max(1, (entityCount + minChunkSize - 1) / minChunkSize);
         return Math.Min(workerCount, maxChunks);
     }
 
     /// <summary>
-    /// Chunk execution: creates a per-chunk Transaction on the calling worker thread, slices the entity set, builds a TickContext, and invokes the system's
-    /// Execute method. Commits or rolls back the Transaction.
+    /// Chunk execution: dispatches to the appropriate path based on WritesVersioned.
+    /// Non-Versioned: uses shared PointInTimeAccessor (no per-chunk Transaction).
+    /// Versioned: creates a per-chunk Transaction (original fallback path).
     /// </summary>
-    private void OnParallelQueryChunk(int sysIdx, int chunkIndex, int totalChunks)
+    private void OnParallelQueryChunk(int sysIdx, int chunkIndex, int totalChunks, int workerId)
+    {
+        if (Scheduler.Systems[sysIdx].WritesVersioned)
+        {
+            ExecuteChunkWithTransaction(sysIdx, chunkIndex, totalChunks);
+            return;
+        }
+
+        ExecuteChunkWithAccessor(sysIdx, chunkIndex, totalChunks, workerId);
+    }
+
+    /// <summary>Paths 1 & 2: Non-Versioned chunk execution with per-worker EntityAccessor from the shared PTA.</summary>
+    private void ExecuteChunkWithAccessor(int sysIdx, int chunkIndex, int totalChunks, int workerId)
+    {
+        var hasChangeFilter = _systemChangeFilterTables[sysIdx] != null;
+
+        IReadOnlyCollection<EntityId> entities;
+        if (hasChangeFilter)
+        {
+            // Path 2: Filtered — slice the materialized dirty entity list
+            var fullList = _parallelEntityLists[sysIdx];
+            var totalEntities = fullList.Count;
+            var baseSize = totalEntities / totalChunks;
+            var remainder = totalEntities % totalChunks;
+            var start = chunkIndex * baseSize + Math.Min(chunkIndex, remainder);
+            var count = baseSize + (chunkIndex < remainder ? 1 : 0);
+            entities = new PooledEntitySlice(fullList.BackingArray, start, count);
+        }
+        else
+        {
+            // Path 1: Full — zero-copy partition view over HashMap buckets
+            var partView = _partitionViews[chunkIndex];
+            partView.Reset(_systemViews[sysIdx].EntityIdsInternal, chunkIndex, totalChunks);
+            entities = partView;
+        }
+
+        // Get this worker's EntityAccessor — direct array lookup, zero dictionary overhead
+        var workerAccessor = _parallelAccessor.GetWorkerAccessor(workerId);
+
+        try
+        {
+            var ctx = new TickContext
+            {
+                TickNumber = Scheduler.CurrentTickNumber,
+                DeltaTime = _currentDeltaTime,
+                Accessor = workerAccessor,
+                CreateSideTransaction = CreateSideTransactionInternal,
+                Entities = entities,
+                ConsumedQueues = null
+            };
+
+            Scheduler.Systems[sysIdx].CallbackAction(ctx);
+        }
+        finally
+        {
+            // Epoch cleanup: flush dirty state and advance epoch on this worker thread
+            _parallelAccessor.FlushWorker(workerId);
+        }
+    }
+
+    /// <summary>Paths 3 & 4: Versioned fallback — per-chunk Transaction (original path).</summary>
+    private void ExecuteChunkWithTransaction(int sysIdx, int chunkIndex, int totalChunks)
     {
         var fullList = _parallelEntityLists[sysIdx];
         var totalEntities = fullList.Count;
@@ -637,7 +782,7 @@ public sealed class TyphonRuntime : IDisposable
                 Transaction = tx,
                 CreateSideTransaction = CreateSideTransactionInternal,
                 Entities = slice,
-                ConsumedQueues = null // Parallel QuerySystems cannot consume event queues
+                ConsumedQueues = null
             };
 
             Scheduler.Systems[sysIdx].CallbackAction(ctx);
@@ -663,7 +808,8 @@ public sealed class TyphonRuntime : IDisposable
     }
 
     /// <summary>
-    /// Cleanup: returns the full entity list to the ArrayPool. Called by the last chunk completer or on skip (zero entities).
+    /// Cleanup: returns pooled entity lists (if any) and resets state.
+    /// Long-lived PTAs are NOT disposed here — they persist across ticks.
     /// </summary>
     private void OnParallelQueryCleanup(int sysIdx)
     {

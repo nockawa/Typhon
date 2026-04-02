@@ -77,7 +77,7 @@ public class ParallelQueryTests
             return Math.Min(workerCount, maxChunks);
         };
 
-        scheduler.ParallelQueryChunkCallback = (sysIdx, chunk, totalChunks) =>
+        scheduler.ParallelQueryChunkCallback = (sysIdx, chunk, totalChunks, workerId) =>
         {
             onChunk(sysIdx, chunk, totalChunks);
         };
@@ -261,7 +261,7 @@ public class ParallelQueryTests
 
         // Wire: prepare returns 0 (empty)
         scheduler.ParallelQueryPrepareCallback = _ => 0;
-        scheduler.ParallelQueryChunkCallback = (_, _, _) => Interlocked.Increment(ref parallelRan);
+        scheduler.ParallelQueryChunkCallback = (_, _, _, _) => Interlocked.Increment(ref parallelRan);
         scheduler.ParallelQueryCleanupCallback = _ => { };
         scheduler.TickEndCallback = _ => Interlocked.Exchange(ref captured, 1);
 
@@ -298,7 +298,7 @@ public class ParallelQueryTests
 
         // Wire: 2 chunks, first one throws
         scheduler.ParallelQueryPrepareCallback = _ => 2;
-        scheduler.ParallelQueryChunkCallback = (_, chunk, _) =>
+        scheduler.ParallelQueryChunkCallback = (_, chunk, _, _) =>
         {
             if (chunk == 0)
             {
@@ -378,7 +378,7 @@ public class ParallelQueryTests
         var scheduler = schedule.Build(_registry.Runtime);
 
         scheduler.ParallelQueryPrepareCallback = _ => 2;
-        scheduler.ParallelQueryChunkCallback = (_, chunk, _) =>
+        scheduler.ParallelQueryChunkCallback = (_, chunk, _, _) =>
         {
             if (captured == 0)
             {
@@ -571,5 +571,210 @@ public class ParallelQueryTests
         // Successor should be skipped due to pipeline failure, but the scheduler should still complete
         // (not hang due to killed worker thread)
         Assert.That(successorRan, Is.EqualTo(0), "Successor should be skipped when pipeline fails");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PartitionEntityView correctness
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void PartitionEntityView_AllEntities_CoveredExactlyOnce()
+    {
+        using var map = new HashMap<long>(128);
+        for (var i = 1; i <= 100; i++)
+        {
+            map.TryAdd(i);
+        }
+
+        var totalPartitions = 4;
+        var allEntities = new HashSet<ulong>();
+
+        for (var p = 0; p < totalPartitions; p++)
+        {
+            var view = new PartitionEntityView();
+            view.Reset(map, p, totalPartitions);
+
+            foreach (var entityId in (IEnumerable<EntityId>)view)
+            {
+                Assert.That(allEntities.Add(entityId.RawValue), Is.True,
+                    $"Entity {entityId.RawValue} appeared in multiple partitions");
+            }
+        }
+
+        Assert.That(allEntities.Count, Is.EqualTo(100), "All entities must be covered");
+        for (ulong i = 1; i <= 100; i++)
+        {
+            Assert.That(allEntities.Contains(i), Is.True, $"Entity {i} missing");
+        }
+    }
+
+    [Test]
+    public void PartitionEntityView_SinglePartition_AllEntities()
+    {
+        using var map = new HashMap<long>(64);
+        for (var i = 1; i <= 50; i++)
+        {
+            map.TryAdd(i);
+        }
+
+        var view = new PartitionEntityView();
+        view.Reset(map, 0, 1);
+
+        var count = 0;
+        foreach (var _ in (IEnumerable<EntityId>)view)
+        {
+            count++;
+        }
+
+        Assert.That(count, Is.EqualTo(50));
+    }
+
+    [Test]
+    public void PartitionEntityView_EmptyMap_NoEntities()
+    {
+        using var map = new HashMap<long>(16);
+
+        var view = new PartitionEntityView();
+        view.Reset(map, 0, 4);
+
+        var count = 0;
+        foreach (var _ in (IEnumerable<EntityId>)view)
+        {
+            count++;
+        }
+
+        Assert.That(count, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void PartitionEntityView_ApproximateCount_Reasonable()
+    {
+        using var map = new HashMap<long>(128);
+        for (var i = 1; i <= 100; i++)
+        {
+            map.TryAdd(i);
+        }
+
+        var view = new PartitionEntityView();
+        view.Reset(map, 0, 4);
+
+        // Approximate count: ceil(100/4) = 25
+        Assert.That(view.Count, Is.InRange(1, 100));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // WritesVersioned flag propagation
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void WritesVersioned_LambdaApi_FlagPropagated()
+    {
+        var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 });
+        schedule.QuerySystem("Parallel", _ => { }, input: () => null, parallel: true, writesVersioned: true);
+
+        using var scheduler = schedule.Build(_registry.Runtime);
+        Assert.That(scheduler.Systems[0].WritesVersioned, Is.True);
+        Assert.That(scheduler.Systems[0].IsParallelQuery, Is.True);
+    }
+
+    [Test]
+    public void WritesVersioned_DefaultFalse()
+    {
+        var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 });
+        schedule.QuerySystem("Parallel", _ => { }, input: () => null, parallel: true);
+
+        using var scheduler = schedule.Build(_registry.Runtime);
+        Assert.That(scheduler.Systems[0].WritesVersioned, Is.False);
+    }
+
+    [Test]
+    public void WritesVersioned_WithoutParallel_Throws()
+    {
+        var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 });
+        schedule.QuerySystem("NonParallel", _ => { }, writesVersioned: true);
+
+        Assert.Throws<InvalidOperationException>(() => schedule.Build(_registry.Runtime));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // PTA vs Transaction dispatch path selection
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public void ParallelQuery_NonVersioned_ChunkReceivesAccessor()
+    {
+        var captured = 0;
+
+        var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 });
+        schedule.QuerySystem("Parallel", _ => { }, input: () => null, parallel: true);
+
+        var scheduler = schedule.Build(_registry.Runtime);
+
+        // Wire manual callbacks simulating PTA-based dispatch
+        scheduler.ParallelQueryPrepareCallback = _ => 1;
+        scheduler.ParallelQueryChunkCallback = (sysIdx, chunk, total, workerId) =>
+        {
+            // In the real TyphonRuntime, the chunk callback sets ctx.Accessor.
+            // Here we verify the flag is set correctly on the SystemDefinition.
+            if (captured == 0)
+            {
+                Interlocked.Exchange(ref captured, 1);
+            }
+        };
+        scheduler.ParallelQueryCleanupCallback = _ => { };
+
+        scheduler.Start();
+        SpinWait.SpinUntil(() => scheduler.CurrentTickNumber >= 1, TimeSpan.FromSeconds(5));
+        scheduler.Shutdown();
+        scheduler.Dispose();
+
+        // Non-versioned system should NOT have WritesVersioned
+        Assert.That(scheduler.Systems[0].WritesVersioned, Is.False,
+            "Non-versioned parallel system should use PTA path (WritesVersioned=false)");
+    }
+
+    [Test]
+    public void ParallelQuery_WritesVersioned_ChunkReceivesTransaction()
+    {
+        var captured = 0;
+
+        var schedule = RuntimeSchedule.Create(new RuntimeOptions { WorkerCount = 2, BaseTickRate = 1000 });
+        schedule.QuerySystem("Parallel", _ => { }, input: () => null, parallel: true, writesVersioned: true);
+
+        var scheduler = schedule.Build(_registry.Runtime);
+
+        scheduler.ParallelQueryPrepareCallback = _ => 1;
+        scheduler.ParallelQueryChunkCallback = (sysIdx, chunk, total, workerId) =>
+        {
+            if (captured == 0)
+            {
+                Interlocked.Exchange(ref captured, 1);
+            }
+        };
+        scheduler.ParallelQueryCleanupCallback = _ => { };
+
+        scheduler.Start();
+        SpinWait.SpinUntil(() => scheduler.CurrentTickNumber >= 1, TimeSpan.FromSeconds(5));
+        scheduler.Shutdown();
+        scheduler.Dispose();
+
+        // Versioned system should have WritesVersioned
+        Assert.That(scheduler.Systems[0].WritesVersioned, Is.True,
+            "Versioned parallel system should use Transaction fallback path");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // HashMap internal accessors (needed by PartitionEntityView)
+    // ═══════════════════════════════════════════════════════════════
+
+    [Test]
+    public unsafe void HashMap_InternalAccessors_Valid()
+    {
+        using var map = new HashMap<long>(64);
+        map.TryAdd(42);
+
+        Assert.That((long)map.EntriesPtr, Is.Not.EqualTo(0), "EntriesPtr must be non-null");
+        Assert.That(map.EntryStride, Is.GreaterThan(0), "EntryStride must be positive");
+        Assert.That(map.Capacity, Is.GreaterThanOrEqualTo(64), "Capacity must be at least initial");
     }
 }

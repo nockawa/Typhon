@@ -73,14 +73,35 @@ public unsafe partial class EntityAccessor
             return default;
         }
 
-        // Read from EntityMap
+        // Read from EntityMap — cache the ChunkAccessor for same-archetype repeated lookups
         int recordSize = meta._entityRecordSize;
         byte* readBuf = stackalloc byte[recordSize];
 
-        using var guard = EpochGuard.Enter(_epochManager);
-        var accessor = es.EntityMap.Segment.CreateChunkAccessor();
-        bool found = es.EntityMap.TryGet(id.EntityKey, readBuf, ref accessor);
-        accessor.Dispose();
+        // Skip EpochGuard if we're already in an epoch scope (PTA workers enter once in InitLightweight).
+        // This eliminates per-entity PinCurrentThread/UnpinCurrentThread overhead.
+        var needsGuard = !_epochManager.IsCurrentThreadInScope;
+        var guard = needsGuard ? EpochGuard.Enter(_epochManager) : default;
+
+        // Reuse cached EntityMap accessor for same archetype (avoids creating a fresh ChunkAccessor per entity).
+        // Transaction uses this pattern in ResolveEntityMapSlotChunkId — extending it to the base class.
+        if (!_hasEntityMapCache || _entityMapCacheArchId != id.ArchetypeId)
+        {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+            }
+
+            _entityMapCacheAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+            _entityMapCacheArchId = id.ArchetypeId;
+            _hasEntityMapCache = true;
+        }
+
+        bool found = es.EntityMap.TryGet(id.EntityKey, readBuf, ref _entityMapCacheAccessor);
+
+        if (needsGuard)
+        {
+            guard.Dispose();
+        }
 
         if (!found)
         {
@@ -101,7 +122,9 @@ public unsafe partial class EntityAccessor
         var result = new EntityRef(id, meta, es, this, enabledBits, writable);
         result.CopyLocationsFrom(readBuf, meta.ComponentCount);
 
-        // For Versioned components: walk revision chain to find visible version
+        // For Versioned components: walk revision chain to find visible version.
+        // skipTimeout: base EntityAccessor is used by PTA — no concurrent writers, chain lock is uncontended.
+        // This avoids Stopwatch.GetTimestamp() overhead per entity (~25ns).
         for (int slot = 0; slot < meta.ComponentCount; slot++)
         {
             var table = es.SlotToComponentTable[slot];
@@ -116,10 +139,11 @@ public unsafe partial class EntityAccessor
                 continue;
             }
 
-            var compType = meta._slotToComponentType[slot];
-            var info = GetComponentInfo(compType);
+            // Use componentTypeId directly from archetype metadata — avoids Dictionary<Type, int> lookup in GetComponentInfo
+            var compTypeId = meta._componentTypeIds[slot];
+            var info = GetComponentInfoByTypeId(compTypeId, meta._slotToComponentType[slot]);
 
-            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
+            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, skipTimeout: true);
             if (chainResult.IsFailure)
             {
                 continue;

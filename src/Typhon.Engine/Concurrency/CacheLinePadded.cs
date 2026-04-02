@@ -17,3 +17,13 @@ internal struct CacheLinePaddedInt
     [FieldOffset(0)]
     public int Value;
 }
+
+/// <summary>
+/// Wraps a <see cref="long"/> in a 64-byte cache-line-sized struct to prevent false sharing.
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 64)]
+internal struct CacheLinePaddedLong
+{
+    [FieldOffset(0)]
+    public long Value;
+}

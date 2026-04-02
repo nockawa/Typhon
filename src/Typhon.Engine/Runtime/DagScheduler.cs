@@ -133,8 +133,8 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Called once before parallel QuerySystem chunk dispatch. Builds entity set, returns totalChunks (0 = skip).</summary>
     internal Func<int, int> ParallelQueryPrepareCallback;
 
-    /// <summary>Called per chunk: creates Transaction on worker thread, slices entities, calls Execute, commits.</summary>
-    internal Action<int, int, int> ParallelQueryChunkCallback;
+    /// <summary>Called per chunk: creates Transaction on worker thread, slices entities, calls Execute, commits. Args: (sysIdx, chunkIndex, totalChunks, workerId).</summary>
+    internal Action<int, int, int, int> ParallelQueryChunkCallback;
 
     /// <summary>Called once after all chunks complete (or on skip). Returns pooled entity list.</summary>
     internal Action<int> ParallelQueryCleanupCallback;
@@ -541,7 +541,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     {
                         try
                         {
-                            ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, totalChunks);
+                            ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, totalChunks, 0);
                         }
                         catch (Exception ex)
                         {
@@ -889,7 +889,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var workStart = Stopwatch.GetTimestamp();
             try
             {
-                ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, sys.TotalChunks);
+                ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, sys.TotalChunks, workerId);
             }
             catch (Exception ex)
             {

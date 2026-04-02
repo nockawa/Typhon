@@ -42,6 +42,9 @@ public partial class EntityAccessor : IDisposable
 
     private protected Dictionary<Type, ComponentInfo> _componentInfos;
 
+    /// <summary>Array-indexed ComponentInfo cache — O(1) lookup by componentTypeId. Avoids Dictionary hash + equality overhead on hot path.</summary>
+    private protected ComponentInfo[] _componentInfosByTypeId;
+
     /// <summary>
     /// Cached EntityMap accessor for same-archetype repeated lookups.
     /// Reused across multiple calls targeting the same archetype. Disposed in ResetCore().
@@ -58,6 +61,7 @@ public partial class EntityAccessor : IDisposable
     public EntityAccessor()
     {
         _componentInfos = new Dictionary<Type, ComponentInfo>(ComponentInfosMaxCapacity);
+        _componentInfosByTypeId = new ComponentInfo[ComponentInfosMaxCapacity];
     }
 
     /// <summary>
@@ -99,10 +103,49 @@ public partial class EntityAccessor : IDisposable
     // Component accessor cache
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Fast path: get ComponentInfo by pre-known componentTypeId. Avoids the Dictionary&lt;Type, int&gt; lookup
+    /// in ArchetypeRegistry.GetComponentTypeId that GetComponentInfo(Type) would do.
+    /// Falls back to the Type-based path if not yet cached.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private protected ComponentInfo GetComponentInfoByTypeId(int componentTypeId, Type componentType)
+    {
+        if (componentTypeId >= 0 && componentTypeId < _componentInfosByTypeId.Length)
+        {
+            var cached = _componentInfosByTypeId[componentTypeId];
+            if (cached != null)
+            {
+                return cached;
+            }
+        }
+
+        // Fall back to full creation path (only on first access)
+        return GetComponentInfo(componentType);
+    }
+
     private protected ComponentInfo GetComponentInfo(Type componentType)
     {
+        // Fast path: array-indexed lookup by componentTypeId (avoids Dictionary hash + equality check)
+        var typeId = ArchetypeRegistry.GetComponentTypeId(componentType);
+        if (typeId >= 0 && typeId < _componentInfosByTypeId.Length)
+        {
+            var cached = _componentInfosByTypeId[typeId];
+            if (cached != null)
+            {
+                return cached;
+            }
+        }
+
+        // Slow path: create and cache
         if (_componentInfos.TryGetValue(componentType, out var info))
         {
+            // Already in Dictionary but not in array (shouldn't happen, but handle gracefully)
+            if (typeId >= 0 && typeId < _componentInfosByTypeId.Length)
+            {
+                _componentInfosByTypeId[typeId] = info;
+            }
+
             return info;
         }
 
@@ -115,7 +158,7 @@ public partial class EntityAccessor : IDisposable
         var isMultiple = ct.Definition.AllowMultiple;
         info = new ComponentInfo(isMultiple)
         {
-            ComponentTypeId = ArchetypeRegistry.GetComponentTypeId(componentType),
+            ComponentTypeId = typeId >= 0 ? typeId : ArchetypeRegistry.GetComponentTypeId(componentType),
             ComponentTable = ct,
             ComponentOverhead = ct.ComponentOverhead,
             SingleCache    = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
@@ -140,6 +183,11 @@ public partial class EntityAccessor : IDisposable
         }
 
         _componentInfos.Add(componentType, info);
+        if (info.ComponentTypeId >= 0 && info.ComponentTypeId < _componentInfosByTypeId.Length)
+        {
+            _componentInfosByTypeId[info.ComponentTypeId] = info;
+        }
+
         return info;
     }
 
@@ -183,6 +231,17 @@ public partial class EntityAccessor : IDisposable
             FlushAndRefreshEpoch();
             _entityOperationCount = 0;
         }
+    }
+
+    /// <summary>
+    /// Unconditionally refresh the epoch scope for this accessor. Flushes all dirty ChunkAccessor state and advances the pinned epoch, allowing pages from
+    /// older epochs to be evicted.
+    /// Called by <see cref="PointInTimeAccessor.FlushWorker"/> at the end of each parallel chunk.
+    /// </summary>
+    internal void RefreshEpochScope()
+    {
+        FlushAndRefreshEpoch();
+        _entityOperationCount = 0;
     }
 
     /// <summary>
@@ -257,6 +316,8 @@ public partial class EntityAccessor : IDisposable
         {
             _componentInfos = new Dictionary<Type, ComponentInfo>(ComponentInfosMaxCapacity);
         }
+
+        Array.Clear(_componentInfosByTypeId);
 
         TSN = 0;
         _changeSet = null;

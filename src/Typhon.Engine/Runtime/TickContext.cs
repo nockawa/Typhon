@@ -37,6 +37,13 @@ public struct TickContext
     public Transaction Transaction { get; init; }
 
     /// <summary>
+    /// Per-worker EntityAccessor for parallel QuerySystems that do NOT write Versioned components.
+    /// Provides Open/OpenMut with warm ChunkAccessor caches, zero per-entity dictionary overhead.
+    /// Null when the system uses Transaction-based access (WritesVersioned=true or non-parallel systems).
+    /// </summary>
+    public EntityAccessor Accessor { get; init; }
+
+    /// <summary>
     /// Filtered entity set for this system's execution.
     /// <list type="bullet">
     /// <item><description>CallbackSystem: empty (no entity input)</description></item>

@@ -73,7 +73,7 @@ public sealed class RuntimeSchedule
     /// </summary>
     public RuntimeSchedule QuerySystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
-        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false, bool parallel = false)
+        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false, bool parallel = false, bool writesVersioned = false)
     {
         ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(name);
@@ -93,7 +93,8 @@ public sealed class RuntimeSchedule
             TickDivisor = tickDivisor,
             ThrottledTickDivisor = throttledTickDivisor,
             CanShed = canShed,
-            Parallel = parallel
+            Parallel = parallel,
+            WritesVersioned = writesVersioned
         });
         return this;
     }
@@ -156,7 +157,8 @@ public sealed class RuntimeSchedule
             CanShed = builder._canShed,
             InputFactory = builder._inputFactory,
             ChangeFilter = builder._changeFilter,
-            Parallel = builder._parallel
+            Parallel = builder._parallel,
+            WritesVersioned = builder._writesVersioned
         });
         return this;
     }
@@ -185,7 +187,8 @@ public sealed class RuntimeSchedule
             CanShed = builder._canShed,
             InputFactory = builder._inputFactory,
             ChangeFilter = builder._changeFilter,
-            Parallel = builder._parallel
+            Parallel = builder._parallel,
+            WritesVersioned = builder._writesVersioned
         });
         return this;
     }
@@ -350,6 +353,12 @@ public sealed class RuntimeSchedule
                 throw new InvalidOperationException(
                     $"System '{reg.Name}': ChangeFilter requires an Input View. Specify input: () => view alongside changeFilter.");
             }
+
+            if (reg.WritesVersioned && !reg.Parallel)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': WritesVersioned is only meaningful for parallel QuerySystems. Add b.Parallel() or parallel: true.");
+            }
         }
 
         _built = true;
@@ -468,6 +477,7 @@ public sealed class RuntimeSchedule
             systems[sysIdx].InputFactory = reg.InputFactory;
             systems[sysIdx].ChangeFilterTypes = reg.ChangeFilter;
             systems[sysIdx].IsParallelQuery = reg.Parallel;
+            systems[sysIdx].WritesVersioned = reg.WritesVersioned;
         }
 
         // Phase 6: Create scheduler
@@ -503,5 +513,6 @@ public sealed class RuntimeSchedule
         public Func<ViewBase> InputFactory;
         public Type[] ChangeFilter;
         public bool Parallel;
+        public bool WritesVersioned;
     }
 }

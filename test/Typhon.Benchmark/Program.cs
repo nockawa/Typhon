@@ -147,6 +147,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--parallel-dispatch"))
+            {
+                ParallelDispatchBenchmark.Run();
+                return;
+            }
+
 
 
             // BTree profile shortcuts: --btree-fast, --btree-medium, --btree-full
@@ -207,6 +213,7 @@ class Program
         table.AddRow("[cyan]--btree-fast[/]", "BTree quick profile: core ops + 2 concurrent (~3 min)");
         table.AddRow("[cyan]--btree-medium[/]", "BTree medium profile: all key types + concurrent scaling (~15 min)");
         table.AddRow("[cyan]--btree-full[/]", "BTree full profile: everything including tree sizes + enumeration (~50 min)");
+        table.AddRow("[cyan]--parallel-dispatch[/]", "Parallel dispatch: prepare O(1), PTA vs Transaction, scaling");
         table.AddRow("[cyan]--help, -h, -?[/]", "Show this help message");
         table.AddRow("[cyan]--exporters <list>[/]", "Export formats: json,markdown,html,rplot");
 

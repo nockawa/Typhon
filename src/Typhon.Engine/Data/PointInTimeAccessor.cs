@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using JetBrains.Annotations;
 
@@ -7,86 +6,146 @@ namespace Typhon.Engine;
 
 /// <summary>
 /// Thread-safe, lightweight snapshot accessor for parallel entity access.
-/// Created once in the prepare phase and shared across all parallel workers.
-/// Each worker thread gets its own <see cref="EntityAccessor"/> instance (lazily created on first use), providing per-thread component accessor caches and
-/// epoch scopes with zero contention.
+/// Constructed once (empty), then <see cref="Attach"/>ed before each parallel system dispatch to obtain a fresh TSN.
+/// Per-worker <see cref="EntityAccessor"/> instances are stored in a flat array indexed by worker ID — zero per-entity
+/// dictionary overhead.
 /// <para>
 /// Supports reading all storage modes (Versioned via MVCC chain walk, SingleVersion/Transient direct).
 /// Supports writing SingleVersion and Transient components. Throws on Versioned writes.
 /// Does not support Spawn, Destroy, Commit, or Rollback.
 /// </para>
 /// <para>
-/// <b>Long-lived reuse:</b> Call <see cref="AdvanceSnapshot"/> at each tick to update the MVCC snapshot without reallocating per-thread EntityAccessors.
-/// ChunkAccessor page caches stay warm across ticks — zero allocation after the first tick's warmup.
+/// <b>Reuse pattern:</b> A single PTA is constructed once and reused across all non-Versioned parallel systems within a tick
+/// and across ticks. Call <see cref="Attach"/> before each system dispatch — it allocates a fresh TSN and resets per-worker
+/// EntityAccessors while preserving ChunkAccessor page caches (zero allocation after first-tick warmup).
 /// </para>
 /// </summary>
 [PublicAPI]
 public sealed class PointInTimeAccessor : IDisposable
 {
-    private readonly DatabaseEngine _dbe;
-    private readonly ConcurrentDictionary<int, EntityAccessor> _threadAccessors = new();
+    private DatabaseEngine _dbe;
+    private EntityAccessor[] _workerAccessors; // Flat array indexed by workerId — no dictionary lookup
+    private int _workerCount;
     private bool _disposed;
 
-    private PointInTimeAccessor(DatabaseEngine dbe, long tsn)
+    /// <summary>Creates an empty PointInTimeAccessor. Call <see cref="Attach"/> before use.</summary>
+    public PointInTimeAccessor()
+    {
+    }
+
+    private PointInTimeAccessor(DatabaseEngine dbe, long tsn, int workerCount)
     {
         _dbe = dbe;
+        _workerCount = workerCount;
+        _workerAccessors = new EntityAccessor[workerCount];
         TSN = tsn;
+        IsAttached = true;
     }
 
     /// <summary>
     /// Creates a PointInTimeAccessor with a frozen MVCC snapshot at the current TSN.
-    /// Thread-safe: multiple workers can call Open/OpenMut concurrently after creation.
     /// </summary>
-    public static PointInTimeAccessor Create(DatabaseEngine dbe)
+    public static PointInTimeAccessor Create(DatabaseEngine dbe, int workerCount = 1)
     {
         var tsn = dbe.TransactionChain.AllocateTSN();
-        return new PointInTimeAccessor(dbe, tsn);
+        return new PointInTimeAccessor(dbe, tsn, workerCount);
     }
 
     /// <summary>The frozen MVCC snapshot timestamp. All workers see the same snapshot.</summary>
     public long TSN { get; private set; }
 
-    /// <summary>Read any storage mode (Versioned via MVCC chain walk, SV/Transient direct).</summary>
-    public EntityRef Open(EntityId id) => GetThreadAccessor().Open(id);
-
-    /// <summary>Write SV/Transient only. Throws for Versioned components at write time.</summary>
-    public EntityRef OpenMut(EntityId id) => GetThreadAccessor().OpenMut(id);
-
-    /// <summary>Try-pattern: returns false if entity not found or not visible.</summary>
-    public bool TryOpen(EntityId id, out EntityRef entity) => GetThreadAccessor().TryOpen(id, out entity);
+    /// <summary>Whether this accessor has been attached to a DatabaseEngine and has a valid TSN.</summary>
+    public bool IsAttached { get; private set; }
 
     /// <summary>
-    /// Advance to a new MVCC snapshot for the next tick. Flushes pending dirty state from the previous tick and updates the TSN on all existing per-thread EntityAccessors.
-    /// ChunkAccessor page caches are preserved — zero allocation, warm caches.
+    /// Attach (or re-attach) this accessor with a fresh TSN.
+    /// On first call: stores the engine reference and worker count, allocates the accessor array and a TSN.
+    /// On subsequent calls: allocates a fresh TSN and resets all existing per-worker EntityAccessors via
+    /// <see cref="EntityAccessor.ResetForNewSnapshot"/>, preserving ChunkAccessor page caches.
     /// <para>
-    /// Must be called from a single thread (the prepare phase), NOT concurrently with Open/OpenMut/TryOpen calls from worker threads.
+    /// Must be called from a single thread (the prepare phase), NOT concurrently with worker access.
     /// </para>
     /// </summary>
-    public void AdvanceSnapshot()
+    public void Attach(DatabaseEngine dbe, int workerCount)
     {
         Debug.Assert(!_disposed, "PointInTimeAccessor used after disposal");
+
+        _dbe ??= dbe;
+
+        // Resize array if worker count changed
+        if (_workerAccessors == null || _workerAccessors.Length < workerCount)
+        {
+            var old = _workerAccessors;
+            _workerAccessors = new EntityAccessor[workerCount];
+            if (old != null)
+            {
+                Array.Copy(old, _workerAccessors, old.Length);
+            }
+        }
+
+        _workerCount = workerCount;
+
         var newTsn = _dbe.TransactionChain.AllocateTSN();
         TSN = newTsn;
+        IsAttached = true;
 
-        foreach (var acc in _threadAccessors.Values)
+        // Reset existing accessors (warm caches preserved)
+        for (var i = 0; i < _workerCount; i++)
         {
-            acc.ResetForNewSnapshot(newTsn);
+            _workerAccessors[i]?.ResetForNewSnapshot(newTsn);
         }
     }
 
-    private EntityAccessor GetThreadAccessor()
+    /// <summary>
+    /// Get or create the EntityAccessor for the given worker. Called ONCE per chunk at chunk start.
+    /// The returned accessor is used directly for all Open/OpenMut calls — zero per-entity overhead.
+    /// </summary>
+    public EntityAccessor GetWorkerAccessor(int workerId)
     {
         Debug.Assert(!_disposed, "PointInTimeAccessor used after disposal");
-        var threadId = Environment.CurrentManagedThreadId;
-        if (_threadAccessors.TryGetValue(threadId, out var acc))
+        Debug.Assert(IsAttached, "PointInTimeAccessor used before Attach");
+        Debug.Assert(workerId >= 0 && workerId < _workerAccessors.Length,
+            $"workerId {workerId} out of range [0, {_workerAccessors.Length})");
+
+        var acc = _workerAccessors[workerId];
+        if (acc != null)
         {
             return acc;
         }
 
         acc = new EntityAccessor();
         acc.InitLightweight(_dbe, TSN);
-        _threadAccessors[threadId] = acc;
+        _workerAccessors[workerId] = acc;
         return acc;
+    }
+
+    /// <summary>
+    /// Advance to a new MVCC snapshot. Equivalent to <see cref="Attach"/> but reuses the existing engine and worker count.
+    /// </summary>
+    public void AdvanceSnapshot()
+    {
+        Debug.Assert(!_disposed, "PointInTimeAccessor used after disposal");
+        Debug.Assert(IsAttached, "PointInTimeAccessor.AdvanceSnapshot called before Attach");
+        var newTsn = _dbe.TransactionChain.AllocateTSN();
+        TSN = newTsn;
+
+        for (var i = 0; i < _workerCount; i++)
+        {
+            _workerAccessors[i]?.ResetForNewSnapshot(newTsn);
+        }
+    }
+
+    /// <summary>
+    /// Flush the given worker's EntityAccessor and refresh its epoch scope.
+    /// Called at the end of each parallel chunk callback on the worker thread.
+    /// </summary>
+    public void FlushWorker(int workerId)
+    {
+        Debug.Assert(!_disposed, "PointInTimeAccessor used after disposal");
+        if (workerId >= 0 && workerId < _workerCount)
+        {
+            _workerAccessors[workerId]?.RefreshEpochScope();
+        }
     }
 
     public void Dispose()
@@ -96,11 +155,15 @@ public sealed class PointInTimeAccessor : IDisposable
             return;
         }
         _disposed = true;
+        IsAttached = false;
 
-        foreach (var acc in _threadAccessors.Values)
+        if (_workerAccessors != null)
         {
-            acc.Dispose();
+            for (var i = 0; i < _workerAccessors.Length; i++)
+            {
+                _workerAccessors[i]?.Dispose();
+                _workerAccessors[i] = null;
+            }
         }
-        _threadAccessors.Clear();
     }
 }
