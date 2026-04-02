@@ -10,8 +10,8 @@ namespace Typhon.Engine;
 /// via cached Location ChunkIds.
 /// </summary>
 /// <remarks>
-/// <para>Created by <see cref="Transaction.Open"/> or <see cref="Transaction.OpenMut"/>. Must not outlive the creating transaction.</para>
-/// <para>Read/Write operations delegate to the Transaction for chunk accessor management.</para>
+/// <para>Created by <see cref="EntityAccessor.Open"/> or <see cref="EntityAccessor.OpenMut"/>. Must not outlive the creating accessor.</para>
+/// <para>Read/Write operations delegate to the EntityAccessor for chunk accessor management.</para>
 /// </remarks>
 [PublicAPI]
 public unsafe ref struct EntityRef
@@ -19,17 +19,17 @@ public unsafe ref struct EntityRef
     internal readonly EntityId _id;
     internal readonly ArchetypeMetadata _archetype;
     internal readonly ArchetypeEngineState _engineState;
-    internal readonly Transaction _tx;
+    internal readonly EntityAccessor _accessor;
     internal ushort _enabledBits;
     internal readonly bool _writable;
     private fixed int _locations[16];
 
-    internal EntityRef(EntityId id, ArchetypeMetadata archetype, ArchetypeEngineState engineState, Transaction tx, ushort enabledBits, bool writable)
+    internal EntityRef(EntityId id, ArchetypeMetadata archetype, ArchetypeEngineState engineState, EntityAccessor accessor, ushort enabledBits, bool writable)
     {
         _id = id;
         _archetype = archetype;
         _engineState = engineState;
-        _tx = tx;
+        _accessor = accessor;
         _enabledBits = enabledBits;
         _writable = writable;
     }
@@ -97,7 +97,7 @@ public unsafe ref struct EntityRef
 
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
-        return ref _tx.ReadEcsComponentData<T>(table, chunkId);
+        return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
     }
 
     /// <summary>Write a component by handle. Returns a mutable ref into the chunk page.
@@ -116,17 +116,17 @@ public unsafe ref struct EntityRef
 
         if (table.StorageMode == StorageMode.Versioned)
         {
-            var (newChunkId, rawPtr) = _tx.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+            var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
             _locations[slot] = newChunkId;
             return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
         }
 
         if (table.HasShadowableIndexes)
         {
-            _tx.ShadowIndexedFields<T>(table, chunkId, _id);
+            _accessor.ShadowIndexedFields<T>(table, chunkId, _id);
         }
 
-        return ref _tx.WriteEcsComponentData<T>(table, chunkId);
+        return ref _accessor.WriteEcsComponentData<T>(table, chunkId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -143,7 +143,7 @@ public unsafe ref struct EntityRef
 
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
-        return ref _tx.ReadEcsComponentData<T>(table, chunkId);
+        return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
     }
 
     /// <summary>Write a component by type. Resolves slot via archetype metadata.
@@ -162,17 +162,17 @@ public unsafe ref struct EntityRef
 
         if (table.StorageMode == StorageMode.Versioned)
         {
-            var (newChunkId, rawPtr) = _tx.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+            var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
             _locations[slot] = newChunkId;
             return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
         }
 
         if (table.HasShadowableIndexes)
         {
-            _tx.ShadowIndexedFields<T>(table, chunkId, _id);
+            _accessor.ShadowIndexedFields<T>(table, chunkId, _id);
         }
 
-        return ref _tx.WriteEcsComponentData<T>(table, chunkId);
+        return ref _accessor.WriteEcsComponentData<T>(table, chunkId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -215,7 +215,7 @@ public unsafe ref struct EntityRef
         }
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
-        value = _tx.ReadEcsComponentData<T>(table, chunkId);
+        value = _accessor.ReadEcsComponentData<T>(table, chunkId);
         return true;
     }
 
@@ -225,7 +225,7 @@ public unsafe ref struct EntityRef
         Debug.Assert(_writable, "EntityRef opened as read-only");
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         _enabledBits &= (ushort)~(1 << slot);
-        _tx.StageEnableDisable(_id, _enabledBits);
+        _accessor.StageEnableDisable(_id, _enabledBits);
     }
 
     /// <summary>Enable a component by handle. Stages the change for commit.</summary>
@@ -234,6 +234,6 @@ public unsafe ref struct EntityRef
         Debug.Assert(_writable, "EntityRef opened as read-only");
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         _enabledBits |= (ushort)(1 << slot);
-        _tx.StageEnableDisable(_id, _enabledBits);
+        _accessor.StageEnableDisable(_id, _enabledBits);
     }
 }

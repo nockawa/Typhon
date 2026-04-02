@@ -12,17 +12,10 @@ namespace Typhon.Engine;
 
 [PublicAPI]
 [DebuggerDisplay("TSN {TSN}, State: {State}")]
-public unsafe partial class Transaction : IDisposable
+public unsafe partial class Transaction : EntityAccessor
 {
     private const int RandomAccessCachedPagesCount = 8;
-    private const int ComponentInfosMaxCapacity = 131;
     private const int DeferredEnqueueBatchCapacity = 256;
-
-    /// <summary>
-    /// Number of entity operations between epoch refreshes. Each operation touches ~4-20 pages.
-    /// At 128 ops × ~10 pages/op = ~1280 pages — refreshes before saturating a 1024-page cache.
-    /// </summary>
-    private const int EpochRefreshInterval = 128;
 
     public enum TransactionState
     {
@@ -34,29 +27,9 @@ public unsafe partial class Transaction : IDisposable
     }
 
     public TransactionState State { get; private set; }
-    private bool _isDisposed;
-    private DatabaseEngine _dbe;
-    internal DatabaseEngine DBE => _dbe;
-    private EpochManager _epochManager;
-
-#if DEBUG
-    private int _debugOwningThreadId;
-#endif
-
-    private Dictionary<Type, ComponentInfo> _componentInfos;
-
-    /// <summary>
-    /// Cached EntityMap accessor for GetCompRevTableFirstChunkId / GetCompRevInfoFromIndex.
-    /// Reused across multiple calls targeting the same archetype. Disposed in Reset().
-    /// </summary>
-    private ushort _entityMapCacheArchId;
-    private ChunkAccessor<PersistentStore> _entityMapCacheAccessor;
-    private bool _hasEntityMapCache;
 
     private int? _committedOperationCount;
     private int _deletedComponentCount;
-    private int _entityOperationCount;
-    private ChangeSet _changeSet;
 
     // Reused across pooled Transaction lifetimes — collects deferred enqueue entries per commit/rollback
     // to flush in a single batch (one lock acquire instead of N). Never re-allocated after warmup.
@@ -98,12 +71,9 @@ public unsafe partial class Transaction : IDisposable
             return _committedOperationCount.Value;
         }
     }
-    
-    public long TSN { get; private set; }
 
     public Transaction()
     {
-        _componentInfos = new Dictionary<Type, ComponentInfo>(ComponentInfosMaxCapacity);
     }
 
     public void Init(DatabaseEngine dbe, long tsn, UnitOfWork uow = null, bool readOnly = false)
@@ -129,51 +99,23 @@ public unsafe partial class Transaction : IDisposable
         _dbe.TransactionChain.PushHead(this);
     }
 
-    internal void Reset()
+    /// <summary>Reset all state for pooling reuse. Called by TransactionChain after unlinking.</summary>
+    internal void Reset() => ResetCore();
+
+    private protected override void ResetCore()
     {
         // Clean up ECS state BEFORE nulling _dbe — CleanupEcsState needs _dbe._archetypeStates
         CleanupEcsState();
 
-        _dbe = null;
-        _epochManager = null;
+        base.ResetCore();
+
         OwningUnitOfWork = null;
         OwnsUnitOfWork = false;
         IsReadOnly = false;
-#if DEBUG
-        _debugOwningThreadId = 0;
-#endif
-        if (_hasEntityMapCache)
-        {
-            _entityMapCacheAccessor.Dispose();
-            _hasEntityMapCache = false;
-        }
-        if (_componentInfos.Capacity <= ComponentInfosMaxCapacity)
-        {
-            _componentInfos.Clear();
-        }
-        else
-        {
-            _componentInfos = new Dictionary<Type, ComponentInfo>(ComponentInfosMaxCapacity);
-        }
-        // Don't touch _isDisposed on purpose
-
-        TSN = 0;
         Next = null;
         _committedOperationCount = null;
         _deletedComponentCount = 0;
-        _changeSet = null;
         _deferredEnqueueBatch?.Clear();
-    }
-
-    [Conditional("DEBUG")]
-    private void AssertThreadAffinity()
-    {
-#if DEBUG
-        Debug.Assert(
-            _debugOwningThreadId == Environment.CurrentManagedThreadId,
-            "Transaction thread affinity violation: current thread differs from the creating thread. " +
-            "Transactions are single-thread-affine — all operations must run on the creating thread.");
-#endif
     }
 
     /// <summary>Throws if the transaction cannot accept new operations (read-only or already finalized).</summary>
@@ -210,7 +152,7 @@ public unsafe partial class Transaction : IDisposable
         _ => false,
     };
 
-    public void Dispose()
+    public override void Dispose()
     {
         // Dispose transient batch accessors first — safe even on double-dispose or if never created
         // (ChunkAccessor<PersistentStore>.Dispose() is idempotent: no-op when _segment==null).
@@ -288,15 +230,6 @@ public unsafe partial class Transaction : IDisposable
                     _dbe.DeferredCleanupManager.ProcessDeferredCleanups(TSN, nextMinTSN, _dbe, _changeSet);
                 }
             }
-        }
-    }
-
-    /// <summary>Dispose all ChunkAccessors to flush dirty pages.</summary>
-    private void FlushAccessors()
-    {
-        foreach (var info in _componentInfos.Values)
-        {
-            info.DisposeAccessors();
         }
     }
 
@@ -611,107 +544,10 @@ public unsafe partial class Transaction : IDisposable
         return header.ItemCount;
     }
 
-    private ComponentInfo GetComponentInfo(Type componentType)
-    {
-        if (_componentInfos.TryGetValue(componentType, out var info))
-        {
-            return info;
-        }
-
-        var ct = _dbe.GetComponentTable(componentType) ?? _dbe.FindComponentTableBySchemaName(componentType);
-        if (ct == null)
-        {
-            throw new InvalidOperationException($"The type {componentType} doesn't have a registered Component Table");
-        }
-
-        var isMultiple = ct.Definition.AllowMultiple;
-        info = new ComponentInfo(isMultiple)
-        {
-            ComponentTypeId = ArchetypeRegistry.GetComponentTypeId(componentType),
-            ComponentTable = ct,
-            ComponentOverhead = ct.ComponentOverhead,
-            SingleCache    = isMultiple ? null : new Dictionary<long, ComponentInfo.CompRevInfo>(),
-            MultipleCache  = isMultiple ? new Dictionary<long, List<ComponentInfo.CompRevInfo>>() : null,
-        };
-
-        switch (ct.StorageMode)
-        {
-            case StorageMode.Transient:
-                info.TransientCompContentAccessor = ct.TransientComponentSegment.CreateChunkAccessor();
-                break;
-            case StorageMode.SingleVersion:
-                info.CompContentSegment  = ct.ComponentSegment;
-                info.CompContentAccessor = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
-                break;
-            default: // Versioned
-                info.CompContentSegment   = ct.ComponentSegment;
-                info.CompRevTableSegment  = ct.CompRevTableSegment;
-                info.CompContentAccessor  = ct.ComponentSegment.CreateChunkAccessor(_changeSet);
-                info.CompRevTableAccessor = ct.CompRevTableSegment.CreateChunkAccessor(_changeSet);
-                break;
-        }
-
-        _componentInfos.Add(componentType, info);
-        return info;
-    }
-
     /// <summary>
-    /// Flush all pending dirty state and advance the epoch within this transaction.
-    /// Must only be called at a quiescent point — no B+Tree OLC write locks held,
-    /// no ChunkAccessor<PersistentStore> mid-operation.
+    /// Read-only transactions just refresh the epoch scope (no dirty state to flush).
     /// </summary>
-    private void FlushAndRefreshEpoch()
-    {
-        // 1. Flush dirty state on all live per-transaction ChunkAccessors.
-        //    SV/Transient components only have their mode-specific accessor initialized;
-        //    calling CommitChanges on a default struct is safe (no-op via _dirtyFlags==0 guard)
-        //    but we skip explicitly for clarity.
-        foreach (var ci in _componentInfos.Values)
-        {
-            if (ci.ComponentTable.StorageMode == StorageMode.Transient)
-            {
-                ci.TransientCompContentAccessor.CommitChanges();
-            }
-            else
-            {
-                ci.CompContentAccessor.CommitChanges();
-                if (ci.ComponentTable.StorageMode == StorageMode.Versioned)
-                {
-                    ci.CompRevTableAccessor.CommitChanges();
-                }
-            }
-        }
-
-        // 2. Cap DirtyCounter at 1 for all tracked pages, clear ChangeSet.
-        //    After clearing, re-registration in MarkSlotDirty brings DC to exactly 2
-        //    (ChangeSet.Add→DC=1, then EnsureDirtyAtLeast(2)→DC=2), so checkpoint needs at most 2 cycles.
-        _changeSet?.ReleaseExcessDirtyMarks();
-
-        // 3. Advance epoch atomically (no unpinned window)
-        var newEpoch = _epochManager.RefreshScope();
-
-        // 4. Keep warm accessor cache alive — update its epoch so RentWarmAccessor sees a match.
-        //    Without this, the next RentWarmAccessor creates a new accessor with empty slot cache,
-        //    forcing all hot pages through RequestPageEpoch which re-stamps their AccessEpoch,
-        //    making them permanently epoch-protected and causing unbounded cache pressure.
-        ChunkBasedSegment<PersistentStore>.RefreshWarmCacheEpoch(newEpoch);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void CheckEpochRefresh()
-    {
-        if (++_entityOperationCount >= EpochRefreshInterval)
-        {
-            FlushAndRefreshEpoch();
-            _entityOperationCount = 0;
-        }
-    }
-
-    /// <summary>
-    /// Epoch refresh for bulk enumerators. Read-only transactions just refresh the epoch scope (no dirty state to flush).
-    /// Read-write transactions delegate to <see cref="FlushAndRefreshEpoch"/> which also flushes ChunkAccessor<PersistentStore> dirty state.
-    /// </summary>
-    internal void EnumerateRefreshEpoch()
+    internal override void EnumerateRefreshEpoch()
     {
         if (IsReadOnly)
         {

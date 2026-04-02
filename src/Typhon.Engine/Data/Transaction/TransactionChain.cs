@@ -174,6 +174,12 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
     }
 
     /// <summary>
+    /// Allocates a monotonically-increasing TSN without creating a Transaction.
+    /// Used by <see cref="PointInTimeAccessor"/> to get an MVCC visibility snapshot point.
+    /// </summary>
+    internal long AllocateTSN() => Interlocked.Increment(ref _nextFreeId);
+
+    /// <summary>
     /// Lock-free transaction creation. No lock acquired — uses ConcurrentQueue for pooling, atomic TSN increment, and CAS-based PushHead.
     /// </summary>
     [return: TransfersOwnership]
