@@ -274,59 +274,6 @@ static class ParallelDispatchBenchmark
 
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// CPU-bound scaling benchmark: Read entity + synthetic compute per entity.
-    /// No writes → no page dirty tracking → no atomic contention.
-    /// The hash-mix loop (~200ns) simulates game logic (AI, rules, physics) that dominates over entity access.
-    /// </summary>
-    private static double MeasureCompute(int entityCount, int workers, int warmup, int measured)
-    {
-        using var env = BenchEnv.Create(entityCount);
-        using var txView = env.Dbe.CreateQuickTransaction();
-        var view = txView.Query<BenchArch>().ToView();
-
-        using var runtime = TyphonRuntime.Create(env.Dbe, schedule =>
-        {
-            schedule.QuerySystem("B", ctx =>
-            {
-                // Read entity data + CPU-bound work per entity (~300ns total: ~100ns Open+Read, ~200ns compute)
-                long accumulator = 0;
-                foreach (var id in ctx.Entities)
-                {
-                    var entity = ctx.Accessor.Open(id);
-                    var data = entity.Read(BenchArch.Data);
-
-                    // Synthetic CPU work: 20 rounds of hash mix (~10ns each ≈ 200ns total)
-                    // Simulates per-entity game logic (AI decision, rule evaluation, distance check)
-                    var h = (uint)(data.Value ^ (int)data.Timestamp);
-                    for (var r = 0; r < 20; r++)
-                    {
-                        h ^= h << 13;
-                        h ^= h >> 17;
-                        h ^= h << 5;
-                    }
-
-                    accumulator += h; // prevent dead-code elimination
-                }
-
-                // Volatile store to prevent the entire loop from being optimized away
-                Thread.VolatileWrite(ref Dummy, accumulator);
-            }, input: () => view, parallel: true);
-        }, new RuntimeOptions { WorkerCount = workers, BaseTickRate = BenchTickRate });
-
-        runtime.Start();
-        SpinWait.SpinUntil(() => runtime.CurrentTickNumber >= warmup, TimeSpan.FromSeconds(30));
-
-        var t0 = runtime.CurrentTickNumber;
-        var sw = Stopwatch.StartNew();
-        SpinWait.SpinUntil(() => runtime.CurrentTickNumber >= t0 + measured, TimeSpan.FromSeconds(30));
-        sw.Stop();
-        var ticks = runtime.CurrentTickNumber - t0;
-
-        runtime.Shutdown();
-        return ticks > 0 ? sw.Elapsed.TotalMicroseconds / ticks : 0;
-    }
-
     private static long Dummy; // Anti-optimization sink
 
     /// <summary>

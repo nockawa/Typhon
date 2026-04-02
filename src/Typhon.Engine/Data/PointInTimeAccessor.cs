@@ -70,6 +70,7 @@ public sealed class PointInTimeAccessor : IDisposable
     {
         Debug.Assert(!_disposed, "PointInTimeAccessor used after disposal");
 
+        Debug.Assert(_dbe == null || _dbe == dbe, "PointInTimeAccessor.Attach called with a different DatabaseEngine than the initial Attach");
         _dbe ??= dbe;
 
         // Resize array if worker count changed

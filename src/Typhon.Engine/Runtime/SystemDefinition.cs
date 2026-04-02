@@ -115,12 +115,12 @@ public sealed class SystemDefinition
     /// When true, Execute is called once per chunk with a per-chunk Transaction and entity slice.
     /// Set by <see cref="RuntimeSchedule"/> from <see cref="SystemBuilder.Parallel"/>.
     /// </summary>
-    public bool IsParallelQuery { get; set; }
+    public bool IsParallelQuery { get; internal set; }
 
     /// <summary>
     /// True if this parallel QuerySystem writes Versioned components (copy-on-write MVCC).
     /// When true, per-chunk Transactions are used instead of the optimized PointInTimeAccessor path.
     /// Set by <see cref="RuntimeSchedule"/> from <see cref="SystemBuilder.WritesVersioned"/>.
     /// </summary>
-    public bool WritesVersioned { get; set; }
+    public bool WritesVersioned { get; internal set; }
 }

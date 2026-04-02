@@ -40,8 +40,11 @@ public sealed class TyphonRuntime : IDisposable
     private readonly EventQueueBase[][] _systemConsumedQueues;     // Pre-allocated consumed queue refs per system (null if none)
     private readonly PooledEntityList[] _parallelEntityLists;      // Full entity set for parallel QuerySystem chunk slicing
     private readonly HashMap<long>[] _multiTableFilterSets;        // Cached dedup sets for multi-table BuildFilteredEntitySet (avoids per-tick alloc)
-    private readonly PointInTimeAccessor _parallelAccessor;        // Single reusable PTA — Attach()ed before each non-Versioned parallel system
-    private readonly PartitionEntityView[] _partitionViews;        // Pre-allocated per-worker partition views (reused across systems since dispatch is sequential)
+    private readonly PointInTimeAccessor[] _parallelAccessors;      // Per-system reusable PTAs — Attach()ed each tick (per-system to avoid race with DAG-concurrent systems)
+    private readonly PartitionEntityView[][] _partitionViews;      // Per-system per-worker partition views [sysIdx][chunkIdx]
+
+    // Cached delegate — avoids per-TickContext allocation from method group conversion
+    private readonly Func<DurabilityMode, Transaction> _createSideTxDelegate;
 
     // First-tick flag
     private bool _firstTickExecuted;
@@ -139,12 +142,9 @@ public sealed class TyphonRuntime : IDisposable
         _systemConsumedQueues = new EventQueueBase[scheduler.SystemCount][];
         _parallelEntityLists = new PooledEntityList[scheduler.SystemCount];
         _multiTableFilterSets = new HashMap<long>[scheduler.SystemCount];
-        _parallelAccessor = new PointInTimeAccessor();
-        _partitionViews = new PartitionEntityView[scheduler.WorkerCount];
-        for (var w = 0; w < scheduler.WorkerCount; w++)
-        {
-            _partitionViews[w] = new PartitionEntityView();
-        }
+        _parallelAccessors = new PointInTimeAccessor[scheduler.SystemCount];
+        _partitionViews = new PartitionEntityView[scheduler.SystemCount][];
+        _createSideTxDelegate = CreateSideTransactionInternal;
 
         ResolveChangeFilters(scheduler);
 
@@ -210,7 +210,7 @@ public sealed class TyphonRuntime : IDisposable
                 TickNumber = Scheduler.CurrentTickNumber,
                 DeltaTime = 0f,
                 Transaction = tx,
-                CreateSideTransaction = CreateSideTransactionInternal,
+                CreateSideTransaction = _createSideTxDelegate,
                 Entities = PooledEntityList.Empty
             };
             OnShutdown.Invoke(ctx);
@@ -226,8 +226,12 @@ public sealed class TyphonRuntime : IDisposable
         _tcpServer?.Dispose();
         Scheduler.Dispose();
 
-        // Dispose the shared PTA AFTER scheduler — workers must be fully stopped before we flush their per-thread EntityAccessors' ChangeSets.
-        _parallelAccessor?.Dispose();
+        // Dispose per-system PTAs AFTER scheduler — workers must be fully stopped
+        // before we flush their per-thread EntityAccessors' ChangeSets.
+        for (var i = 0; i < _parallelAccessors.Length; i++)
+        {
+            _parallelAccessors[i]?.Dispose();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -608,6 +612,22 @@ public sealed class TyphonRuntime : IDisposable
         return PrepareFullNonVersioned(sysIdx);
     }
 
+    /// <summary>Lazy-init per-system PTA and PartitionEntityViews on first use. Zero-alloc on subsequent ticks.</summary>
+    private void EnsureParallelResources(int sysIdx)
+    {
+        if (_parallelAccessors[sysIdx] == null)
+        {
+            _parallelAccessors[sysIdx] = new PointInTimeAccessor();
+            _partitionViews[sysIdx] = new PartitionEntityView[Scheduler.WorkerCount];
+            for (var w = 0; w < Scheduler.WorkerCount; w++)
+            {
+                _partitionViews[sysIdx][w] = new PartitionEntityView();
+            }
+        }
+
+        _parallelAccessors[sysIdx].Attach(Engine, Scheduler.WorkerCount);
+    }
+
     /// <summary>Path 1: Full View, Non-Versioned. O(1) prepare — no entity list materialization.</summary>
     private int PrepareFullNonVersioned(int sysIdx)
     {
@@ -617,8 +637,7 @@ public sealed class TyphonRuntime : IDisposable
             return 0;
         }
 
-        // Attach the shared PTA — gets a fresh TSN, resets per-thread accessors (warm caches preserved)
-        _parallelAccessor.Attach(Engine, Scheduler.WorkerCount);
+        EnsureParallelResources(sysIdx);
 
         ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
         metrics.EntitiesProcessed = view.Count;
@@ -632,8 +651,7 @@ public sealed class TyphonRuntime : IDisposable
         var entityList = BuildFilteredEntitySet(sysIdx);
         _parallelEntityLists[sysIdx] = entityList;
 
-        // Attach the shared PTA — gets a fresh TSN, resets per-thread accessors (warm caches preserved)
-        _parallelAccessor.Attach(Engine, Scheduler.WorkerCount);
+        EnsureParallelResources(sysIdx);
 
         ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
         metrics.EntitiesProcessed = entityList.Count;
@@ -708,9 +726,10 @@ public sealed class TyphonRuntime : IDisposable
         ExecuteChunkWithAccessor(sysIdx, chunkIndex, totalChunks, workerId);
     }
 
-    /// <summary>Paths 1 & 2: Non-Versioned chunk execution with per-worker EntityAccessor from the shared PTA.</summary>
+    /// <summary>Paths 1 & 2: Non-Versioned chunk execution with per-worker EntityAccessor from per-system PTA.</summary>
     private void ExecuteChunkWithAccessor(int sysIdx, int chunkIndex, int totalChunks, int workerId)
     {
+        var pta = _parallelAccessors[sysIdx];
         var hasChangeFilter = _systemChangeFilterTables[sysIdx] != null;
 
         IReadOnlyCollection<EntityId> entities;
@@ -727,14 +746,14 @@ public sealed class TyphonRuntime : IDisposable
         }
         else
         {
-            // Path 1: Full — zero-copy partition view over HashMap buckets
-            var partView = _partitionViews[chunkIndex];
+            // Path 1: Full — zero-copy partition view over HashMap buckets (per-system views, safe for concurrent systems)
+            var partView = _partitionViews[sysIdx][chunkIndex];
             partView.Reset(_systemViews[sysIdx].EntityIdsInternal, chunkIndex, totalChunks);
             entities = partView;
         }
 
         // Get this worker's EntityAccessor — direct array lookup, zero dictionary overhead
-        var workerAccessor = _parallelAccessor.GetWorkerAccessor(workerId);
+        var workerAccessor = pta.GetWorkerAccessor(workerId);
 
         try
         {
@@ -743,7 +762,7 @@ public sealed class TyphonRuntime : IDisposable
                 TickNumber = Scheduler.CurrentTickNumber,
                 DeltaTime = _currentDeltaTime,
                 Accessor = workerAccessor,
-                CreateSideTransaction = CreateSideTransactionInternal,
+                CreateSideTransaction = _createSideTxDelegate,
                 Entities = entities,
                 ConsumedQueues = null
             };
@@ -753,7 +772,7 @@ public sealed class TyphonRuntime : IDisposable
         finally
         {
             // Epoch cleanup: flush dirty state and advance epoch on this worker thread
-            _parallelAccessor.FlushWorker(workerId);
+            pta.FlushWorker(workerId);
         }
     }
 
@@ -780,7 +799,7 @@ public sealed class TyphonRuntime : IDisposable
                 TickNumber = Scheduler.CurrentTickNumber,
                 DeltaTime = _currentDeltaTime,
                 Transaction = tx,
-                CreateSideTransaction = CreateSideTransactionInternal,
+                CreateSideTransaction = _createSideTxDelegate,
                 Entities = slice,
                 ConsumedQueues = null
             };
@@ -839,7 +858,7 @@ public sealed class TyphonRuntime : IDisposable
                 TickNumber = scheduler.CurrentTickNumber,
                 DeltaTime = _currentDeltaTime,
                 Transaction = tx,
-                CreateSideTransaction = CreateSideTransactionInternal,
+                CreateSideTransaction = _createSideTxDelegate,
                 Entities = PooledEntityList.Empty
             };
 
@@ -851,9 +870,8 @@ public sealed class TyphonRuntime : IDisposable
             finally
             {
                 tx.Dispose();
+                _firstTickExecuted = true; // Set in finally — prevents infinite retry if handler throws
             }
-
-            _firstTickExecuted = true;
         }
     }
 
@@ -926,7 +944,7 @@ public sealed class TyphonRuntime : IDisposable
             TickNumber = Scheduler.CurrentTickNumber,
             DeltaTime = _currentDeltaTime,
             Transaction = tx,
-            CreateSideTransaction = CreateSideTransactionInternal,
+            CreateSideTransaction = _createSideTxDelegate,
             Entities = entities,
             ConsumedQueues = _systemConsumedQueues[sysIdx]
         };

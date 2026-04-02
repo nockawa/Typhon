@@ -262,9 +262,16 @@ public partial class EntityAccessor : IDisposable
     /// </summary>
     internal void ResetForNewSnapshot(long newTsn)
     {
-        // Flush pending dirty state from previous tick
-        foreach (var ci in _componentInfos.Values)
+        // Flush pending dirty state from previous tick.
+        // Iterate the flat array (no Dictionary enumerator allocation) — only non-null slots.
+        for (var i = 0; i < _componentInfosByTypeId.Length; i++)
         {
+            var ci = _componentInfosByTypeId[i];
+            if (ci == null)
+            {
+                continue;
+            }
+
             if (ci.ComponentTable.StorageMode == StorageMode.Transient)
             {
                 ci.TransientCompContentAccessor.CommitChanges();
