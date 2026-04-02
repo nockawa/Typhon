@@ -61,6 +61,9 @@ public class ResourceRegistry : IResourceRegistry
     /// <inheritdoc />
     public IResource TimerDedicated { get; }
 
+    /// <inheritdoc />
+    public IResource Runtime { get; }
+
     /// <summary>
     /// Creates a new resource registry with the standard subsystem tree.
     /// </summary>
@@ -81,6 +84,9 @@ public class ResourceRegistry : IResourceRegistry
         // Timer subsystem
         Timer = new ResourceNode("Timer", ResourceType.Node, Root);
         TimerDedicated = new ResourceNode("Dedicated", ResourceType.Node, Timer);
+
+        // Runtime subsystem
+        Runtime = new ResourceNode("Runtime", ResourceType.Node, Root);
     }
 
     /// <inheritdoc />
@@ -92,6 +98,7 @@ public class ResourceRegistry : IResourceRegistry
         ResourceSubsystem.Allocation => Allocation,
         ResourceSubsystem.Synchronization => Synchronization,
         ResourceSubsystem.Timer => Timer,
+        ResourceSubsystem.Runtime => Runtime,
         _ => throw new ArgumentOutOfRangeException(nameof(subsystem), subsystem, "Unknown subsystem")
     };
 

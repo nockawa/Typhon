@@ -14,13 +14,13 @@ public class HashMapTests
     private static IResource Parent => BitmapTestServices.AllocationResource;
 
     private static HashMap<int> CreateSet(int initialBuckets = 64) =>
-        new("TestSet", Parent, Allocator, initialBuckets);
+        new(initialBuckets);
 
     private static HashMap<int, int> CreateMap(int initialBuckets = 64) =>
-        new("TestMap", Parent, Allocator, initialBuckets);
+        new(initialBuckets);
 
     private static HashMap<int, string> CreateManagedMap(int initialBuckets = 64) =>
-        new("TestManagedMap", Parent, Allocator, initialBuckets);
+        new(initialBuckets);
 
     // ═══════════════════════════════════════════════════════════════════════
     // HashUtils tests

@@ -228,6 +228,21 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     // ── SingleVersion dirty tracking (non-null only when StorageMode == SingleVersion) ──
     internal DirtyBitmap DirtyBitmap { get; private set; }
 
+    /// <summary>
+    /// Raw dirty bitmap snapshot from the previous tick, captured at tick fence time via <see cref="DirtyBitmap.Snapshot()"/>.
+    /// Each set bit represents a chunkId with dirty component data. Used by the runtime's change-filtered
+    /// system inputs (#197): the runtime iterates set bits, reads entity PK from chunk offset 0, and intersects with the View.
+    /// Null before the first tick fence runs.
+    /// </summary>
+    internal long[] PreviousTickDirtyBitmap { get; set; }
+
+    /// <summary>
+    /// Whether any entity was dirty in the previous tick. Reliable regardless of EntityPK overhead.
+    /// Used as a fast skip check by ReactiveSkip closures.
+    /// Defaults to true so the first tick (before any tick fence) is conservative.
+    /// </summary>
+    internal bool PreviousTickHadDirtyEntities { get; set; } = true;
+
     // ── Shadow tracking for SV tick-boundary index/view maintenance ──
     // Non-null only when StorageMode == SingleVersion AND IndexedFieldInfos.Length > 0.
     // ShadowBitmap tracks which chunkIds have been shadowed this tick (TestAndSet guard).
@@ -241,34 +256,15 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     // ── Destroyed chunk tracking for SV index cleanup ──
     // Accumulates chunkIds of destroyed SV entities during commits this tick.
-    // Checked by ProcessShadowEntries to distinguish Remove vs Move. Cleared at tick boundary.
-    private HashSet<int> _destroyedChunkIds;
-    private readonly Lock _destroyedLock = new();
+    // Checked by ProcessShadowEntries/BuildFilteredEntitySet to distinguish Remove vs Move. Cleared at tick boundary.
+    // Fully lock-free: ConcurrentHashMap uses OLC for reads (~5ns) and per-stripe CAS locks for writes (no global lock).
+    private readonly ConcurrentHashMap<int> _destroyedChunkIds = new(64);
 
-    internal void TrackDestroyedChunkId(int chunkId)
-    {
-        lock (_destroyedLock)
-        {
-            _destroyedChunkIds ??= [];
-            _destroyedChunkIds.Add(chunkId);
-        }
-    }
+    internal void TrackDestroyedChunkId(int chunkId) => _destroyedChunkIds.TryAdd(chunkId);
 
-    internal bool IsChunkDestroyed(int chunkId)
-    {
-        lock (_destroyedLock)
-        {
-            return _destroyedChunkIds != null && _destroyedChunkIds.Contains(chunkId);
-        }
-    }
+    internal bool IsChunkDestroyed(int chunkId) => _destroyedChunkIds.Contains(chunkId);
 
-    internal void ClearDestroyedChunkIds()
-    {
-        lock (_destroyedLock)
-        {
-            _destroyedChunkIds?.Clear();
-        }
-    }
+    internal void ClearDestroyedChunkIds() => _destroyedChunkIds.Clear();
 
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }

@@ -27,7 +27,7 @@ internal class PipelineExecutor
     /// <param name="table">The component table to read entities from.</param>
     /// <param name="tx">Transaction for MVCC-consistent reads.</param>
     /// <param name="result">Caller-provided set to populate. Must be empty (or pre-cleared by caller).</param>
-    public void Execute(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> result) 
+    public void Execute(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashMap<long> result) 
         => ExecuteCore(plan, evaluators, table, tx, result, null, 0, int.MaxValue);
 
     /// <summary>
@@ -331,7 +331,7 @@ internal class PipelineExecutor
         return result;
     }
 
-    private void ExecuteCore(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> unorderedResult,
+    private void ExecuteCore(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashMap<long> unorderedResult,
         List<long> orderedResult, int skip, int take)
     {
         if (take == 0)
@@ -350,7 +350,7 @@ internal class PipelineExecutor
     /// <see cref="CompRevStorageHeader.EntityPK"/>, then evaluates remaining predicates via component reads.
     /// </summary>
     private void ExecuteCoreSecondaryIndex(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx,
-        HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take)
+        HashMap<long> unorderedResult, List<long> orderedResult, int skip, int take)
     {
         // SingleVersion: combined scan+evaluate in one pass (no QueryRead, no CompRevTable).
         if (table.StorageMode == StorageMode.SingleVersion)
@@ -391,7 +391,7 @@ internal class PipelineExecutor
     /// evaluates non-primary filters on the resolved component data, collects entity PKs.
     /// </summary>
     private static void ExecutePKsTypedVersioned<TKey>(BTree<TKey, PersistentStore> index, ExecutionPlan plan, ComponentTable table,
-        FieldEvaluator[] evaluators, Transaction tx, HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take) where TKey : unmanaged
+        FieldEvaluator[] evaluators, Transaction tx, HashMap<long> unorderedResult, List<long> orderedResult, int skip, int take) where TKey : unmanaged
     {
         var minKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMin);
         var maxKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMax);
@@ -458,7 +458,7 @@ internal class PipelineExecutor
     /// </summary>
     private static unsafe bool ExecuteOneVersioned(int compRevFirstChunkId, ref ChunkAccessor<PersistentStore> compRevAccessor,
         ref ChunkAccessor<PersistentStore> compContentAccessor, ComponentTable table, FieldEvaluator[] nonPrimaryEvals, bool hasFilters, Transaction tx,
-        HashSet<long> unorderedResult, List<long> orderedResult, ref int skip, ref int collected)
+        HashMap<long> unorderedResult, List<long> orderedResult, ref int skip, ref int collected)
     {
         // Read entityPK from CompRevStorageHeader
         ref var header = ref compRevAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId);
@@ -494,7 +494,7 @@ internal class PipelineExecutor
 
         if (skip > 0) { skip--; return false; }
 
-        if (unorderedResult != null) { unorderedResult.Add(entityPK); }
+        if (unorderedResult != null) { unorderedResult.TryAdd(entityPK); }
         else { orderedResult?.Add(entityPK); }
 
         collected++;
@@ -505,7 +505,7 @@ internal class PipelineExecutor
     /// SV-specific secondary index Execute: dispatches to typed method for index iteration.
     /// Combines scan + evaluate + collect in one pass — no QueryRead, no CompRevTable.
     /// </summary>
-    private void ExecuteCoreSecondaryIndexSV(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, HashSet<long> unorderedResult, 
+    private void ExecuteCoreSecondaryIndexSV(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, HashMap<long> unorderedResult, 
         List<long> orderedResult, int skip, int take)
     {
         var ifi = table.IndexedFieldInfos[plan.PrimaryFieldIndex];
@@ -529,7 +529,7 @@ internal class PipelineExecutor
     /// <summary>
     /// Transient secondary index Execute: dispatches to typed generic non-versioned method using TransientStore accessors.
     /// </summary>
-    private void ExecuteCoreSecondaryIndexTransient(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, HashSet<long> unorderedResult,
+    private void ExecuteCoreSecondaryIndexTransient(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, HashMap<long> unorderedResult,
         List<long> orderedResult, int skip, int take)
     {
         var ifi = table.IndexedFieldInfos[plan.PrimaryFieldIndex];
@@ -562,7 +562,7 @@ internal class PipelineExecutor
     /// collects matching PKs.
     /// </summary>
     private static unsafe void ExecutePKsTypedSV<TKey>(BTree<TKey, PersistentStore> index, ExecutionPlan plan, ComponentTable table, 
-        FieldEvaluator[] evaluators, HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take) where TKey : unmanaged
+        FieldEvaluator[] evaluators, HashMap<long> unorderedResult, List<long> orderedResult, int skip, int take) where TKey : unmanaged
     {
         var minKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMin);
         var maxKey = BTree<TKey, PersistentStore>.LongToKey(plan.PrimaryScanMax);
@@ -598,7 +598,7 @@ internal class PipelineExecutor
 
                                 if (unorderedResult != null)
                                 {
-                                    unorderedResult.Add(entityPK);
+                                    unorderedResult.TryAdd(entityPK);
                                 }
                                 else
                                 {
@@ -633,7 +633,7 @@ internal class PipelineExecutor
 
                     if (unorderedResult != null)
                     {
-                        unorderedResult.Add(entityPK);
+                        unorderedResult.TryAdd(entityPK);
                     }
                     else
                     {
@@ -714,7 +714,7 @@ internal class PipelineExecutor
     /// Non-versioned Execute: iterates index range, reads entityPK from inline chunk overhead, collects matching PKs. Works for both SV and Transient store types.
     /// </summary>
     private static unsafe void ExecutePKsTypedNonVersioned<TKey, TStore>(BTree<TKey, TStore> index, ExecutionPlan plan, ComponentTable table,
-        FieldEvaluator[] evaluators, HashSet<long> unorderedResult, List<long> orderedResult, int skip, int take,
+        FieldEvaluator[] evaluators, HashMap<long> unorderedResult, List<long> orderedResult, int skip, int take,
         ref ChunkAccessor<TStore> compAccessor) where TKey : unmanaged where TStore : struct, IPageStore
     {
         var minKey = BTree<TKey, TStore>.LongToKey(plan.PrimaryScanMin);
@@ -748,7 +748,7 @@ internal class PipelineExecutor
 
                             if (unorderedResult != null)
                             {
-                                unorderedResult.Add(entityPK);
+                                unorderedResult.TryAdd(entityPK);
                             }
                             else
                             {
@@ -783,7 +783,7 @@ internal class PipelineExecutor
 
                 if (unorderedResult != null)
                 {
-                    unorderedResult.Add(entityPK);
+                    unorderedResult.TryAdd(entityPK);
                 }
                 else
                 {

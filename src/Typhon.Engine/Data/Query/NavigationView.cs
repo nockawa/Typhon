@@ -507,7 +507,7 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
 
     private void RefreshFull(Transaction tx)
     {
-        var oldEntities = new HashSet<long>(_entityIds);
+        var oldEntities = _entityIds.Clone();
 
         DeltaBuffer.Reset(tx.TSN);
 

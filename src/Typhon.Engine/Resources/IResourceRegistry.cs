@@ -25,7 +25,10 @@ public enum ResourceSubsystem
     Synchronization,
 
     /// <summary>Timer services: high-resolution shared and dedicated timers</summary>
-    Timer
+    Timer,
+
+    /// <summary>Runtime subsystem: DAG scheduler, tick loop, worker pool</summary>
+    Runtime
 }
 
 /// <summary>
@@ -68,6 +71,9 @@ public interface IResourceRegistry : IDisposable
 
     /// <summary>Timer/Dedicated sub-node for isolated single-handler timers.</summary>
     IResource TimerDedicated { get; }
+
+    /// <summary>Runtime subsystem node (DAG scheduler, tick loop, worker pool).</summary>
+    IResource Runtime { get; }
 
     /// <summary>
     /// Gets the subsystem node for the specified category.

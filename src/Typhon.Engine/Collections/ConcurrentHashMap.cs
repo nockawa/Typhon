@@ -1,7 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine;
@@ -18,9 +18,9 @@ namespace Typhon.Engine;
 ///   <item><b>Resize</b>: Per-stripe, under existing write lock. Other stripes remain fully accessible.</item>
 /// </list>
 /// </para>
-/// Replaces concurrent <see cref="HashSet{T}"/> usage on hot paths.
+/// Uses POH (Pinned Object Heap) allocation — same memory model as <see cref="HashMap{TKey}"/>.
 /// </summary>
-public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, IEquatable<TKey>
+public unsafe class ConcurrentHashMap<TKey> : IDisposable where TKey : unmanaged, IEquatable<TKey>
 {
     private const double MaxLoadFactor = 0.75;
 
@@ -36,37 +36,25 @@ public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, 
         public int Mask;              // Capacity - 1
         public int ResizeThreshold;
         public byte* Entries;
-        public PinnedMemoryBlock Block;
+        public byte[] PohArray;       // POH array reference — prevents GC collection
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Fields
     // ═══════════════════════════════════════════════════════════════════════
 
-    private readonly IMemoryAllocator _allocator;
     private readonly int _entryStride;       // bytes per entry: (4 + sizeof(TKey)) aligned to 4
     private readonly int _stripeCount;
     private readonly int _stripeShift;       // 32 - log2(stripeCount), for stripe selection via hash >> shift
     private readonly Stripe[] _stripes;
-    private readonly Lock _retiredLock = new();
-    private readonly List<PinnedMemoryBlock> _retiredBlocks = new();
     private bool _disposed;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
-    public ConcurrentHashMap(string id, IResource parent, IMemoryAllocator allocator, int initialCapacity = 1024)
+    public ConcurrentHashMap(int initialCapacity = 1024)
     {
-        ArgumentNullException.ThrowIfNull(parent);
-        ArgumentNullException.ThrowIfNull(allocator);
-
-        Id = id ?? Guid.NewGuid().ToString();
-        Parent = parent;
-        Owner = parent.Owner;
-        CreatedAt = DateTime.UtcNow;
-        _allocator = allocator;
-
         _entryStride = (4 + sizeof(TKey) + 3) & ~3;
         _stripeCount = Math.Max(64, (int)BitOperations.RoundUpToPowerOf2((uint)Environment.ProcessorCount * 4));
         _stripeShift = 32 - BitOperations.Log2((uint)_stripeCount);
@@ -80,40 +68,11 @@ public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, 
             stripe.Capacity = perStripeCapacity;
             stripe.Mask = perStripeCapacity - 1;
             stripe.ResizeThreshold = (int)(perStripeCapacity * MaxLoadFactor);
-            stripe.Block = allocator.AllocatePinned($"{Id}/Stripe{i}", this, perStripeCapacity * _entryStride, true, 64);
-            stripe.Entries = stripe.Block.DataAsPointer;
-        }
-
-        parent.RegisterChild(this);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // IResource
-    // ═══════════════════════════════════════════════════════════════════════
-
-    public string Id { get; }
-    public ResourceType Type => ResourceType.None;
-    public IResource Parent { get; }
-
-    public IEnumerable<IResource> Children
-    {
-        get
-        {
-            for (int i = 0; i < _stripeCount; i++)
-            {
-                var block = _stripes[i].Block;
-                if (block != null)
-                {
-                    yield return block;
-                }
-            }
+            int size = perStripeCapacity * _entryStride;
+            stripe.PohArray = GC.AllocateArray<byte>(size, pinned: true);
+            stripe.Entries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(stripe.PohArray));
         }
     }
-
-    public DateTime CreatedAt { get; }
-    public IResourceRegistry Owner { get; }
-    public bool RegisterChild(IResource child) => false;
-    public bool RemoveChild(IResource resource) => false;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Properties
@@ -160,7 +119,7 @@ public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, 
 
             if (stripe.Count >= stripe.ResizeThreshold)
             {
-                ResizeStripe(ref stripe, stripeIdx, checked(stripe.Capacity * 2));
+                ResizeStripe(ref stripe, checked(stripe.Capacity * 2));
             }
 
             int idx = (int)(hash & (uint)stripe.Mask);
@@ -339,7 +298,7 @@ public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, 
             {
                 if (perStripe > stripe.Capacity)
                 {
-                    ResizeStripe(ref stripe, i, perStripe);
+                    ResizeStripe(ref stripe, perStripe);
                 }
             }
             finally
@@ -409,21 +368,10 @@ public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, 
 
         for (int i = 0; i < _stripeCount; i++)
         {
-            _stripes[i].Block?.Dispose();
-            _stripes[i].Block = null;
+            _stripes[i].PohArray = null;
             _stripes[i].Entries = null;
+            _stripes[i].Count = 0;
         }
-
-        lock (_retiredLock)
-        {
-            foreach (var block in _retiredBlocks)
-            {
-                block.Dispose();
-            }
-            _retiredBlocks.Clear();
-        }
-
-        Parent.RemoveChild(this);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -519,11 +467,12 @@ public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, 
     // Private — per-stripe resize (called under stripe lock)
     // ═══════════════════════════════════════════════════════════════════════
 
-    private void ResizeStripe(ref Stripe stripe, int stripeIdx, int newCapacity)
+    private void ResizeStripe(ref Stripe stripe, int newCapacity)
     {
         int stride = _entryStride;
-        var newBlock = _allocator.AllocatePinned($"{Id}/Stripe{stripeIdx}", this, newCapacity * stride, true, 64);
-        byte* newEntries = newBlock.DataAsPointer;
+        int newSize = newCapacity * stride;
+        var newPoh = GC.AllocateArray<byte>(newSize, pinned: true);
+        byte* newEntries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(newPoh));
         int newMask = newCapacity - 1;
 
         for (int i = 0; i < stripe.Capacity; i++)
@@ -541,14 +490,9 @@ public unsafe class ConcurrentHashMap<TKey> : IResource where TKey : unmanaged, 
             }
         }
 
-        // Retire old block — lock-free readers may still be probing it
-        var oldBlock = stripe.Block;
-        lock (_retiredLock)
-        {
-            _retiredBlocks.Add(oldBlock);
-        }
-
-        stripe.Block = newBlock;
+        // Old POH array: GC collects it once lock-free readers finish probing.
+        // OLC version bump in ReleaseStripeLock ensures readers retry with new entries pointer.
+        stripe.PohArray = newPoh;
         stripe.Entries = newEntries;
         stripe.Capacity = newCapacity;
         stripe.Mask = newMask;

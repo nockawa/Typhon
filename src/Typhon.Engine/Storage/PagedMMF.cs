@@ -1340,23 +1340,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     {
         var pi = _memPagesInfo[memPageIndex];
         Debug.Assert(pi.PageState is PageState.Exclusive or PageState.Idle, "We can't increment the dirty counter for a page that is not Exclusive or Idle.");
-
-        // Use infinite wait (no Stopwatch.GetTimestamp overhead) — consistent with DecrementDirty.
-        // Hold time is nanoseconds (just ++DirtyCounter), so timeout is unnecessary.
-        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-        ++pi.DirtyCounter;
-        pi.StateSyncRoot.ExitExclusiveAccess();
+        Interlocked.Increment(ref pi.DirtyCounter);
     }
-    
+
     internal void DecrementDirty(int memPageIndex)
     {
         var pi = _memPagesInfo[memPageIndex];
-        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-        --pi.DirtyCounter;
-        var nowClean = pi.DirtyCounter == 0;
-        pi.StateSyncRoot.ExitExclusiveAccess();
-
-        if (nowClean)
+        var newVal = Interlocked.Decrement(ref pi.DirtyCounter);
+        if (newVal == 0)
         {
             _backpressureStrategy.SignalPageAvailable();
         }
@@ -1408,23 +1399,48 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     internal void EnsureDirtyAtLeast(int memPageIndex, int minValue)
     {
         var pi = _memPagesInfo[memPageIndex];
-        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-        if (pi.DirtyCounter < minValue)
+        SpinWait sw = default;
+        while (true)
         {
-            pi.DirtyCounter = minValue;
+            var current = pi.DirtyCounter;
+            if (current >= minValue)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref pi.DirtyCounter, minValue, current) == current)
+            {
+                return;
+            }
+
+            sw.SpinOnce();
         }
-        pi.StateSyncRoot.ExitExclusiveAccess();
     }
 
     internal void DecrementDirtyToMin(int memPageIndex, int minValue)
     {
         var pi = _memPagesInfo[memPageIndex];
-        pi.StateSyncRoot.EnterExclusiveAccess(ref WaitContext.Null);
-        if (pi.DirtyCounter > minValue)
+        SpinWait sw = default;
+        while (true)
         {
-            pi.DirtyCounter = minValue;
+            var current = pi.DirtyCounter;
+            if (current <= minValue)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref pi.DirtyCounter, minValue, current) == current)
+            {
+                if (minValue == 0)
+                {
+                    _backpressureStrategy.SignalPageAvailable();
+                }
+
+                return;
+            }
+
+            sw.SpinOnce();
         }
-        pi.StateSyncRoot.ExitExclusiveAccess();
     }
 
     /// <summary>

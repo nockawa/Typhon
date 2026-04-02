@@ -479,19 +479,8 @@ public unsafe partial class Transaction
     // Open
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Open an entity for reading. Returns an EntityRef for zero-copy component access.</summary>
-    public EntityRef Open(EntityId id)
-    {
-        var entity = ResolveEntity(id, writable: false);
-        if (!entity.IsValid)
-        {
-            throw new InvalidOperationException($"Entity {id} not found or not visible at TSN {TSN}");
-        }
-        return entity;
-    }
-
-    /// <summary>Open an entity for reading and writing.</summary>
-    public EntityRef OpenMut(EntityId id)
+    /// <summary>Open an entity for reading and writing. Adds EnsureMutable check + state transition.</summary>
+    public override EntityRef OpenMut(EntityId id)
     {
         EnsureMutable();
         State = TransactionState.InProgress;
@@ -501,13 +490,6 @@ public unsafe partial class Transaction
             throw new InvalidOperationException($"Entity {id} not found or not visible at TSN {TSN}");
         }
         return entity;
-    }
-
-    /// <summary>Try to open an entity. Returns false if the entity doesn't exist or isn't visible.</summary>
-    public bool TryOpen(EntityId id, out EntityRef entity)
-    {
-        entity = ResolveEntity(id, writable: false);
-        return entity.IsValid;
     }
 
     /// <summary>Check whether an entity is alive (exists and visible at this transaction's TSN).</summary>
@@ -779,7 +761,7 @@ public unsafe partial class Transaction
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>Stage an EnabledBits change for commit. Called from EntityRef.Enable/Disable.</summary>
-    internal void StageEnableDisable(EntityId id, ushort newEnabledBits)
+    internal override void StageEnableDisable(EntityId id, ushort newEnabledBits)
     {
         _pendingEnableDisable ??= new Dictionary<EntityId, ushort>();
         _pendingEnableDisable[id] = newEnabledBits;
@@ -802,7 +784,7 @@ public unsafe partial class Transaction
     // Internal helpers — entity resolution
     // ═══════════════════════════════════════════════════════════════════════
 
-    private EntityRef ResolveEntity(EntityId id, bool writable)
+    private protected override EntityRef ResolveEntity(EntityId id, bool writable)
     {
         AssertThreadAffinity();
 
@@ -963,70 +945,12 @@ public unsafe partial class Transaction
     // Internal helpers — component data access (delegated from EntityRef)
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Read component data via the existing ComponentInfo accessor cache. Zero-copy — returns a ref into the page.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref readonly T ReadEcsComponentData<T>(ComponentTable table, int chunkId) where T : unmanaged
-    {
-        var info = GetComponentInfo(typeof(T));
-        byte* ptr = table.StorageMode == StorageMode.Transient ?
-            info.TransientCompContentAccessor.GetChunkAddress(chunkId) : info.CompContentAccessor.GetChunkAddress(chunkId);
-        return ref Unsafe.AsRef<T>(ptr + info.ComponentOverhead);
-    }
-
-    /// <summary>Write component data via the existing ComponentInfo accessor cache. Returns mutable ref.
-    /// For SingleVersion: atomically marks chunkId in DirtyBitmap for tick fence serialization.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref T WriteEcsComponentData<T>(ComponentTable table, int chunkId) where T : unmanaged
-    {
-        var info = GetComponentInfo(typeof(T));
-        byte* ptr;
-        if (table.StorageMode == StorageMode.Transient)
-        {
-            ptr = info.TransientCompContentAccessor.GetChunkAddress(chunkId, true);
-        }
-        else
-        {
-            ptr = info.CompContentAccessor.GetChunkAddress(chunkId, true);
-        }
-        table.DirtyBitmap?.Set(chunkId);
-        return ref Unsafe.AsRef<T>(ptr + info.ComponentOverhead);
-    }
-
-    /// <summary>
-    /// Capture old indexed field values before the first SV in-place mutation per entity per tick.
-    /// Called from <see cref="EntityRef.Write{T}(Comp{T})"/> for SingleVersion components with indexed fields.
-    /// The shadow bitmap ensures only the first write per entity per tick captures values; subsequent writes in the same tick are no-ops.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ShadowIndexedFields<T>(ComponentTable table, int chunkId, EntityId entityId) where T : unmanaged
-    {
-        if (table.ShadowBitmap.TestAndSet(chunkId))
-        {
-            return; // Already shadowed this tick
-        }
-
-        var info = GetComponentInfo(typeof(T));
-        byte* ptr = table.StorageMode == StorageMode.Transient ? 
-            info.TransientCompContentAccessor.GetChunkAddress(chunkId) : info.CompContentAccessor.GetChunkAddress(chunkId);
-
-        var fields = table.IndexedFieldInfos;
-        var buffers = table.FieldShadowBuffers;
-        long pk = (long)entityId.RawValue;
-
-        for (int i = 0; i < fields.Length; i++)
-        {
-            ref var ifi = ref fields[i];
-            var oldKey = KeyBytes8.FromPointer(ptr + ifi.OffsetToField, ifi.Size);
-            buffers[i].Append(chunkId, pk, oldKey);
-        }
-    }
-
     /// <summary>
     /// Copy-on-write for Versioned components: allocates new chunk, copies data, creates revision entry.
     /// Called by EntityRef.Write for Versioned components. Returns (newChunkId, newChunkAddress).
     /// First write per entity allocates; subsequent writes reuse the same new chunk.
     /// </summary>
-    internal (int chunkId, nint ptr) EcsVersionedCopyOnWrite(Type compType, EntityId entityId, ComponentTable table)
+    internal override (int chunkId, nint ptr) EcsVersionedCopyOnWrite(Type compType, EntityId entityId, ComponentTable table)
     {
         var info = GetComponentInfo(compType);
         long pk = (long)entityId.RawValue;

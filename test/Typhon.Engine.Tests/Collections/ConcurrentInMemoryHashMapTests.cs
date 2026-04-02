@@ -14,11 +14,11 @@ public class ConcurrentHashMapTests
     private static IMemoryAllocator Allocator => BitmapTestServices.MemoryAllocator;
     private static IResource Parent => BitmapTestServices.AllocationResource;
 
-    private static ConcurrentHashMap<int> CreateSet(int initialCapacity = 1024) => new("TestConcSet", Parent, Allocator, initialCapacity);
+    private static ConcurrentHashMap<int> CreateSet(int initialCapacity = 1024) => new(initialCapacity);
 
-    private static ConcurrentHashMap<int, int> CreateMap(int initialCapacity = 1024) => new("TestConcMap", Parent, Allocator, initialCapacity);
+    private static ConcurrentHashMap<int, int> CreateMap(int initialCapacity = 1024) => new(initialCapacity);
 
-    private static ConcurrentHashMap<int, string> CreateManagedMap(int initialCapacity = 1024) => new("TestConcManagedMap", Parent, Allocator, initialCapacity);
+    private static ConcurrentHashMap<int, string> CreateManagedMap(int initialCapacity = 1024) => new(initialCapacity);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Single-threaded: Set variant
