@@ -256,34 +256,15 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
 
     // ── Destroyed chunk tracking for SV index cleanup ──
     // Accumulates chunkIds of destroyed SV entities during commits this tick.
-    // Checked by ProcessShadowEntries to distinguish Remove vs Move. Cleared at tick boundary.
-    private HashSet<int> _destroyedChunkIds;
-    private readonly Lock _destroyedLock = new();
+    // Checked by ProcessShadowEntries/BuildFilteredEntitySet to distinguish Remove vs Move. Cleared at tick boundary.
+    // Fully lock-free: ConcurrentHashMap uses OLC for reads (~5ns) and per-stripe CAS locks for writes (no global lock).
+    private readonly ConcurrentHashMap<int> _destroyedChunkIds = new(64);
 
-    internal void TrackDestroyedChunkId(int chunkId)
-    {
-        lock (_destroyedLock)
-        {
-            _destroyedChunkIds ??= [];
-            _destroyedChunkIds.Add(chunkId);
-        }
-    }
+    internal void TrackDestroyedChunkId(int chunkId) => _destroyedChunkIds.TryAdd(chunkId);
 
-    internal bool IsChunkDestroyed(int chunkId)
-    {
-        lock (_destroyedLock)
-        {
-            return _destroyedChunkIds != null && _destroyedChunkIds.Contains(chunkId);
-        }
-    }
+    internal bool IsChunkDestroyed(int chunkId) => _destroyedChunkIds.Contains(chunkId);
 
-    internal void ClearDestroyedChunkIds()
-    {
-        lock (_destroyedLock)
-        {
-            _destroyedChunkIds?.Clear();
-        }
-    }
+    internal void ClearDestroyedChunkIds() => _destroyedChunkIds.Clear();
 
     public int ComponentStorageSize => Definition.ComponentStorageSize;
     public DBComponentDefinition Definition { get; private set; }

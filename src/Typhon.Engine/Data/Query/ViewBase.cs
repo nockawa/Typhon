@@ -14,7 +14,7 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
 {
     private static int _nextViewId;
 
-    protected readonly HashSet<long> _entityIds = new();
+    protected readonly HashMap<long> _entityIds = new();
     private readonly Dictionary<long, DeltaKind> _deltas = new(16);
     private int _addedCount;
     private int _removedCount;
@@ -59,10 +59,10 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
 
     public bool Contains(long pk) => _entityIds.Contains(pk);
 
-    internal void AddEntityDirect(long pk) => _entityIds.Add(pk);
+    internal void AddEntityDirect(long pk) => _entityIds.TryAdd(pk);
 
     /// <summary>Direct access to the entity set for callers that need to populate it (e.g., PipelineExecutor during ToView).</summary>
-    internal HashSet<long> EntityIdsInternal => _entityIds;
+    internal HashMap<long> EntityIdsInternal => _entityIds;
 
     public ViewDelta GetDelta() => new(_deltas, _addedCount, _removedCount, _modifiedCount);
 
@@ -74,11 +74,11 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
         _modifiedCount = 0;
     }
 
-    public HashSet<long>.Enumerator GetEnumerator() => _entityIds.GetEnumerator();
+    public HashMap<long>.Enumerator GetEnumerator() => _entityIds.GetEnumerator();
 
-    IEnumerator<long> IEnumerable<long>.GetEnumerator() => _entityIds.GetEnumerator();
+    IEnumerator<long> IEnumerable<long>.GetEnumerator() => ((IEnumerable<long>)_entityIds).GetEnumerator();
 
-    IEnumerator IEnumerable.GetEnumerator() => _entityIds.GetEnumerator();
+    IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<long>)_entityIds).GetEnumerator();
 
     protected void SetLastRefreshTSN(long tsn) => _lastRefreshTSN = tsn;
 
@@ -109,7 +109,7 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
         // Safety fence: allow in-flight producers to complete TryAppend before freeing buffer memory
         Thread.SpinWait(100);
         DeltaBuffer.Dispose();
-        _entityIds.Clear();
+        _entityIds.Dispose();
         _deltas.Clear();
         _addedCount = 0;
         _removedCount = 0;
@@ -121,12 +121,12 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     {
         if (!wasInView && shouldBeInView)
         {
-            _entityIds.Add(pk);
+            _entityIds.TryAdd(pk);
             CompactDelta(pk, DeltaKind.Added);
         }
         else if (wasInView && !shouldBeInView)
         {
-            _entityIds.Remove(pk);
+            _entityIds.TryRemove(pk);
             CompactDelta(pk, DeltaKind.Removed);
         }
         else if (wasInView)
@@ -200,7 +200,7 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     /// Entities present in both sets are NOT reported as Modified — after overflow, granular field-change tracking is lost. Consumers needing field-change
     /// tracking after overflow should treat the overflow event itself as a full invalidation signal via <see cref="HasOverflow"/>.
     /// </summary>
-    protected void ComputeRefreshFullDeltas(HashSet<long> oldEntities)
+    protected void ComputeRefreshFullDeltas(HashMap<long> oldEntities)
     {
         foreach (var pk in _entityIds)
         {
@@ -216,5 +216,6 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
                 CompactDelta(pk, DeltaKind.Removed);
             }
         }
+        oldEntities.Dispose();
     }
 }

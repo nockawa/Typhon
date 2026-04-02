@@ -122,19 +122,17 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
     /// <summary>Iterate EntityIds in the view.</summary>
     public EntityIdEnumerator GetEntityEnumerator() => new(GetEnumerator());
 
-    /// <summary>Enumerator that wraps HashSet&lt;long&gt;.Enumerator and yields EntityId.</summary>
+    /// <summary>Enumerator that wraps HashMap&lt;long&gt;.Enumerator and yields EntityId. Ref struct (HashMap enumerator is ref struct).</summary>
     [PublicAPI]
-    public struct EntityIdEnumerator : IEnumerator<EntityId>
+    public ref struct EntityIdEnumerator
     {
-        private HashSet<long>.Enumerator _inner;
+        private HashMap<long>.Enumerator _inner;
 
-        internal EntityIdEnumerator(HashSet<long>.Enumerator inner) => _inner = inner;
+        internal EntityIdEnumerator(HashMap<long>.Enumerator inner) => _inner = inner;
 
+        public EntityIdEnumerator GetEnumerator() => this;
         public EntityId Current => EntityId.FromRaw(_inner.Current);
-        object IEnumerator.Current => Current;
         public bool MoveNext() => _inner.MoveNext();
-        public void Reset() { }
-        public void Dispose() => _inner.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -225,7 +223,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
         foreach (var id in newSet)
         {
             var pk = (long)id.RawValue;
-            if (_entityIds.Add(pk))
+            if (_entityIds.TryAdd(pk))
             {
                 CompactDelta(pk, DeltaKind.Added);
             }
@@ -243,7 +241,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
         for (var i = 0; i < toRemove.Count; i++)
         {
-            _entityIds.Remove(toRemove[i]);
+            _entityIds.TryRemove(toRemove[i]);
             CompactDelta(toRemove[i], DeltaKind.Removed);
         }
 
@@ -321,7 +319,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
     private void RefreshFull(Transaction tx)
     {
-        var oldEntities = new HashSet<long>(_entityIds);
+        var oldEntities = _entityIds.Clone();
 
         DeltaBuffer.Reset(tx.TSN);
         _entityIds.Clear();
@@ -340,7 +338,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
                 var pk = (long)id.RawValue;
                 if (_fieldReader.EvaluateAllFields(pk, _evaluators, tx))
                 {
-                    _entityIds.Add(pk);
+                    _entityIds.TryAdd(pk);
                 }
             }
         }
@@ -350,7 +348,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             _query.UpdateTransaction(tx);
             foreach (var id in _query.Execute())
             {
-                _entityIds.Add((long)id.RawValue);
+                _entityIds.TryAdd((long)id.RawValue);
             }
         }
 
@@ -373,14 +371,18 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
         for (var b = 0; b < plans.Length; b++)
         {
-            var branchResult = new HashSet<long>();
+            var branchResult = new HashMap<long>();
             _fieldReader.ExecuteFullScan(plans[b], plans[b].OrderedEvaluators, _componentTable, tx, branchResult);
             var bit = (ushort)(1 << b);
             foreach (var pk in branchResult)
             {
                 var entityId = EntityId.FromRaw(pk);
-                if (!_query.MaskTestPublic(entityId.ArchetypeId)) continue;
-                _entityIds.Add(pk);
+                if (!_query.MaskTestPublic(entityId.ArchetypeId))
+                {
+                    continue;
+                }
+
+                _entityIds.TryAdd(pk);
                 ref var bitmapRef = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_branchBitmaps, pk, out _);
                 bitmapRef |= bit;
             }
@@ -474,7 +476,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
     private void RefreshFullOr(Transaction tx)
     {
-        var oldEntities = new HashSet<long>(_entityIds);
+        var oldEntities = _entityIds.Clone();
         DeltaBuffer.Reset(tx.TSN);
         _entityIds.Clear();
         _branchBitmaps.Clear();
@@ -484,7 +486,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
         {
             for (var b = 0; b < plans.Length; b++)
             {
-                var branchResult = new HashSet<long>();
+                var branchResult = new HashMap<long>();
                 _fieldReader.ExecuteFullScan(plans[b], plans[b].OrderedEvaluators, _componentTable, tx, branchResult);
                 var bit = (ushort)(1 << b);
                 foreach (var pk in branchResult)
@@ -495,7 +497,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
                         continue;
                     }
 
-                    _entityIds.Add(pk);
+                    _entityIds.TryAdd(pk);
                     ref var bitmapRef = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_branchBitmaps, pk, out _);
                     bitmapRef |= bit;
                 }
@@ -647,7 +649,7 @@ internal abstract class EcsViewFieldReader
     public abstract bool CheckOtherFields(long pk, FieldEvaluator[] evaluators, int skipFieldIndex, Transaction tx);
     public abstract bool CheckOtherFieldsInBranch(long pk, FieldEvaluator[] branchEvals, int skipFieldIndex, Transaction tx);
     public abstract bool EvaluateAllFields(long pk, FieldEvaluator[] evaluators, Transaction tx);
-    public abstract void ExecuteFullScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> result);
+    public abstract void ExecuteFullScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashMap<long> result);
     public abstract void ExecuteOrderedScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, List<long> result,
         int skip = 0, int take = int.MaxValue);
     public abstract int CountScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx);
@@ -739,7 +741,7 @@ internal sealed unsafe class EcsViewFieldReader<T> : EcsViewFieldReader where T 
         return true;
     }
 
-    public override void ExecuteFullScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashSet<long> result) =>
+    public override void ExecuteFullScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, HashMap<long> result) =>
         PipelineExecutor.Instance.Execute(plan, evaluators, table, tx, result);
 
     public override void ExecuteOrderedScan(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx, List<long> result,

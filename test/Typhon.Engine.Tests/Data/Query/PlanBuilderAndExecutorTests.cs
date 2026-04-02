@@ -40,11 +40,11 @@ class PlanBuilderAndExecutorTests : TestBase<PlanBuilderAndExecutorTests>
         return (plan, plan.OrderedEvaluators);
     }
 
-    private static HashSet<long> ExecutePlan(DatabaseEngine dbe, ExecutionPlan plan)
+    private static HashMap<long> ExecutePlan(DatabaseEngine dbe, ExecutionPlan plan)
     {
         var ct = dbe.GetComponentTable<CompD>();
         using var tx = dbe.CreateQuickTransaction();
-        var result = new HashSet<long>();
+        var result = new HashMap<long>();
         PipelineExecutor.Instance.Execute(plan, plan.OrderedEvaluators, ct, tx, result);
         return result;
     }

@@ -643,7 +643,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
 
-        var pkResult = new HashSet<long>();
+        var pkResult = new HashMap<long>();
         _whereFieldReader.ExecuteFullScan(plan, plan.OrderedEvaluators, ct, _tx, pkResult);
 
         // Convert PKs to EntityIds — pre-size result to avoid rehashing

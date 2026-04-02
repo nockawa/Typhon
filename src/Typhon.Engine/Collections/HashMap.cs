@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -12,7 +14,7 @@ namespace Typhon.Engine;
 /// Backward-shift deletion avoids tombstone accumulation.
 /// POH (Pinned Object Heap) allocation + software prefetch on resize.
 /// </summary>
-public unsafe class HashMap<TKey> : IDisposable where TKey : unmanaged, IEquatable<TKey>
+public unsafe class HashMap<TKey> : IDisposable, IEnumerable<TKey> where TKey : unmanaged, IEquatable<TKey>
 {
     private const double MaxLoadFactor = 0.75;
     private const int PrefetchLookahead = 8;
@@ -193,6 +195,100 @@ public unsafe class HashMap<TKey> : IDisposable where TKey : unmanaged, IEquatab
         }
     }
 
+    /// <summary>
+    /// Returns a partition enumerator that walks a contiguous slice of the entries array.
+    /// Each partition yields only the entries in its index range — no cross-partition contamination.
+    /// O(1) setup, O(capacity/totalPartitions) iteration. Sequential L1-friendly access pattern.
+    /// </summary>
+    public PartitionEnumerator GetPartitionEnumerator(int partitionIndex, int totalPartitions)
+    {
+        int start = (int)((long)partitionIndex * _capacity / totalPartitions);
+        int end = (int)((long)(partitionIndex + 1) * _capacity / totalPartitions);
+        return new PartitionEnumerator(_entries, start, end, _entryStride);
+    }
+
+    public ref struct PartitionEnumerator
+    {
+        private readonly byte* _entries;
+        private readonly int _end;
+        private readonly int _stride;
+        private int _index;
+
+        internal PartitionEnumerator(byte* entries, int start, int end, int stride)
+        {
+            _entries = entries;
+            _end = end;
+            _stride = stride;
+            _index = start - 1;
+        }
+
+        public TKey Current { get; private set; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool MoveNext()
+        {
+            while (++_index < _end)
+            {
+                byte* entry = _entries + (long)_index * _stride;
+                if (*(uint*)entry != 0)
+                {
+                    Current = *(TKey*)(entry + 4);
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Creates a shallow copy with an independent entries array. Both the original and clone
+    /// can be modified independently. Used by EcsView.RefreshFull for old-set snapshotting.
+    /// </summary>
+    public HashMap<TKey> Clone()
+    {
+        var clone = new HashMap<TKey>(_capacity);
+        Buffer.MemoryCopy(_entries, clone._entries, clone._capacity * _entryStride, _capacity * _entryStride);
+        clone._count = _count;
+        return clone;
+    }
+
+    // IEnumerable<TKey> — boxed fallback for interface-based foreach (non-hot-path)
+    IEnumerator<TKey> IEnumerable<TKey>.GetEnumerator() => new BoxedEnumerator(this);
+    IEnumerator IEnumerable.GetEnumerator() => new BoxedEnumerator(this);
+
+    private class BoxedEnumerator : IEnumerator<TKey>
+    {
+        private readonly HashMap<TKey> _map;
+        private int _index = -1;
+
+        public BoxedEnumerator(HashMap<TKey> map) => _map = map;
+        public TKey Current { get; private set; }
+        object IEnumerator.Current => Current;
+
+        public bool MoveNext()
+        {
+            if (_map._entries == null)
+            {
+                return false;
+            }
+
+            int stride = _map._entryStride;
+            while (++_index < _map._capacity)
+            {
+                byte* entry = _map._entries + (long)_index * stride;
+                if (*(uint*)entry != 0)
+                {
+                    Current = *(TKey*)(entry + 4);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public void Reset() => _index = -1;
+        public void Dispose() { }
+    }
+
     public void Dispose()
     {
         if (_entries == null)
@@ -202,6 +298,7 @@ public unsafe class HashMap<TKey> : IDisposable where TKey : unmanaged, IEquatab
 
         _pohArray = null;
         _entries = null;
+        _count = 0;
     }
 
     // ═══════════════════════════════════════════════════════════════

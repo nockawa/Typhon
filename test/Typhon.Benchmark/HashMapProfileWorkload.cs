@@ -597,14 +597,14 @@ static class HashMapProfileWorkload
     static long BenchConcMapDisjointInsert(int threadCount, int keysPerThread, IResource parent, IMemoryAllocator alloc)
     {
         // Warmup
-        var warmup = new ConcurrentHashMap<int, int>("W", parent, alloc);
+        var warmup = new ConcurrentHashMap<int, int>();
         for (int i = 0; i < keysPerThread; i++) warmup.TryAdd(i, i);
         warmup.Dispose();
 
         var sw = Stopwatch.StartNew();
         for (int iter = 0; iter < 50; iter++)
         {
-            var map = new ConcurrentHashMap<int, int>("B", parent, alloc, keysPerThread * threadCount);
+            var map = new ConcurrentHashMap<int, int>(keysPerThread * threadCount);
             var threads = new Thread[threadCount];
             using var barrier = new Barrier(threadCount);
             for (int t = 0; t < threadCount; t++)
@@ -668,7 +668,7 @@ static class HashMapProfileWorkload
 
     static long BenchConcMapMixedReadWrite(int threadCount, int keyRange, IResource parent, IMemoryAllocator alloc)
     {
-        using var map = new ConcurrentHashMap<int, int>("B", parent, alloc, keyRange);
+        using var map = new ConcurrentHashMap<int, int>(keyRange);
         for (int i = 0; i < keyRange; i++) map.TryAdd(i, i);
 
         var sw = Stopwatch.StartNew();

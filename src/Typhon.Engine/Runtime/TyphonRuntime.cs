@@ -39,6 +39,7 @@ public sealed class TyphonRuntime : IDisposable
     private readonly PooledEntityList[] _systemEntityLists;        // For returning ArrayPool buffers
     private readonly EventQueueBase[][] _systemConsumedQueues;     // Pre-allocated consumed queue refs per system (null if none)
     private readonly PooledEntityList[] _parallelEntityLists;      // Full entity set for parallel QuerySystem chunk slicing
+    private readonly HashMap<long>[] _multiTableFilterSets;       // Cached dedup sets for multi-table BuildFilteredEntitySet (avoids per-tick alloc)
 
     // First-tick flag
     private bool _firstTickExecuted;
@@ -135,6 +136,7 @@ public sealed class TyphonRuntime : IDisposable
         _systemEntityLists = new PooledEntityList[scheduler.SystemCount];
         _systemConsumedQueues = new EventQueueBase[scheduler.SystemCount][];
         _parallelEntityLists = new PooledEntityList[scheduler.SystemCount];
+        _multiTableFilterSets = new HashMap<long>[scheduler.SystemCount];
 
         ResolveChangeFilters(scheduler);
 
@@ -378,67 +380,27 @@ public sealed class TyphonRuntime : IDisposable
     /// across multiple changeFilter tables.
     /// Falls back to full View when PK resolution is unavailable (first tick, or SV without indexed fields).
     /// </summary>
-    private unsafe PooledEntityList BuildFilteredEntitySet(int sysIdx)
+    private PooledEntityList BuildFilteredEntitySet(int sysIdx)
     {
         var view = _systemViews[sysIdx];
         var filterTables = _systemChangeFilterTables[sysIdx];
 
-        // Collect dirty entity PKs that are in the View (OR across all changeFilter tables)
-        var dirtyInView = new HashSet<long>();
+        // Single-table fast path: skip intermediate collection, write directly to result array.
+        // Most systems filter on a single component type — this eliminates HashSet allocation + copy.
+        if (filterTables.Length == 1)
+        {
+            return BuildFilteredSingleTable(sysIdx, view, filterTables[0]);
+        }
+
+        // Multi-table path: deduplicate across tables using cached HashMap<long> (zero alloc after first tick)
+        var dirtyInView = _multiTableFilterSets[sysIdx] ??= new HashMap<long>();
+        dirtyInView.Clear();
 
         for (var t = 0; t < filterTables.Length; t++)
         {
-            var table = filterTables[t];
-            if (!table.PreviousTickHadDirtyEntities)
+            if (!ScanDirtyBitmapIntoSet(sysIdx, view, filterTables[t], dirtyInView, out var fallback))
             {
-                continue;
-            }
-
-            var bitmap = table.PreviousTickDirtyBitmap;
-            if (bitmap == null)
-            {
-                // First tick — fall back to full View
-                return BuildFullViewEntitySet(sysIdx);
-            }
-
-            // PK at chunk offset 0 is only written during spawn for SV components with indexed fields.
-            if (table.IndexedFieldInfos == null || table.IndexedFieldInfos.Length == 0)
-            {
-                // Cannot resolve chunkId → PK — fall back to full View
-                return BuildFullViewEntitySet(sysIdx);
-            }
-
-            // Iterate bitmap → chunkId → PK → View intersection (same pattern as ProcessSpatialEntries)
-            var accessor = table.ComponentSegment.CreateChunkAccessor();
-            try
-            {
-                for (var wordIdx = 0; wordIdx < bitmap.Length; wordIdx++)
-                {
-                    var word = bitmap[wordIdx];
-                    while (word != 0)
-                    {
-                        var bit = BitOperations.TrailingZeroCount((ulong)word);
-                        var chunkId = wordIdx * 64 + bit;
-                        word &= word - 1;
-
-                        if (table.IsChunkDestroyed(chunkId))
-                        {
-                            continue;
-                        }
-
-                        var chunkPtr = accessor.GetChunkAddress(chunkId);
-                        var entityPK = *(long*)chunkPtr;
-
-                        if (view.Contains(entityPK))
-                        {
-                            dirtyInView.Add(entityPK);
-                        }
-                    }
-                }
-            }
-            finally
-            {
-                accessor.Dispose();
+                return fallback;
             }
         }
 
@@ -456,6 +418,125 @@ public sealed class TyphonRuntime : IDisposable
         }
 
         return list;
+    }
+
+    /// <summary>
+    /// Single-table fast path: scan dirty bitmap → View intersection → result array.
+    /// No intermediate collection, no dedup (only one table → no duplicates possible).
+    /// </summary>
+    private unsafe PooledEntityList BuildFilteredSingleTable(int sysIdx, ViewBase view, ComponentTable table)
+    {
+        if (!table.PreviousTickHadDirtyEntities)
+        {
+            return PooledEntityList.Empty;
+        }
+
+        var bitmap = table.PreviousTickDirtyBitmap;
+        if (bitmap == null || table.IndexedFieldInfos == null || table.IndexedFieldInfos.Length == 0)
+        {
+            return BuildFullViewEntitySet(sysIdx);
+        }
+
+        // Upper bound: min(view entity count, dirty bit count) — avoids over-renting for large views with few dirty entities
+        int bitmapPopCount = 0;
+        for (int i = 0; i < bitmap.Length; i++)
+        {
+            bitmapPopCount += BitOperations.PopCount((ulong)bitmap[i]);
+        }
+        var list = PooledEntityList.Rent(Math.Min(view.Count, bitmapPopCount));
+        var span = list.AsSpan();
+        int count = 0;
+
+        var accessor = table.ComponentSegment.CreateChunkAccessor();
+        try
+        {
+            for (var wordIdx = 0; wordIdx < bitmap.Length; wordIdx++)
+            {
+                var word = bitmap[wordIdx];
+                while (word != 0)
+                {
+                    var bit = BitOperations.TrailingZeroCount((ulong)word);
+                    var chunkId = wordIdx * 64 + bit;
+                    word &= word - 1;
+
+                    if (table.IsChunkDestroyed(chunkId))
+                    {
+                        continue;
+                    }
+
+                    var entityPK = *(long*)accessor.GetChunkAddress(chunkId);
+                    if (view.Contains(entityPK))
+                    {
+                        span[count++] = EntityId.FromRaw(entityPK);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        if (count == 0)
+        {
+            list.Return();
+            return PooledEntityList.Empty;
+        }
+
+        return new PooledEntityList(list.BackingArray, count);
+    }
+
+    /// <summary>
+    /// Scan a single table's dirty bitmap and add matching entities to the dedup set.
+    /// Returns false if a fallback is needed (first tick, no indexed fields).
+    /// </summary>
+    private unsafe bool ScanDirtyBitmapIntoSet(int sysIdx, ViewBase view, ComponentTable table, HashMap<long> dirtyInView, out PooledEntityList fallback)
+    {
+        fallback = default;
+
+        if (!table.PreviousTickHadDirtyEntities)
+        {
+            return true;
+        }
+
+        var bitmap = table.PreviousTickDirtyBitmap;
+        if (bitmap == null || table.IndexedFieldInfos == null || table.IndexedFieldInfos.Length == 0)
+        {
+            fallback = BuildFullViewEntitySet(sysIdx);
+            return false;
+        }
+
+        var accessor = table.ComponentSegment.CreateChunkAccessor();
+        try
+        {
+            for (var wordIdx = 0; wordIdx < bitmap.Length; wordIdx++)
+            {
+                var word = bitmap[wordIdx];
+                while (word != 0)
+                {
+                    var bit = BitOperations.TrailingZeroCount((ulong)word);
+                    var chunkId = wordIdx * 64 + bit;
+                    word &= word - 1;
+
+                    if (table.IsChunkDestroyed(chunkId))
+                    {
+                        continue;
+                    }
+
+                    var entityPK = *(long*)accessor.GetChunkAddress(chunkId);
+                    if (view.Contains(entityPK))
+                    {
+                        dirtyInView.TryAdd(entityPK);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        return true;
     }
 
     /// <summary>
