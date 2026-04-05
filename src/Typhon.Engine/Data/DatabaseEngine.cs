@@ -18,6 +18,8 @@ using Typhon.Schema.Definition;
 [assembly: InternalsVisibleTo("Typhon.MonitoringDemo")]
 [assembly: InternalsVisibleTo("Typhon.ARPG.Shell")]
 [assembly: InternalsVisibleTo("tsh")]
+[assembly: InternalsVisibleTo("AntHill")]
+[assembly: InternalsVisibleTo("AntHill.ProfileRunner")]
 
 namespace Typhon.Engine;
 

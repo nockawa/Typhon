@@ -13,6 +13,25 @@ public unsafe partial class EntityAccessor
     // Public entity access API
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Create a fast-path <see cref="ArchetypeAccessor{TArch}"/> pre-bound to a specific archetype.
+    /// Bypasses epoch checks, archetype lookup, and MVCC visibility on every Open/OpenMut call.
+    /// Intended for PTA workers in parallel QuerySystems where these checks are redundant.
+    /// </summary>
+    public ArchetypeAccessor<TArch> For<TArch>() where TArch : class
+    {
+        var meta = ArchetypeRegistry.GetMetadata<TArch>();
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        return new ArchetypeAccessor<TArch>(meta, es, this, _dbe);
+    }
+
+    /// <summary>Pre-warm the ComponentInfo cache for a given component type. Called by ArchetypeAccessor during construction.</summary>
+    internal void EnsureComponentInfoCached(Type componentType) => GetComponentInfo(componentType);
+
+    /// <summary>Get cached ComponentInfo by type ID. For ArchetypeAccessor's Versioned chain walk.</summary>
+    internal ComponentInfo GetComponentInfoInternal(int componentTypeId, Type componentType) =>
+        GetComponentInfoByTypeId(componentTypeId, componentType);
+
     /// <summary>Open an entity for reading. Throws if not found or not visible.</summary>
     public EntityRef Open(EntityId id)
     {

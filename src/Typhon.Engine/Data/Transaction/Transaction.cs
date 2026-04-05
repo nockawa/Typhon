@@ -118,6 +118,13 @@ public unsafe partial class Transaction : EntityAccessor
         _deferredEnqueueBatch?.Clear();
     }
 
+    /// <summary>Prepare for mutation via ArchetypeAccessor. Sets state to InProgress so Commit processes writes.</summary>
+    internal override void PrepareForMutation()
+    {
+        EnsureMutable();
+        State = TransactionState.InProgress;
+    }
+
     /// <summary>Throws if the transaction cannot accept new operations (read-only or already finalized).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureMutable()

@@ -1,0 +1,377 @@
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Typhon.Engine;
+using Typhon.Schema.Definition;
+
+namespace Typhon.Benchmark;
+
+// ── Components matching AntHill pattern (SV) ────────────────────────────
+[Component("Typhon.Benchmark.AA.Position", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct AaBenchPosition
+{
+    public float X, Y;
+    public AaBenchPosition(float x, float y) { X = x; Y = y; }
+}
+
+[Component("Typhon.Benchmark.AA.Movement", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct AaBenchMovement
+{
+    public float VX, VY;
+    public AaBenchMovement(float vx, float vy) { VX = vx; VY = vy; }
+}
+
+[Archetype(510)]
+partial class AaBenchAnt : Archetype<AaBenchAnt>
+{
+    public static readonly Comp<AaBenchPosition> Position = Register<AaBenchPosition>();
+    public static readonly Comp<AaBenchMovement> Movement = Register<AaBenchMovement>();
+}
+
+/// <summary>
+/// Compares per-entity access cost: standard EntityAccessor.Open vs ArchetypeAccessor.Open.
+/// Mimics the AntHill movement system: Read(Movement) + Write(Position) per entity.
+/// </summary>
+static class ArchetypeAccessorBenchmark
+{
+    const float WorldSize = 10_000f;
+
+    public static void Run(int entityCount = 50_000, int iterations = 500)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  ArchetypeAccessor Benchmark — {entityCount:N0} entities, {iterations} iterations");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+
+        using var env = CreateEnv(entityCount);
+        var dbe = env.Dbe;
+        var entityIds = env.EntityIds;
+
+        // Warm up both paths
+        RunStandard(dbe, entityIds, 10);
+        RunArchetypeAccessor(dbe, entityIds, 10);
+
+        // ── Benchmark: Standard path ────────────────────────────────
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        var sw = Stopwatch.StartNew();
+        RunStandard(dbe, entityIds, iterations);
+        sw.Stop();
+        double standardUs = sw.Elapsed.TotalMicroseconds;
+        double standardPerEntity = standardUs / (iterations * entityCount) * 1000; // ns
+
+        // ── Benchmark: ArchetypeAccessor path ───────────────────────
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        sw.Restart();
+        RunArchetypeAccessor(dbe, entityIds, iterations);
+        sw.Stop();
+        double accessorUs = sw.Elapsed.TotalMicroseconds;
+        double accessorPerEntity = accessorUs / (iterations * entityCount) * 1000; // ns
+
+        Console.WriteLine();
+        Console.WriteLine($"  Standard EntityAccessor:    {standardUs / iterations,8:F0} µs/iter  ({standardPerEntity:F1} ns/entity)");
+        Console.WriteLine($"  ArchetypeAccessor:          {accessorUs / iterations,8:F0} µs/iter  ({accessorPerEntity:F1} ns/entity)");
+        Console.WriteLine($"  Speedup:                    {standardUs / accessorUs:F2}x");
+        Console.WriteLine();
+    }
+
+    /// <summary>Run with standard EntityAccessor.Open/OpenMut path (for profiling).</summary>
+    public static void ProfileStandard(int entityCount = 50_000, int iterations = 500)
+    {
+        using var env = CreateEnv(entityCount);
+        RunStandard(env.Dbe, env.EntityIds, 10); // warmup
+        RunStandard(env.Dbe, env.EntityIds, iterations);
+    }
+
+    /// <summary>Run with ArchetypeAccessor path (for profiling).</summary>
+    public static void ProfileAccessor(int entityCount = 50_000, int iterations = 500)
+    {
+        using var env = CreateEnv(entityCount);
+        RunArchetypeAccessor(env.Dbe, env.EntityIds, 10); // warmup
+        RunArchetypeAccessor(env.Dbe, env.EntityIds, iterations);
+    }
+
+    /// <summary>Run both runtime paths at increasing entity counts to find saturation.</summary>
+    public static void ScaleTest()
+    {
+        int[] counts = [50_000, 100_000, 200_000, 500_000];
+        Console.WriteLine("═══════════════════════════════════════════════════════════════════════════");
+        Console.WriteLine("  Runtime Scale Test — Movement system only, 4 workers, 60Hz target");
+        Console.WriteLine("═══════════════════════════════════════════════════════════════════════════");
+        Console.WriteLine($"  {"Entities",10} | {"Std tick",10} | {"AA tick",10} | {"Speedup",8} | {"Std ns/e",10} | {"AA ns/e",10}");
+        Console.WriteLine(new string('-', 75));
+
+        foreach (var n in counts)
+        {
+            var (stdMs, aaMs) = MeasureRuntimePair(n);
+            double stdNs = stdMs * 1_000_000 / n;
+            double aaNs = aaMs * 1_000_000 / n;
+            Console.WriteLine($"  {n,10:N0} | {stdMs,8:F2}ms | {aaMs,8:F2}ms | {stdMs / aaMs,7:F2}x | {stdNs,8:F1}ns | {aaNs,8:F1}ns");
+        }
+        Console.WriteLine();
+    }
+
+    static (double stdMs, double aaMs) MeasureRuntimePair(int entityCount)
+    {
+        double stdMs = MeasureRuntimeTick(entityCount, useAccessor: false);
+        double aaMs = MeasureRuntimeTick(entityCount, useAccessor: true);
+        return (stdMs, aaMs);
+    }
+
+    static double MeasureRuntimeTick(int entityCount, bool useAccessor)
+    {
+        using var env = CreateEnv(entityCount);
+        using var txView = env.Dbe.CreateQuickTransaction();
+        var view = txView.Query<AaBenchAnt>().ToView();
+
+        using var runtime = TyphonRuntime.Create(env.Dbe, schedule =>
+        {
+            schedule.QuerySystem("Movement", ctx =>
+            {
+                if (useAccessor)
+                {
+                    var ants = ctx.Accessor.For<AaBenchAnt>();
+                    foreach (var id in ctx.Entities)
+                    {
+                        var entity = ants.OpenMut(id);
+                        ref var pos = ref entity.Write(AaBenchAnt.Position);
+                        ref readonly var mov = ref entity.Read(AaBenchAnt.Movement);
+                        pos.X += mov.VX * ctx.DeltaTime;
+                        pos.Y += mov.VY * ctx.DeltaTime;
+                        if (pos.X < 0f) pos.X += WorldSize;
+                        else if (pos.X >= WorldSize) pos.X -= WorldSize;
+                        if (pos.Y < 0f) pos.Y += WorldSize;
+                        else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
+                    }
+                    ants.Dispose();
+                }
+                else
+                {
+                    foreach (var id in ctx.Entities)
+                    {
+                        var entity = ctx.Accessor.OpenMut(id);
+                        ref var pos = ref entity.Write(AaBenchAnt.Position);
+                        ref readonly var mov = ref entity.Read(AaBenchAnt.Movement);
+                        pos.X += mov.VX * ctx.DeltaTime;
+                        pos.Y += mov.VY * ctx.DeltaTime;
+                        if (pos.X < 0f) pos.X += WorldSize;
+                        else if (pos.X >= WorldSize) pos.X -= WorldSize;
+                        if (pos.Y < 0f) pos.Y += WorldSize;
+                        else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
+                    }
+                }
+            }, input: () => view, parallel: true);
+        }, new RuntimeOptions { BaseTickRate = 60, WorkerCount = 4 });
+
+        runtime.Start();
+        // Let it stabilize for 2s, then sample for 3s
+        System.Threading.Thread.Sleep(2000);
+        var telemetry = runtime.Telemetry;
+        long startTick = telemetry.NewestTick;
+        System.Threading.Thread.Sleep(3000);
+        long endTick = telemetry.NewestTick;
+
+        // Average system duration across sampled ticks
+        double totalSystemUs = 0;
+        int samples = 0;
+        for (long t = startTick + 1; t <= endTick && t >= telemetry.OldestAvailableTick; t++)
+        {
+            var systems = telemetry.GetSystemMetrics(t);
+            if (systems.Length > 0 && !systems[0].WasSkipped)
+            {
+                totalSystemUs += systems[0].DurationUs;
+                samples++;
+            }
+        }
+
+        runtime.Shutdown();
+        view.Dispose();
+
+        return samples > 0 ? totalSystemUs / samples / 1000.0 : 0; // ms
+    }
+
+    /// <summary>Profile the STANDARD path through TyphonRuntime (parallel QuerySystem + PTA), same as AntHill.</summary>
+    public static void ProfileRuntimeStandard(int entityCount = 50_000, int runSeconds = 10)
+    {
+        Console.WriteLine($"ProfileRuntimeStandard: {entityCount:N0} entities, {runSeconds}s via TyphonRuntime");
+        using var env = CreateEnv(entityCount);
+        using var txView = env.Dbe.CreateQuickTransaction();
+        var view = txView.Query<AaBenchAnt>().ToView();
+
+        using var runtime = TyphonRuntime.Create(env.Dbe, schedule =>
+        {
+            schedule.QuerySystem("Movement", ctx =>
+            {
+                foreach (var id in ctx.Entities)
+                {
+                    var entity = ctx.Accessor.OpenMut(id);
+                    ref var pos = ref entity.Write(AaBenchAnt.Position);
+                    ref readonly var mov = ref entity.Read(AaBenchAnt.Movement);
+                    pos.X += mov.VX * ctx.DeltaTime;
+                    pos.Y += mov.VY * ctx.DeltaTime;
+                    if (pos.X < 0f) pos.X += WorldSize;
+                    else if (pos.X >= WorldSize) pos.X -= WorldSize;
+                    if (pos.Y < 0f) pos.Y += WorldSize;
+                    else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
+                }
+            }, input: () => view, parallel: true);
+        }, new RuntimeOptions { BaseTickRate = 60, WorkerCount = 4 });
+
+        runtime.Start();
+        System.Threading.Thread.Sleep(runSeconds * 1000);
+        runtime.Shutdown();
+        view.Dispose();
+        Console.WriteLine("Done.");
+    }
+
+    /// <summary>Profile the ARCHETYPE ACCESSOR path through TyphonRuntime, same as optimized AntHill.</summary>
+    public static void ProfileRuntimeAccessor(int entityCount = 100_000, int runSeconds = 10)
+    {
+        Console.WriteLine($"ProfileRuntimeAccessor: {entityCount:N0} entities, {runSeconds}s via TyphonRuntime");
+        using var env = CreateEnv(entityCount);
+        using var txView = env.Dbe.CreateQuickTransaction();
+        var view = txView.Query<AaBenchAnt>().ToView();
+
+        using var runtime = TyphonRuntime.Create(env.Dbe, schedule =>
+        {
+            schedule.QuerySystem("Movement", ctx =>
+            {
+                var ants = ctx.Accessor.For<AaBenchAnt>();
+                foreach (var id in ctx.Entities)
+                {
+                    var entity = ants.OpenMut(id);
+                    ref var pos = ref entity.Write(AaBenchAnt.Position);
+                    ref readonly var mov = ref entity.Read(AaBenchAnt.Movement);
+                    pos.X += mov.VX * ctx.DeltaTime;
+                    pos.Y += mov.VY * ctx.DeltaTime;
+                    if (pos.X < 0f) pos.X += WorldSize;
+                    else if (pos.X >= WorldSize) pos.X -= WorldSize;
+                    if (pos.Y < 0f) pos.Y += WorldSize;
+                    else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
+                }
+                ants.Dispose();
+            }, input: () => view, parallel: true);
+        }, new RuntimeOptions { BaseTickRate = 60, WorkerCount = 4 });
+
+        runtime.Start();
+        System.Threading.Thread.Sleep(runSeconds * 1000);
+        runtime.Shutdown();
+        view.Dispose();
+        Console.WriteLine("Done.");
+    }
+
+    static void RunStandard(DatabaseEngine dbe, EntityId[] ids, int iterations)
+    {
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var entity = tx.OpenMut(ids[i]);
+                ref var pos = ref entity.Write(AaBenchAnt.Position);
+                ref readonly var mov = ref entity.Read(AaBenchAnt.Movement);
+                pos.X += mov.VX * 0.016f;
+                pos.Y += mov.VY * 0.016f;
+                if (pos.X < 0f) pos.X += WorldSize;
+                else if (pos.X >= WorldSize) pos.X -= WorldSize;
+                if (pos.Y < 0f) pos.Y += WorldSize;
+                else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
+            }
+            tx.Commit();
+        }
+    }
+
+    static void RunArchetypeAccessor(DatabaseEngine dbe, EntityId[] ids, int iterations)
+    {
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var ants = tx.For<AaBenchAnt>();
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var entity = ants.OpenMut(ids[i]);
+                ref var pos = ref entity.Write(AaBenchAnt.Position);
+                ref readonly var mov = ref entity.Read(AaBenchAnt.Movement);
+                pos.X += mov.VX * 0.016f;
+                pos.Y += mov.VY * 0.016f;
+                if (pos.X < 0f) pos.X += WorldSize;
+                else if (pos.X >= WorldSize) pos.X -= WorldSize;
+                if (pos.Y < 0f) pos.Y += WorldSize;
+                else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
+            }
+            ants.Dispose();
+            tx.Commit();
+        }
+    }
+
+    sealed class BenchEnv : IDisposable
+    {
+        public DatabaseEngine Dbe { get; }
+        public EntityId[] EntityIds { get; }
+        private readonly ServiceProvider _sp;
+
+        public static BenchEnv Create(int entityCount)
+        {
+            var name = $"AABench_{Environment.ProcessId}";
+            var sc = new ServiceCollection();
+            sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+              .AddResourceRegistry()
+              .AddMemoryAllocator()
+              .AddEpochManager()
+              .AddHighResolutionSharedTimer()
+              .AddDeadlineWatchdog()
+              .AddScopedManagedPagedMemoryMappedFile(o =>
+              {
+                  o.DatabaseName = name;
+                  o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
+                  o.PagesDebugPattern = false;
+              })
+              .AddScopedDatabaseEngine(o => { o.Wal = null; });
+
+            var sp = sc.BuildServiceProvider();
+            sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+            var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+            Archetype<AaBenchAnt>.Touch();
+            dbe.RegisterComponentFromAccessor<AaBenchPosition>();
+            dbe.RegisterComponentFromAccessor<AaBenchMovement>();
+            dbe.InitializeArchetypes();
+
+            var rng = new Random(42);
+            var ids = new EntityId[entityCount];
+            int remaining = entityCount;
+            int offset = 0;
+            while (remaining > 0)
+            {
+                int batch = Math.Min(1000, remaining);
+                remaining -= batch;
+                using var tx = dbe.CreateQuickTransaction();
+                for (int i = 0; i < batch; i++)
+                {
+                    var pos = new AaBenchPosition((float)(rng.NextDouble() * WorldSize), (float)(rng.NextDouble() * WorldSize));
+                    float angle = (float)(rng.NextDouble() * Math.PI * 2);
+                    float speed = 20f + (float)(rng.NextDouble() * 60);
+                    var mov = new AaBenchMovement(MathF.Cos(angle) * speed, MathF.Sin(angle) * speed);
+                    ids[offset + i] = tx.Spawn<AaBenchAnt>(AaBenchAnt.Position.Set(in pos), AaBenchAnt.Movement.Set(in mov));
+                }
+                tx.Commit();
+                offset += batch;
+            }
+
+            return new BenchEnv(sp, dbe, ids);
+        }
+
+        BenchEnv(ServiceProvider sp, DatabaseEngine dbe, EntityId[] ids) { _sp = sp; Dbe = dbe; EntityIds = ids; }
+
+        public void Dispose()
+        {
+            Dbe?.Dispose();
+            _sp?.Dispose();
+            try { System.IO.File.Delete($"AABench_{Environment.ProcessId}.bin"); } catch { }
+        }
+    }
+
+    static BenchEnv CreateEnv(int entityCount) => BenchEnv.Create(entityCount);
+}

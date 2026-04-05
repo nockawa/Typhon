@@ -58,6 +58,13 @@ public partial class EntityAccessor : IDisposable
 
     public long TSN { get; private protected set; }
 
+    /// <summary>
+    /// Prepare this accessor for mutation. Called once by <see cref="ArchetypeAccessor{TArch}"/>
+    /// on first <c>OpenMut</c> to ensure the underlying accessor is in the correct state for writes.
+    /// Base implementation is a no-op. Transaction overrides to call EnsureMutable + set InProgress state.
+    /// </summary>
+    internal virtual void PrepareForMutation() { }
+
     public EntityAccessor()
     {
         _componentInfos = new Dictionary<Type, ComponentInfo>(ComponentInfosMaxCapacity);

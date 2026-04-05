@@ -153,6 +153,42 @@ class Program
                 return;
             }
 
+            if (args.Contains("--aa-bench"))
+            {
+                ArchetypeAccessorBenchmark.Run();
+                return;
+            }
+
+            if (args.Contains("--profile-aa-standard"))
+            {
+                ArchetypeAccessorBenchmark.ProfileStandard();
+                return;
+            }
+
+            if (args.Contains("--profile-aa-accessor"))
+            {
+                ArchetypeAccessorBenchmark.ProfileAccessor();
+                return;
+            }
+
+            if (args.Contains("--aa-scale"))
+            {
+                ArchetypeAccessorBenchmark.ScaleTest();
+                return;
+            }
+
+            if (args.Contains("--profile-runtime-standard"))
+            {
+                ArchetypeAccessorBenchmark.ProfileRuntimeStandard();
+                return;
+            }
+
+            if (args.Contains("--profile-runtime-accessor"))
+            {
+                ArchetypeAccessorBenchmark.ProfileRuntimeAccessor();
+                return;
+            }
+
 
 
             // BTree profile shortcuts: --btree-fast, --btree-medium, --btree-full
