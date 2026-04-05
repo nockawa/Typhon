@@ -189,6 +189,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--indexed-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunIndexedBench();
+                return;
+            }
+
             if (args.Contains("--profile-runtime-standard"))
             {
                 ArchetypeAccessorBenchmark.ProfileRuntimeStandard();

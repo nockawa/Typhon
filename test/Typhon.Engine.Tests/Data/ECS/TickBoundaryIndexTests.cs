@@ -53,21 +53,44 @@ class TickBoundaryIndexTests : TestBase<TickBoundaryIndexTests>
     /// <summary>
     /// Verify index state by directly querying the B+Tree.
     /// Returns true if the index contains an entry with the given category key.
+    /// For cluster-eligible archetypes, checks the per-archetype B+Tree.
     /// </summary>
     private unsafe bool IndexContainsKey(DatabaseEngine dbe, int category)
     {
         using var epoch = EpochGuard.Enter(dbe.EpochManager);
+        var meta = Archetype<TbSvArch>.Metadata;
+
+        // Phase 3a: cluster-eligible archetypes use per-archetype B+Trees
+        if (meta.HasClusterIndexes)
+        {
+            var clusterState = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+            if (clusterState?.IndexSlots != null && clusterState.IndexSlots.Length > 0)
+            {
+                ref var field = ref clusterState.IndexSlots[0].Fields[0];
+                var accessor = field.Index.Segment.CreateChunkAccessor();
+                try
+                {
+                    var result = field.Index.TryGet(&category, ref accessor);
+                    return result.IsSuccess;
+                }
+                finally
+                {
+                    accessor.Dispose();
+                }
+            }
+        }
+
         var table = dbe.GetComponentTable<TbSvData>();
         var ifi = table.IndexedFieldInfos[0]; // Category is the first (only) indexed field
-        var accessor = ifi.PersistentIndex.Segment.CreateChunkAccessor();
+        var accessor2 = ifi.PersistentIndex.Segment.CreateChunkAccessor();
         try
         {
-            var result = ifi.PersistentIndex.TryGet(&category, ref accessor);
-            return result.IsSuccess;
+            var result2 = ifi.PersistentIndex.TryGet(&category, ref accessor2);
+            return result2.IsSuccess;
         }
         finally
         {
-            accessor.Dispose();
+            accessor2.Dispose();
         }
     }
 

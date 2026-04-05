@@ -126,7 +126,19 @@ public unsafe ref struct EntityRef
         {
             // Cluster fast path: direct pointer arithmetic into SoA array.
             // Page was already marked dirty at resolve time (OpenMut → GetChunkAddress(dirty:true)).
-            _engineState.ClusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
+            var clusterState = _engineState.ClusterState;
+
+            // Shadow capture for per-archetype B+Tree index maintenance (first write per entity per tick)
+            if (clusterState.IndexSlots != null)
+            {
+                int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+                if (!clusterState.ClusterShadowBitmap.TestAndSet(entityIndex))
+                {
+                    ShadowClusterIndexedFields(clusterState);
+                }
+            }
+
+            clusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
             return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
         }
 
@@ -183,7 +195,19 @@ public unsafe ref struct EntityRef
 
         if (_clusterBase != null)
         {
-            _engineState.ClusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
+            var clusterState = _engineState.ClusterState;
+
+            // Shadow capture for per-archetype B+Tree index maintenance (first write per entity per tick)
+            if (clusterState.IndexSlots != null)
+            {
+                int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+                if (!clusterState.ClusterShadowBitmap.TestAndSet(entityIndex))
+                {
+                    ShadowClusterIndexedFields(clusterState);
+                }
+            }
+
+            clusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
             return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
         }
 
@@ -203,6 +227,31 @@ public unsafe ref struct EntityRef
         }
 
         return ref _accessor.WriteEcsComponentData<T>(table, chunkId);
+    }
+
+    /// <summary>
+    /// Capture old indexed field values from cluster SoA for all indexed components.
+    /// Called once per entity per tick, before the first write mutation.
+    /// </summary>
+    private void ShadowClusterIndexedFields(ArchetypeClusterState clusterState)
+    {
+        long pk = (long)_id.RawValue;
+        int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+        var slots = clusterState.IndexSlots;
+
+        for (int s = 0; s < slots.Length; s++)
+        {
+            ref var ixSlot = ref slots[s];
+            int compSize = _clusterLayout.ComponentSize(ixSlot.Slot);
+            byte* compBase = _clusterBase + _clusterLayout.ComponentOffset(ixSlot.Slot) + _clusterSlotIndex * compSize;
+
+            for (int f = 0; f < ixSlot.Fields.Length; f++)
+            {
+                ref var field = ref ixSlot.Fields[f];
+                var oldKey = KeyBytes8.FromPointer(compBase + field.FieldOffset, field.FieldSize);
+                ixSlot.ShadowBuffers[f].Append(entityIndex, pk, oldKey);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

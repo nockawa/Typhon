@@ -2,6 +2,7 @@ using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -32,6 +33,19 @@ internal sealed unsafe class ArchetypeClusterState
 
     /// <summary>Per-entity dirty tracking for tick fence WAL serialization. Index = clusterChunkId * 64 + slotIndex.</summary>
     public DirtyBitmap ClusterDirtyBitmap;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Per-archetype B+Tree indexes (Phase 3a). Null if archetype has no indexed fields.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Per-archetype B+Tree index slots, one per component slot with indexed fields. Null if no indexed fields.</summary>
+    public ClusterIndexSlot[] IndexSlots;
+
+    /// <summary>Shadow guard bitmap. Guards first-write-per-tick shadow capture. Same index semantics as <see cref="ClusterDirtyBitmap"/>.</summary>
+    public DirtyBitmap ClusterShadowBitmap;
+
+    /// <summary>Shared <see cref="ChunkBasedSegment{TStore}"/> backing all per-archetype B+Trees for this archetype.</summary>
+    public ChunkBasedSegment<PersistentStore> IndexSegment;
 
     private ArchetypeClusterState() { }
 
@@ -90,7 +104,7 @@ internal sealed unsafe class ArchetypeClusterState
         ActiveClusterCount = 0;
         FreeClusterHead = -1;
 
-        var accessor = ClusterSegment.CreateChunkAccessor(null);
+        var accessor = ClusterSegment.CreateChunkAccessor();
         try
         {
             int capacity = ClusterSegment.ChunkCapacity;
@@ -101,7 +115,7 @@ internal sealed unsafe class ArchetypeClusterState
                     continue;
                 }
 
-                byte* clusterBase = accessor.GetChunkAddress(chunkId, false);
+                byte* clusterBase = accessor.GetChunkAddress(chunkId);
                 ulong occupancy = *(ulong*)clusterBase;
 
                 if (occupancy == 0)
@@ -274,4 +288,158 @@ internal sealed unsafe class ArchetypeClusterState
         }
     }
 
+    /// <summary>
+    /// Initialize per-archetype B+Tree index infrastructure from the component tables.
+    /// Called after cluster state creation for archetypes with <see cref="ArchetypeMetadata.HasClusterIndexes"/>.
+    /// </summary>
+    public void InitializeIndexes(ComponentTable[] slotToTable, ChunkBasedSegment<PersistentStore> indexSegment, bool load, ChangeSet changeSet)
+    {
+        IndexSegment = indexSegment;
+
+        int slotCount = 0;
+        for (int slot = 0; slot < slotToTable.Length; slot++)
+        {
+            var infos = slotToTable[slot].IndexedFieldInfos;
+            if (infos != null && infos.Length > 0)
+            {
+                slotCount++;
+            }
+        }
+
+        IndexSlots = new ClusterIndexSlot[slotCount];
+        int idx = 0;
+        for (int slot = 0; slot < slotToTable.Length; slot++)
+        {
+            var table = slotToTable[slot];
+            var infos = table.IndexedFieldInfos;
+            if (infos == null || infos.Length == 0)
+            {
+                continue;
+            }
+
+            var fields = new ClusterIndexField[infos.Length];
+            var shadowBuffers = new FieldShadowBuffer[infos.Length];
+
+            // Iterate component definition fields to find indexed ones (in stable order matching IndexedFieldInfos)
+            int fi = 0;
+            for (int i = 0; i < table.Definition.MaxFieldId && fi < infos.Length; i++)
+            {
+                var fieldDef = table.Definition[i];
+                if (fieldDef == null || !fieldDef.HasIndex)
+                {
+                    continue;
+                }
+
+                ref var ifi = ref infos[fi];
+                // FieldOffset in cluster = field offset within pure component data (no ComponentOverhead in clusters)
+                int clusterFieldOffset = ifi.OffsetToField - table.ComponentOverhead;
+                var btree = ComponentTable.CreateIndexForFieldCore(fieldDef, (short)fieldDef.FieldId, load, indexSegment, changeSet);
+                fields[fi] = new ClusterIndexField
+                {
+                    FieldOffset = clusterFieldOffset,
+                    FieldSize = ifi.Size,
+                    Index = btree,
+                    AllowMultiple = ifi.AllowMultiple,
+                    ZoneMap = new ZoneMapArray(ClusterSegment.ChunkCapacity, ifi.Size,
+                        isFloat: fieldDef.Type == FieldType.Float, isDouble: fieldDef.Type == FieldType.Double),
+                };
+                shadowBuffers[fi] = new FieldShadowBuffer();
+                fi++;
+            }
+
+            IndexSlots[idx++] = new ClusterIndexSlot
+            {
+                Slot = slot,
+                Fields = fields,
+                ShadowBuffers = shadowBuffers,
+            };
+        }
+
+        ClusterShadowBitmap = new DirtyBitmap(Math.Max(64, ClusterSegment.ChunkCapacity * 64));
+    }
+
+    /// <summary>
+    /// Rebuild per-archetype B+Tree indexes from cluster data (scan all occupied entities).
+    /// Used on reopen when index segment is not persisted or is corrupted.
+    /// </summary>
+    public void RebuildIndexesFromData(ChangeSet changeSet)
+    {
+        if (IndexSlots == null)
+        {
+            return;
+        }
+
+        var clusterAccessor = ClusterSegment.CreateChunkAccessor();
+        var idxAccessor = IndexSegment.CreateChunkAccessor(changeSet);
+        try
+        {
+            for (int c = 0; c < ActiveClusterCount; c++)
+            {
+                int chunkId = ActiveClusterIds[c];
+                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId);
+                ulong occupancy = *(ulong*)clusterBase;
+
+                while (occupancy != 0)
+                {
+                    int slotIndex = BitOperations.TrailingZeroCount(occupancy);
+                    occupancy &= occupancy - 1;
+                    int clusterLocation = chunkId * 64 + slotIndex;
+
+                    for (int s = 0; s < IndexSlots.Length; s++)
+                    {
+                        ref var ixSlot = ref IndexSlots[s];
+                        byte* compBase = clusterBase + Layout.ComponentOffset(ixSlot.Slot);
+                        int compSize = Layout.ComponentSize(ixSlot.Slot);
+                        for (int f = 0; f < ixSlot.Fields.Length; f++)
+                        {
+                            ref var field = ref ixSlot.Fields[f];
+                            byte* fieldPtr = compBase + slotIndex * compSize + field.FieldOffset;
+                            field.Index.Add(fieldPtr, clusterLocation, ref idxAccessor);
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            idxAccessor.Dispose();
+            clusterAccessor.Dispose();
+        }
+    }
+}
+
+/// <summary>
+/// Per-component-slot index state for a cluster-eligible archetype. One per component slot that has indexed fields.
+/// </summary>
+internal struct ClusterIndexSlot
+{
+    /// <summary>Component slot index within the archetype.</summary>
+    public int Slot;
+
+    /// <summary>Per-indexed-field B+Tree instances (per-archetype ownership).</summary>
+    public ClusterIndexField[] Fields;
+
+    /// <summary>Per-indexed-field shadow buffers for old value capture before mutation.</summary>
+    public FieldShadowBuffer[] ShadowBuffers;
+}
+
+/// <summary>
+/// Per-indexed-field B+Tree state within a cluster-eligible archetype.
+/// </summary>
+internal struct ClusterIndexField
+{
+    /// <summary>Byte offset of this field within the pure component data (no ComponentOverhead — clusters have no overhead).</summary>
+    public int FieldOffset;
+
+    /// <summary>Field size in bytes.</summary>
+    public int FieldSize;
+
+    /// <summary>Per-archetype B+Tree instance. Value = ClusterLocation (clusterChunkId * 64 + slotIndex).</summary>
+    public BTreeBase<PersistentStore> Index;
+
+    /// <summary>Whether index allows multiple values per key.</summary>
+    public bool AllowMultiple;
+
+    /// <summary>Zone map for cluster-level query pruning. Non-null for numeric field types.</summary>
+    public ZoneMapArray ZoneMap;
 }

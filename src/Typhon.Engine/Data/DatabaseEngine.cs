@@ -805,7 +805,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Mask dirty bits with live occupancy to skip destroyed entities whose dirty bit remained set.
             // A destroyed entity's slot is cleared in the cluster (occupancy bit = 0), but its dirty bit
             // stays set until snapshot. Without masking we'd serialize stale/zeroed data for dead slots.
-            var accessor = clusterState.ClusterSegment.CreateChunkAccessor(null);
+            var accessor = clusterState.ClusterSegment.CreateChunkAccessor();
             try
             {
                 int entryCount = 0;
@@ -816,10 +816,18 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         continue;
                     }
 
-                    byte* occBase = accessor.GetChunkAddress(i, false);
+                    byte* occBase = accessor.GetChunkAddress(i);
                     ulong occupancy = *(ulong*)occBase;
                     dirtyBits[i] &= (long)occupancy;
                     entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
+                }
+
+                // Process per-archetype shadow entries for B+Tree index maintenance (Phase 3a).
+                // MUST run regardless of entryCount — destroyed entities with pending shadows need index cleanup.
+                if (clusterState.IndexSlots != null)
+                {
+                    ProcessClusterShadowEntries(clusterState, engineState);
+                    RecomputeClusterZoneMaps(clusterState, dirtyBits);
                 }
 
                 if (entryCount == 0)
@@ -930,7 +938,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                             offset += 4;
 
                             // Write all component data from cluster SoA arrays
-                            byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, false);
+                            byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
                             for (int slot = 0; slot < layout.ComponentCount; slot++)
                             {
                                 int compOffset = layout.ComponentOffset(slot);
@@ -967,6 +975,152 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 accessor.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Recompute zone maps for all dirty clusters in the dirty bitmap snapshot.
+    /// Each dirty cluster gets a full min/max scan for each indexed field.
+    /// </summary>
+    private unsafe void RecomputeClusterZoneMaps(ArchetypeClusterState clusterState, long[] dirtyBits)
+    {
+        var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            for (int wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
+            {
+                if (dirtyBits[wordIdx] == 0)
+                {
+                    continue;
+                }
+
+                int clusterChunkId = wordIdx;
+
+                // Guard against freed/unallocated chunks (stale dirty bits from destroyed entities)
+                if (clusterChunkId == 0 || !clusterState.ClusterSegment.IsChunkAllocated(clusterChunkId))
+                {
+                    continue;
+                }
+
+                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+                var ixSlots = clusterState.IndexSlots;
+
+                for (int s = 0; s < ixSlots.Length; s++)
+                {
+                    ref var ixSlot = ref ixSlots[s];
+                    for (int f = 0; f < ixSlot.Fields.Length; f++)
+                    {
+                        ixSlot.Fields[f].ZoneMap?.Recompute(clusterChunkId, clusterBase, clusterState.Layout, ixSlot.Slot,
+                            ixSlot.Fields[f].FieldOffset);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            clusterAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Drains the per-archetype shadow buffers for cluster-backed indexed fields, updating per-archetype B+Trees.
+    /// Reads current field values from cluster SoA, compares with captured old values, and calls B+Tree.Move for changes.
+    /// Called at tick boundary from <see cref="WriteClusterTickFence"/>.
+    /// </summary>
+    private unsafe void ProcessClusterShadowEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState)
+    {
+        // Quick check: any shadow buffers non-empty? Skip allocation if all empty.
+        bool anyShadow = false;
+        var ixSlots = clusterState.IndexSlots;
+        for (int s = 0; s < ixSlots.Length && !anyShadow; s++)
+        {
+            for (int f = 0; f < ixSlots[s].Fields.Length; f++)
+            {
+                if (ixSlots[s].ShadowBuffers[f].Count > 0)
+                {
+                    anyShadow = true;
+                    break;
+                }
+            }
+        }
+
+        if (!anyShadow)
+        {
+            clusterState.ClusterShadowBitmap.Clear();
+            return;
+        }
+
+        var changeSet = MMF.CreateChangeSet();
+        var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+
+        try
+        {
+            for (int s = 0; s < ixSlots.Length; s++)
+            {
+                ref var ixSlot = ref ixSlots[s];
+                for (int f = 0; f < ixSlot.Fields.Length; f++)
+                {
+                    var buffer = ixSlot.ShadowBuffers[f];
+                    int count = buffer.Count;
+                    if (count == 0)
+                    {
+                        continue;
+                    }
+
+                    ref var field = ref ixSlot.Fields[f];
+                    var idxAccessor = field.Index.Segment.CreateChunkAccessor(changeSet);
+
+                    try
+                    {
+                        for (int e = 0; e < count; e++)
+                        {
+                            ref var entry = ref buffer[e];
+                            int clusterChunkId = entry.ChunkId >> 6;   // entityIndex → chunkId
+                            int slotIndex = entry.ChunkId & 0x3F;      // entityIndex → slot
+
+                            // Check occupancy (entity may have been destroyed this tick)
+                            byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+                            ulong occupancy = *(ulong*)clusterBase;
+                            if ((occupancy & (1UL << slotIndex)) == 0)
+                            {
+                                // Entity destroyed — remove old index entry using shadow value
+                                var destroyOldKey = entry.OldKey;
+                                field.Index.Remove(&destroyOldKey, out _, ref idxAccessor);
+                                continue;
+                            }
+
+                            // Read current (post-mutation) field value from cluster SoA
+                            int compSize = clusterState.Layout.ComponentSize(ixSlot.Slot);
+                            byte* compBase = clusterBase + clusterState.Layout.ComponentOffset(ixSlot.Slot) + slotIndex * compSize;
+                            byte* fieldPtr = compBase + field.FieldOffset;
+                            var oldKey = entry.OldKey;
+                            var newKey = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
+
+                            if (oldKey.RawValue == newKey.RawValue)
+                            {
+                                continue; // Field didn't actually change
+                            }
+
+                            // Update per-archetype B+Tree: remove old key, insert new key, same ClusterLocation value
+                            int clusterLocation = entry.ChunkId; // entityIndex = clusterLocation
+                            field.Index.Move(&oldKey, fieldPtr, clusterLocation, ref idxAccessor);
+                        }
+                    }
+                    finally
+                    {
+                        idxAccessor.Dispose();
+                    }
+
+                    buffer.Reset();
+                }
+            }
+        }
+        finally
+        {
+            clusterAccessor.Dispose();
+            changeSet.SaveChanges();
+        }
+
+        clusterState.ClusterShadowBitmap.Clear();
     }
 
     /// <summary>
@@ -1753,6 +1907,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             arch.ClusterSegmentSPI = state.ClusterState?.ClusterSegment.RootPageIndex ?? 0;
             arch.NextEntityKey = Interlocked.Read(ref state.NextEntityKey);
 
+            // Persist per-archetype cluster index segment SPI via bootstrap dictionary
+            if (state.ClusterState?.IndexSegment != null)
+            {
+                MMF.Bootstrap.SetInt($"clusterindex.{meta.ArchetypeId}", state.ClusterState.IndexSegment.RootPageIndex);
+            }
+
             SystemCrud.Update(archetypesTable, persisted.ChunkId, ref arch, EpochManager, cs);
             anyUpdated = true;
         }
@@ -2192,18 +2352,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // ═══════════════════════════════════════════════════════════════════════
-            // Cluster storage eligibility: all SV, no indexes, no spatial
+            // Cluster storage eligibility: all SV, no spatial (indexes allowed since Phase 3a)
             // ═══════════════════════════════════════════════════════════════════════
             bool isClusterEligible = true;
+            bool hasIndexedFields = false;
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
                 var table = slotToTable[slot];
                 if (table.StorageMode != StorageMode.SingleVersion)
-                {
-                    isClusterEligible = false;
-                    break;
-                }
-                if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0)
                 {
                     isClusterEligible = false;
                     break;
@@ -2213,8 +2369,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     isClusterEligible = false;
                     break;
                 }
+                if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0)
+                {
+                    hasIndexedFields = true;
+                }
             }
             meta.IsClusterEligible = isClusterEligible;
+            meta.HasClusterIndexes = isClusterEligible && hasIndexedFields;
 
             if (isClusterEligible)
             {
@@ -2302,6 +2463,43 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         var fallbackSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
                         _archetypeStates[meta.ArchetypeId].ClusterState =
                             ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment);
+                    }
+                }
+
+                // Initialize per-archetype B+Tree indexes for cluster archetypes with indexed fields.
+                if (meta.HasClusterIndexes)
+                {
+                    var clusterState = _archetypeStates[meta.ArchetypeId].ClusterState;
+                    var changeSet = MMF.CreateChangeSet();
+                    try
+                    {
+                        // Try to load persisted per-archetype index segment
+                        bool loadIndexes = false;
+                        ChunkBasedSegment<PersistentStore> indexSegment;
+                        string indexKey = $"clusterindex.{meta.ArchetypeId}";
+                        int indexSPI = !isFreshAllocation ? MMF.Bootstrap.GetInt(indexKey) : 0;
+                        if (indexSPI > 0 && MMF.TryLoadChunkBasedSegment(indexSPI, 256 /* sizeof(Index64Chunk) */, out var loadedIdx))
+                        {
+                            indexSegment = loadedIdx;
+                            loadIndexes = true;
+                        }
+                        else
+                        {
+                            indexSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, 256 /* sizeof(Index64Chunk) */);
+                        }
+
+                        clusterState.InitializeIndexes(slotToTable, indexSegment, loadIndexes, changeSet);
+
+                        // If fresh indexes on a reopened database with existing cluster data, rebuild from scan
+                        if (!loadIndexes && !isFreshAllocation && clusterState.ActiveClusterCount > 0)
+                        {
+                            using var idxEpoch = EpochGuard.Enter(EpochManager);
+                            clusterState.RebuildIndexesFromData(changeSet);
+                        }
+                    }
+                    finally
+                    {
+                        changeSet.SaveChanges();
                     }
                 }
             }

@@ -1129,6 +1129,8 @@ public unsafe partial class Transaction
         ArchetypeClusterState clusterState = null;
         var clusterAccessor = default(ChunkAccessor<PersistentStore>);
         bool hasClusterAccessor = false;
+        var clusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasClusterIdxAccessor = false;
         
         // Per-component accessors for reading source data from per-component chunks during cluster copy
         ChunkAccessor<PersistentStore>[] clusterSrcAccessors = null;
@@ -1171,6 +1173,11 @@ public unsafe partial class Transaction
                                 clusterSrcAccessors[ci].Dispose();
                             }
                             hasClusterAccessor = false;
+                            if (hasClusterIdxAccessor)
+                            {
+                                clusterIdxAccessor.Dispose();
+                                hasClusterIdxAccessor = false;
+                            }
                         }
                         for (int si = 0; si < svSlotCount; si++)
                         {
@@ -1224,6 +1231,13 @@ public unsafe partial class Transaction
                         for (int slot = 0; slot < componentCount; slot++)
                         {
                             clusterSrcAccessors[slot] = engineState.SlotToComponentTable[slot].ComponentSegment.CreateChunkAccessor(_changeSet);
+                        }
+
+                        // Per-archetype index accessor for cluster B+Tree insertion (Phase 3a)
+                        if (clusterState.IndexSegment != null)
+                        {
+                            clusterIdxAccessor = clusterState.IndexSegment.CreateChunkAccessor(_changeSet);
+                            hasClusterIdxAccessor = true;
                         }
                     }
 
@@ -1397,7 +1411,25 @@ public unsafe partial class Transaction
                     // Checkpoint persists them. We do NOT set ClusterDirtyBitmap here — that bitmap tracks write mutations for change-filtered dispatch,
                     // same as per-ComponentTable DirtyBitmap (which is also not set during FinalizeSpawns for non-cluster SV entities).
 
-                    // TODO: Phase 3 — free orphaned per-component chunks from SpawnEntry.Loc[]
+                    // Insert per-archetype B+Tree entries for cluster entity (Phase 3a)
+                    if (clusterState.IndexSlots != null)
+                    {
+                        int clusterLocation = clusterChunkId * 64 + slotIdx;
+                        var ixSlots = clusterState.IndexSlots;
+                        for (int ixs = 0; ixs < ixSlots.Length; ixs++)
+                        {
+                            ref var ixSlot = ref ixSlots[ixs];
+                            int compSize = layout.ComponentSize(ixSlot.Slot);
+                            byte* compBase = clusterBase + layout.ComponentOffset(ixSlot.Slot) + slotIdx * compSize;
+                            for (int fi = 0; fi < ixSlot.Fields.Length; fi++)
+                            {
+                                ref var field = ref ixSlot.Fields[fi];
+                                byte* fieldPtr = compBase + field.FieldOffset;
+                                field.Index.Add(fieldPtr, clusterLocation, ref clusterIdxAccessor);
+                                field.ZoneMap?.Widen(clusterChunkId, fieldPtr);
+                            }
+                        }
+                    }
                 }
                 else
                 {
@@ -1414,78 +1446,86 @@ public unsafe partial class Transaction
                     engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
                 }
 
-                // Insert SV secondary indexes (Versioned is handled by CommitComponentCore).
+                // Insert shared ComponentTable secondary indexes — ONLY for non-cluster (legacy) entities.
+                // Cluster entities use per-archetype B+Trees (inserted in the cluster path above).
                 // Accessors are hoisted: created once when archetype changes (alongside mapAccessor),
                 // reused across all entities of the same archetype.
-                for (int si = 0; si < svSlotCount; si++)
+                if (!useCluster)
                 {
-                    int slot = svSlots[si];
-                    var table = engineState.SlotToComponentTable[slot];
-                    int chunkId = entry.Loc[slot];
-                    if (chunkId == 0)
+                    for (int si = 0; si < svSlotCount; si++)
                     {
-                        continue;
-                    }
-
-                    byte* chunkAddr = svCompAccessors[si].GetChunkAddress(chunkId, true);
-
-                    // Write inline entityPK at offset 0 (SV indexed components store entityPK in overhead to enable chunkId → entityPK resolution during
-                    // index-based queries).
-                    if (table.Definition.EntityPKOverheadSize > 0)
-                    {
-                        *(long*)chunkAddr = (long)entry.Id.RawValue;
-                    }
-
-                    var indexedFieldInfos = table.IndexedFieldInfos;
-
-                    for (int i = 0; i < indexedFieldInfos.Length; i++)
-                    {
-                        ref var ifi = ref indexedFieldInfos[i];
-                        var index = ifi.PersistentIndex;
-                        if (ifi.AllowMultiple)
+                        int slot = svSlots[si];
+                        var table = engineState.SlotToComponentTable[slot];
+                        int chunkId = entry.Loc[slot];
+                        if (chunkId == 0)
                         {
-                            *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
-                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i], out _);
+                            continue;
                         }
-                        else
+
+                        byte* chunkAddr = svCompAccessors[si].GetChunkAddress(chunkId, true);
+
+                        // Write inline entityPK at offset 0 (SV indexed components store entityPK in overhead to enable chunkId → entityPK resolution during
+                        // index-based queries).
+                        if (table.Definition.EntityPKOverheadSize > 0)
                         {
-                            index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i]);
+                            *(long*)chunkAddr = (long)entry.Id.RawValue;
+                        }
+
+                        var indexedFieldInfos = table.IndexedFieldInfos;
+
+                        for (int i = 0; i < indexedFieldInfos.Length; i++)
+                        {
+                            ref var ifi = ref indexedFieldInfos[i];
+                            var index = ifi.PersistentIndex;
+                            if (ifi.AllowMultiple)
+                            {
+                                *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
+                                    index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i], out _);
+                            }
+                            else
+                            {
+                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i]);
+                            }
                         }
                     }
                 }
 
                 // Insert Transient secondary indexes (hoisted accessors, same pattern as SV).
-                for (int si = 0; si < trSlotCount; si++)
+                // Cluster archetypes are always all-SV, so trSlotCount == 0. Guard for safety.
+                if (!useCluster)
                 {
-                    int slot = trSlots[si];
-                    var table = engineState.SlotToComponentTable[slot];
-                    int chunkId = entry.Loc[slot];
-                    if (chunkId == 0)
+                    for (int si = 0; si < trSlotCount; si++)
                     {
-                        continue;
-                    }
-
-                    byte* chunkAddr = trCompAccessors[si].GetChunkAddress(chunkId, true);
-
-                    if (table.Definition.EntityPKOverheadSize > 0)
-                    {
-                        *(long*)chunkAddr = (long)entry.Id.RawValue;
-                    }
-
-                    var indexedFieldInfos = table.IndexedFieldInfos;
-
-                    for (int i = 0; i < indexedFieldInfos.Length; i++)
-                    {
-                        ref var ifi = ref indexedFieldInfos[i];
-                        var index = ifi.TransientIndex;
-                        if (ifi.AllowMultiple)
+                        int slot = trSlots[si];
+                        var table = engineState.SlotToComponentTable[slot];
+                        int chunkId = entry.Loc[slot];
+                        if (chunkId == 0)
                         {
-                            *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
-                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i], out _);
+                            continue;
                         }
-                        else
+
+                        byte* chunkAddr = trCompAccessors[si].GetChunkAddress(chunkId, true);
+
+                        if (table.Definition.EntityPKOverheadSize > 0)
                         {
-                            index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i]);
+                            *(long*)chunkAddr = (long)entry.Id.RawValue;
+                        }
+
+                        var indexedFieldInfos = table.IndexedFieldInfos;
+
+                        for (int i = 0; i < indexedFieldInfos.Length; i++)
+                        {
+                            ref var ifi = ref indexedFieldInfos[i];
+                            var index = ifi.TransientIndex;
+                            if (ifi.AllowMultiple)
+                            {
+                                *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
+                                    index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i], out _);
+                            }
+                            else
+                            {
+                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i]);
+                            }
                         }
                     }
                 }
@@ -1546,6 +1586,10 @@ public unsafe partial class Transaction
                     for (int ci = 0; ci < clusterSrcAccessorCount; ci++)
                     {
                         clusterSrcAccessors[ci].Dispose();
+                    }
+                    if (hasClusterIdxAccessor)
+                    {
+                        clusterIdxAccessor.Dispose();
                     }
                 }
                 for (int si = 0; si < svSlotCount; si++)
@@ -1657,6 +1701,8 @@ public unsafe partial class Transaction
         bool hasClusterAccessor = false;
         bool destroyUseCluster = false;
         ArchetypeClusterState destroyClusterState = null;
+        var destroyClusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasDestroyClusterIdxAccessor = false;
 
         try
         {
@@ -1683,6 +1729,11 @@ public unsafe partial class Transaction
                             clusterAccessor.Dispose();
                             hasClusterAccessor = false;
                         }
+                        if (hasDestroyClusterIdxAccessor)
+                        {
+                            destroyClusterIdxAccessor.Dispose();
+                            hasDestroyClusterIdxAccessor = false;
+                        }
                     }
                     accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
                     lastArchId = entityId.ArchetypeId;
@@ -1695,6 +1746,11 @@ public unsafe partial class Transaction
                         destroyClusterState = engineState.ClusterState;
                         clusterAccessor = destroyClusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
                         hasClusterAccessor = true;
+                        if (destroyClusterState.IndexSegment != null)
+                        {
+                            destroyClusterIdxAccessor = destroyClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
+                            hasDestroyClusterIdxAccessor = true;
+                        }
                     }
                 }
 
@@ -1705,6 +1761,39 @@ public unsafe partial class Transaction
                     {
                         int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(readBuf);
                         byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
+
+                        // Remove per-archetype B+Tree entries before releasing the slot (Phase 3a).
+                        // If the entity was written this tick (shadow bitmap set), skip B+Tree removal here — ProcessClusterShadowEntries at tick fence will
+                        // detect occupancy=0 and Remove the OLD key.
+                        // This is necessary because the current cluster data may contain the post-mutation value, but the B+Tree still holds the pre-mutation
+                        // key (Move hasn't happened yet).
+                        if (destroyClusterState.IndexSlots != null)
+                        {
+                            int entityIndex = clusterChunkId * 64 + slotIndex;
+                            bool hasPendingShadow = destroyClusterState.ClusterShadowBitmap != null && destroyClusterState.ClusterShadowBitmap.Test(entityIndex);
+
+                            if (!hasPendingShadow)
+                            {
+                                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+                                var layout = destroyClusterState.Layout;
+                                var ixSlots = destroyClusterState.IndexSlots;
+                                for (int s = 0; s < ixSlots.Length; s++)
+                                {
+                                    ref var ixSlot = ref ixSlots[s];
+                                    int compSize = layout.ComponentSize(ixSlot.Slot);
+                                    byte* compBase = clusterBase + layout.ComponentOffset(ixSlot.Slot) + slotIndex * compSize;
+                                    for (int fi = 0; fi < ixSlot.Fields.Length; fi++)
+                                    {
+                                        ref var field = ref ixSlot.Fields[fi];
+                                        byte* fieldPtr = compBase + field.FieldOffset;
+                                        var key = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
+                                        field.Index.Remove(&key, out _, ref destroyClusterIdxAccessor);
+                                    }
+                                }
+                            }
+                            // else: shadow processing at tick fence will handle removal
+                        }
+
                         destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet);
                     }
 
@@ -1726,6 +1815,10 @@ public unsafe partial class Transaction
             if (hasClusterAccessor)
             {
                 clusterAccessor.Dispose();
+            }
+            if (hasDestroyClusterIdxAccessor)
+            {
+                destroyClusterIdxAccessor.Dispose();
             }
         }
     }
@@ -1801,6 +1894,14 @@ public unsafe partial class Transaction
                     }
 
                     hasRecord = engineState.EntityMap.TryGet(entityId.EntityKey, readBuf, ref emAccessor);
+                }
+
+                // Cluster entities: index removal handled by cluster-specific destroy path (FlushPendingDestroys)
+                // and ProcessClusterShadowEntries. Skip legacy per-ComponentTable index removal to avoid
+                // reading ClusterEntityRecord (19 bytes) as legacy EntityRecord (14 + 4*C bytes).
+                if (meta.IsClusterEligible)
+                {
+                    continue;
                 }
 
                 for (int slot = 0; slot < meta.ComponentCount; slot++)

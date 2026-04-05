@@ -643,17 +643,52 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
 
-        var pkResult = new HashMap<long>();
-        _whereFieldReader.ExecuteFullScan(plan, plan.OrderedEvaluators, ct, _tx, pkResult);
+        // Scan for matching entities across all matching archetypes.
+        // Cluster archetypes: direct cluster scan with evaluator predicates (bypasses shared B+Tree).
+        // Non-cluster archetypes: shared ComponentTable B+Tree via PipelineExecutor.
+        var result = new HashSet<EntityId>();
+        bool hasNonClusterArchetypes = false;
 
-        // Convert PKs to EntityIds — pre-size result to avoid rehashing
-        var result = new HashSet<EntityId>(pkResult.Count);
-        foreach (var pk in pkResult)
+        // Phase 3a: direct cluster scan for cluster-eligible archetypes with indexed fields
         {
-            var entityId = EntityId.FromRaw(pk);
-            if (MaskTest(entityId.ArchetypeId))
+            var dbe = _tx.DBE;
+            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
             {
-                result.Add(entityId);
+                if (!MaskTest(meta.ArchetypeId))
+                {
+                    continue;
+                }
+                if (!meta.HasClusterIndexes)
+                {
+                    hasNonClusterArchetypes = true;
+                    continue;
+                }
+
+                var engineState = dbe._archetypeStates[meta.ArchetypeId];
+                var clusterState = engineState?.ClusterState;
+                if (clusterState?.IndexSlots == null)
+                {
+                    hasNonClusterArchetypes = true;
+                    continue;
+                }
+
+                ScanPerArchetypeBTree(plan, evaluators, clusterState, meta, result);
+            }
+        }
+
+        // Fall through to shared pipeline for non-cluster archetypes
+        if (hasNonClusterArchetypes)
+        {
+            var pkResult = new HashMap<long>();
+            _whereFieldReader.ExecuteFullScan(plan, plan.OrderedEvaluators, ct, _tx, pkResult);
+
+            foreach (var pk in pkResult)
+            {
+                var entityId = EntityId.FromRaw(pk);
+                if (MaskTest(entityId.ArchetypeId))
+                {
+                    result.Add(entityId);
+                }
             }
         }
 
@@ -670,6 +705,85 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Scan cluster entities for a per-archetype indexed archetype using direct cluster evaluation (Path B).
+    /// Evaluates all field predicates on cluster SoA data, resolving EntityKeys from the cluster.
+    /// </summary>
+    private void ScanPerArchetypeBTree(ExecutionPlan plan, FieldEvaluator[] evaluators, ArchetypeClusterState clusterState, ArchetypeMetadata meta,
+        HashSet<EntityId> result)
+    {
+        // Locate the index slot that corresponds to the queried component
+        int ixSlotIdx = -1;
+        var ixSlots = clusterState.IndexSlots;
+        var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
+        for (int s = 0; s < ixSlots.Length; s++)
+        {
+            var table = engineState.SlotToComponentTable[ixSlots[s].Slot];
+            if (table == _whereComponentTable)
+            {
+                ixSlotIdx = s;
+                break;
+            }
+        }
+        if (ixSlotIdx < 0)
+        {
+            return;
+        }
+
+        ref var matchSlot = ref ixSlots[ixSlotIdx];
+        var layout = clusterState.Layout;
+        int compSlot = matchSlot.Slot;
+        int compSize = layout.ComponentSize(compSlot);
+        int compOffset = layout.ComponentOffset(compSlot);
+
+        var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            for (int c = 0; c < clusterState.ActiveClusterCount; c++)
+            {
+                int clusterChunkId = clusterState.ActiveClusterIds[c];
+                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+                ulong occupancy = *(ulong*)clusterBase;
+                if (occupancy == 0)
+                {
+                    continue;
+                }
+
+                // Evaluate each occupied entity against all field predicates
+                byte* compBase = clusterBase + compOffset;
+                while (occupancy != 0)
+                {
+                    int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(occupancy);
+                    occupancy &= occupancy - 1;
+
+                    byte* entityComp = compBase + slotIndex * compSize;
+                    bool allMatch = true;
+                    for (int e = 0; e < evaluators.Length; e++)
+                    {
+                        ref var eval = ref evaluators[e];
+                        // FieldOffset is the byte offset within the pure struct (no ComponentOverhead).
+                        // Cluster SoA component data has no overhead, so FieldOffset maps directly.
+                        if (!FieldEvaluator.Evaluate(ref eval, entityComp + eval.FieldOffset))
+                        {
+                            allMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (allMatch)
+                    {
+                        long entityKey = *(long*)(clusterBase + layout.EntityKeysOffset + slotIndex * 8);
+                        result.Add(new EntityId(entityKey, meta.ArchetypeId));
+                    }
+                }
+            }
+        }
+        finally
+        {
+            clusterAccessor.Dispose();
+        }
     }
 
     /// <summary>
@@ -817,6 +931,26 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         // Targeted count via PipelineExecutor — avoids allocating result collections
         if (HasFieldPredicates)
         {
+            // If any matching archetypes use cluster storage, fall through to Execute().Count (cluster scan path handles counting correctly)
+            bool anyCluster = false;
+            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+            {
+                if (MaskTest(meta.ArchetypeId) && meta.HasClusterIndexes)
+                {
+                    anyCluster = true;
+                    break;
+                }
+            }
+
+            if (anyCluster)
+            {
+                int hybrid = ExecuteTargeted().Count;
+                activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, hybrid);
+                activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "targeted-cluster");
+                activity?.Dispose();
+                return hybrid;
+            }
+
             var ct = _whereComponentTable;
             var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
             var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);

@@ -34,6 +34,24 @@ partial class AaBenchAnt : Archetype<AaBenchAnt>
     public static readonly Comp<AaBenchMovement> Movement = Register<AaBenchMovement>();
 }
 
+// ── Indexed SV component for Phase 3a benchmarks ──────────────────────
+[Component("Typhon.Benchmark.AA.IdxData", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct AaBenchIdxData
+{
+    [Index]
+    public int Score;
+    public int Flags;
+    public AaBenchIdxData(int score, int flags) { Score = score; Flags = flags; }
+}
+
+[Archetype(512)]
+partial class AaBenchIdxUnit : Archetype<AaBenchIdxUnit>
+{
+    public static readonly Comp<AaBenchPosition> Position = Register<AaBenchPosition>();
+    public static readonly Comp<AaBenchIdxData> Data = Register<AaBenchIdxData>();
+}
+
 /// <summary>
 /// Compares per-entity access cost: standard EntityAccessor.Open vs ArchetypeAccessor.Open.
 /// Mimics the AntHill movement system: Read(Movement) + Write(Position) per entity.
@@ -375,7 +393,7 @@ static class ArchetypeAccessorBenchmark
             return new BenchEnv(sp, dbe, ids);
         }
 
-        BenchEnv(ServiceProvider sp, DatabaseEngine dbe, EntityId[] ids) { _sp = sp; Dbe = dbe; EntityIds = ids; }
+        internal BenchEnv(ServiceProvider sp, DatabaseEngine dbe, EntityId[] ids) { _sp = sp; Dbe = dbe; EntityIds = ids; }
 
         public void Dispose()
         {
@@ -546,5 +564,159 @@ static class ArchetypeAccessorBenchmark
             pos.X += 0.1f;
         }
         tx.Commit();
+    }
+
+    // ── Indexed cluster benchmark (Phase 3a) ──────────────────────────
+
+    public static void RunIndexedBench(int entityCount = 50_000, int iterations = 200)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  Indexed Cluster Benchmark — {entityCount:N0} entities, {iterations} iterations");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+
+        using var env = CreateIndexedEnv(entityCount);
+        var dbe = env.Dbe;
+        var ids = env.EntityIds;
+
+        var meta = Archetype<AaBenchIdxUnit>.Metadata;
+        var clusterState = dbe._archetypeStates[meta.ArchetypeId]?.ClusterState;
+        Console.WriteLine($"  Cluster eligible: {meta.IsClusterEligible}");
+        Console.WriteLine($"  Has cluster indexes: {meta.HasClusterIndexes}");
+        Console.WriteLine($"  Active clusters: {clusterState?.ActiveClusterCount ?? 0}");
+        Console.WriteLine($"  Index slots: {clusterState?.IndexSlots?.Length ?? 0}");
+        Console.WriteLine();
+
+        // ── 1. Indexed Write benchmark: Write(Data) triggers shadow capture ──
+        // Warmup
+        for (int w = 0; w < 5; w++)
+        {
+            WriteAllIndexedEntities(dbe, ids, w);
+            dbe.WriteTickFence(w + 1);
+        }
+
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
+        {
+            WriteAllIndexedEntities(dbe, ids, 100 + i);
+        }
+        sw.Stop();
+        double writeUs = sw.Elapsed.TotalMicroseconds / iterations;
+        double writeNs = writeUs * 1000.0 / entityCount;
+        Console.WriteLine($"  Indexed Write (shadow capture):");
+        Console.WriteLine($"    {writeUs:F1} µs/iter  ({writeNs:F1} ns/entity)");
+        Console.WriteLine();
+
+        // ── 2. Tick fence with shadow processing ──
+        var tickTimes = new double[50];
+        for (int i = 0; i < 50; i++)
+        {
+            WriteAllIndexedEntities(dbe, ids, 200 + i);
+            sw.Restart();
+            dbe.WriteTickFence(200 + i);
+            sw.Stop();
+            tickTimes[i] = sw.Elapsed.TotalMicroseconds;
+        }
+        Array.Sort(tickTimes);
+        double tfMean = 0;
+        for (int i = 0; i < 50; i++) tfMean += tickTimes[i];
+        tfMean /= 50;
+        Console.WriteLine($"  Tick Fence (shadow + B+Tree Move + zone map recompute):");
+        Console.WriteLine($"    Mean: {tfMean:F1} µs  ({tfMean / entityCount * 1000:F2} ns/entity)");
+        Console.WriteLine($"    P50:  {tickTimes[25]:F1} µs");
+        Console.WriteLine($"    P90:  {tickTimes[45]:F1} µs");
+        Console.WriteLine();
+
+        // ── 3. Targeted query benchmark ──
+        // Warmup
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (int w = 0; w < 10; w++)
+            {
+                tx.Query<AaBenchIdxUnit>().WhereField<AaBenchIdxData>(d => d.Score >= 0 && d.Score < 500).Execute();
+            }
+        }
+
+        var queryTimes = new double[100];
+        for (int i = 0; i < 100; i++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            sw.Restart();
+            var result = tx.Query<AaBenchIdxUnit>().WhereField<AaBenchIdxData>(d => d.Score >= 0 && d.Score < 500).Count();
+            sw.Stop();
+            queryTimes[i] = sw.Elapsed.TotalMicroseconds;
+        }
+        Array.Sort(queryTimes);
+        double qMean = 0;
+        for (int i = 0; i < 100; i++) qMean += queryTimes[i];
+        qMean /= 100;
+        Console.WriteLine($"  Targeted Query (WhereField cluster scan, ~1% selectivity):");
+        Console.WriteLine($"    Mean: {qMean:F1} µs");
+        Console.WriteLine($"    P50:  {queryTimes[50]:F1} µs");
+        Console.WriteLine($"    P90:  {queryTimes[90]:F1} µs");
+        Console.WriteLine();
+    }
+
+    static void WriteAllIndexedEntities(DatabaseEngine dbe, EntityId[] ids, int tick)
+    {
+        using var tx = dbe.CreateQuickTransaction();
+        for (int i = 0; i < ids.Length; i++)
+        {
+            ref var data = ref tx.OpenMut(ids[i]).Write(AaBenchIdxUnit.Data);
+            data.Score = tick * 1000 + i; // Unique value to force B+Tree Move at tick fence
+        }
+        tx.Commit();
+    }
+
+    static BenchEnv CreateIndexedEnv(int entityCount)
+    {
+        var name = $"AABench_{Environment.ProcessId}";
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(o =>
+          {
+              o.DatabaseName = name;
+              o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
+              o.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine(o => { o.Wal = null; });
+
+        var sp = sc.BuildServiceProvider();
+        sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+        Archetype<AaBenchIdxUnit>.Touch();
+        dbe.RegisterComponentFromAccessor<AaBenchPosition>();
+        dbe.RegisterComponentFromAccessor<AaBenchIdxData>();
+        dbe.InitializeArchetypes();
+
+        var ids = new EntityId[entityCount];
+        int remaining = entityCount;
+        int offset = 0;
+        while (remaining > 0)
+        {
+            int batch = Math.Min(1000, remaining);
+            remaining -= batch;
+            using var tx = dbe.CreateQuickTransaction();
+            for (int i = 0; i < batch; i++)
+            {
+                var pos = new AaBenchPosition(offset + i, 0);
+                var data = new AaBenchIdxData(offset + i, 0); // Unique Score for unique B+Tree index
+                ids[offset + i] = tx.Spawn<AaBenchIdxUnit>(AaBenchIdxUnit.Position.Set(in pos), AaBenchIdxUnit.Data.Set(in data));
+            }
+            tx.Commit();
+            offset += batch;
+        }
+
+        // Initial tick fence to establish baseline index state
+        dbe.WriteTickFence(0);
+
+        return new BenchEnv(sp, dbe, ids);
     }
 }
