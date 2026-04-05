@@ -1131,7 +1131,10 @@ public unsafe partial class Transaction
         bool hasClusterAccessor = false;
         var clusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
         bool hasClusterIdxAccessor = false;
-        
+        var clusterSpatialTreeAccessor = default(ChunkAccessor<PersistentStore>);
+        var clusterSpatialBpAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasClusterSpatialAccessors = false;
+
         // Per-component accessors for reading source data from per-component chunks during cluster copy
         ChunkAccessor<PersistentStore>[] clusterSrcAccessors = null;
         int clusterSrcAccessorCount = 0;
@@ -1177,6 +1180,12 @@ public unsafe partial class Transaction
                             {
                                 clusterIdxAccessor.Dispose();
                                 hasClusterIdxAccessor = false;
+                            }
+                            if (hasClusterSpatialAccessors)
+                            {
+                                clusterSpatialTreeAccessor.Dispose();
+                                clusterSpatialBpAccessor.Dispose();
+                                hasClusterSpatialAccessors = false;
                             }
                         }
                         for (int si = 0; si < svSlotCount; si++)
@@ -1238,6 +1247,14 @@ public unsafe partial class Transaction
                         {
                             clusterIdxAccessor = clusterState.IndexSegment.CreateChunkAccessor(_changeSet);
                             hasClusterIdxAccessor = true;
+                        }
+
+                        // Per-archetype spatial accessors for cluster R-Tree insertion (Phase 3b)
+                        if (clusterState.SpatialSlot.Tree != null)
+                        {
+                            clusterSpatialTreeAccessor = clusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
+                            clusterSpatialBpAccessor = clusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
+                            hasClusterSpatialAccessors = true;
                         }
                     }
 
@@ -1382,8 +1399,8 @@ public unsafe partial class Transaction
                         Unsafe.CopyBlockUnaligned(dstAddr, srcAddr + overhead, (uint)layout.ComponentSize(slot));
                     }
 
-                    // Write EntityKey to cluster
-                    *(long*)(clusterBase + layout.EntityKeysOffset + slotIdx * 8) = entry.Id.EntityKey;
+                    // Write full EntityId to cluster (stores ArchetypeId alongside EntityKey — eliminates conversion at read sites)
+                    *(long*)(clusterBase + layout.EntityIdsOffset + slotIdx * 8) = (long)entry.Id.RawValue;
 
                     // Set EnabledBits in cluster
                     for (int slot = 0; slot < componentCount; slot++)
@@ -1429,6 +1446,22 @@ public unsafe partial class Transaction
                                 field.ZoneMap?.Widen(clusterChunkId, fieldPtr);
                             }
                         }
+                    }
+
+                    // Insert per-archetype spatial R-Tree entry for cluster entity (Phase 3b)
+                    if (clusterState.SpatialSlot.Tree != null)
+                    {
+                        int clusterLocation = clusterChunkId * 64 + slotIdx;
+                        ref var ss = ref clusterState.SpatialSlot;
+                        int spatialCompSize = layout.ComponentSize(ss.Slot);
+                        byte* spatialFieldPtr = clusterBase + layout.ComponentOffset(ss.Slot) + slotIdx * spatialCompSize + ss.FieldOffset;
+
+                        // Zero back-pointer before insert (same safety pattern as legacy path)
+                        SpatialBackPointerHelper.Clear(ref clusterSpatialBpAccessor, clusterLocation);
+
+                        SpatialMaintainer.InsertSpatialCluster(
+                            (long)entry.Id.RawValue, clusterLocation, spatialFieldPtr,
+                            ref ss, ref clusterSpatialTreeAccessor, ref clusterSpatialBpAccessor, _changeSet);
                     }
                 }
                 else
@@ -1531,46 +1564,51 @@ public unsafe partial class Transaction
                 }
 
                 // Insert SV spatial indexes (Transient excluded by schema validation).
-                // Must iterate all component slots (not just svSlots) because spatial-only components// without B+Tree indexes are not in the svSlots array.
-                for (int slot = 0; slot < componentCount; slot++)
+                // Must iterate all component slots (not just svSlots) because spatial-only components
+                // without B+Tree indexes are not in the svSlots array.
+                // Skip for cluster entities — per-archetype R-Tree is used instead (Phase 3b).
+                if (!useCluster)
                 {
-                    if ((versionedMask & (1 << slot)) != 0)
+                    for (int slot = 0; slot < componentCount; slot++)
                     {
-                        continue; // Versioned — handled by CommitComponentCore
-                    }
-                    var table = engineState.SlotToComponentTable[slot];
-                    if (table.SpatialIndex == null)
-                    {
-                        continue;
-                    }
-                    int chunkId = entry.Loc[slot];
-                    if (chunkId == 0)
-                    {
-                        continue;
-                    }
+                        if ((versionedMask & (1 << slot)) != 0)
+                        {
+                            continue; // Versioned — handled by CommitComponentCore
+                        }
+                        var table = engineState.SlotToComponentTable[slot];
+                        if (table.SpatialIndex == null)
+                        {
+                            continue;
+                        }
+                        int chunkId = entry.Loc[slot];
+                        if (chunkId == 0)
+                        {
+                            continue;
+                        }
 
-                    // Zero the back-pointer chunk before InsertSpatial. Guarantees "not inserted" state (LeafChunkId=0)
-                    // even if InsertSpatial skips due to degenerate bounds. Without this, the CBS chunk may contain
-                    // garbage from a reused page, which UpdateSpatial would misinterpret as a valid leaf position.
-                    var bpAccessor = table.SpatialIndex.BackPointerSegment.CreateChunkAccessor(_changeSet);
-                    try
-                    {
-                        SpatialBackPointerHelper.Clear(ref bpAccessor, chunkId);
-                    }
-                    finally
-                    {
-                        bpAccessor.Dispose();
-                    }
+                        // Zero the back-pointer chunk before InsertSpatial. Guarantees "not inserted" state (LeafChunkId=0)
+                        // even if InsertSpatial skips due to degenerate bounds. Without this, the CBS chunk may contain
+                        // garbage from a reused page, which UpdateSpatial would misinterpret as a valid leaf position.
+                        var bpAccessor = table.SpatialIndex.BackPointerSegment.CreateChunkAccessor(_changeSet);
+                        try
+                        {
+                            SpatialBackPointerHelper.Clear(ref bpAccessor, chunkId);
+                        }
+                        finally
+                        {
+                            bpAccessor.Dispose();
+                        }
 
-                    // Create a temporary component accessor for reading spatial field data
-                    var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
-                    try
-                    {
-                        SpatialMaintainer.InsertSpatial((long)entry.Id.RawValue, chunkId, table, ref compAccessor, _changeSet);
-                    }
-                    finally
-                    {
-                        compAccessor.Dispose();
+                        // Create a temporary component accessor for reading spatial field data
+                        var compAccessor = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+                        try
+                        {
+                            SpatialMaintainer.InsertSpatial((long)entry.Id.RawValue, chunkId, table, ref compAccessor, _changeSet);
+                        }
+                        finally
+                        {
+                            compAccessor.Dispose();
+                        }
                     }
                 }
             }
@@ -1590,6 +1628,11 @@ public unsafe partial class Transaction
                     if (hasClusterIdxAccessor)
                     {
                         clusterIdxAccessor.Dispose();
+                    }
+                    if (hasClusterSpatialAccessors)
+                    {
+                        clusterSpatialTreeAccessor.Dispose();
+                        clusterSpatialBpAccessor.Dispose();
                     }
                 }
                 for (int si = 0; si < svSlotCount; si++)
@@ -1675,6 +1718,28 @@ public unsafe partial class Transaction
                 state.BackPointerSegment.EnsureCapacity(compCapNeeded, _changeSet);
             }
 
+            // Pre-grow per-archetype cluster spatial segments (Phase 3b)
+            if (es.ClusterState?.SpatialSlot.Tree != null)
+            {
+                var cs = es.ClusterState;
+                {
+                    ref var ss = ref cs.SpatialSlot;
+                    int leafCapacity = ss.Descriptor.LeafCapacity;
+                    int estimatedLeaves = (spawnCount + leafCapacity - 1) / leafCapacity;
+                    int estimatedTotal = ss.Tree.EntityCount > 0
+                        ? (int)((ss.Tree.EntityCount + spawnCount) / (leafCapacity * 0.7)) + 10
+                        : (int)(estimatedLeaves * 1.3) + 10;
+                    ss.Tree.Segment.EnsureCapacity(estimatedTotal, _changeSet);
+
+                    // BP segment keyed by ClusterLocation = clusterChunkId * 64 + slotIndex
+                    // Estimate max ClusterLocation after spawns
+                    int currentMaxClusterLoc = cs.ClusterSegment.ChunkCapacity * 64;
+                    int additionalClusters = (spawnCount + cs.Layout.ClusterSize - 1) / cs.Layout.ClusterSize;
+                    int estimatedMaxClusterLoc = currentMaxClusterLoc + additionalClusters * 64 + 64;
+                    ss.BackPointerSegment.EnsureCapacity(estimatedMaxClusterLoc, _changeSet);
+                }
+            }
+
             break; // All entries in a single spawn batch share the same archetype — one pass suffices
         }
     }
@@ -1703,6 +1768,9 @@ public unsafe partial class Transaction
         ArchetypeClusterState destroyClusterState = null;
         var destroyClusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
         bool hasDestroyClusterIdxAccessor = false;
+        var destroyClusterSpatialTreeAccessor = default(ChunkAccessor<PersistentStore>);
+        var destroyClusterSpatialBpAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasDestroyClusterSpatialAccessors = false;
 
         try
         {
@@ -1734,6 +1802,12 @@ public unsafe partial class Transaction
                             destroyClusterIdxAccessor.Dispose();
                             hasDestroyClusterIdxAccessor = false;
                         }
+                        if (hasDestroyClusterSpatialAccessors)
+                        {
+                            destroyClusterSpatialTreeAccessor.Dispose();
+                            destroyClusterSpatialBpAccessor.Dispose();
+                            hasDestroyClusterSpatialAccessors = false;
+                        }
                     }
                     accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
                     lastArchId = entityId.ArchetypeId;
@@ -1750,6 +1824,12 @@ public unsafe partial class Transaction
                         {
                             destroyClusterIdxAccessor = destroyClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
                             hasDestroyClusterIdxAccessor = true;
+                        }
+                        if (destroyClusterState.SpatialSlot.Tree != null)
+                        {
+                            destroyClusterSpatialTreeAccessor = destroyClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
+                            destroyClusterSpatialBpAccessor = destroyClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
+                            hasDestroyClusterSpatialAccessors = true;
                         }
                     }
                 }
@@ -1794,6 +1874,17 @@ public unsafe partial class Transaction
                             // else: shadow processing at tick fence will handle removal
                         }
 
+                        // Remove per-archetype spatial R-Tree entry before releasing the slot (Phase 3b).
+                        // Spatial doesn't need shadow logic — back-pointer provides O(1) leaf lookup.
+                        if (destroyClusterState.SpatialSlot.Tree != null)
+                        {
+                            int clusterLocation = clusterChunkId * 64 + slotIndex;
+                            SpatialMaintainer.RemoveFromSpatialCluster(
+                                (long)entityId.RawValue, clusterLocation,
+                                ref destroyClusterState.SpatialSlot,
+                                ref destroyClusterSpatialTreeAccessor, ref destroyClusterSpatialBpAccessor, _changeSet);
+                        }
+
                         destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet);
                     }
 
@@ -1819,6 +1910,11 @@ public unsafe partial class Transaction
             if (hasDestroyClusterIdxAccessor)
             {
                 destroyClusterIdxAccessor.Dispose();
+            }
+            if (hasDestroyClusterSpatialAccessors)
+            {
+                destroyClusterSpatialTreeAccessor.Dispose();
+                destroyClusterSpatialBpAccessor.Dispose();
             }
         }
     }

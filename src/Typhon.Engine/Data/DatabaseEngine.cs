@@ -830,6 +830,17 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     RecomputeClusterZoneMaps(clusterState, dirtyBits);
                 }
 
+                // Process per-archetype spatial entries for cluster archetypes with spatial fields (Phase 3b).
+                // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup. Only Dynamic mode is updated.
+                if (clusterState.SpatialSlot.Tree != null
+                    && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
+                {
+                    ProcessClusterSpatialEntries(clusterState, engineState, dirtyBits, ref accessor);
+                }
+
+                // Archive dirty bitmap into per-archetype DirtyBitmapRing for spatial interest management
+                clusterState.SpatialSlot.DirtyRing?.Archive(tickNumber, dirtyBits, dirtyBits.Length);
+
                 if (entryCount == 0)
                 {
                     continue;
@@ -1018,6 +1029,77 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         finally
         {
             clusterAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Iterate dirty cluster entities and update per-archetype spatial R-Tree positions.
+    /// For each dirty entity: read current spatial bounds from cluster SoA, check fat AABB containment via back-pointer,
+    /// reinsert if escaped. Called at tick boundary from <see cref="WriteClusterTickFence"/> (Phase 3b).
+    /// </summary>
+    private unsafe void ProcessClusterSpatialEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState,
+        long[] dirtyBits, ref ChunkAccessor<PersistentStore> clusterAccessor)
+    {
+        ref var ss = ref clusterState.SpatialSlot;
+        var layout = clusterState.Layout;
+        int compSlot = ss.Slot;
+        int compSize = layout.ComponentSize(compSlot);
+        int compOffset = layout.ComponentOffset(compSlot);
+
+        var changeSet = MMF.CreateChangeSet();
+        var treeAccessor = ss.Tree.Segment.CreateChunkAccessor(changeSet);
+        var bpAccessor = ss.BackPointerSegment.CreateChunkAccessor(changeSet);
+        int dirtyCount = 0;
+        int escapeCount = 0;
+
+        try
+        {
+            for (int wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
+            {
+                long word = dirtyBits[wordIdx];
+                if (word == 0)
+                {
+                    continue;
+                }
+
+                // wordIdx = clusterChunkId (cluster dirty bitmap is indexed by clusterChunkId)
+                int clusterChunkId = wordIdx;
+                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+
+                while (word != 0)
+                {
+                    int slotIndex = BitOperations.TrailingZeroCount((ulong)word);
+                    word &= word - 1;
+
+                    // Occupancy already masked in WriteClusterTickFence (dead slots filtered out)
+                    int clusterLocation = clusterChunkId * 64 + slotIndex;
+                    long entityPK = *(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8);
+                    byte* fieldPtr = clusterBase + compOffset + slotIndex * compSize + ss.FieldOffset;
+
+                    dirtyCount++;
+                    if (SpatialMaintainer.UpdateSpatialBatchCluster(entityPK, clusterLocation, fieldPtr,
+                            ref ss, ref treeAccessor, ref bpAccessor, changeSet))
+                    {
+                        escapeCount++;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            bpAccessor.Dispose();
+            treeAccessor.Dispose();
+            changeSet.SaveChanges();
+        }
+
+        // Escape rate telemetry (same pattern as ProcessSpatialEntries)
+        if (TelemetryConfig.SpatialActive && dirtyCount > 0)
+        {
+            double escapeRate = (double)escapeCount / dirtyCount;
+            if (escapeRate > 0.10)
+            {
+                SpatialMaintainer.LogHighEscapeRate(_log, $"cluster.{clusterState.Layout.ClusterSize}", escapeRate, escapeCount, dirtyCount);
+            }
         }
     }
 
@@ -1913,6 +1995,18 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 MMF.Bootstrap.SetInt($"clusterindex.{meta.ArchetypeId}", state.ClusterState.IndexSegment.RootPageIndex);
             }
 
+            // Persist per-archetype cluster spatial segment SPIs via bootstrap dictionary (Phase 3b)
+            if (state.ClusterState?.SpatialSlot.Tree != null)
+            {
+                ref var ss = ref state.ClusterState.SpatialSlot;
+                MMF.Bootstrap.Set($"clusterspatial.{meta.ArchetypeId}", BootstrapDictionary.Value.FromInt5(
+                    ss.Tree.Segment.RootPageIndex,
+                    ss.BackPointerSegment.RootPageIndex,
+                    (int)ss.Tree.Variant | ((int)ss.FieldInfo.Mode << 4) | (ss.Descriptor.Stride << 8),
+                    BitConverter.SingleToInt32Bits(ss.FieldInfo.Margin),
+                    ss.OccupancyMap?.Segment.RootPageIndex ?? 0));
+            }
+
             SystemCrud.Update(archetypesTable, persisted.ChunkId, ref arch, EpochManager, cs);
             anyUpdated = true;
         }
@@ -2352,10 +2446,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // ═══════════════════════════════════════════════════════════════════════
-            // Cluster storage eligibility: all SV, no spatial (indexes allowed since Phase 3a)
+            // Cluster storage eligibility: all SV (indexes + Dynamic spatial allowed since Phase 3a/3b)
             // ═══════════════════════════════════════════════════════════════════════
             bool isClusterEligible = true;
             bool hasIndexedFields = false;
+            bool hasSpatialField = false;
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
                 var table = slotToTable[slot];
@@ -2366,8 +2461,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
                 if (table.SpatialIndex != null)
                 {
-                    isClusterEligible = false;
-                    break;
+                    // Only Dynamic spatial is cluster-eligible; Static uses bulk loading (Phase 3c)
+                    if (table.SpatialIndex.FieldInfo.Mode == SpatialMode.Dynamic)
+                    {
+                        hasSpatialField = true;
+                    }
+                    else
+                    {
+                        isClusterEligible = false;
+                        break;
+                    }
                 }
                 if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0)
                 {
@@ -2376,6 +2479,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
             meta.IsClusterEligible = isClusterEligible;
             meta.HasClusterIndexes = isClusterEligible && hasIndexedFields;
+            meta.HasClusterSpatial = isClusterEligible && hasSpatialField;
 
             if (isClusterEligible)
             {
@@ -2495,6 +2599,85 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         {
                             using var idxEpoch = EpochGuard.Enter(EpochManager);
                             clusterState.RebuildIndexesFromData(changeSet);
+                        }
+                    }
+                    finally
+                    {
+                        changeSet.SaveChanges();
+                    }
+                }
+
+                // Initialize per-archetype spatial R-Tree for cluster archetypes with spatial fields (Phase 3b).
+                if (meta.HasClusterSpatial)
+                {
+                    var clusterState = _archetypeStates[meta.ArchetypeId].ClusterState;
+                    var changeSet = MMF.CreateChangeSet();
+                    try
+                    {
+                        bool loadSpatial = false;
+                        ChunkBasedSegment<PersistentStore> treeSeg;
+                        ChunkBasedSegment<PersistentStore> bpSeg;
+                        string spatialKey = $"clusterspatial.{meta.ArchetypeId}";
+
+                        // Find the spatial descriptor to know the tree segment stride
+                        SpatialNodeDescriptor spatialDesc = default;
+                        for (int slot = 0; slot < meta.ComponentCount; slot++)
+                        {
+                            var table = slotToTable[slot];
+                            if (table.SpatialIndex != null)
+                            {
+                                spatialDesc = SpatialNodeDescriptor.ForVariant(table.SpatialIndex.FieldInfo.ToVariant());
+                                break;
+                            }
+                        }
+
+                        if (!isFreshAllocation && MMF.Bootstrap.TryGet(spatialKey, out var spatialVal))
+                        {
+                            int treeSPI = spatialVal.GetInt();
+                            int bpSPI = spatialVal.GetInt(1);
+                            int variantStride = spatialVal.GetInt(2);
+                            int spatialTreeStride = variantStride >> 8;
+
+                            if (treeSPI > 0 && bpSPI > 0
+                                && MMF.TryLoadChunkBasedSegment(treeSPI, spatialTreeStride, out var loadedTree)
+                                && MMF.TryLoadChunkBasedSegment(bpSPI, 8, out var loadedBp))
+                            {
+                                treeSeg = loadedTree;
+                                bpSeg = loadedBp;
+                                loadSpatial = true;
+                            }
+                            else
+                            {
+                                treeSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, spatialDesc.Stride, changeSet);
+                                bpSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, 8, changeSet);
+                            }
+                        }
+                        else
+                        {
+                            treeSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, spatialDesc.Stride, changeSet);
+                            bpSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, 8, changeSet);
+                        }
+
+                        clusterState.InitializeSpatial(slotToTable, treeSeg, bpSeg, loadSpatial, changeSet);
+
+                        // Register with per-table SpatialInterestSystem for fan-out
+                        for (int slot = 0; slot < meta.ComponentCount; slot++)
+                        {
+                            var table = slotToTable[slot];
+                            if (table.SpatialIndex != null)
+                            {
+                                // Register cluster archetype on SpatialIndexState — interest/trigger systems
+                                // access this list dynamically (they may not exist yet at init time).
+                                table.SpatialIndex.RegisterClusterArchetype(clusterState);
+                                break;
+                            }
+                        }
+
+                        // If fresh spatial on a reopened database with existing cluster data, rebuild from scan
+                        if (!loadSpatial && !isFreshAllocation && clusterState.ActiveClusterCount > 0)
+                        {
+                            using var spatialEpoch = EpochGuard.Enter(EpochManager);
+                            clusterState.RebuildSpatialFromData(changeSet);
                         }
                     }
                     finally

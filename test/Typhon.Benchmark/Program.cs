@@ -195,6 +195,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--spatial-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunSpatialBench();
+                return;
+            }
+
             if (args.Contains("--profile-runtime-standard"))
             {
                 ArchetypeAccessorBenchmark.ProfileRuntimeStandard();

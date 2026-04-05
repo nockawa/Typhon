@@ -58,12 +58,16 @@ internal class ArchetypeMetadata
     // Cluster storage (set during DatabaseEngine.InitializeArchetypes)
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>True if this archetype uses cluster storage (all SV, no spatial).</summary>
+    /// <summary>True if this archetype uses cluster storage (all SV, no non-Dynamic spatial).</summary>
     internal bool IsClusterEligible;
 
     /// <summary>True if cluster-eligible AND at least one component has indexed fields.
     /// Gates per-archetype B+Tree creation and shadow capture in the cluster write path.</summary>
     internal bool HasClusterIndexes;
+
+    /// <summary>True if cluster-eligible AND has a dynamic spatial-indexed component.
+    /// Gates per-archetype R-Tree creation and cluster spatial maintenance.</summary>
+    internal bool HasClusterSpatial;
 
     /// <summary>Precomputed cluster layout. Non-null only when <see cref="IsClusterEligible"/> is true.</summary>
     internal ArchetypeClusterInfo ClusterLayout;
@@ -134,7 +138,7 @@ internal class ArchetypeEngineState
     /// <summary>Monotonic entity key counter. Use Interlocked.Increment for thread-safe generation.</summary>
     public long NextEntityKey;
 
-    /// <summary>Cluster storage state. Non-null for cluster-eligible archetypes (all SV, no spatial).</summary>
+    /// <summary>Cluster storage state. Non-null for cluster-eligible archetypes.</summary>
     public ArchetypeClusterState ClusterState;
 }
 

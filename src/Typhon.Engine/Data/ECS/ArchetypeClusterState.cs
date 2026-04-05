@@ -47,6 +47,13 @@ internal sealed unsafe class ArchetypeClusterState
     /// <summary>Shared <see cref="ChunkBasedSegment{TStore}"/> backing all per-archetype B+Trees for this archetype.</summary>
     public ChunkBasedSegment<PersistentStore> IndexSegment;
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Per-archetype Spatial R-Tree (Phase 3b). Null if archetype has no spatial fields.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Per-archetype spatial R-Tree state. Check <c>SpatialSlot.Tree != null</c> for presence.</summary>
+    public ClusterSpatialSlot SpatialSlot;
+
     private ArchetypeClusterState() { }
 
     /// <summary>Mark an entity slot as dirty for tick fence processing.</summary>
@@ -269,8 +276,8 @@ internal sealed unsafe class ArchetypeClusterState
         ref ulong occupancy = ref *(ulong*)clusterBase;
         occupancy &= ~slotMask;
 
-        // Clear EntityKey
-        *(long*)(clusterBase + Layout.EntityKeysOffset + slotIndex * 8) = 0;
+        // Clear EntityId
+        *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8) = 0;
 
         // If cluster now empty, free it
         if (BitOperations.PopCount(occupancy) == 0)
@@ -406,6 +413,100 @@ internal sealed unsafe class ArchetypeClusterState
             clusterAccessor.Dispose();
         }
     }
+
+    /// <summary>
+    /// Initialize per-archetype spatial R-Tree infrastructure from the component tables.
+    /// Called after cluster state creation for archetypes with <see cref="ArchetypeMetadata.HasClusterSpatial"/>.
+    /// </summary>
+    public void InitializeSpatial(ComponentTable[] slotToTable, ChunkBasedSegment<PersistentStore> treeSeg, ChunkBasedSegment<PersistentStore> bpSeg, bool load, 
+        ChangeSet changeSet)
+    {
+        for (int slot = 0; slot < slotToTable.Length; slot++)
+        {
+            var table = slotToTable[slot];
+            if (table.SpatialIndex == null)
+            {
+                continue;
+            }
+
+            var tableFi = table.SpatialIndex.FieldInfo;
+            // FieldOffset in cluster = field offset within pure component data (no ComponentOverhead in clusters)
+            int clusterFieldOffset = tableFi.FieldOffset - table.ComponentOverhead;
+            var variant = tableFi.ToVariant();
+            var descriptor = load ? SpatialNodeDescriptor.FromVariant(variant, treeSeg.Stride) : SpatialNodeDescriptor.ForVariant(variant);
+            var tree = new SpatialRTree<PersistentStore>(treeSeg, variant, load);
+            tree.BackPointerSegment = bpSeg;
+
+            // Create a modified SpatialFieldInfo with cluster-relative offset
+            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType,
+                tableFi.Margin, tableFi.CellSize, tableFi.Mode);
+
+            // Occupancy map (Layer 1) if CellSize > 0
+            PagedHashMap<long, int, PersistentStore> occupancyMap = null;
+            // For now skip occupancy map for cluster spatial — the R-Tree is the primary query path
+
+            SpatialSlot = new ClusterSpatialSlot
+            {
+                Slot = slot,
+                FieldOffset = clusterFieldOffset,
+                FieldInfo = fi,
+                Descriptor = descriptor,
+                Tree = tree,
+                BackPointerSegment = bpSeg,
+                OccupancyMap = occupancyMap,
+                DirtyRing = new DirtyBitmapRing(Math.Max(4, ClusterSegment.ChunkCapacity)),
+            };
+            break; // Only one spatial field per archetype
+        }
+    }
+
+    /// <summary>
+    /// Rebuild per-archetype spatial R-Tree from cluster data (scan all occupied entities).
+    /// Used on reopen when spatial segment is not persisted or is corrupted.
+    /// </summary>
+    public void RebuildSpatialFromData(ChangeSet changeSet)
+    {
+        if (SpatialSlot.Tree == null)
+        {
+            return;
+        }
+
+        ref var ss = ref SpatialSlot;
+        var clusterAccessor = ClusterSegment.CreateChunkAccessor();
+        var treeAccessor = ss.Tree.Segment.CreateChunkAccessor(changeSet);
+        var bpAccessor = ss.BackPointerSegment.CreateChunkAccessor(changeSet);
+        try
+        {
+            int compSlot = ss.Slot;
+            int compSize = Layout.ComponentSize(compSlot);
+            int compOffset = Layout.ComponentOffset(compSlot);
+
+            for (int c = 0; c < ActiveClusterCount; c++)
+            {
+                int chunkId = ActiveClusterIds[c];
+                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId);
+                ulong occupancy = *(ulong*)clusterBase;
+
+                while (occupancy != 0)
+                {
+                    int slotIndex = BitOperations.TrailingZeroCount(occupancy);
+                    occupancy &= occupancy - 1;
+                    int clusterLocation = chunkId * 64 + slotIndex;
+                    long entityPK = *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8);
+
+                    byte* fieldPtr = clusterBase + compOffset + slotIndex * compSize + ss.FieldOffset;
+                    SpatialMaintainer.InsertSpatialCluster(entityPK, clusterLocation, fieldPtr,
+                        ref ss, ref treeAccessor, ref bpAccessor, changeSet);
+                }
+            }
+        }
+        finally
+        {
+            bpAccessor.Dispose();
+            treeAccessor.Dispose();
+            clusterAccessor.Dispose();
+        }
+    }
 }
 
 /// <summary>
@@ -421,6 +522,36 @@ internal struct ClusterIndexSlot
 
     /// <summary>Per-indexed-field shadow buffers for old value capture before mutation.</summary>
     public FieldShadowBuffer[] ShadowBuffers;
+}
+
+/// <summary>
+/// Per-archetype spatial R-Tree state for a cluster-eligible archetype with a <c>[SpatialIndex]</c> field.
+/// </summary>
+internal struct ClusterSpatialSlot
+{
+    /// <summary>Component slot index that has the spatial field.</summary>
+    public int Slot;
+
+    /// <summary>Byte offset of spatial field within cluster component SoA (no ComponentOverhead).</summary>
+    public int FieldOffset;
+
+    /// <summary>Spatial field metadata (margin, mode, field type).</summary>
+    public SpatialFieldInfo FieldInfo;
+
+    /// <summary>Node layout descriptor.</summary>
+    public SpatialNodeDescriptor Descriptor;
+
+    /// <summary>Per-archetype R-Tree (Dynamic mode). Value stored in leaf = ClusterLocation.</summary>
+    public SpatialRTree<PersistentStore> Tree;
+
+    /// <summary>Per-archetype back-pointer CBS keyed by ClusterLocation (clusterChunkId * 64 + slotIndex).</summary>
+    public ChunkBasedSegment<PersistentStore> BackPointerSegment;
+
+    /// <summary>Per-archetype occupancy map (null if CellSize == 0).</summary>
+    public PagedHashMap<long, int, PersistentStore> OccupancyMap;
+
+    /// <summary>Per-archetype DirtyBitmapRing for interest management delta queries.</summary>
+    public DirtyBitmapRing DirtyRing;
 }
 
 /// <summary>

@@ -100,6 +100,29 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         return dbe;
     }
 
+    /// <summary>
+    /// Get the spatial R-Tree for a given archetype. For cluster-eligible archetypes, returns per-archetype tree;
+    /// otherwise the shared per-table tree.
+    /// </summary>
+    private static SpatialRTree<PersistentStore> GetSpatialTree<TArch>(DatabaseEngine dbe) where TArch : Archetype<TArch>
+    {
+        var meta = Archetype<TArch>.Metadata;
+        if (meta.HasClusterSpatial)
+        {
+            return dbe._archetypeStates[meta.ArchetypeId]?.ClusterState?.SpatialSlot.Tree;
+        }
+        // Non-cluster: find the component table with spatial index
+        for (int slot = 0; slot < meta.ComponentCount; slot++)
+        {
+            var table = dbe._archetypeStates[meta.ArchetypeId]?.SlotToComponentTable[slot];
+            if (table?.SpatialIndex != null)
+            {
+                return table.SpatialIndex.ActiveTree;
+            }
+        }
+        return null;
+    }
+
     // ── Schema Validation ────────────────────────────────────────────────
 
     [Test]
@@ -170,9 +193,9 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        // Verify tree entity count after transaction commits (FinalizeSpawns runs on commit)
-        var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
+        // Verify tree entity count after transaction commits (FinalizeSpawns runs on commit).
+        // SpatialShipArchetype is now cluster-eligible (Phase 3b), so entities are in the per-archetype R-Tree.
+        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(1));
     }
 
     [Test]
@@ -190,8 +213,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(50));
+        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(50));
     }
 
     [Test]
@@ -207,8 +229,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         }
 
         // Query a region that overlaps the entity
-        var table = dbe.GetComponentTable<SpatialShip>();
-        var tree = table.SpatialIndex.ActiveTree;
+        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
 
         // Query region that overlaps the entity (bounds are enlarged by margin=5, so fat AABB is [5,15,25]→[17,27,37])
         // Query [0,10,20]→[20,30,40] should overlap
@@ -238,8 +259,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
+        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(1));
 
         using (var t = dbe.CreateQuickTransaction())
         {
@@ -247,7 +267,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(0));
+        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(0));
     }
 
     // ── Fat AABB Containment ─────────────────────────────────────────────
@@ -264,8 +284,8 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialShip>();
-        int nodeCountBefore = table.SpatialIndex.ActiveTree.NodeCount;
+        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
+        int nodeCountBefore = tree.NodeCount;
 
         // Write tick fence to process initial spatial state
         dbe.WriteTickFence(1);
@@ -280,7 +300,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         dbe.WriteTickFence(2);
 
         // Node count should not change (no splits from small moves)
-        Assert.That(table.SpatialIndex.ActiveTree.NodeCount, Is.EqualTo(nodeCountBefore));
+        Assert.That(tree.NodeCount, Is.EqualTo(nodeCountBefore));
     }
 
     // ── Back-pointer consistency ─────────────────────────────────────────
@@ -312,11 +332,11 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(100));
+        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
+        Assert.That(tree.EntityCount, Is.EqualTo(100));
 
         // Validate tree invariants (TreeValidator.Validate throws on failure)
-        TreeValidator.Validate(table.SpatialIndex.ActiveTree);
+        TreeValidator.Validate(tree);
     }
 
     // ── Bulk spawn (regression test for #192) ──────────────────────────
@@ -345,9 +365,9 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialShip>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(2000));
-        TreeValidator.Validate(table.SpatialIndex.ActiveTree);
+        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
+        Assert.That(tree.EntityCount, Is.EqualTo(2000));
+        TreeValidator.Validate(tree);
     }
 
     // ── Static/Dynamic Mode (F2) ──────────────────────────────────────

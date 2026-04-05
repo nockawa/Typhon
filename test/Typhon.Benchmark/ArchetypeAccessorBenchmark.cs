@@ -34,6 +34,33 @@ partial class AaBenchAnt : Archetype<AaBenchAnt>
     public static readonly Comp<AaBenchMovement> Movement = Register<AaBenchMovement>();
 }
 
+// ── Spatial SV component for Phase 3b benchmarks ─────────────────────
+[Component("Typhon.Benchmark.AA.SpatialPos", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct AaBenchSpatialPos
+{
+    [Field]
+    [SpatialIndex(5.0f)]
+    public AABB3F Bounds;
+    [Field]
+    public float Speed;
+}
+
+[Component("Typhon.Benchmark.AA.SpatialMeta", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct AaBenchSpatialMeta
+{
+    [Field]
+    public long Tag;
+}
+
+[Archetype(514)]
+partial class AaBenchSpatialUnit : Archetype<AaBenchSpatialUnit>
+{
+    public static readonly Comp<AaBenchSpatialPos> Pos = Register<AaBenchSpatialPos>();
+    public static readonly Comp<AaBenchSpatialMeta> Meta = Register<AaBenchSpatialMeta>();
+}
+
 // ── Indexed SV component for Phase 3a benchmarks ──────────────────────
 [Component("Typhon.Benchmark.AA.IdxData", 1, StorageMode = StorageMode.SingleVersion)]
 [StructLayout(LayoutKind.Sequential)]
@@ -667,6 +694,172 @@ static class ArchetypeAccessorBenchmark
             data.Score = tick * 1000 + i; // Unique value to force B+Tree Move at tick fence
         }
         tx.Commit();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Spatial Cluster Benchmark (Phase 3b)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public static void RunSpatialBench(int entityCount = 50_000, int iterations = 200)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  Spatial Cluster Benchmark — {entityCount:N0} entities, {iterations} iterations");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+
+        using var env = CreateSpatialEnv(entityCount);
+        var dbe = env.Dbe;
+        var ids = env.EntityIds;
+
+        var meta = Archetype<AaBenchSpatialUnit>.Metadata;
+        var clusterState = dbe._archetypeStates[meta.ArchetypeId]?.ClusterState;
+        Console.WriteLine($"  Cluster eligible: {meta.IsClusterEligible}");
+        Console.WriteLine($"  Has cluster spatial: {meta.HasClusterSpatial}");
+        Console.WriteLine($"  Active clusters: {clusterState?.ActiveClusterCount ?? 0}");
+        Console.WriteLine($"  R-Tree entities: {clusterState?.SpatialSlot.Tree?.EntityCount ?? 0}");
+        Console.WriteLine();
+
+        // ── 1. Spatial Write benchmark: Write(Pos) with new bounds ──
+        for (int w = 0; w < 5; w++)
+        {
+            WriteSpatialEntities(dbe, ids, w, 10.0f);
+            dbe.WriteTickFence(w + 1);
+        }
+
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
+        {
+            WriteSpatialEntities(dbe, ids, 100 + i, 0.5f); // Small move within fat AABB
+        }
+        sw.Stop();
+        double writeUs = sw.Elapsed.TotalMicroseconds / iterations;
+        double writeNs = writeUs * 1000.0 / entityCount;
+        Console.WriteLine($"  Spatial Write (small move, within fat AABB):");
+        Console.WriteLine($"    {writeUs:F1} µs/iter  ({writeNs:F1} ns/entity)");
+        Console.WriteLine();
+
+        // ── 2. Tick Fence — 100% dirty, small moves (fast path: containment check only) ──
+        var tickTimes = new double[50];
+        for (int i = 0; i < 50; i++)
+        {
+            WriteSpatialEntities(dbe, ids, 200 + i, 0.5f);
+            sw.Restart();
+            dbe.WriteTickFence(200 + i);
+            sw.Stop();
+            tickTimes[i] = sw.Elapsed.TotalMicroseconds;
+        }
+        Array.Sort(tickTimes);
+        double tfMean = 0;
+        for (int i = 0; i < 50; i++) tfMean += tickTimes[i];
+        tfMean /= 50;
+        Console.WriteLine($"  Tick Fence (100% dirty, small moves → fast path):");
+        Console.WriteLine($"    Mean: {tfMean:F1} µs  ({tfMean / entityCount * 1000:F2} ns/entity)");
+        Console.WriteLine($"    P50:  {tickTimes[25]:F1} µs");
+        Console.WriteLine($"    P90:  {tickTimes[45]:F1} µs");
+        Console.WriteLine();
+
+        // ── 3. Tick Fence — 100% dirty, large moves (slow path: remove + reinsert) ──
+        for (int i = 0; i < 50; i++)
+        {
+            WriteSpatialEntities(dbe, ids, 300 + i, 50.0f); // Large move escapes fat AABB
+            sw.Restart();
+            dbe.WriteTickFence(300 + i);
+            sw.Stop();
+            tickTimes[i] = sw.Elapsed.TotalMicroseconds;
+        }
+        Array.Sort(tickTimes);
+        tfMean = 0;
+        for (int i = 0; i < 50; i++) tfMean += tickTimes[i];
+        tfMean /= 50;
+        Console.WriteLine($"  Tick Fence (100% dirty, large moves → slow path: remove+reinsert):");
+        Console.WriteLine($"    Mean: {tfMean:F1} µs  ({tfMean / entityCount * 1000:F2} ns/entity)");
+        Console.WriteLine($"    P50:  {tickTimes[25]:F1} µs");
+        Console.WriteLine($"    P90:  {tickTimes[45]:F1} µs");
+        Console.WriteLine();
+
+        // ── 4. Spatial AABB Query benchmark ──
+        var queryTimes = new double[100];
+        for (int i = 0; i < 100; i++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            sw.Restart();
+            var result = tx.Query<AaBenchSpatialUnit>().WhereInAABB<AaBenchSpatialPos>(-1000, -1000, -1000, 1000, 1000, 1000).Execute();
+            sw.Stop();
+            queryTimes[i] = sw.Elapsed.TotalMicroseconds;
+        }
+        Array.Sort(queryTimes);
+        double qMean = 0;
+        for (int i = 0; i < 100; i++) qMean += queryTimes[i];
+        qMean /= 100;
+        Console.WriteLine($"  Spatial AABB Query (full extent, {entityCount:N0} entities):");
+        Console.WriteLine($"    Mean: {qMean:F1} µs");
+        Console.WriteLine($"    P50:  {queryTimes[50]:F1} µs");
+        Console.WriteLine($"    P90:  {queryTimes[90]:F1} µs");
+        Console.WriteLine();
+    }
+
+    static void WriteSpatialEntities(DatabaseEngine dbe, EntityId[] ids, int tick, float delta)
+    {
+        using var tx = dbe.CreateQuickTransaction();
+        for (int i = 0; i < ids.Length; i++)
+        {
+            ref var pos = ref tx.OpenMut(ids[i]).Write(AaBenchSpatialUnit.Pos);
+            float x = i * 20.0f + tick * delta;
+            pos.Bounds = new AABB3F { MinX = x - 1, MinY = -1, MinZ = -1, MaxX = x + 1, MaxY = 1, MaxZ = 1 };
+        }
+        tx.Commit();
+    }
+
+    static BenchEnv CreateSpatialEnv(int entityCount)
+    {
+        var name = $"AABenchSpatial_{Environment.ProcessId}";
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(o =>
+          {
+              o.DatabaseName = name;
+              o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
+              o.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine(o => { o.Wal = null; });
+
+        var sp = sc.BuildServiceProvider();
+        sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+        Archetype<AaBenchSpatialUnit>.Touch();
+        dbe.RegisterComponentFromAccessor<AaBenchSpatialPos>();
+        dbe.RegisterComponentFromAccessor<AaBenchSpatialMeta>();
+        dbe.InitializeArchetypes();
+
+        var ids = new EntityId[entityCount];
+        int remaining = entityCount;
+        int offset = 0;
+        while (remaining > 0)
+        {
+            int batch = Math.Min(1000, remaining);
+            remaining -= batch;
+            using var tx = dbe.CreateQuickTransaction();
+            for (int i = 0; i < batch; i++)
+            {
+                float x = (offset + i) * 20.0f;
+                var pos = new AaBenchSpatialPos { Bounds = new AABB3F { MinX = x - 1, MinY = -1, MinZ = -1, MaxX = x + 1, MaxY = 1, MaxZ = 1 }, Speed = 1.0f };
+                var meta2 = new AaBenchSpatialMeta { Tag = offset + i };
+                ids[offset + i] = tx.Spawn<AaBenchSpatialUnit>(AaBenchSpatialUnit.Pos.Set(in pos), AaBenchSpatialUnit.Meta.Set(in meta2));
+            }
+            tx.Commit();
+            offset += batch;
+        }
+
+        dbe.WriteTickFence(0);
+
+        return new BenchEnv(sp, dbe, ids);
     }
 
     static BenchEnv CreateIndexedEnv(int entityCount)

@@ -114,19 +114,16 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
     }
 
     /// <summary>Entity keys for all N slots. Use with slot index to reconstruct EntityId.</summary>
-    public ReadOnlySpan<long> EntityKeys
+    public ReadOnlySpan<long> EntityIds
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => new(_base + _layout.EntityKeysOffset, _layout.ClusterSize);
+        get => new(_base + _layout.EntityIdsOffset, _layout.ClusterSize);
     }
 
-    /// <summary>Reconstruct EntityId for the entity at the given slot.</summary>
+    /// <summary>Read EntityId for the entity at the given slot (stored as full packed EntityId).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public EntityId GetEntityId(int slotIndex)
-    {
-        long entityKey = *(long*)(_base + _layout.EntityKeysOffset + slotIndex * 8);
-        return new EntityId(entityKey, _meta.ArchetypeId);
-    }
+    public EntityId GetEntityId(int slotIndex) =>
+        EntityId.FromRaw(*(long*)(_base + _layout.EntityIdsOffset + slotIndex * 8));
 }
 
 /// <summary>

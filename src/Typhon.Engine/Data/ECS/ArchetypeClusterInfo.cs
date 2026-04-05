@@ -34,8 +34,8 @@ internal sealed class ArchetypeClusterInfo
     /// <summary>Byte size of the fixed header: 8 (OccupancyBits) + 8 * ComponentCount (EnabledBits).</summary>
     public readonly int HeaderSize;
 
-    /// <summary>Byte offset of the EntityKeys array from cluster base (= HeaderSize).</summary>
-    public readonly int EntityKeysOffset;
+    /// <summary>Byte offset of the EntityIds array (packed 64-bit EntityId) from cluster base (= HeaderSize).</summary>
+    public readonly int EntityIdsOffset;
 
     /// <summary>Bitmask with the lower N bits set: (1UL &lt;&lt; N) - 1. Used for iteration and full-cluster detection.</summary>
     public readonly ulong FullMask;
@@ -54,7 +54,7 @@ internal sealed class ArchetypeClusterInfo
         _componentSizes = componentSizes;
 
         HeaderSize = 8 + 8 * componentCount;
-        EntityKeysOffset = HeaderSize;
+        EntityIdsOffset = HeaderSize;
         FullMask = clusterSize == 64 ? ulong.MaxValue : (1UL << clusterSize) - 1;
 
         // Stride = offset past the last component array

@@ -774,8 +774,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
                     if (allMatch)
                     {
-                        long entityKey = *(long*)(clusterBase + layout.EntityKeysOffset + slotIndex * 8);
-                        result.Add(new EntityId(entityKey, meta.ArchetypeId));
+                        result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
                     }
                 }
             }
@@ -803,6 +802,20 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         if (state.DynamicTree != null)
         {
             QuerySingleTree(state.DynamicTree, state, result);
+        }
+
+        // Fan out to per-archetype cluster spatial R-Trees (Phase 3b).
+        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype trees.
+        // QuerySingleTree internally uses MaskTest(archetypeId) on each result, so we don't need to pre-filter here.
+        if (state.ClusterArchetypes != null)
+        {
+            foreach (var cs in state.ClusterArchetypes)
+            {
+                if (cs.SpatialSlot.Tree != null)
+                {
+                    QuerySingleTree(cs.SpatialSlot.Tree, state, result);
+                }
+            }
         }
 
         // Opaque WHERE post-filter

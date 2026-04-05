@@ -80,8 +80,8 @@ class ClusterStorageTests : TestBase<ClusterStorageTests>
         Assert.That(info.ClusterSize, Is.LessThanOrEqualTo(64));
         Assert.That(info.ClusterStride, Is.GreaterThan(0));
         Assert.That(info.HeaderSize, Is.EqualTo(8 + 8 * 2)); // OccupancyBits + 2 EnabledBits
-        Assert.That(info.EntityKeysOffset, Is.EqualTo(info.HeaderSize));
-        Assert.That(info.ComponentOffset(0), Is.GreaterThan(info.EntityKeysOffset));
+        Assert.That(info.EntityIdsOffset, Is.EqualTo(info.HeaderSize));
+        Assert.That(info.ComponentOffset(0), Is.GreaterThan(info.EntityIdsOffset));
         Assert.That(info.ComponentOffset(1), Is.GreaterThan(info.ComponentOffset(0)));
         Assert.That(info.ComponentSize(0), Is.EqualTo(8));
         Assert.That(info.ComponentSize(1), Is.EqualTo(8));
