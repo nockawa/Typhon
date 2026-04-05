@@ -1,0 +1,187 @@
+using System;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Per-cluster accessor providing typed, zero-copy access to component SoA arrays.
+/// Created by <see cref="ClusterEnumerator{TArch}"/>. Must not outlive the enumerator.
+/// </summary>
+/// <remarks>
+/// <para>Component data is laid out in Structure-of-Arrays format within the cluster:
+/// <c>Component₀[N], Component₁[N], ...</c> where N is the cluster size (8..64).</para>
+/// <para>Iteration pattern using OccupancyBits TZCNT loop:</para>
+/// <code>
+/// ulong bits = cluster.OccupancyBits;
+/// while (bits != 0)
+/// {
+///     int idx = BitOperations.TrailingZeroCount(bits);
+///     bits &amp;= bits - 1;
+///     ref var pos = ref cluster.Get(Ant.Position, idx);
+///     // ...
+/// }
+/// </code>
+/// </remarks>
+[PublicAPI]
+public unsafe ref struct ClusterRef<TArch> where TArch : class
+{
+    private readonly byte* _base;
+    private readonly ArchetypeClusterInfo _layout;
+    private readonly ArchetypeMetadata _meta;
+
+    internal ClusterRef(byte* basePtr, ArchetypeClusterInfo layout, ArchetypeMetadata meta)
+    {
+        _base = basePtr;
+        _layout = layout;
+        _meta = meta;
+    }
+
+    /// <summary>Bitmask of occupied slots. Bit i = 1 means slot i contains a live entity.</summary>
+    public ulong OccupancyBits
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => *(ulong*)_base;
+    }
+
+    /// <summary>Bitmask of entities with component at <paramref name="slot"/> enabled.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ulong EnabledBits(int slot) => *(ulong*)(_base + _layout.EnabledBitsOffset(slot));
+
+    /// <summary>Combined mask: alive AND component at slot enabled.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ulong ActiveBits(int slot) => OccupancyBits & EnabledBits(slot);
+
+    /// <summary>Number of live entities in this cluster (PopCount of OccupancyBits).</summary>
+    public int LiveCount
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => BitOperations.PopCount(OccupancyBits);
+    }
+
+    /// <summary>True when all slots are occupied.</summary>
+    public bool IsFull
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => OccupancyBits == _layout.FullMask;
+    }
+
+    /// <summary>Cluster size N (number of slots, 8..64).</summary>
+    public int ClusterSize
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _layout.ClusterSize;
+    }
+
+    /// <summary>Full mask with lower N bits set.</summary>
+    public ulong FullMask
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _layout.FullMask;
+    }
+
+    /// <summary>Get a mutable span of component data for all N slots (SoA array).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<T> GetSpan<T>(Comp<T> comp) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        return new Span<T>(_base + _layout.ComponentOffset(slot), _layout.ClusterSize);
+    }
+
+    /// <summary>Get a read-only span of component data for all N slots.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> GetReadOnlySpan<T>(Comp<T> comp) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        return new ReadOnlySpan<T>(_base + _layout.ComponentOffset(slot), _layout.ClusterSize);
+    }
+
+    /// <summary>Get a mutable reference to a single component value at the given slot index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T Get<T>(Comp<T> comp, int slotIndex) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        return ref Unsafe.Add(ref Unsafe.AsRef<T>(_base + _layout.ComponentOffset(slot)), slotIndex);
+    }
+
+    /// <summary>Get a read-only reference to a single component value at the given slot index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref readonly T GetReadOnly<T>(Comp<T> comp, int slotIndex) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        return ref Unsafe.Add(ref Unsafe.AsRef<T>(_base + _layout.ComponentOffset(slot)), slotIndex);
+    }
+
+    /// <summary>Entity keys for all N slots. Use with slot index to reconstruct EntityId.</summary>
+    public ReadOnlySpan<long> EntityKeys
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => new(_base + _layout.EntityKeysOffset, _layout.ClusterSize);
+    }
+
+    /// <summary>Reconstruct EntityId for the entity at the given slot.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public EntityId GetEntityId(int slotIndex)
+    {
+        long entityKey = *(long*)(_base + _layout.EntityKeysOffset + slotIndex * 8);
+        return new EntityId(entityKey, _meta.ArchetypeId);
+    }
+}
+
+/// <summary>
+/// Iterates active clusters for an archetype. Owns a <see cref="ChunkAccessor{TStore}"/> — must be disposed.
+/// </summary>
+/// <remarks>
+/// <para>Supports <c>foreach</c> via <see cref="GetEnumerator"/>.</para>
+/// <para>Usage:</para>
+/// <code>
+/// foreach (var cluster in ants.GetClusterEnumerator())
+/// {
+///     ulong bits = cluster.OccupancyBits;
+///     var positions = cluster.GetSpan&lt;Position&gt;(Ant.Position);
+///     while (bits != 0) { ... }
+/// }
+/// </code>
+/// </remarks>
+[PublicAPI]
+public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
+{
+    private ArchetypeClusterState _state;
+    private ArchetypeMetadata _meta;
+    private ChunkAccessor<PersistentStore> _accessor;
+    private int _index;
+
+    [AllowCopy]
+    internal static ClusterEnumerator<TArch> Create(ArchetypeClusterState state, ArchetypeMetadata meta, ChunkBasedSegment<PersistentStore> segment)
+    {
+        var result = new ClusterEnumerator<TArch>();
+        result._state = state;
+        result._meta = meta;
+        result._accessor = segment.CreateChunkAccessor();
+        result._index = -1;
+        return result;
+    }
+
+    /// <summary>Advance to the next active cluster.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool MoveNext() => ++_index < _state.ActiveClusterCount;
+
+    /// <summary>Get the current cluster ref.</summary>
+    public ClusterRef<TArch> Current
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            int chunkId = _state.ActiveClusterIds[_index];
+            byte* basePtr = _accessor.GetChunkAddress(chunkId, false);
+            return new ClusterRef<TArch>(basePtr, _state.Layout, _meta);
+        }
+    }
+
+    /// <summary>Release the ChunkAccessor.</summary>
+    public void Dispose() => _accessor.Dispose();
+
+    /// <summary>Enable foreach.</summary>
+    public ClusterEnumerator<TArch> GetEnumerator() => this;
+}

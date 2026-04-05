@@ -187,6 +187,13 @@ public class DatabaseEngineOptions
     /// Null disables the background statistics worker (statistics can still be rebuilt manually).
     /// </summary>
     public StatisticsOptions Statistics { get; set; }
+
+    /// <summary>
+    /// Enable entity cluster storage for eligible archetypes (SV-only, non-indexed).
+    /// Default is false. Set to true for benchmarks and tests that exercise cluster iteration.
+    /// Phase 1: cluster storage bypasses DirtyBitmap/tick fence — only enable when dirty tracking is not needed.
+    /// </summary>
+    public bool EnableClusterStorage { get; set; }
 }
 
 /// <summary>
@@ -1988,6 +1995,45 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Schema validation: compare runtime archetype against persisted schema
             ValidateArchetypeSchema(meta);
 
+            // ═══════════════════════════════════════════════════════════════════════
+            // Cluster storage eligibility: opt-in via EnableClusterStorage + all SV, no indexes, no spatial
+            // ═══════════════════════════════════════════════════════════════════════
+            bool isClusterEligible = _options.EnableClusterStorage;
+            for (int slot = 0; slot < meta.ComponentCount && isClusterEligible; slot++)
+            {
+                var table = slotToTable[slot];
+                if (table.StorageMode != StorageMode.SingleVersion)
+                {
+                    isClusterEligible = false;
+                    break;
+                }
+                if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0)
+                {
+                    isClusterEligible = false;
+                    break;
+                }
+                if (table.SpatialIndex != null)
+                {
+                    isClusterEligible = false;
+                    break;
+                }
+            }
+            meta.IsClusterEligible = isClusterEligible;
+
+            if (isClusterEligible)
+            {
+                // Compute component data sizes (pure struct size, no overhead)
+                var componentSizes = new int[meta.ComponentCount];
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    componentSizes[slot] = slotToTable[slot].Definition.ComponentStorageSize;
+                }
+                meta.ClusterLayout = ArchetypeClusterInfo.Compute(meta.ComponentCount, componentSizes);
+
+                // Override entity record size to use the compact 19-byte ClusterEntityRecord format
+                meta._entityRecordSize = ClusterEntityRecordAccessor.RecordSize;
+            }
+
             // Allocate or reload per-archetype entity storage (RawValueHashMap) on THIS engine's MMF
             int stride = RawValuePagedHashMap<long, PersistentStore>.RecommendedStride(meta._entityRecordSize);
 
@@ -2003,6 +2049,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
             }
 
+            bool isFreshAllocation;
             if (!hasMigratedSlot && _persistedArchetypes.TryGetValue(meta.ArchetypeId, out var persisted) && persisted.Arch.EntityMapSPI > 0
                 && MMF.TryLoadChunkBasedSegment(persisted.Arch.EntityMapSPI, stride, out var loadedSegment))
             {
@@ -2014,6 +2061,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     EntityMap = em,
                     NextEntityKey = persisted.Arch.NextEntityKey,
                 };
+                isFreshAllocation = false;
             }
             else
             {
@@ -2027,6 +2075,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     EntityMap = RawValuePagedHashMap<long, PersistentStore>.Create(segment, 256, meta._entityRecordSize),
                     NextEntityKey = 0,
                 };
+                isFreshAllocation = true;
+            }
+
+            // Create ClusterState for cluster-eligible archetypes on fresh databases only.
+            // Phase 1 does not persist cluster data (no WAL integration), so on database reopen// we skip cluster setup — entities will be accessed via
+            // the legacy EntityMap path.
+            if (isClusterEligible && isFreshAllocation)
+            {
+                var clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
+                _archetypeStates[meta.ArchetypeId].ClusterState = ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment);
             }
         }
 

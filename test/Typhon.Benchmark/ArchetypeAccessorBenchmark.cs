@@ -312,7 +312,7 @@ static class ArchetypeAccessorBenchmark
         public EntityId[] EntityIds { get; }
         private readonly ServiceProvider _sp;
 
-        public static BenchEnv Create(int entityCount)
+        public static BenchEnv Create(int entityCount, bool enableClusters = false)
         {
             var name = $"AABench_{Environment.ProcessId}";
             var sc = new ServiceCollection();
@@ -328,7 +328,7 @@ static class ArchetypeAccessorBenchmark
                   o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
                   o.PagesDebugPattern = false;
               })
-              .AddScopedDatabaseEngine(o => { o.Wal = null; });
+              .AddScopedDatabaseEngine(o => { o.Wal = null; o.EnableClusterStorage = enableClusters; });
 
             var sp = sc.BuildServiceProvider();
             sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
@@ -374,4 +374,85 @@ static class ArchetypeAccessorBenchmark
     }
 
     static BenchEnv CreateEnv(int entityCount) => BenchEnv.Create(entityCount);
+    static BenchEnv CreateClusterEnv(int entityCount) => BenchEnv.Create(entityCount, enableClusters: true);
+
+    // ── Cluster iteration benchmark ─────────────────────────────────────
+
+    public static void RunCluster(int entityCount = 50_000, int iterations = 500)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  Cluster Iteration Benchmark — {entityCount:N0} entities, {iterations} iterations");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+
+        using var env = CreateClusterEnv(entityCount);
+        var dbe = env.Dbe;
+        var entityIds = env.EntityIds;
+
+        // Warm up all three paths
+        RunStandard(dbe, entityIds, 10);
+        RunArchetypeAccessor(dbe, entityIds, 10);
+        RunClusterIteration(dbe, 10);
+
+        // ── Benchmark: Standard path ────────────────────────────────
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        RunStandard(dbe, entityIds, iterations);
+        sw.Stop();
+        double standardUs = sw.Elapsed.TotalMicroseconds;
+        double standardPerEntity = standardUs / (iterations * entityCount) * 1000;
+
+        // ── Benchmark: ArchetypeAccessor path ───────────────────────
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        sw.Restart();
+        RunArchetypeAccessor(dbe, entityIds, iterations);
+        sw.Stop();
+        double accessorUs = sw.Elapsed.TotalMicroseconds;
+        double accessorPerEntity = accessorUs / (iterations * entityCount) * 1000;
+
+        // ── Benchmark: Cluster iteration path ───────────────────────
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        sw.Restart();
+        RunClusterIteration(dbe, iterations);
+        sw.Stop();
+        double clusterUs = sw.Elapsed.TotalMicroseconds;
+        double clusterPerEntity = clusterUs / (iterations * entityCount) * 1000;
+
+        Console.WriteLine();
+        Console.WriteLine($"  Standard EntityAccessor:    {standardUs / iterations,8:F0} µs/iter  ({standardPerEntity:F1} ns/entity)");
+        Console.WriteLine($"  ArchetypeAccessor:          {accessorUs / iterations,8:F0} µs/iter  ({accessorPerEntity:F1} ns/entity)");
+        Console.WriteLine($"  ClusterIteration:           {clusterUs / iterations,8:F0} µs/iter  ({clusterPerEntity:F1} ns/entity)");
+        Console.WriteLine($"  Speedup (Cluster vs Std):   {standardUs / clusterUs:F2}x");
+        Console.WriteLine($"  Speedup (Cluster vs AA):    {accessorUs / clusterUs:F2}x");
+        Console.WriteLine();
+    }
+
+    static void RunClusterIteration(DatabaseEngine dbe, int iterations)
+    {
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var ants = tx.For<AaBenchAnt>();
+            foreach (var cluster in ants.GetClusterEnumerator())
+            {
+                var positions = cluster.GetSpan<AaBenchPosition>(AaBenchAnt.Position);
+                var movements = cluster.GetReadOnlySpan<AaBenchMovement>(AaBenchAnt.Movement);
+                ulong bits = cluster.OccupancyBits;
+                while (bits != 0)
+                {
+                    int idx = System.Numerics.BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    ref var pos = ref positions[idx];
+                    ref readonly var mov = ref movements[idx];
+                    pos.X += mov.VX * 0.016f;
+                    pos.Y += mov.VY * 0.016f;
+                    if (pos.X < 0f) pos.X += WorldSize;
+                    else if (pos.X >= WorldSize) pos.X -= WorldSize;
+                    if (pos.Y < 0f) pos.Y += WorldSize;
+                    else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
+                }
+            }
+            ants.Dispose();
+            tx.Commit();
+        }
+    }
 }

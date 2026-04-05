@@ -155,3 +155,72 @@ internal unsafe struct EntityLocations
 {
     public fixed int Values[EntityRecordAccessor.MaxComponentCount];
 }
+
+/// <summary>
+/// Static accessor for cluster entity records stored as raw bytes in the per-archetype RawValueHashMap.
+/// Record layout: [EntityRecordHeader (14B)] [ClusterChunkId (4B)] [SlotIndex (1B)]
+/// Total: 19 bytes (fixed, regardless of component count — components live in the cluster, not in the record).
+/// </summary>
+/// <remarks>
+/// <para>Used for SV-only, non-indexed archetypes that use cluster storage.</para>
+/// <para>The EntityRecordHeader is identical to the legacy format (same BornTSN/DiedTSN/EnabledBits).</para>
+/// </remarks>
+[PublicAPI]
+public static unsafe class ClusterEntityRecordAccessor
+{
+    /// <summary>Size of the <see cref="EntityRecordHeader"/> in bytes (same as legacy).</summary>
+    public const int HeaderSize = 14;
+
+    /// <summary>Total cluster entity record size in bytes: Header(14) + ClusterChunkId(4) + SlotIndex(1) = 19.</summary>
+    public const int RecordSize = 19;
+
+    /// <summary>Byte offset of ClusterChunkId within the record.</summary>
+    public const int ClusterChunkIdOffset = HeaderSize;
+
+    /// <summary>Byte offset of SlotIndex within the record.</summary>
+    public const int SlotIndexOffset = HeaderSize + sizeof(int);
+
+    /// <summary>Get a reference to the header at the start of the record.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ref EntityRecordHeader GetHeader(byte* record) => ref Unsafe.AsRef<EntityRecordHeader>(record);
+
+    /// <summary>Read the cluster chunk ID (the cluster's chunkId in the ClusterSegment).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int GetClusterChunkId(byte* record) => *(int*)(record + ClusterChunkIdOffset);
+
+    /// <summary>Write the cluster chunk ID.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void SetClusterChunkId(byte* record, int chunkId) => *(int*)(record + ClusterChunkIdOffset) = chunkId;
+
+    /// <summary>Read the slot index within the cluster (0..63).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static byte GetSlotIndex(byte* record) => *(record + SlotIndexOffset);
+
+    /// <summary>Write the slot index within the cluster.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void SetSlotIndex(byte* record, byte slotIndex) => *(record + SlotIndexOffset) = slotIndex;
+
+    /// <summary>Zero-initialize an entire cluster entity record (19 bytes).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void InitializeRecord(byte* record) => Unsafe.InitBlock(record, 0, RecordSize);
+}
+
+/// <summary>
+/// Packed ClusterLocation encoding for B+Tree values and spatial entries.
+/// Uses a fixed multiplier of 64 (max cluster size) for uniform encoding across all archetypes.
+/// </summary>
+[PublicAPI]
+public static class ClusterLocation
+{
+    /// <summary>Maximum cluster size. Used as multiplier for packed encoding.</summary>
+    public const int MaxClusterSize = 64;
+
+    /// <summary>Pack a cluster chunk ID and slot index into a single int.</summary>
+    /// <remarks>Max capacity: int.MaxValue / 64 = 33.5M clusters.</remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int Pack(int clusterChunkId, int slotIndex) => clusterChunkId * MaxClusterSize + slotIndex;
+
+    /// <summary>Unpack a packed ClusterLocation into (clusterChunkId, slotIndex).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static (int clusterChunkId, int slotIndex) Unpack(int packed) => (packed >> 6, packed & 0x3F);
+}

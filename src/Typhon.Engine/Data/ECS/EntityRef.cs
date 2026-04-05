@@ -24,6 +24,11 @@ public unsafe ref struct EntityRef
     internal readonly bool _writable;
     private fixed int _locations[16];
 
+    // ── Cluster storage fields (non-null when entity uses cluster storage) ──
+    internal byte* _clusterBase;               // Pointer to cluster chunk data; null = legacy path
+    internal byte _clusterSlotIndex;           // Slot within cluster (0..63)
+    internal ArchetypeClusterInfo _clusterLayout; // Layout info for offset computation
+
     internal EntityRef(EntityId id, ArchetypeMetadata archetype, ArchetypeEngineState engineState, EntityAccessor accessor, ushort enabledBits, bool writable)
     {
         _id = id;
@@ -87,7 +92,7 @@ public unsafe ref struct EntityRef
     // Component access — by handle (O(1), preferred)
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Read a component by handle. Zero-copy — returns a ref into the chunk page.</summary>
+    /// <summary>Read a component by handle. Zero-copy — returns a ref into the chunk page (or cluster slot).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref readonly T Read<T>(Comp<T> comp) where T : unmanaged
     {
@@ -95,12 +100,17 @@ public unsafe ref struct EntityRef
         Debug.Assert(slot < _archetype.ComponentCount, $"Slot {slot} out of range for archetype with {_archetype.ComponentCount} components");
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component at slot {slot} is disabled");
 
+        if (_clusterBase != null)
+        {
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+        }
+
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
         return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
     }
 
-    /// <summary>Write a component by handle. Returns a mutable ref into the chunk page.
+    /// <summary>Write a component by handle. Returns a mutable ref into the chunk page (or cluster slot).
     /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).
     /// For SingleVersion with indexes: shadows old field values on first write per tick for deferred index maintenance.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -110,6 +120,14 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         Debug.Assert(slot < _archetype.ComponentCount);
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component at slot {slot} is disabled");
+
+        if (_clusterBase != null)
+        {
+            // Cluster fast path: direct pointer arithmetic into SoA array.
+            // Page was already marked dirty at resolve time (OpenMut → GetChunkAddress(dirty:true)).
+            // Phase 1: no shadow/dirty bitmap integration for cluster writes (Phase 2 adds this).
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+        }
 
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
@@ -141,6 +159,11 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(typeId);
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component {typeof(T).Name} at slot {slot} is disabled");
 
+        if (_clusterBase != null)
+        {
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+        }
+
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
         return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
@@ -156,6 +179,11 @@ public unsafe ref struct EntityRef
         Debug.Assert(typeId >= 0, $"Component type {typeof(T).Name} not registered");
         byte slot = _archetype.GetSlot(typeId);
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component {typeof(T).Name} at slot {slot} is disabled");
+
+        if (_clusterBase != null)
+        {
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+        }
 
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
@@ -213,6 +241,13 @@ public unsafe ref struct EntityRef
             value = default;
             return false;
         }
+
+        if (_clusterBase != null)
+        {
+            value = Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+            return true;
+        }
+
         int chunkId = _locations[slot];
         var table = _engineState.SlotToComponentTable[slot];
         value = _accessor.ReadEcsComponentData<T>(table, chunkId);
@@ -226,6 +261,13 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         _enabledBits &= (ushort)~(1 << slot);
         _accessor.StageEnableDisable(_id, _enabledBits);
+
+        // Update cluster EnabledBits so cluster iteration sees the change immediately
+        if (_clusterBase != null)
+        {
+            ref ulong clusterBits = ref *(ulong*)(_clusterBase + _clusterLayout.EnabledBitsOffset(slot));
+            clusterBits &= ~(1UL << _clusterSlotIndex);
+        }
     }
 
     /// <summary>Enable a component by handle. Stages the change for commit.</summary>
@@ -235,5 +277,12 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         _enabledBits |= (ushort)(1 << slot);
         _accessor.StageEnableDisable(_id, _enabledBits);
+
+        // Update cluster EnabledBits so cluster iteration sees the change immediately
+        if (_clusterBase != null)
+        {
+            ref ulong clusterBits = ref *(ulong*)(_clusterBase + _clusterLayout.EnabledBitsOffset(slot));
+            clusterBits |= 1UL << _clusterSlotIndex;
+        }
     }
 }

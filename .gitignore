@@ -289,3 +289,5 @@ nul
 
 /coverage/reports/charts/
 /coverage/reports/latest.md
+/test/AntHill/godot/godot.exe
+/test/AntHill/godot/godot_console.exe

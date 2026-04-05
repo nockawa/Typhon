@@ -893,35 +893,60 @@ public unsafe partial class Transaction
             }
 
             var result = new EntityRef(id, meta, es, this, enabledBits, writable);
-            result.CopyLocationsFrom(readBuf, meta.ComponentCount);
 
-            // For Versioned components: resolve MVCC-visible chunkId via SingleCache or revision chain walk.
-            // Location[slot] from EntityMap is compRevFirstChunkId.
-            // For committed entities, walk the revision chain to find the visible version.
-            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            if (meta.IsClusterEligible && es.ClusterState != null)
             {
-                var table = es.SlotToComponentTable[slot];
-                if (table.StorageMode != StorageMode.Versioned)
+                // Cluster path: read ClusterEntityRecord → resolve cluster base + slot
+                int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(readBuf);
+                byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
+
+                // Reuse the cluster cache accessor — keyed by archetype
+                if (!_hasClusterCache || _clusterCacheArchId != id.ArchetypeId)
                 {
-                    continue;
+                    if (_hasClusterCache)
+                    {
+                        _clusterCacheAccessor.Dispose();
+                    }
+                    _clusterCacheAccessor = es.ClusterState.ClusterSegment.CreateChunkAccessor();
+                    _clusterCacheArchId = id.ArchetypeId;
+                    _hasClusterCache = true;
                 }
 
-                var compType = meta._slotToComponentType[slot];
-                var info = GetComponentInfo(compType);
-                long pk = (long)id.RawValue;
+                result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+                result._clusterSlotIndex = slotIndex;
+                result._clusterLayout = es.ClusterState.Layout;
+            }
+            else
+            {
+                result.CopyLocationsFrom(readBuf, meta.ComponentCount);
 
-                // If already resolved in this transaction (prior Open or Write), reuse cached entry
-                if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+                // For Versioned components: resolve MVCC-visible chunkId via SingleCache or revision chain walk.
+                // Location[slot] from EntityMap is compRevFirstChunkId.
+                // For committed entities, walk the revision chain to find the visible version.
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
                 {
-                    result.SetLocation(slot, cached.CurCompContentChunkId);
-                    continue;
-                }
+                    var table = es.SlotToComponentTable[slot];
+                    if (table.StorageMode != StorageMode.Versioned)
+                    {
+                        continue;
+                    }
 
-                // Walk revision chain from EntityMap's compRevFirstChunkId
-                int compRevFirstChunkId = result.GetLocation(slot);
-                if (compRevFirstChunkId == 0)
-                {
-                    continue;
+                    var compType = meta._slotToComponentType[slot];
+                    var info = GetComponentInfo(compType);
+                    long pk = (long)id.RawValue;
+
+                    // If already resolved in this transaction (prior Open or Write), reuse cached entry
+                    if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+                    {
+                        result.SetLocation(slot, cached.CurCompContentChunkId);
+                        continue;
+                    }
+
+                    // Walk revision chain from EntityMap's compRevFirstChunkId
+                    int compRevFirstChunkId = result.GetLocation(slot);
+                    if (compRevFirstChunkId == 0)
+                    {
+                        continue;
                 }
 
                 var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
@@ -935,6 +960,7 @@ public unsafe partial class Transaction
                 compRevInfo.Operations = ComponentInfo.OperationType.Read;
                 info.AddNew(pk, compRevInfo);
                 result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
+                }
             }
 
             return result;
@@ -1097,6 +1123,16 @@ public unsafe partial class Transaction
         int componentCount = 0;
         ushort versionedMask = 0; // bit set for Versioned slots — eliminates per-slot table dereference
 
+        // Cluster storage hoisted state — set when archetype changes and is cluster-eligible
+        bool useCluster = false;
+        ArchetypeClusterState clusterState = null;
+        var clusterAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasClusterAccessor = false;
+        
+        // Per-component accessors for reading source data from per-component chunks during cluster copy
+        ChunkAccessor<PersistentStore>[] clusterSrcAccessors = null;
+        int clusterSrcAccessorCount = 0;
+
         try
         {
             foreach (var entry in _spawnedEntities)
@@ -1126,6 +1162,15 @@ public unsafe partial class Transaction
                     if (hasMapAccessor)
                     {
                         mapAccessor.Dispose();
+                        if (hasClusterAccessor)
+                        {
+                            clusterAccessor.Dispose();
+                            for (int ci = 0; ci < clusterSrcAccessorCount; ci++)
+                            {
+                                clusterSrcAccessors[ci].Dispose();
+                            }
+                            hasClusterAccessor = false;
+                        }
                         for (int si = 0; si < svSlotCount; si++)
                         {
                             svCompAccessors[si].Dispose();
@@ -1160,6 +1205,26 @@ public unsafe partial class Transaction
                     mapAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
                     lastArchId = entry.Id.ArchetypeId;
                     hasMapAccessor = true;
+
+                    // Set up cluster accessors if this archetype uses cluster storage
+                    useCluster = meta.IsClusterEligible && engineState.ClusterState != null;
+                    if (useCluster)
+                    {
+                        clusterState = engineState.ClusterState;
+                        clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
+                        hasClusterAccessor = true;
+
+                        // Create per-component accessors for reading from per-component chunks
+                        clusterSrcAccessorCount = componentCount;
+                        if (clusterSrcAccessors == null || clusterSrcAccessors.Length < componentCount)
+                        {
+                            clusterSrcAccessors = new ChunkAccessor<PersistentStore>[componentCount];
+                        }
+                        for (int slot = 0; slot < componentCount; slot++)
+                        {
+                            clusterSrcAccessors[slot] = engineState.SlotToComponentTable[slot].ComponentSegment.CreateChunkAccessor(_changeSet);
+                        }
+                    }
 
                     // Build SV indexed slot accessors for this archetype (Transient handled separately below).
                     // First pass: count SV indexed slots, then allocate exact sizes.
@@ -1278,15 +1343,71 @@ public unsafe partial class Transaction
                     }
                 }
 
-                // Build location array from SpawnEntry using pre-computed versioned mask
-                var locDest = (int*)(recordPtr + EntityRecordAccessor.HeaderSize);
-                for (int slot = 0; slot < componentCount; slot++)
+                if (useCluster)
                 {
-                    locDest[slot] = (versionedMask & (1 << slot)) != 0 ? entry.Rev[slot] : entry.Loc[slot];
-                }
+                    // ═══════════════════════════════════════════════════════════════
+                    // Cluster path: claim slot, copy data to cluster, write ClusterEntityRecord
+                    // ═══════════════════════════════════════════════════════════════
+                    var layout = clusterState.Layout;
+                    var (clusterChunkId, slotIdx) = clusterState.ClaimSlot(ref clusterAccessor, _changeSet);
+                    byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId, true);
 
-                // Insert into EntityMap — skip duplicate check (EntityKey is freshly generated, guaranteed unique)
-                engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
+                    // Copy component data from per-component chunks to cluster SoA slots
+                    for (int slot = 0; slot < componentCount; slot++)
+                    {
+                        int srcChunkId = entry.Loc[slot];
+                        if (srcChunkId == 0)
+                        {
+                            continue;
+                        }
+                        var table = engineState.SlotToComponentTable[slot];
+                        int overhead = table.ComponentOverhead;
+                        byte* srcAddr = clusterSrcAccessors[slot].GetChunkAddress(srcChunkId, false);
+                        byte* dstAddr = clusterBase + layout.ComponentOffset(slot) + slotIdx * layout.ComponentSize(slot);
+                        Unsafe.CopyBlockUnaligned(dstAddr, srcAddr + overhead, (uint)layout.ComponentSize(slot));
+                    }
+
+                    // Write EntityKey to cluster
+                    *(long*)(clusterBase + layout.EntityKeysOffset + slotIdx * 8) = entry.Id.EntityKey;
+
+                    // Set EnabledBits in cluster
+                    for (int slot = 0; slot < componentCount; slot++)
+                    {
+                        if ((enabledBits & (1 << slot)) != 0)
+                        {
+                            *(ulong*)(clusterBase + layout.EnabledBitsOffset(slot)) |= 1UL << slotIdx;
+                        }
+                    }
+
+                    // OccupancyBit was already set by ClaimSlot
+
+                    // Build 19-byte ClusterEntityRecord
+                    ClusterEntityRecordAccessor.InitializeRecord(recordPtr);
+                    ref var clusterHeader = ref ClusterEntityRecordAccessor.GetHeader(recordPtr);
+                    clusterHeader.BornTSN = TSN;
+                    clusterHeader.EnabledBits = enabledBits;
+                    ClusterEntityRecordAccessor.SetClusterChunkId(recordPtr, clusterChunkId);
+                    ClusterEntityRecordAccessor.SetSlotIndex(recordPtr, (byte)slotIdx);
+
+                    // Insert ClusterEntityRecord into EntityMap
+                    engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
+
+                    // TODO: Phase 2 — free orphaned per-component chunks from SpawnEntry.Loc[]
+                }
+                else
+                {
+                    // ═══════════════════════════════════════════════════════════════
+                    // Legacy path: build location array from SpawnEntry
+                    // ═══════════════════════════════════════════════════════════════
+                    var locDest = (int*)(recordPtr + EntityRecordAccessor.HeaderSize);
+                    for (int slot = 0; slot < componentCount; slot++)
+                    {
+                        locDest[slot] = (versionedMask & (1 << slot)) != 0 ? entry.Rev[slot] : entry.Loc[slot];
+                    }
+
+                    // Insert into EntityMap — skip duplicate check (EntityKey is freshly generated, guaranteed unique)
+                    engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
+                }
 
                 // Insert SV secondary indexes (Versioned is handled by CommitComponentCore).
                 // Accessors are hoisted: created once when archetype changes (alongside mapAccessor),
@@ -1414,6 +1535,14 @@ public unsafe partial class Transaction
             if (hasMapAccessor)
             {
                 mapAccessor.Dispose();
+                if (hasClusterAccessor)
+                {
+                    clusterAccessor.Dispose();
+                    for (int ci = 0; ci < clusterSrcAccessorCount; ci++)
+                    {
+                        clusterSrcAccessors[ci].Dispose();
+                    }
+                }
                 for (int si = 0; si < svSlotCount; si++)
                 {
                     svCompAccessors[si].Dispose();
@@ -1518,6 +1647,12 @@ public unsafe partial class Transaction
         var accessor = default(ChunkAccessor<PersistentStore>);
         bool hasAccessor = false;
 
+        // Cluster accessor — hoisted per-archetype
+        var clusterAccessor = default(ChunkAccessor<PersistentStore>);
+        bool hasClusterAccessor = false;
+        bool destroyUseCluster = false;
+        ArchetypeClusterState destroyClusterState = null;
+
         try
         {
             foreach (var entityId in _pendingDestroys)
@@ -1538,15 +1673,37 @@ public unsafe partial class Transaction
                     if (hasAccessor)
                     {
                         accessor.Dispose();
+                        if (hasClusterAccessor)
+                        {
+                            clusterAccessor.Dispose();
+                            hasClusterAccessor = false;
+                        }
                     }
                     accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
                     lastArchId = entityId.ArchetypeId;
                     hasAccessor = true;
+
+                    // Set up cluster accessor if applicable
+                    destroyUseCluster = meta.IsClusterEligible && engineState.ClusterState != null;
+                    if (destroyUseCluster)
+                    {
+                        destroyClusterState = engineState.ClusterState;
+                        clusterAccessor = destroyClusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
+                        hasClusterAccessor = true;
+                    }
                 }
 
                 if (engineState.EntityMap.TryGet(entityId.EntityKey, readBuf, ref accessor))
                 {
-                    // Set DiedTSN
+                    // Clear cluster bits if cluster storage is active
+                    if (destroyUseCluster)
+                    {
+                        int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(readBuf);
+                        byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
+                        destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet);
+                    }
+
+                    // Set DiedTSN (header layout is the same for both cluster and legacy records)
                     EntityRecordAccessor.GetHeader(readBuf).DiedTSN = TSN;
                     engineState.EntityMap.Upsert(entityId.EntityKey, readBuf, ref accessor, _changeSet);
 
@@ -1560,6 +1717,10 @@ public unsafe partial class Transaction
             if (hasAccessor)
             {
                 accessor.Dispose();
+            }
+            if (hasClusterAccessor)
+            {
+                clusterAccessor.Dispose();
             }
         }
     }

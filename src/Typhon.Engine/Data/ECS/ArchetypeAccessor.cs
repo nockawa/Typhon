@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
 using Typhon.Schema.Definition;
@@ -19,6 +20,8 @@ namespace Typhon.Engine;
 /// </list>
 /// <para>Versioned components are supported — revision chain walk is performed only for Versioned slots.
 /// SV/Transient slots skip the chain walk entirely (the common fast path for game systems).</para>
+/// <para>Cluster storage: when the archetype uses cluster storage, Resolve reads ClusterEntityRecord from the EntityMap and populates EntityRef's cluster
+/// fields for direct SoA access.</para>
 /// </remarks>
 [PublicAPI]
 public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
@@ -32,6 +35,11 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
     private readonly bool _hasVersionedSlots;
     private bool _mutationPrepared;
     private ChunkAccessor<PersistentStore> _entityMapAccessor;
+
+    // ── Cluster storage fields ──────────────────────────────────────────
+    private readonly bool _hasClusterStorage;
+    private readonly ArchetypeClusterState _clusterState;
+    private ChunkAccessor<PersistentStore> _clusterAccessor;
 
     internal ArchetypeAccessor(ArchetypeMetadata archetype, ArchetypeEngineState engineState, EntityAccessor accessor, DatabaseEngine dbe)
     {
@@ -55,6 +63,11 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             // Pre-warm ComponentInfo cache — ensures EntityRef.Read/Write hits the fast array path
             accessor.EnsureComponentInfoCached(archetype._slotToComponentType[slot]);
         }
+
+        // Cluster storage setup
+        _hasClusterStorage = archetype.IsClusterEligible && engineState.ClusterState != null;
+        _clusterState = engineState.ClusterState;
+        _clusterAccessor = _hasClusterStorage ? _clusterState.ClusterSegment.CreateChunkAccessor() : default;
     }
 
     /// <summary>Open an entity for read-only access.</summary>
@@ -86,13 +99,27 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
         ushort enabledBits = _enabledBitsOverrides.ResolveEnabledBits(id.EntityKey, header.EnabledBits, _tsn);
 
         var result = new EntityRef(id, _archetype, _engineState, _accessor, enabledBits, writable);
-        result.CopyLocationsFrom(readBuf, _archetype.ComponentCount);
 
-        // Versioned components: walk revision chain to find visible content chunk.
-        // SV/Transient: location from EntityRecord is the direct content chunk — no walk needed.
-        if (_hasVersionedSlots)
+        if (_hasClusterStorage)
         {
-            ResolveVersionedSlots(ref result);
+            // Cluster path: read ClusterEntityRecord → resolve cluster base + slot
+            int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(readBuf);
+            byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
+            result._clusterBase = _clusterAccessor.GetChunkAddress(clusterChunkId, writable);
+            result._clusterSlotIndex = slotIndex;
+            result._clusterLayout = _clusterState.Layout;
+        }
+        else
+        {
+            // Legacy path: copy per-component locations
+            result.CopyLocationsFrom(readBuf, _archetype.ComponentCount);
+
+            // Versioned components: walk revision chain to find visible content chunk.
+            // SV/Transient: location from EntityRecord is the direct content chunk — no walk needed.
+            if (_hasVersionedSlots)
+            {
+                ResolveVersionedSlots(ref result);
+            }
         }
 
         return result;
@@ -127,6 +154,36 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
         }
     }
 
-    /// <summary>Release the cached EntityMap ChunkAccessor.</summary>
-    public void Dispose() => _entityMapAccessor.Dispose();
+    // ═══════════════════════════════════════════════════════════════════════
+    // Cluster iteration API
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>True if this archetype uses cluster storage.</summary>
+    public bool HasClusterStorage => _hasClusterStorage;
+
+    /// <summary>Number of active clusters (clusters with at least one live entity).</summary>
+    public int ClusterCount => _hasClusterStorage ? _clusterState.ActiveClusterCount : 0;
+
+    /// <summary>
+    /// Get an enumerator over active clusters for direct SoA iteration.
+    /// The enumerator owns its own ChunkAccessor and must be disposed.
+    /// </summary>
+    public ClusterEnumerator<TArch> GetClusterEnumerator()
+    {
+        if (!_hasClusterStorage)
+        {
+            throw new InvalidOperationException($"Archetype {typeof(TArch).Name} does not use cluster storage");
+        }
+        return ClusterEnumerator<TArch>.Create(_clusterState, _archetype, _clusterState.ClusterSegment);
+    }
+
+    /// <summary>Release the cached EntityMap and cluster ChunkAccessors.</summary>
+    public void Dispose()
+    {
+        _entityMapAccessor.Dispose();
+        if (_hasClusterStorage)
+        {
+            _clusterAccessor.Dispose();
+        }
+    }
 }

@@ -1295,9 +1295,14 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 }
             }
 
-            // Copy component locations inline — no heap allocation
+            // Copy component locations inline — no heap allocation.
+            // For cluster archetypes, locations are meaningless (record has ClusterChunkId+SlotIndex, not per-component ChunkIds).
+            // Store a zeroed EntityLocations — the enumerator will resolve via Transaction.Open for cluster archetypes.
             var locs = new EntityLocations();
-            EntityRecordAccessor.CopyLocationsTo(value, ref locs, Meta.ComponentCount);
+            if (!Meta.IsClusterEligible)
+            {
+                EntityRecordAccessor.CopyLocationsTo(value, ref locs, Meta.ComponentCount);
+            }
 
             Results.Add((entityId, Meta, bits, locs));
             return true;
@@ -1349,9 +1354,17 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                     continue;
                 }
 
-                var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
-                _current = new EntityRef(id, meta, engineState, _tx, enabledBits, false);
-                _current.CopyLocationsFrom(in locations, meta.ComponentCount);
+                if (meta.IsClusterEligible)
+                {
+                    // Cluster archetype: resolve via Transaction.Open which handles cluster path correctly
+                    _current = _tx.Open(id);
+                }
+                else
+                {
+                    var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
+                    _current = new EntityRef(id, meta, engineState, _tx, enabledBits, false);
+                    _current.CopyLocationsFrom(in locations, meta.ComponentCount);
+                }
                 return true;
             }
         }

@@ -1,0 +1,150 @@
+using System;
+using System.Runtime.CompilerServices;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Precomputed cluster layout for an archetype. Immutable after creation.
+/// Stores byte offsets, component sizes, cluster size N, and stride.
+/// One instance per cluster-eligible archetype, shared by all EntityRef and ClusterRef instances.
+/// </summary>
+/// <remarks>
+/// <para>Cluster memory layout (all offsets from cluster base):</para>
+/// <code>
+/// Offset  Size              Field
+/// ──────  ────              ─────
+/// 0       8                 OccupancyBits (u64, lower N bits used)
+/// 8       8 × C             EnabledBits[C] (u64 per component slot)
+/// 8+8C    8 × N             EntityKeys[N] (long per slot)
+/// ...     sizeof(Comp₀)×N   Component₀[N] (SoA array)
+/// ...     sizeof(Compᵢ)×N   Componentᵢ[N] (SoA array)
+/// </code>
+/// </remarks>
+internal sealed class ArchetypeClusterInfo
+{
+    /// <summary>Number of entities per cluster (8..64).</summary>
+    public readonly int ClusterSize;
+
+    /// <summary>Total byte size of one cluster (= ChunkBasedSegment stride).</summary>
+    public readonly int ClusterStride;
+
+    /// <summary>Number of component slots in this archetype.</summary>
+    public readonly int ComponentCount;
+
+    /// <summary>Byte size of the fixed header: 8 (OccupancyBits) + 8 * ComponentCount (EnabledBits).</summary>
+    public readonly int HeaderSize;
+
+    /// <summary>Byte offset of the EntityKeys array from cluster base (= HeaderSize).</summary>
+    public readonly int EntityKeysOffset;
+
+    /// <summary>Bitmask with the lower N bits set: (1UL &lt;&lt; N) - 1. Used for iteration and full-cluster detection.</summary>
+    public readonly ulong FullMask;
+
+    /// <summary>Per-component byte offsets from cluster base. Length == ComponentCount.</summary>
+    private readonly int[] _componentOffsets;
+
+    /// <summary>Per-component data sizes in bytes (pure struct size, no overhead). Length == ComponentCount.</summary>
+    private readonly int[] _componentSizes;
+
+    private ArchetypeClusterInfo(int clusterSize, int componentCount, int[] componentOffsets, int[] componentSizes)
+    {
+        ClusterSize = clusterSize;
+        ComponentCount = componentCount;
+        _componentOffsets = componentOffsets;
+        _componentSizes = componentSizes;
+
+        HeaderSize = 8 + 8 * componentCount;
+        EntityKeysOffset = HeaderSize;
+        FullMask = clusterSize == 64 ? ulong.MaxValue : (1UL << clusterSize) - 1;
+
+        // Stride = offset past the last component array
+        int lastSlot = componentCount - 1;
+        ClusterStride = componentCount > 0 ? componentOffsets[lastSlot] + componentSizes[lastSlot] * clusterSize : HeaderSize + 8 * clusterSize;
+    }
+
+    /// <summary>Byte offset of component data for the given slot from the cluster base.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int ComponentOffset(int slot) => _componentOffsets[slot];
+
+    /// <summary>Data size in bytes of the component at the given slot (sizeof(T), no overhead).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int ComponentSize(int slot) => _componentSizes[slot];
+
+    /// <summary>Byte offset of the EnabledBits u64 for the given component slot.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int EnabledBitsOffset(int slot) => 8 + slot * 8;
+
+    /// <summary>
+    /// Compute the optimal cluster layout for an archetype with the given component sizes.
+    /// </summary>
+    /// <param name="componentCount">Number of component slots (1..16).</param>
+    /// <param name="componentSizes">Per-slot component data sizes in bytes (pure struct size, no overhead).</param>
+    /// <returns>A fully initialized <see cref="ArchetypeClusterInfo"/>.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if components are too large to fit even N=8 in one page.</exception>
+    public static ArchetypeClusterInfo Compute(int componentCount, ReadOnlySpan<int> componentSizes)
+    {
+        int fixedHeader = 8 + 8 * componentCount; // OccupancyBits + EnabledBits[C]
+        int perEntitySize = 8; // EntityKey (long)
+        for (int i = 0; i < componentCount; i++)
+        {
+            perEntitySize += componentSizes[i];
+        }
+
+        int bestN = SelectClusterSize(fixedHeader, perEntitySize);
+
+        // Build per-component offsets
+        var offsets = new int[componentCount];
+        var sizes = new int[componentCount];
+        int offset = fixedHeader + 8 * bestN; // Past header + EntityKeys[N]
+        for (int i = 0; i < componentCount; i++)
+        {
+            offsets[i] = offset;
+            sizes[i] = componentSizes[i];
+            offset += componentSizes[i] * bestN;
+        }
+
+        return new ArchetypeClusterInfo(bestN, componentCount, offsets, sizes);
+    }
+
+    /// <summary>
+    /// Select the cluster size N in [8..64] that maximizes entities per page.
+    /// </summary>
+    /// <param name="fixedHeader">Fixed bytes per cluster: 8 + 8 * ComponentCount.</param>
+    /// <param name="perEntitySize">Bytes per entity slot: 8 (EntityKey) + sum(sizeof(Component_i)).</param>
+    /// <returns>Optimal N.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when even N=8 produces a stride exceeding <see cref="PagedMMF.PageRawDataSize"/>.
+    /// </exception>
+    internal static int SelectClusterSize(int fixedHeader, int perEntitySize)
+    {
+        int pageSize = PagedMMF.PageRawDataSize;
+        int bestN = 0;
+        int bestEntitiesPerPage = 0;
+
+        for (int n = 8; n <= 64; n++)
+        {
+            int stride = fixedHeader + perEntitySize * n;
+            if (stride > pageSize)
+            {
+                break;
+            }
+
+            int clustersPerPage = pageSize / stride;
+            int entitiesPerPage = clustersPerPage * n;
+            if (entitiesPerPage > bestEntitiesPerPage)
+            {
+                bestEntitiesPerPage = entitiesPerPage;
+                bestN = n;
+            }
+        }
+
+        if (bestN == 0)
+        {
+            throw new InvalidOperationException(
+                $"Components too large for cluster storage (fixedHeader={fixedHeader}, perEntity={perEntitySize}, " +
+                $"min stride at N=8 = {fixedHeader + perEntitySize * 8}, page size = {PagedMMF.PageRawDataSize})");
+        }
+
+        return bestN;
+    }
+}

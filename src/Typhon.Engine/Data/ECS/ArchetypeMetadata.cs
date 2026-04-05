@@ -51,8 +51,18 @@ internal class ArchetypeMetadata
     /// <summary>[slotIndex] → CLR Type of the component at this slot. Length == ComponentCount.</summary>
     internal Type[] _slotToComponentType;
 
-    /// <summary>Cached entity record size: 14 + ComponentCount * 4 bytes.</summary>
+    /// <summary>Cached entity record size: 14 + ComponentCount * 4 bytes (legacy), or 19 bytes (cluster).</summary>
     internal int _entityRecordSize;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Cluster storage (set during DatabaseEngine.InitializeArchetypes)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>True if this archetype uses cluster storage (all SV, no indexes, no spatial).</summary>
+    internal bool IsClusterEligible;
+
+    /// <summary>Precomputed cluster layout. Non-null only when <see cref="IsClusterEligible"/> is true.</summary>
+    internal ArchetypeClusterInfo ClusterLayout;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Cascade delete graph (populated during Freeze)
@@ -119,6 +129,9 @@ internal class ArchetypeEngineState
 
     /// <summary>Monotonic entity key counter. Use Interlocked.Increment for thread-safe generation.</summary>
     public long NextEntityKey;
+
+    /// <summary>Cluster storage state. Non-null for cluster-eligible archetypes (all SV, no indexes, no spatial).</summary>
+    public ArchetypeClusterState ClusterState;
 }
 
 /// <summary>

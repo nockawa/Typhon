@@ -53,6 +53,11 @@ public partial class EntityAccessor : IDisposable
     private protected ChunkAccessor<PersistentStore> _entityMapCacheAccessor;
     private protected bool _hasEntityMapCache;
 
+    /// <summary>Cached cluster accessor for same-archetype repeated lookups (cluster-eligible archetypes only).</summary>
+    private protected ushort _clusterCacheArchId;
+    private protected ChunkAccessor<PersistentStore> _clusterCacheAccessor;
+    private protected bool _hasClusterCache;
+
     private protected int _entityOperationCount;
     private protected ChangeSet _changeSet;
 
@@ -322,6 +327,11 @@ public partial class EntityAccessor : IDisposable
             _entityMapCacheAccessor.Dispose();
             _hasEntityMapCache = false;
         }
+        if (_hasClusterCache)
+        {
+            _clusterCacheAccessor.Dispose();
+            _hasClusterCache = false;
+        }
         if (_componentInfos.Capacity <= ComponentInfosMaxCapacity)
         {
             _componentInfos.Clear();
@@ -345,6 +355,11 @@ public partial class EntityAccessor : IDisposable
             {
                 _entityMapCacheAccessor.Dispose();
                 _hasEntityMapCache = false;
+            }
+            if (_hasClusterCache)
+            {
+                _clusterCacheAccessor.Dispose();
+                _hasClusterCache = false;
             }
             return;
         }

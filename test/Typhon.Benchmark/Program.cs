@@ -177,6 +177,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--cluster-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunCluster();
+                return;
+            }
+
             if (args.Contains("--profile-runtime-standard"))
             {
                 ArchetypeAccessorBenchmark.ProfileRuntimeStandard();
