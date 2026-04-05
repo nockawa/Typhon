@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Typhon.Engine;
@@ -312,7 +314,7 @@ static class ArchetypeAccessorBenchmark
         public EntityId[] EntityIds { get; }
         private readonly ServiceProvider _sp;
 
-        public static BenchEnv Create(int entityCount, bool enableClusters = false)
+        public static BenchEnv Create(int entityCount, bool enableWal = false)
         {
             var name = $"AABench_{Environment.ProcessId}";
             var sc = new ServiceCollection();
@@ -328,7 +330,17 @@ static class ArchetypeAccessorBenchmark
                   o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
                   o.PagesDebugPattern = false;
               })
-              .AddScopedDatabaseEngine(o => { o.Wal = null; o.EnableClusterStorage = enableClusters; });
+              .AddScopedDatabaseEngine(o =>
+              {
+                  if (enableWal)
+                  {
+                      o.Wal = new WalWriterOptions { WalDirectory = Path.Combine(Path.GetTempPath(), $"AABench_wal_{Environment.ProcessId}") };
+                  }
+                  else
+                  {
+                      o.Wal = null;
+                  }
+              });
 
             var sp = sc.BuildServiceProvider();
             sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
@@ -369,12 +381,19 @@ static class ArchetypeAccessorBenchmark
         {
             Dbe?.Dispose();
             _sp?.Dispose();
-            try { System.IO.File.Delete($"AABench_{Environment.ProcessId}.bin"); } catch { }
+            try { File.Delete($"AABench_{Environment.ProcessId}.bin"); } catch { }
+            try
+            {
+                var walDir = Path.Combine(Path.GetTempPath(), $"AABench_wal_{Environment.ProcessId}");
+                if (Directory.Exists(walDir)) { Directory.Delete(walDir, true); }
+            }
+            catch { }
         }
     }
 
     static BenchEnv CreateEnv(int entityCount) => BenchEnv.Create(entityCount);
-    static BenchEnv CreateClusterEnv(int entityCount) => BenchEnv.Create(entityCount, enableClusters: true);
+    static BenchEnv CreateClusterEnv(int entityCount) => BenchEnv.Create(entityCount);
+    static BenchEnv CreateWalEnv(int entityCount) => BenchEnv.Create(entityCount, enableWal: true);
 
     // ── Cluster iteration benchmark ─────────────────────────────────────
 
@@ -454,5 +473,78 @@ static class ArchetypeAccessorBenchmark
             ants.Dispose();
             tx.Commit();
         }
+    }
+
+    // ── Tick fence benchmark ───────────────────────────────────────────
+
+    public static void RunTickFenceBench()
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine("  Tick Fence Benchmark — With WAL Serialization");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+
+        int[] entityCounts = [10_000, 50_000, 100_000, 200_000];
+
+        foreach (int count in entityCounts)
+        {
+            using var env = CreateWalEnv(count);
+            var dbe = env.Dbe;
+            var ids = env.EntityIds;
+
+            // Check if cluster storage is active
+            var meta = Archetype<AaBenchAnt>.Metadata;
+            var clusterState = dbe._archetypeStates[meta.ArchetypeId]?.ClusterState;
+            bool hasClusters = clusterState != null;
+
+            // Warmup: write all entities + tick fence (10 rounds with drain time)
+            for (int w = 0; w < 10; w++)
+            {
+                WriteAllEntities(dbe, ids);
+                dbe.WriteTickFence(w + 1);
+                Thread.Sleep(5); // Let WAL writer drain the commit buffer
+            }
+
+            // Measure: write all entities, then time WriteTickFence
+            const int iterations = 50;
+            var tickFenceTimes = new double[iterations];
+
+            for (int i = 0; i < iterations; i++)
+            {
+                WriteAllEntities(dbe, ids);
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                dbe.WriteTickFence(100 + i);
+                sw.Stop();
+                tickFenceTimes[i] = sw.Elapsed.TotalMicroseconds;
+                Thread.Sleep(5); // Let WAL writer drain before next iteration
+            }
+
+            Array.Sort(tickFenceTimes);
+            double p50 = tickFenceTimes[iterations / 2];
+            double p90 = tickFenceTimes[(int)(iterations * 0.90)];
+            double p99 = tickFenceTimes[(int)(iterations * 0.99)];
+            double mean = 0;
+            for (int i = 0; i < iterations; i++) mean += tickFenceTimes[i];
+            mean /= iterations;
+
+            Console.WriteLine($"  {count,8:N0} entities (cluster={hasClusters}):");
+            Console.WriteLine($"    Mean:  {mean,10:F1} µs  ({mean / count * 1000:F2} ns/entity)");
+            Console.WriteLine($"    P50:   {p50,10:F1} µs");
+            Console.WriteLine($"    P90:   {p90,10:F1} µs");
+            Console.WriteLine($"    P99:   {p99,10:F1} µs");
+            Console.WriteLine();
+        }
+    }
+
+    static void WriteAllEntities(DatabaseEngine dbe, EntityId[] ids)
+    {
+        using var tx = dbe.CreateQuickTransaction();
+        for (int i = 0; i < ids.Length; i++)
+        {
+            ref var pos = ref tx.OpenMut(ids[i]).Write(AaBenchAnt.Position);
+            pos.X += 0.1f;
+        }
+        tx.Commit();
     }
 }

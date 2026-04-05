@@ -59,10 +59,6 @@ class ClusterStorageTests : TestBase<ClusterStorageTests>
 
     private DatabaseEngine SetupClusterEngine()
     {
-        // Configure EnableClusterStorage before creating the engine
-        var options = ServiceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<DatabaseEngineOptions>>();
-        options.Value.EnableClusterStorage = true;
-
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClPosition>();
         dbe.RegisterComponentFromAccessor<ClMovement>();

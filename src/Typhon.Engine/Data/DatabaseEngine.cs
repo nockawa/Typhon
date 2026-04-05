@@ -103,6 +103,9 @@ public struct ArchetypeR1
     /// <summary>Root page index of the EntityMap segment (0 = not persisted, rebuild from PK indexes).</summary>
     public int EntityMapSPI;
 
+    /// <summary>Root page index of the ClusterSegment (0 = no cluster storage).</summary>
+    public int ClusterSegmentSPI;
+
     /// <summary>Resume entity key counter on reopen (avoids scanning PK indexes).</summary>
     public long NextEntityKey;
 
@@ -188,12 +191,6 @@ public class DatabaseEngineOptions
     /// </summary>
     public StatisticsOptions Statistics { get; set; }
 
-    /// <summary>
-    /// Enable entity cluster storage for eligible archetypes (SV-only, non-indexed).
-    /// Default is false. Set to true for benchmarks and tests that exercise cluster iteration.
-    /// Phase 1: cluster storage bypasses DirtyBitmap/tick fence — only enable when dirty tracking is not needed.
-    /// </summary>
-    public bool EnableClusterStorage { get; set; }
 }
 
 /// <summary>
@@ -766,12 +763,210 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             table.SpatialIndex?.InterestSystem?.DirtyRing.Archive(tickNumber, dirtyBits, dirtyBits.Length);
         }
 
+        // Cluster tick fence: serialize dirty cluster-backed entity data to WAL
+        WriteClusterTickFence(tickNumber, ref highestLSN);
+
         if (highestLSN > 0)
         {
             Interlocked.Exchange(ref _lastTickFenceLSN, highestLSN);
         }
 
         return highestLSN;
+    }
+
+    /// <summary>
+    /// Serializes dirty cluster entity data to WAL for all cluster-eligible archetypes.
+    /// Called from <see cref="WriteTickFence"/> after per-ComponentTable processing.
+    /// </summary>
+    private unsafe void WriteClusterTickFence(long tickNumber, ref long highestLSN)
+    {
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!meta.IsClusterEligible || meta.ArchetypeId >= _archetypeStates.Length)
+            {
+                continue;
+            }
+
+            var engineState = _archetypeStates[meta.ArchetypeId];
+            var clusterState = engineState?.ClusterState;
+            if (clusterState == null)
+            {
+                continue;
+            }
+
+            if (!clusterState.ClusterDirtyBitmap.HasDirty)
+            {
+                continue;
+            }
+
+            // Snapshot atomically — clears bitmap for next tick
+            var dirtyBits = clusterState.ClusterDirtyBitmap.Snapshot();
+
+            // Mask dirty bits with live occupancy to skip destroyed entities whose dirty bit remained set.
+            // A destroyed entity's slot is cleared in the cluster (occupancy bit = 0), but its dirty bit
+            // stays set until snapshot. Without masking we'd serialize stale/zeroed data for dead slots.
+            var accessor = clusterState.ClusterSegment.CreateChunkAccessor(null);
+            try
+            {
+                int entryCount = 0;
+                for (int i = 0; i < dirtyBits.Length; i++)
+                {
+                    if (dirtyBits[i] == 0)
+                    {
+                        continue;
+                    }
+
+                    byte* occBase = accessor.GetChunkAddress(i, false);
+                    ulong occupancy = *(ulong*)occBase;
+                    dirtyBits[i] &= (long)occupancy;
+                    entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
+                }
+
+                if (entryCount == 0)
+                {
+                    continue;
+                }
+
+                // Propagate dirty status to ComponentTables for change-filtered runtime dispatch.
+                // The per-ComponentTable loop in WriteTickFence sets PreviousTickHadDirtyEntities = false for tables without dirty bits. Cluster writes
+                // bypass table.DirtyBitmap, so we must re-set PreviousTickHadDirtyEntities here after the per-ComponentTable loop runs.
+                for (int slot = 0; slot < clusterState.Layout.ComponentCount; slot++)
+                {
+                    var table = engineState.SlotToComponentTable[slot];
+                    table.PreviousTickHadDirtyEntities = true;
+                    table.PreviousTickDirtyBitmap ??= Array.Empty<long>();
+                }
+
+                // WAL serialization requires WalManager — skip WAL write if not available
+                if (WalManager == null)
+                {
+                    continue;
+                }
+
+                var layout = clusterState.Layout;
+                int perEntityPayload = 0;
+                for (int slot = 0; slot < layout.ComponentCount; slot++)
+                {
+                    perEntityPayload += layout.ComponentSize(slot);
+                }
+
+                if (perEntityPayload > ushort.MaxValue)
+                {
+                    continue; // Archetype too large for cluster tick fence — skip (shouldn't happen with cluster eligibility constraints)
+                }
+
+                int entrySize = 4 + perEntityPayload; // EntityIndex(4B) + AllComponentData
+                int maxEntriesPerChunk =
+                    (ushort.MaxValue - WalChunkHeader.SizeInBytes - ClusterTickFenceHeader.SizeInBytes - WalChunkFooter.SizeInBytes) / entrySize;
+
+                int entriesRemaining = entryCount;
+                int wordIndex = 0;
+                long currentWord = wordIndex < dirtyBits.Length ? dirtyBits[wordIndex] : 0;
+
+                while (entriesRemaining > 0)
+                {
+                    int batchCount = Math.Min(entriesRemaining, maxEntriesPerChunk);
+                    int bodySize = ClusterTickFenceHeader.SizeInBytes + batchCount * entrySize;
+                    int chunkSize = WalChunkHeader.SizeInBytes + bodySize + WalChunkFooter.SizeInBytes;
+
+                    var wc = WaitContext.FromDeadline(Deadline.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout));
+                    var claim = WalManager.CommitBuffer.TryClaim(chunkSize, 1, ref wc);
+                    if (!claim.IsValid)
+                    {
+                        break; // back-pressure — skip remaining entries
+                    }
+
+                    try
+                    {
+                        int offset = 0;
+
+                        // WalChunkHeader
+                        var chunkHeader = new WalChunkHeader
+                        {
+                            ChunkType = (ushort)WalChunkType.ClusterTickFence,
+                            ChunkSize = (ushort)chunkSize,
+                            PrevCRC = 0,
+                        };
+                        MemoryMarshal.Write(claim.DataSpan[offset..], in chunkHeader);
+                        offset += WalChunkHeader.SizeInBytes;
+
+                        // ClusterTickFenceHeader
+                        var ctfHeader = new ClusterTickFenceHeader
+                        {
+                            TickNumber = tickNumber,
+                            LSN = claim.FirstLSN,
+                            ArchetypeId = meta.ArchetypeId,
+                            EntryCount = (ushort)batchCount,
+                            PerEntityPayload = (ushort)perEntityPayload,
+                            ComponentCount = (byte)layout.ComponentCount,
+                            Reserved = 0,
+                        };
+                        MemoryMarshal.Write(claim.DataSpan[offset..], in ctfHeader);
+                        offset += ClusterTickFenceHeader.SizeInBytes;
+
+                        // Write entries by iterating occupancy-masked dirty bits — one word = one cluster
+                        int written = 0;
+                        while (written < batchCount)
+                        {
+                            while (currentWord == 0 && wordIndex < dirtyBits.Length - 1)
+                            {
+                                wordIndex++;
+                                currentWord = dirtyBits[wordIndex];
+                            }
+
+                            if (currentWord == 0)
+                            {
+                                break;
+                            }
+
+                            int bit = BitOperations.TrailingZeroCount((ulong)currentWord);
+                            int clusterChunkId = wordIndex;
+                            int slotIndex = bit;
+                            int entityIndex = clusterChunkId * 64 + slotIndex;
+                            currentWord &= currentWord - 1; // clear lowest set bit
+
+                            // Write EntityIndex (4B)
+                            MemoryMarshal.Write(claim.DataSpan[offset..], in entityIndex);
+                            offset += 4;
+
+                            // Write all component data from cluster SoA arrays
+                            byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, false);
+                            for (int slot = 0; slot < layout.ComponentCount; slot++)
+                            {
+                                int compOffset = layout.ComponentOffset(slot);
+                                int compSize = layout.ComponentSize(slot);
+                                byte* src = clusterBase + compOffset + slotIndex * compSize;
+                                new ReadOnlySpan<byte>(src, compSize).CopyTo(claim.DataSpan[offset..]);
+                                offset += compSize;
+                            }
+
+                            written++;
+                        }
+
+                        // WalChunkFooter
+                        var footer = new WalChunkFooter { CRC = 0 };
+                        MemoryMarshal.Write(claim.DataSpan[offset..], in footer);
+
+                        WalManager.CommitBuffer.Publish(ref claim);
+                        if (claim.FirstLSN > highestLSN)
+                        {
+                            highestLSN = claim.FirstLSN;
+                        }
+                    }
+                    catch
+                    {
+                        WalManager.CommitBuffer.AbandonClaim(ref claim);
+                        throw;
+                    }
+
+                    entriesRemaining -= batchCount;
+                }
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
     }
 
     /// <summary>
@@ -1555,6 +1750,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             var arch = persisted.Arch;
             arch.EntityMapSPI = state.EntityMap.Segment.RootPageIndex;
+            arch.ClusterSegmentSPI = state.ClusterState?.ClusterSegment.RootPageIndex ?? 0;
             arch.NextEntityKey = Interlocked.Read(ref state.NextEntityKey);
 
             SystemCrud.Update(archetypesTable, persisted.ChunkId, ref arch, EpochManager, cs);
@@ -1996,10 +2192,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // ═══════════════════════════════════════════════════════════════════════
-            // Cluster storage eligibility: opt-in via EnableClusterStorage + all SV, no indexes, no spatial
+            // Cluster storage eligibility: all SV, no indexes, no spatial
             // ═══════════════════════════════════════════════════════════════════════
-            bool isClusterEligible = _options.EnableClusterStorage;
-            for (int slot = 0; slot < meta.ComponentCount && isClusterEligible; slot++)
+            bool isClusterEligible = true;
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
                 var table = slotToTable[slot];
                 if (table.StorageMode != StorageMode.SingleVersion)
@@ -2078,13 +2274,36 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 isFreshAllocation = true;
             }
 
-            // Create ClusterState for cluster-eligible archetypes on fresh databases only.
-            // Phase 1 does not persist cluster data (no WAL integration), so on database reopen// we skip cluster setup — entities will be accessed via
-            // the legacy EntityMap path.
-            if (isClusterEligible && isFreshAllocation)
+            // Create or reload ClusterState for cluster-eligible archetypes.
+            if (isClusterEligible)
             {
-                var clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
-                _archetypeStates[meta.ArchetypeId].ClusterState = ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment);
+                if (isFreshAllocation)
+                {
+                    var clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
+                    _archetypeStates[meta.ArchetypeId].ClusterState = ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment);
+                }
+                else if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var clusterPersisted)
+                         && clusterPersisted.Arch.ClusterSegmentSPI > 0)
+                {
+                    if (MMF.TryLoadChunkBasedSegment(clusterPersisted.Arch.ClusterSegmentSPI, meta.ClusterLayout.ClusterStride,
+                            out var loadedCluster))
+                    {
+                        // Reopen persisted cluster segment and rebuild runtime state from occupancy bitmaps.
+                        // RebuildActiveList needs an epoch scope to create a ChunkAccessor for reading occupancy bits.
+                        using var clusterEpoch = EpochGuard.Enter(EpochManager);
+                        _archetypeStates[meta.ArchetypeId].ClusterState =
+                            ArchetypeClusterState.CreateFromExisting(meta.ClusterLayout, loadedCluster);
+                    }
+                    else
+                    {
+                        // Cluster segment corrupted or unavailable — allocate fresh.
+                        // Existing ClusterEntityRecords in the EntityMap reference the old segment;
+                        // those entities will read zeroed component data until next write.
+                        var fallbackSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
+                        _archetypeStates[meta.ArchetypeId].ClusterState =
+                            ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment);
+                    }
+                }
             }
         }
 

@@ -66,13 +66,28 @@ class StorageModeTickFenceTests : TestBase<StorageModeTickFenceTests>
         entity.Write(SvTestArchetype.SvComp).Value = 42;
 
         var table = dbe.GetComponentTable<CompSmSingleVersion>();
-        Assert.That(table.DirtyBitmap.HasDirty, Is.True, "Should be dirty after write");
+        var clusterState = dbe._archetypeStates[Archetype<SvTestArchetype>.Metadata.ArchetypeId]?.ClusterState;
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True, "Should be dirty after write");
+        }
+        else
+        {
+            Assert.That(table.DirtyBitmap.HasDirty, Is.True, "Should be dirty after write");
+        }
 
         // WriteTickFence with no WAL still snapshots the bitmap (internal logic skips WAL claim)
         dbe.WriteTickFence(1);
 
         // Bitmap should be cleared by Snapshot() inside WriteTickFence
-        Assert.That(table.DirtyBitmap.HasDirty, Is.False, "DirtyBitmap should be cleared after WriteTickFence");
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.False, "ClusterDirtyBitmap should be cleared after WriteTickFence");
+        }
+        else
+        {
+            Assert.That(table.DirtyBitmap.HasDirty, Is.False, "DirtyBitmap should be cleared after WriteTickFence");
+        }
     }
 
     [Test]

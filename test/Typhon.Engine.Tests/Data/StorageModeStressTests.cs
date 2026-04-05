@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine.Tests;
 
@@ -62,7 +63,15 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
         }
 
         // Clear any dirty bits from spawn
-        table.DirtyBitmap.Snapshot();
+        var clusterState = dbe._archetypeStates[Archetype<SvTestArchetype>.Metadata.ArchetypeId]?.ClusterState;
+        if (clusterState != null)
+        {
+            clusterState.ClusterDirtyBitmap.Snapshot();
+        }
+        else
+        {
+            table.DirtyBitmap.Snapshot();
+        }
 
         // Each thread writes its own disjoint slice — no write-write conflicts
         var errors = new ConcurrentBag<string>();
@@ -96,9 +105,18 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
         Assert.That(errors, Is.Empty, () => $"Concurrent SV writes failed: {string.Join("; ", errors)}");
 
         // DirtyBitmap should reflect all concurrent writes
-        Assert.That(table.DirtyBitmap.HasDirty, Is.True, "DirtyBitmap must reflect concurrent SV writes");
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True, "ClusterDirtyBitmap must reflect concurrent SV writes");
+        }
+        else
+        {
+            Assert.That(table.DirtyBitmap.HasDirty, Is.True, "DirtyBitmap must reflect concurrent SV writes");
+        }
 
-        var snapshot = table.DirtyBitmap.Snapshot();
+        var snapshot = clusterState != null
+            ? clusterState.ClusterDirtyBitmap.Snapshot()
+            : table.DirtyBitmap.Snapshot();
         int dirtyCount = 0;
         for (int i = 0; i < snapshot.Length; i++)
         {
@@ -142,7 +160,15 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
             tx.Commit();
         }
 
-        table.DirtyBitmap.Snapshot(); // clear spawn-time dirty bits
+        var clusterState = dbe._archetypeStates[Archetype<SvTestArchetype>.Metadata.ArchetypeId]?.ClusterState;
+        if (clusterState != null)
+        {
+            clusterState.ClusterDirtyBitmap.Snapshot(); // clear spawn-time dirty bits
+        }
+        else
+        {
+            table.DirtyBitmap.Snapshot(); // clear spawn-time dirty bits
+        }
 
         // Concurrent writes
         var errors = new ConcurrentBag<string>();
@@ -176,9 +202,23 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
         Assert.That(errors, Is.Empty, () => $"Concurrent writes failed: {string.Join("; ", errors)}");
 
         // TickFence snapshots and clears the bitmap
-        Assert.That(table.DirtyBitmap.HasDirty, Is.True, "Should be dirty before tick fence");
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True, "Should be dirty before tick fence");
+        }
+        else
+        {
+            Assert.That(table.DirtyBitmap.HasDirty, Is.True, "Should be dirty before tick fence");
+        }
         dbe.WriteTickFence(1);
-        Assert.That(table.DirtyBitmap.HasDirty, Is.False, "DirtyBitmap must be cleared by WriteTickFence");
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.False, "ClusterDirtyBitmap must be cleared by WriteTickFence");
+        }
+        else
+        {
+            Assert.That(table.DirtyBitmap.HasDirty, Is.False, "DirtyBitmap must be cleared by WriteTickFence");
+        }
 
         // New writes after tick fence produce fresh dirty bits
         using (var tx = dbe.CreateQuickTransaction())
@@ -186,7 +226,14 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
             tx.OpenMut(ids[0]).Write(SvTestArchetype.SvComp).Value = 9999;
             tx.Commit();
         }
-        Assert.That(table.DirtyBitmap.HasDirty, Is.True, "Writes after tick fence must set new dirty bits");
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True, "Writes after tick fence must set new dirty bits");
+        }
+        else
+        {
+            Assert.That(table.DirtyBitmap.HasDirty, Is.True, "Writes after tick fence must set new dirty bits");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -377,7 +424,15 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
             tx.Commit();
         }
 
-        table.DirtyBitmap.Snapshot(); // clear
+        var clusterState = dbe._archetypeStates[Archetype<SvTestArchetype>.Metadata.ArchetypeId]?.ClusterState;
+        if (clusterState != null)
+        {
+            clusterState.ClusterDirtyBitmap.Snapshot(); // clear
+        }
+        else
+        {
+            table.DirtyBitmap.Snapshot(); // clear
+        }
 
         // Single transaction writes all 200 — epoch refresh fires at ~128 ops
         using (var tx = dbe.CreateQuickTransaction())
@@ -398,7 +453,15 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
         }
 
         // DirtyBitmap must still reflect writes (epoch refresh caps DirtyCounter, not DirtyBitmap)
-        Assert.That(table.DirtyBitmap.HasDirty, Is.True,
-            "DirtyBitmap must persist through epoch refresh — only WriteTickFence clears it");
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True,
+                "ClusterDirtyBitmap must persist through epoch refresh — only WriteTickFence clears it");
+        }
+        else
+        {
+            Assert.That(table.DirtyBitmap.HasDirty, Is.True,
+                "DirtyBitmap must persist through epoch refresh — only WriteTickFence clears it");
+        }
     }
 }

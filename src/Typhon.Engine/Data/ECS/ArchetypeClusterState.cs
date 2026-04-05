@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine;
@@ -29,10 +30,21 @@ internal sealed unsafe class ArchetypeClusterState
     /// <summary>Chunk ID of first cluster with at least one free slot. -1 = none (allocate new).</summary>
     public int FreeClusterHead;
 
+    /// <summary>Per-entity dirty tracking for tick fence WAL serialization. Index = clusterChunkId * 64 + slotIndex.</summary>
+    public DirtyBitmap ClusterDirtyBitmap;
+
     private ArchetypeClusterState() { }
 
+    /// <summary>Mark an entity slot as dirty for tick fence processing.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void SetDirty(int clusterChunkId, int slotIndex)
+    {
+        int entityIndex = clusterChunkId * 64 + slotIndex;
+        ClusterDirtyBitmap.Set(entityIndex);
+    }
+
     /// <summary>
-    /// Create a new ArchetypeClusterState for a cluster-eligible archetype.
+    /// Create a new ArchetypeClusterState for a cluster-eligible archetype (fresh database).
     /// </summary>
     public static ArchetypeClusterState Create(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment) =>
         new()
@@ -42,7 +54,75 @@ internal sealed unsafe class ArchetypeClusterState
             ActiveClusterIds = new int[16],
             ActiveClusterCount = 0,
             FreeClusterHead = -1,
+            // Index = clusterChunkId * 64 + slotIndex. The 64 multiplier is fixed (not cluster size N)
+            // because it aligns each cluster to exactly one bitmap word for O(1) per-cluster dirty scan.
+            ClusterDirtyBitmap = new DirtyBitmap(Math.Max(64, segment.ChunkCapacity * 64)),
         };
+
+    /// <summary>
+    /// Create an ArchetypeClusterState from an existing persisted segment (database reopen).
+    /// Scans cluster occupancy bitmaps to rebuild <see cref="ActiveClusterIds"/> and <see cref="FreeClusterHead"/>.
+    /// </summary>
+    public static ArchetypeClusterState CreateFromExisting(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment)
+    {
+        var state = new ArchetypeClusterState
+        {
+            ClusterSegment = segment,
+            Layout = layout,
+            ActiveClusterIds = new int[16],
+            ActiveClusterCount = 0,
+            FreeClusterHead = -1,
+            // Index = clusterChunkId * 64 + slotIndex. The 64 multiplier is fixed (not cluster size N)
+            // because it aligns each cluster to exactly one bitmap word for O(1) per-cluster dirty scan.
+            ClusterDirtyBitmap = new DirtyBitmap(Math.Max(64, segment.ChunkCapacity * 64)),
+        };
+
+        state.RebuildActiveList();
+        return state;
+    }
+
+    /// <summary>
+    /// Scan all allocated chunks in the segment, read OccupancyBits, and rebuild <see cref="ActiveClusterIds"/>,
+    /// <see cref="ActiveClusterCount"/>, and <see cref="FreeClusterHead"/> from persisted data.
+    /// </summary>
+    private void RebuildActiveList()
+    {
+        ActiveClusterCount = 0;
+        FreeClusterHead = -1;
+
+        var accessor = ClusterSegment.CreateChunkAccessor(null);
+        try
+        {
+            int capacity = ClusterSegment.ChunkCapacity;
+            for (int chunkId = 1; chunkId < capacity; chunkId++)
+            {
+                if (!ClusterSegment.IsChunkAllocated(chunkId))
+                {
+                    continue;
+                }
+
+                byte* clusterBase = accessor.GetChunkAddress(chunkId, false);
+                ulong occupancy = *(ulong*)clusterBase;
+
+                if (occupancy == 0)
+                {
+                    continue; // Empty cluster — shouldn't exist normally, skip defensively
+                }
+
+                AddToActiveList(chunkId);
+
+                // If cluster has free slots, set as free head (first-fit)
+                if (FreeClusterHead < 0 && (~occupancy & Layout.FullMask) != 0)
+                {
+                    FreeClusterHead = chunkId;
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
 
     /// <summary>
     /// Claim a free slot in an existing cluster, or allocate a new cluster.
@@ -194,23 +274,4 @@ internal sealed unsafe class ArchetypeClusterState
         }
     }
 
-    /// <summary>Find the next active cluster with free slots after the given cluster, or -1 if none.</summary>
-    private int FindNextFreeCluster(ref ChunkAccessor<PersistentStore> accessor, int afterChunkId)
-    {
-        for (int i = 0; i < ActiveClusterCount; i++)
-        {
-            int id = ActiveClusterIds[i];
-            if (id == afterChunkId)
-            {
-                continue;
-            }
-            byte* clusterBase = accessor.GetChunkAddress(id, false);
-            ulong occupancy = *(ulong*)clusterBase;
-            if ((~occupancy & Layout.FullMask) != 0)
-            {
-                return id;
-            }
-        }
-        return -1;
-    }
 }

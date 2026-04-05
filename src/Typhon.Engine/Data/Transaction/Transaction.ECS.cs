@@ -914,6 +914,7 @@ public unsafe partial class Transaction
 
                 result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
                 result._clusterSlotIndex = slotIndex;
+                result._clusterChunkId = clusterChunkId;
                 result._clusterLayout = es.ClusterState.Layout;
             }
             else
@@ -1362,7 +1363,7 @@ public unsafe partial class Transaction
                         }
                         var table = engineState.SlotToComponentTable[slot];
                         int overhead = table.ComponentOverhead;
-                        byte* srcAddr = clusterSrcAccessors[slot].GetChunkAddress(srcChunkId, false);
+                        byte* srcAddr = clusterSrcAccessors[slot].GetChunkAddress(srcChunkId);
                         byte* dstAddr = clusterBase + layout.ComponentOffset(slot) + slotIdx * layout.ComponentSize(slot);
                         Unsafe.CopyBlockUnaligned(dstAddr, srcAddr + overhead, (uint)layout.ComponentSize(slot));
                     }
@@ -1392,7 +1393,11 @@ public unsafe partial class Transaction
                     // Insert ClusterEntityRecord into EntityMap
                     engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
 
-                    // TODO: Phase 2 — free orphaned per-component chunks from SpawnEntry.Loc[]
+                    // Note: cluster pages are marked dirty at page level (GetChunkAddress(dirty:true) above).
+                    // Checkpoint persists them. We do NOT set ClusterDirtyBitmap here — that bitmap tracks write mutations for change-filtered dispatch,
+                    // same as per-ComponentTable DirtyBitmap (which is also not set during FinalizeSpawns for non-cluster SV entities).
+
+                    // TODO: Phase 3 — free orphaned per-component chunks from SpawnEntry.Loc[]
                 }
                 else
                 {

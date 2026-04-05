@@ -25,9 +25,10 @@ public unsafe ref struct EntityRef
     private fixed int _locations[16];
 
     // ── Cluster storage fields (non-null when entity uses cluster storage) ──
-    internal byte* _clusterBase;               // Pointer to cluster chunk data; null = legacy path
-    internal byte _clusterSlotIndex;           // Slot within cluster (0..63)
-    internal ArchetypeClusterInfo _clusterLayout; // Layout info for offset computation
+    internal byte* _clusterBase;                    // Pointer to cluster chunk data; null = legacy path
+    internal byte _clusterSlotIndex;                // Slot within cluster (0..63)
+    internal int _clusterChunkId;                   // Cluster chunk ID (for dirty tracking: entityIndex = chunkId * 64 + slot)
+    internal ArchetypeClusterInfo _clusterLayout;   // Layout info for offset computation
 
     internal EntityRef(EntityId id, ArchetypeMetadata archetype, ArchetypeEngineState engineState, EntityAccessor accessor, ushort enabledBits, bool writable)
     {
@@ -125,7 +126,7 @@ public unsafe ref struct EntityRef
         {
             // Cluster fast path: direct pointer arithmetic into SoA array.
             // Page was already marked dirty at resolve time (OpenMut → GetChunkAddress(dirty:true)).
-            // Phase 1: no shadow/dirty bitmap integration for cluster writes (Phase 2 adds this).
+            _engineState.ClusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
             return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
         }
 
@@ -182,6 +183,7 @@ public unsafe ref struct EntityRef
 
         if (_clusterBase != null)
         {
+            _engineState.ClusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
             return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
         }
 

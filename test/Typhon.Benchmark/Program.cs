@@ -183,6 +183,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--tickfence-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunTickFenceBench();
+                return;
+            }
+
             if (args.Contains("--profile-runtime-standard"))
             {
                 ArchetypeAccessorBenchmark.ProfileRuntimeStandard();

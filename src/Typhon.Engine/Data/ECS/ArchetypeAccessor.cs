@@ -107,6 +107,7 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
             result._clusterBase = _clusterAccessor.GetChunkAddress(clusterChunkId, writable);
             result._clusterSlotIndex = slotIndex;
+            result._clusterChunkId = clusterChunkId;
             result._clusterLayout = _clusterState.Layout;
         }
         else

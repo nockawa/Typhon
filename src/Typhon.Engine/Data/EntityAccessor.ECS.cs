@@ -160,6 +160,7 @@ public unsafe partial class EntityAccessor
 
             result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
             result._clusterSlotIndex = slotIndex;
+            result._clusterChunkId = clusterChunkId;
             result._clusterLayout = es.ClusterState.Layout;
         }
         else
