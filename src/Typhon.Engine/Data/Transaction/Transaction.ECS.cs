@@ -1444,6 +1444,22 @@ public unsafe partial class Transaction
                                 byte* fieldPtr = compBase + field.FieldOffset;
                                 field.Index.Add(fieldPtr, clusterLocation, ref clusterIdxAccessor);
                                 field.ZoneMap?.Widen(clusterChunkId, fieldPtr);
+
+                                // Notify views of creation (Phase 4a: isCreation flag so incremental views detect the new entity)
+                                var spawnTable = engineState.SlotToComponentTable[ixSlot.Slot];
+                                var views = spawnTable.ViewRegistry.GetViewsForField(fi);
+                                for (int v = 0; v < views.Length; v++)
+                                {
+                                    var reg = views[v];
+                                    if (reg.View.IsDisposed)
+                                    {
+                                        continue;
+                                    }
+
+                                    var newKey = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
+                                    byte flags = (byte)((fi & 0x3F) | 0x40); // isCreation
+                                    reg.View.DeltaBuffer.TryAppend(entry.Id.EntityKey, default, newKey, TSN, flags, reg.ComponentTag);
+                                }
                             }
                         }
                     }
@@ -1868,6 +1884,21 @@ public unsafe partial class Transaction
                                         byte* fieldPtr = compBase + field.FieldOffset;
                                         var key = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
                                         field.Index.Remove(&key, out _, ref destroyClusterIdxAccessor);
+
+                                        // Notify views of deletion (Phase 4a)
+                                        var destroyTable = engineState.SlotToComponentTable[ixSlot.Slot];
+                                        var views = destroyTable.ViewRegistry.GetViewsForField(fi);
+                                        for (int v = 0; v < views.Length; v++)
+                                        {
+                                            var reg = views[v];
+                                            if (reg.View.IsDisposed)
+                                            {
+                                                continue;
+                                            }
+
+                                            byte flags = (byte)((fi & 0x3F) | 0x80); // isDeletion
+                                            reg.View.DeltaBuffer.TryAppend(entityId.EntityKey, key, default, TSN, flags, reg.ComponentTag);
+                                        }
                                     }
                                 }
                             }

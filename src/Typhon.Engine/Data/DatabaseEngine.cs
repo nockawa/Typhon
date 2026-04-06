@@ -796,6 +796,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             if (!clusterState.ClusterDirtyBitmap.HasDirty)
             {
+                clusterState.PreviousTickDirtySnapshot = null;
                 continue;
             }
 
@@ -845,6 +846,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 {
                     continue;
                 }
+
+                // Store dirty snapshot for change-filtered runtime dispatch (Phase 4a).
+                // BuildFilteredClusterEntities reads this to find dirty cluster entities.
+                clusterState.PreviousTickDirtySnapshot = dirtyBits;
 
                 // Propagate dirty status to ComponentTables for change-filtered runtime dispatch.
                 // The per-ComponentTable loop in WriteTickFence sets PreviousTickHadDirtyEntities = false for tables without dirty bits. Cluster writes
@@ -1167,6 +1172,22 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                                 // Entity destroyed — remove old index entry using shadow value
                                 var destroyOldKey = entry.OldKey;
                                 field.Index.Remove(&destroyOldKey, out _, ref idxAccessor);
+
+                                // Notify views of deletion (same pattern as ProcessShadowFieldEntries)
+                                var table = engineState.SlotToComponentTable[ixSlot.Slot];
+                                var delViews = table.ViewRegistry.GetViewsForField(f);
+                                for (int v = 0; v < delViews.Length; v++)
+                                {
+                                    var reg = delViews[v];
+                                    if (reg.View.IsDisposed)
+                                    {
+                                        continue;
+                                    }
+
+                                    byte delFlags = (byte)((f & 0x3F) | 0x80); // isDeletion
+                                    reg.View.DeltaBuffer.TryAppend(entry.EntityPK, entry.OldKey, default, 0, delFlags, reg.ComponentTag);
+                                }
+
                                 continue;
                             }
 
@@ -1185,6 +1206,23 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                             // Update per-archetype B+Tree: remove old key, insert new key, same ClusterLocation value
                             int clusterLocation = entry.ChunkId; // entityIndex = clusterLocation
                             field.Index.Move(&oldKey, fieldPtr, clusterLocation, ref idxAccessor);
+
+                            // Notify registered views (same pattern as ProcessShadowFieldEntries)
+                            {
+                                var table = engineState.SlotToComponentTable[ixSlot.Slot];
+                                var views = table.ViewRegistry.GetViewsForField(f);
+                                for (int v = 0; v < views.Length; v++)
+                                {
+                                    var reg = views[v];
+                                    if (reg.View.IsDisposed)
+                                    {
+                                        continue;
+                                    }
+
+                                    byte flags = (byte)(f & 0x3F);
+                                    reg.View.DeltaBuffer.TryAppend(entry.EntityPK, oldKey, newKey, 0, flags, reg.ComponentTag);
+                                }
+                            }
                         }
                     }
                     finally
@@ -2461,16 +2499,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
                 if (table.SpatialIndex != null)
                 {
-                    // Only Dynamic spatial is cluster-eligible; Static uses bulk loading (Phase 3c)
-                    if (table.SpatialIndex.FieldInfo.Mode == SpatialMode.Dynamic)
-                    {
-                        hasSpatialField = true;
-                    }
-                    else
-                    {
-                        isClusterEligible = false;
-                        break;
-                    }
+                    hasSpatialField = true;
                 }
                 if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0)
                 {

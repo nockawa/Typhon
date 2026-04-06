@@ -34,6 +34,13 @@ internal sealed unsafe class ArchetypeClusterState
     /// <summary>Per-entity dirty tracking for tick fence WAL serialization. Index = clusterChunkId * 64 + slotIndex.</summary>
     public DirtyBitmap ClusterDirtyBitmap;
 
+    /// <summary>
+    /// Snapshot of the previous tick's dirty bitmap (occupancy-masked). Set during <c>WriteClusterTickFence</c>, consumed
+    /// by <c>TyphonRuntime.BuildFilteredClusterEntities</c> for change-filtered parallel dispatch.
+    /// Word index = clusterChunkId, bit position = slotIndex. Null when no entities were dirty.
+    /// </summary>
+    public long[] PreviousTickDirtySnapshot;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Per-archetype B+Tree indexes (Phase 3a). Null if archetype has no indexed fields.
     // ═══════════════════════════════════════════════════════════════════════
@@ -348,7 +355,8 @@ internal sealed unsafe class ArchetypeClusterState
                     Index = btree,
                     AllowMultiple = ifi.AllowMultiple,
                     ZoneMap = new ZoneMapArray(ClusterSegment.ChunkCapacity, ifi.Size,
-                        isFloat: fieldDef.Type == FieldType.Float, isDouble: fieldDef.Type == FieldType.Double),
+                        isFloat: fieldDef.Type == FieldType.Float, isDouble: fieldDef.Type == FieldType.Double,
+                        isUnsigned: (fieldDef.Type & FieldType.Unsigned) != 0),
                 };
                 shadowBuffers[fi] = new FieldShadowBuffer();
                 fi++;

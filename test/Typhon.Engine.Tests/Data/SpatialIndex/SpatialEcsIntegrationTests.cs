@@ -425,16 +425,27 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialTerrain>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
+        var tree = GetSpatialTree<SpatialTerrainArchetype>(dbe);
+        Assert.That(tree.EntityCount, Is.EqualTo(1));
 
-        // Read back-pointer and verify TreeSelector equals (byte)SpatialMode.Static
+        // SpatialTerrainArchetype is cluster-eligible (all SV), so back-pointers live on the per-archetype
+        // ClusterSpatialSlot, keyed by clusterLocation (not component chunk ID).
+        var meta = Archetype<SpatialTerrainArchetype>.Metadata;
         using var guard = EpochGuard.Enter(dbe.EpochManager);
-        var bpAccessor = table.SpatialIndex.BackPointerSegment.CreateChunkAccessor();
+
+        // Query the tree to obtain the clusterLocation (stored as ComponentChunkId in cluster trees)
+        int clusterLocation = -1;
+        foreach (var hit in tree.QueryAABB(stackalloc double[] { -1, -1, -1, 11, 11, 6 }))
+        {
+            clusterLocation = hit.ComponentChunkId;
+        }
+        Assert.That(clusterLocation, Is.GreaterThan(0), "Should find entity in tree");
+
+        var bpSegment = dbe._archetypeStates[meta.ArchetypeId].ClusterState.SpatialSlot.BackPointerSegment;
+        var bpAccessor = bpSegment.CreateChunkAccessor();
         try
         {
-            // ChunkId 1 is the first entity's component chunk
-            var bp = SpatialBackPointerHelper.Read(ref bpAccessor, 1);
+            var bp = SpatialBackPointerHelper.Read(ref bpAccessor, clusterLocation);
             Assert.That(bp.LeafChunkId, Is.GreaterThan(0));
             Assert.That(bp.TreeSelector, Is.EqualTo((byte)SpatialMode.Static));
         }
@@ -468,20 +479,20 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialTerrain>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(10));
+        var tree = GetSpatialTree<SpatialTerrainArchetype>(dbe);
+        Assert.That(tree.EntityCount, Is.EqualTo(10));
 
         // Query a region that overlaps the first 3 terrain pieces
         using var guard = EpochGuard.Enter(dbe.EpochManager);
         double[] queryCoords = { -5, -5, -5, 55, 15, 10 };
         var results = new List<long>();
-        foreach (var hit in table.SpatialIndex.ActiveTree.QueryAABB(queryCoords))
+        foreach (var hit in tree.QueryAABB(queryCoords))
         {
             results.Add(hit.EntityId);
         }
         Assert.That(results.Count, Is.EqualTo(3));
 
-        TreeValidator.Validate(table.SpatialIndex.ActiveTree);
+        TreeValidator.Validate(tree);
     }
 
     [Test]
@@ -502,8 +513,8 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialTerrain>();
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(1));
+        var tree = GetSpatialTree<SpatialTerrainArchetype>(dbe);
+        Assert.That(tree.EntityCount, Is.EqualTo(1));
 
         // Destroy the entity
         using (var t = dbe.CreateQuickTransaction())
@@ -512,7 +523,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(0));
+        Assert.That(tree.EntityCount, Is.EqualTo(0));
     }
 
     [Test]

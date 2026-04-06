@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -16,15 +17,16 @@ namespace Typhon.Engine;
 /// </remarks>
 internal sealed unsafe class ZoneMapArray
 {
-    private long[] _mins;       // [clusterChunkId] → min value (raw bits, sign-flipped for float ordering)
-    private long[] _maxs;       // [clusterChunkId] → max value (raw bits, sign-flipped for float ordering)
+    private long[] _mins;       // [clusterChunkId] → min value (ordered long, sign-flipped for float/unsigned ordering)
+    private long[] _maxs;       // [clusterChunkId] → max value (ordered long, sign-flipped for float/unsigned ordering)
     private bool[] _valid;      // [clusterChunkId] → true if min/max are initialized
     private int _capacity;
     private readonly int _fieldSize;
     private readonly bool _isFloat;
     private readonly bool _isDouble;
+    private readonly bool _isUnsigned;
 
-    internal ZoneMapArray(int initialCapacity, int fieldSize, bool isFloat, bool isDouble)
+    internal ZoneMapArray(int initialCapacity, int fieldSize, bool isFloat, bool isDouble, bool isUnsigned = false)
     {
         _capacity = Math.Max(16, initialCapacity);
         _mins = new long[_capacity];
@@ -33,6 +35,7 @@ internal sealed unsafe class ZoneMapArray
         _fieldSize = fieldSize;
         _isFloat = isFloat;
         _isDouble = isDouble;
+        _isUnsigned = isUnsigned;
     }
 
     /// <summary>
@@ -143,17 +146,34 @@ internal sealed unsafe class ZoneMapArray
         {
             return FloatToOrderedLong(*(float*)ptr);
         }
+
         if (_isDouble)
         {
             return DoubleToOrderedLong(*(double*)ptr);
         }
+
+        if (_isUnsigned)
+        {
+            // Unsigned types: XOR with sign bit to preserve ordering in signed comparison.
+            // Maps unsigned 0 → signed MIN, unsigned MAX → signed MAX.
+            return _fieldSize switch
+            {
+                1 => *(byte*)ptr,                                              // byte: 0..255 fits, no XOR needed
+                2 => (long)(*(ushort*)ptr) ^ (1L << 15),                       // ushort: XOR bit 15
+                4 => (long)(*(uint*)ptr) ^ (1L << 31),                         // uint: XOR bit 31
+                8 => *(long*)ptr ^ long.MinValue,                              // ulong: XOR bit 63
+                _ => (long)(*(uint*)ptr) ^ (1L << 31),
+            };
+        }
+
+        Debug.Assert(_fieldSize is 1 or 2 or 4 or 8, $"Unexpected zone map field size: {_fieldSize}");
         return _fieldSize switch
         {
-            1 => *(byte*)ptr,
+            1 => *(sbyte*)ptr,
             2 => *(short*)ptr,
             4 => *(int*)ptr,
             8 => *(long*)ptr,
-            _ => *(int*)ptr, // fallback
+            _ => *(int*)ptr,
         };
     }
 
@@ -163,7 +183,10 @@ internal sealed unsafe class ZoneMapArray
     private static long FloatToOrderedLong(float value)
     {
         int bits = BitConverter.SingleToInt32Bits(value);
-        return bits < 0 ? ~bits : bits ^ int.MinValue;
+        // Cast to long BEFORE XOR/NOT to avoid sign-extension of int result to long.
+        // Without cast: (0 ^ int.MinValue) = int -2147483648, sign-extends to long -2147483648 (wrong ordering).
+        // With cast: (0L ^ (long)(uint)int.MinValue) = long 2147483648 (correct ordering).
+        return bits < 0 ? ~(long)bits : (long)(uint)(bits ^ int.MinValue);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -171,6 +194,80 @@ internal sealed unsafe class ZoneMapArray
     {
         long bits = BitConverter.DoubleToInt64Bits(value);
         return bits < 0 ? ~bits : bits ^ long.MinValue;
+    }
+
+    /// <summary>
+    /// Convert a <see cref="FieldEvaluator"/> into zone map query bounds [min, max] as ordered longs.
+    /// The bounds define the interval that must overlap the zone map for a potential match.
+    /// Returns false if the evaluator's CompareOp cannot be expressed as a range (e.g., NotEqual).
+    /// </summary>
+    internal static bool TryGetQueryBounds(ref FieldEvaluator eval, out long queryMin, out long queryMax)
+    {
+        long orderedThreshold = ThresholdToOrdered(eval.Threshold, eval.KeyType);
+
+        switch (eval.CompareOp)
+        {
+            case CompareOp.Equal:
+                queryMin = orderedThreshold;
+                queryMax = orderedThreshold;
+                return true;
+            case CompareOp.GreaterThan:
+                queryMin = orderedThreshold + 1;
+                queryMax = long.MaxValue;
+                return true;
+            case CompareOp.GreaterThanOrEqual:
+                queryMin = orderedThreshold;
+                queryMax = long.MaxValue;
+                return true;
+            case CompareOp.LessThan:
+                queryMin = long.MinValue;
+                queryMax = orderedThreshold - 1;
+                return true;
+            case CompareOp.LessThanOrEqual:
+                queryMin = long.MinValue;
+                queryMax = orderedThreshold;
+                return true;
+            case CompareOp.NotEqual:
+            default:
+                queryMin = long.MinValue;
+                queryMax = long.MaxValue;
+                return false; // Cannot prune with NotEqual
+        }
+    }
+
+    /// <summary>
+    /// Convert a <see cref="FieldEvaluator.Threshold"/> to the ordered long encoding used by zone maps.
+    /// Same sign-flip logic as <see cref="ReadFieldAsOrderedLong"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static long ThresholdToOrdered(long threshold, KeyType keyType)
+    {
+        switch (keyType)
+        {
+            case KeyType.Float:
+            {
+                int bits = (int)threshold;
+                float value = Unsafe.As<int, float>(ref bits);
+                return FloatToOrderedLong(value);
+            }
+            case KeyType.Double:
+            {
+                double value = Unsafe.As<long, double>(ref threshold);
+                return DoubleToOrderedLong(value);
+            }
+            // Unsigned types: XOR with sign bit (must match ReadFieldAsOrderedLong encoding)
+            case KeyType.Byte:
+                return threshold; // 0..255 fits in signed long, no XOR needed
+            case KeyType.UShort:
+                return threshold ^ (1L << 15);
+            case KeyType.UInt:
+                return threshold ^ (1L << 31);
+            case KeyType.ULong:
+                return threshold ^ long.MinValue;
+            default:
+                // Signed integers are already in sort order as longs.
+                return threshold;
+        }
     }
 
     private void EnsureCapacity(int index)

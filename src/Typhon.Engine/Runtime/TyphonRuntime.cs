@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
 
@@ -438,6 +439,7 @@ public sealed class TyphonRuntime : IDisposable
     /// <summary>
     /// Single-table fast path: scan dirty bitmap → View intersection → result array.
     /// No intermediate collection, no dedup (only one table → no duplicates possible).
+    /// Includes cluster entity scanning (Phase 4a): reads PreviousTickDirtySnapshot from each cluster archetype that references this table.
     /// </summary>
     private unsafe PooledEntityList BuildFilteredSingleTable(int sysIdx, ViewBase view, ComponentTable table)
     {
@@ -452,45 +454,54 @@ public sealed class TyphonRuntime : IDisposable
             return BuildFullViewEntitySet(sysIdx);
         }
 
-        // Upper bound: min(view entity count, dirty bit count) — avoids over-renting for large views with few dirty entities
+        // Estimate upper bound from non-cluster bitmap + cluster dirty snapshots
         int bitmapPopCount = 0;
         for (int i = 0; i < bitmap.Length; i++)
         {
             bitmapPopCount += BitOperations.PopCount((ulong)bitmap[i]);
         }
-        var list = PooledEntityList.Rent(Math.Min(view.Count, bitmapPopCount));
+
+        // Upper bound: view.Count (dirty ∩ view can't exceed view size). Avoids separate cluster estimate scan.
+        var list = PooledEntityList.Rent(view.Count);
         var span = list.AsSpan();
         int count = 0;
 
-        var accessor = table.ComponentSegment.CreateChunkAccessor();
-        try
+        // Non-cluster path: scan ComponentTable dirty bitmap
+        if (bitmap.Length > 0)
         {
-            for (var wordIdx = 0; wordIdx < bitmap.Length; wordIdx++)
+            var accessor = table.ComponentSegment.CreateChunkAccessor();
+            try
             {
-                var word = bitmap[wordIdx];
-                while (word != 0)
+                for (var wordIdx = 0; wordIdx < bitmap.Length; wordIdx++)
                 {
-                    var bit = BitOperations.TrailingZeroCount((ulong)word);
-                    var chunkId = wordIdx * 64 + bit;
-                    word &= word - 1;
-
-                    if (table.IsChunkDestroyed(chunkId))
+                    var word = bitmap[wordIdx];
+                    while (word != 0)
                     {
-                        continue;
-                    }
+                        var bit = BitOperations.TrailingZeroCount((ulong)word);
+                        var chunkId = wordIdx * 64 + bit;
+                        word &= word - 1;
 
-                    var entityPK = *(long*)accessor.GetChunkAddress(chunkId);
-                    if (view.Contains(entityPK))
-                    {
-                        span[count++] = EntityId.FromRaw(entityPK);
+                        if (table.IsChunkDestroyed(chunkId))
+                        {
+                            continue;
+                        }
+
+                        var entityPK = *(long*)accessor.GetChunkAddress(chunkId);
+                        if (view.Contains(entityPK))
+                        {
+                            span[count++] = EntityId.FromRaw(entityPK);
+                        }
                     }
                 }
             }
+            finally
+            {
+                accessor.Dispose();
+            }
         }
-        finally
-        {
-            accessor.Dispose();
-        }
+
+        // Cluster path (Phase 4a): scan cluster dirty bitmaps for archetypes referencing this table
+        count = ScanClusterDirtyEntities(table, view, span, count);
 
         if (count == 0)
         {
@@ -499,6 +510,58 @@ public sealed class TyphonRuntime : IDisposable
         }
 
         return new PooledEntityList(list.BackingArray, count);
+    }
+
+    /// <summary>
+    /// Scan cluster dirty bitmaps for all archetypes referencing the given table, adding matching entities to the result span.
+    /// Uses direct array loop over <see cref="ArchetypeRegistry"/> (no yield-return allocation).
+    /// Returns the updated count.
+    /// </summary>
+    private unsafe int ScanClusterDirtyEntities(ComponentTable table, ViewBase view, Span<EntityId> span, int count)
+    {
+        int maxArchId = Math.Min(ArchetypeRegistry.MaxArchetypeId, Engine._archetypeStates.Length - 1);
+        for (int archId = 0; archId <= maxArchId; archId++)
+        {
+            var es = Engine._archetypeStates[archId];
+            var cs = es?.ClusterState;
+            if (cs?.PreviousTickDirtySnapshot == null)
+            {
+                continue;
+            }
+
+            if (!ArchetypeReferencesTable(es, table))
+            {
+                continue;
+            }
+
+            var snapshot = cs.PreviousTickDirtySnapshot;
+            var clusterAccessor = cs.ClusterSegment.CreateChunkAccessor();
+            try
+            {
+                for (int wordIdx = 0; wordIdx < snapshot.Length; wordIdx++)
+                {
+                    long word = snapshot[wordIdx];
+                    while (word != 0)
+                    {
+                        int bit = BitOperations.TrailingZeroCount((ulong)word);
+                        word &= word - 1;
+
+                        byte* clusterBase = clusterAccessor.GetChunkAddress(wordIdx);
+                        long entityPK = *(long*)(clusterBase + cs.Layout.EntityIdsOffset + bit * 8);
+                        if (view.Contains(entityPK))
+                        {
+                            span[count++] = EntityId.FromRaw(entityPK);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                clusterAccessor.Dispose();
+            }
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -521,6 +584,7 @@ public sealed class TyphonRuntime : IDisposable
             return false;
         }
 
+        // Non-cluster path
         var accessor = table.ComponentSegment.CreateChunkAccessor();
         try
         {
@@ -551,7 +615,76 @@ public sealed class TyphonRuntime : IDisposable
             accessor.Dispose();
         }
 
+        // Cluster path (Phase 4a): scan cluster dirty bitmaps for archetypes referencing this table
+        ScanClusterDirtyEntitiesIntoSet(table, view, dirtyInView);
+
         return true;
+    }
+
+    /// <summary>
+    /// Scan cluster dirty bitmaps for all archetypes referencing the given table, adding matching entities to the dedup set.
+    /// Multi-table variant that adds to HashMap instead of Span.
+    /// </summary>
+    private unsafe void ScanClusterDirtyEntitiesIntoSet(ComponentTable table, ViewBase view, HashMap<long> dirtyInView)
+    {
+        int maxArchId = Math.Min(ArchetypeRegistry.MaxArchetypeId, Engine._archetypeStates.Length - 1);
+        for (int archId = 0; archId <= maxArchId; archId++)
+        {
+            var es = Engine._archetypeStates[archId];
+            var cs = es?.ClusterState;
+            if (cs?.PreviousTickDirtySnapshot == null)
+            {
+                continue;
+            }
+
+            if (!ArchetypeReferencesTable(es, table))
+            {
+                continue;
+            }
+
+            var snapshot = cs.PreviousTickDirtySnapshot;
+            var clusterAccessor = cs.ClusterSegment.CreateChunkAccessor();
+            try
+            {
+                for (int wordIdx = 0; wordIdx < snapshot.Length; wordIdx++)
+                {
+                    long word = snapshot[wordIdx];
+                    while (word != 0)
+                    {
+                        int bit = BitOperations.TrailingZeroCount((ulong)word);
+                        word &= word - 1;
+
+                        byte* clusterBase = clusterAccessor.GetChunkAddress(wordIdx);
+                        long entityPK = *(long*)(clusterBase + cs.Layout.EntityIdsOffset + bit * 8);
+                        if (view.Contains(entityPK))
+                        {
+                            dirtyInView.TryAdd(entityPK);
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                clusterAccessor.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Check whether an archetype's component slots include the given ComponentTable.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ArchetypeReferencesTable(ArchetypeEngineState es, ComponentTable table)
+    {
+        for (int slot = 0; slot < es.SlotToComponentTable.Length; slot++)
+        {
+            if (es.SlotToComponentTable[slot] == table)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

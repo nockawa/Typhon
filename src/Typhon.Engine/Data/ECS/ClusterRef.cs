@@ -148,6 +148,7 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
     private ArchetypeMetadata _meta;
     private ChunkAccessor<PersistentStore> _accessor;
     private int _index;
+    private int _endIndex;
 
     [AllowCopy]
     internal static ClusterEnumerator<TArch> Create(ArchetypeClusterState state, ArchetypeMetadata meta, ChunkBasedSegment<PersistentStore> segment)
@@ -157,12 +158,30 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
         result._meta = meta;
         result._accessor = segment.CreateChunkAccessor();
         result._index = -1;
+        result._endIndex = state.ActiveClusterCount;
         return result;
     }
 
-    /// <summary>Advance to the next active cluster.</summary>
+    /// <summary>
+    /// Create a scoped enumerator that only iterates a range of active clusters.
+    /// Used by parallel dispatch to partition cluster work across workers.
+    /// </summary>
+    [AllowCopy]
+    internal static ClusterEnumerator<TArch> CreateScoped(ArchetypeClusterState state, ArchetypeMetadata meta,
+        ChunkBasedSegment<PersistentStore> segment, int startIndex, int endIndex)
+    {
+        var result = new ClusterEnumerator<TArch>();
+        result._state = state;
+        result._meta = meta;
+        result._accessor = segment.CreateChunkAccessor();
+        result._index = startIndex - 1;
+        result._endIndex = endIndex;
+        return result;
+    }
+
+    /// <summary>Advance to the next active cluster in the range.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool MoveNext() => ++_index < _state.ActiveClusterCount;
+    public bool MoveNext() => ++_index < _endIndex;
 
     /// <summary>Get the current cluster ref.</summary>
     public ClusterRef<TArch> Current

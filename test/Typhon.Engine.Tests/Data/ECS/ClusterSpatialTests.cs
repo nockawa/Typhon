@@ -49,11 +49,28 @@ struct ClSpatialVData
     public int Padding;
 }
 
+// Static spatial component for Phase 3c test
+[Component("Typhon.Test.ClSp.StaticPos", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct ClSpatialStaticPos
+{
+    [Field]
+    [SpatialIndex(0.0f, Mode = SpatialMode.Static)]
+    public AABB3F Bounds;
+}
+
 [Archetype(831)]
 partial class ClSpatialNonClusterUnit : Archetype<ClSpatialNonClusterUnit>
 {
     public static readonly Comp<ClSpatialPos> Pos = Register<ClSpatialPos>();
     public static readonly Comp<ClSpatialVData> VData = Register<ClSpatialVData>();
+}
+
+[Archetype(832)]
+partial class ClSpatialStaticUnit : Archetype<ClSpatialStaticUnit>
+{
+    public static readonly Comp<ClSpatialStaticPos> StaticPos = Register<ClSpatialStaticPos>();
+    public static readonly Comp<ClSpatialMeta> Meta = Register<ClSpatialMeta>();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -69,6 +86,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
     {
         Archetype<ClSpatialUnit>.Touch();
         Archetype<ClSpatialNonClusterUnit>.Touch();
+        Archetype<ClSpatialStaticUnit>.Touch();
     }
 
     private DatabaseEngine SetupEngine()
@@ -77,6 +95,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         dbe.RegisterComponentFromAccessor<ClSpatialPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
         dbe.RegisterComponentFromAccessor<ClSpatialVData>();
+        dbe.RegisterComponentFromAccessor<ClSpatialStaticPos>();
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -561,6 +580,50 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Static spatial mode (Phase 3c)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void StaticSpatial_ClusterEligible_SpawnAndQuery()
+    {
+        using var dbe = SetupEngine();
+        var meta = Archetype<ClSpatialStaticUnit>.Metadata;
+        Assert.That(meta.IsClusterEligible, Is.True, "Static SV spatial archetype should be cluster-eligible");
+        Assert.That(meta.HasClusterSpatial, Is.True);
+
+        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+        Assert.That(cs.SpatialSlot.Tree, Is.Not.Null, "Per-archetype R-Tree should exist for Static spatial");
+
+        // Spawn static entities
+        EntityId id1, id2;
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var pos1 = new ClSpatialStaticPos { Bounds = new AABB3F { MinX = 10, MinY = 10, MinZ = 10, MaxX = 12, MaxY = 12, MaxZ = 12 } };
+            var pos2 = new ClSpatialStaticPos { Bounds = new AABB3F { MinX = 50, MinY = 50, MinZ = 50, MaxX = 52, MaxY = 52, MaxZ = 52 } };
+            var met = new ClSpatialMeta { Tag = 1 };
+            id1 = tx.Spawn<ClSpatialStaticUnit>(ClSpatialStaticUnit.StaticPos.Set(in pos1), ClSpatialStaticUnit.Meta.Set(in met));
+            met.Tag = 2;
+            id2 = tx.Spawn<ClSpatialStaticUnit>(ClSpatialStaticUnit.StaticPos.Set(in pos2), ClSpatialStaticUnit.Meta.Set(in met));
+            tx.Commit();
+        }
+
+        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(2));
+
+        // Query should find both
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var results = tx.Query<ClSpatialStaticUnit>().WhereInAABB<ClSpatialStaticPos>(0, 0, 0, 60, 60, 60).Execute();
+            Assert.That(results.Count, Is.EqualTo(2));
+            Assert.That(results, Does.Contain(id1));
+            Assert.That(results, Does.Contain(id2));
+        }
+
+        // Tick fence should NOT process static spatial (no crash, no tree modification)
+        dbe.WriteTickFence(1);
+        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(2), "Static tree unaffected by tick fence");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Database reopen with persisted spatial data
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -624,6 +687,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         dbe.RegisterComponentFromAccessor<ClSpatialPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
         dbe.RegisterComponentFromAccessor<ClSpatialVData>();
+        dbe.RegisterComponentFromAccessor<ClSpatialStaticPos>();
         dbe.InitializeArchetypes();
         return dbe;
     }

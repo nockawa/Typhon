@@ -672,7 +672,15 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                     continue;
                 }
 
-                ScanPerArchetypeBTree(plan, evaluators, clusterState, meta, result);
+                // Query planner: choose Path A (B+Tree selective) vs Path B (zone map + eval) based on selectivity (Phase 4a)
+                if (plan.UsesSecondaryIndex && EstimateClusterSelectivity(plan, clusterState) < 0.05f)
+                {
+                    ScanPerArchetypeBTreeSelective(plan, evaluators, clusterState, meta, result);
+                }
+                else
+                {
+                    ScanPerArchetypeBTree(plan, evaluators, clusterState, meta, result);
+                }
             }
         }
 
@@ -714,29 +722,47 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private void ScanPerArchetypeBTree(ExecutionPlan plan, FieldEvaluator[] evaluators, ArchetypeClusterState clusterState, ArchetypeMetadata meta,
         HashSet<EntityId> result)
     {
-        // Locate the index slot that corresponds to the queried component
-        int ixSlotIdx = -1;
-        var ixSlots = clusterState.IndexSlots;
-        var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
-        for (int s = 0; s < ixSlots.Length; s++)
-        {
-            var table = engineState.SlotToComponentTable[ixSlots[s].Slot];
-            if (table == _whereComponentTable)
-            {
-                ixSlotIdx = s;
-                break;
-            }
-        }
+        int ixSlotIdx = FindClusterIndexSlot(clusterState, meta);
         if (ixSlotIdx < 0)
         {
             return;
         }
 
+        var ixSlots = clusterState.IndexSlots;
         ref var matchSlot = ref ixSlots[ixSlotIdx];
         var layout = clusterState.Layout;
         int compSlot = matchSlot.Slot;
         int compSize = layout.ComponentSize(compSlot);
         int compOffset = layout.ComponentOffset(compSlot);
+
+        // Pre-compute zone map query bounds for each evaluator (Phase 4a: zone map pruning).
+        // Match evaluators to their ClusterIndexField by FieldOffset + FieldSize.
+        int evalCount = evaluators.Length;
+        var zoneMapMins = evalCount <= 8 ? stackalloc long[evalCount] : new long[evalCount];
+        var zoneMapMaxs = evalCount <= 8 ? stackalloc long[evalCount] : new long[evalCount];
+        var zoneMapRefs = new ZoneMapArray[evalCount]; // small one-shot array for reference types
+        bool hasZoneMaps = false;
+
+        for (int e = 0; e < evalCount; e++)
+        {
+            ref var eval = ref evaluators[e];
+            for (int fi = 0; fi < matchSlot.Fields.Length; fi++)
+            {
+                ref var field = ref matchSlot.Fields[fi];
+                if (field.FieldOffset == eval.FieldOffset && field.FieldSize == eval.FieldSize && field.ZoneMap != null)
+                {
+                    if (ZoneMapArray.TryGetQueryBounds(ref eval, out var qMin, out var qMax))
+                    {
+                        zoneMapRefs[e] = field.ZoneMap;
+                        zoneMapMins[e] = qMin;
+                        zoneMapMaxs[e] = qMax;
+                        hasZoneMaps = true;
+                    }
+
+                    break;
+                }
+            }
+        }
 
         var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
         try
@@ -744,6 +770,26 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             for (int c = 0; c < clusterState.ActiveClusterCount; c++)
             {
                 int clusterChunkId = clusterState.ActiveClusterIds[c];
+
+                // Zone map pruning: skip cluster if any predicate's range doesn't overlap the cluster's [min, max]
+                if (hasZoneMaps)
+                {
+                    bool skip = false;
+                    for (int e = 0; e < evalCount; e++)
+                    {
+                        if (zoneMapRefs[e] != null && !zoneMapRefs[e].MayContain(clusterChunkId, zoneMapMins[e], zoneMapMaxs[e]))
+                        {
+                            skip = true;
+                            break;
+                        }
+                    }
+
+                    if (skip)
+                    {
+                        continue;
+                    }
+                }
+
                 byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
                 ulong occupancy = *(ulong*)clusterBase;
                 if (occupancy == 0)
@@ -782,6 +828,248 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         finally
         {
             clusterAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Estimate selectivity for the primary predicate of a cluster query. Returns a value in [0, 1] where lower = more selective.
+    /// Uses the plan's EstimatedCounts (from selectivity estimator) divided by total entity count in this archetype's clusters.
+    /// Falls back to 0.5 (moderate selectivity → Path B) when estimates are unavailable.
+    /// </summary>
+    private static float EstimateClusterSelectivity(ExecutionPlan plan, ArchetypeClusterState clusterState)
+    {
+        if (plan.EstimatedCounts == null || plan.EstimatedCounts.Length == 0)
+        {
+            return 0.5f;
+        }
+
+        // EstimatedCounts[0] = estimated match count for the most selective predicate.
+        // This estimate comes from the shared per-ComponentTable B+Tree, which may have 0 entries
+        // for cluster archetypes (all entities in per-archetype B+Trees). Treat 0 as "unknown" → Path B.
+        long estimated = plan.EstimatedCounts[0];
+        if (estimated <= 0)
+        {
+            return 0.5f;
+        }
+
+        // Total entity estimate: ActiveClusterCount * ClusterSize (upper bound)
+        long total = (long)clusterState.ActiveClusterCount * clusterState.Layout.ClusterSize;
+        if (total <= 0)
+        {
+            return 0.5f;
+        }
+
+        return (float)estimated / total;
+    }
+
+    /// <summary>
+    /// Find the cluster index slot that corresponds to <see cref="_whereComponentTable"/>.
+    /// Returns the index into <see cref="ArchetypeClusterState.IndexSlots"/>, or -1 if not found.
+    /// </summary>
+    private int FindClusterIndexSlot(ArchetypeClusterState clusterState, ArchetypeMetadata meta)
+    {
+        var ixSlots = clusterState.IndexSlots;
+        var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
+        for (int s = 0; s < ixSlots.Length; s++)
+        {
+            if (engineState.SlotToComponentTable[ixSlots[s].Slot] == _whereComponentTable)
+            {
+                return s;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Path A selective query: scan per-archetype B+Tree for the primary predicate range, collect ClusterLocations,
+    /// then verify remaining predicates only on matched entities. Optimal for highly selective queries (&lt;5% match).
+    /// </summary>
+    private void ScanPerArchetypeBTreeSelective(ExecutionPlan plan, FieldEvaluator[] evaluators, ArchetypeClusterState clusterState,
+        ArchetypeMetadata meta, HashSet<EntityId> result)
+    {
+        int ixSlotIdx = FindClusterIndexSlot(clusterState, meta);
+        if (ixSlotIdx < 0)
+        {
+            return;
+        }
+
+        var ixSlots = clusterState.IndexSlots;
+
+        ref var matchSlot = ref ixSlots[ixSlotIdx];
+        var layout = clusterState.Layout;
+        int compSlot = matchSlot.Slot;
+        int compSize = layout.ComponentSize(compSlot);
+        int compOffset = layout.ComponentOffset(compSlot);
+
+        // Find the primary field's B+Tree matching the plan's PrimaryFieldIndex
+        if (plan.PrimaryFieldIndex < 0 || plan.PrimaryFieldIndex >= matchSlot.Fields.Length)
+        {
+            // Fall back to Path B (full scan) if primary field not found
+            ScanPerArchetypeBTree(plan, evaluators, clusterState, meta, result);
+            return;
+        }
+
+        ref var primaryField = ref matchSlot.Fields[plan.PrimaryFieldIndex];
+        var primaryIndex = primaryField.Index;
+
+        // Step 1: Range scan B+Tree → collect ClusterLocations grouped by clusterChunkId.
+        // Use a flat array indexed by clusterChunkId (bounded by segment ChunkCapacity, typically small).
+        int chunkCapacity = clusterState.ClusterSegment.ChunkCapacity;
+        var matchBitsArr = System.Buffers.ArrayPool<ulong>.Shared.Rent(chunkCapacity);
+        Array.Clear(matchBitsArr, 0, chunkCapacity);
+        bool hasAny = false;
+
+        CollectClusterLocationsFromBTree(primaryIndex, plan.PrimaryKeyType, plan.PrimaryScanMin, plan.PrimaryScanMax,
+            primaryField.AllowMultiple, matchBitsArr, ref hasAny);
+
+        if (!hasAny)
+        {
+            System.Buffers.ArrayPool<ulong>.Shared.Return(matchBitsArr);
+            return;
+        }
+
+        // Step 2: For each active cluster with matches, verify ALL evaluators on matched entities
+        var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            for (int c = 0; c < clusterState.ActiveClusterCount; c++)
+            {
+                int clusterChunkId = clusterState.ActiveClusterIds[c];
+                ulong candidateBits = matchBitsArr[clusterChunkId];
+                if (candidateBits == 0)
+                {
+                    continue;
+                }
+
+                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+                ulong occupancy = *(ulong*)clusterBase;
+                ulong remaining = candidateBits & occupancy; // intersection with live entities
+
+                if (remaining == 0)
+                {
+                    continue;
+                }
+
+                byte* compBase = clusterBase + compOffset;
+                while (remaining != 0)
+                {
+                    int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(remaining);
+                    remaining &= remaining - 1;
+
+                    byte* entityComp = compBase + slotIndex * compSize;
+                    bool allMatch = true;
+                    for (int e = 0; e < evaluators.Length; e++)
+                    {
+                        ref var eval = ref evaluators[e];
+                        if (!FieldEvaluator.Evaluate(ref eval, entityComp + eval.FieldOffset))
+                        {
+                            allMatch = false;
+                            break;
+                        }
+                    }
+
+                    if (allMatch)
+                    {
+                        result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
+                    }
+                }
+            }
+        }
+        finally
+        {
+            clusterAccessor.Dispose();
+            System.Buffers.ArrayPool<ulong>.Shared.Return(matchBitsArr);
+        }
+    }
+
+    /// <summary>
+    /// Range scan a per-archetype B+Tree, collecting ClusterLocation values grouped by clusterChunkId into per-cluster bitmasks.
+    /// Dispatches on <see cref="KeyType"/> to call the typed B+Tree range scan API.
+    /// </summary>
+    /// <remarks>
+    /// Scan bounds are stored as raw <c>long</c> in <see cref="ExecutionPlan"/>. For float/double, the lower 32/64 bits
+    /// hold the IEEE 754 bit pattern. Use <see cref="BitConverter"/> (JIT intrinsic, zero overhead) for safe reinterpretation
+    /// instead of <c>Unsafe.As</c> on temporaries (which creates dangling refs to stack values).
+    /// ULong is stored as <c>BTree&lt;long&gt;</c> (same convention as <see cref="PipelineExecutor"/>).
+    /// </remarks>
+    private static void CollectClusterLocationsFromBTree(BTreeBase<PersistentStore> index, KeyType keyType, long scanMin, long scanMax,
+        bool allowMultiple, ulong[] matchBitsArr, ref bool hasAny)
+    {
+        switch (keyType)
+        {
+            case KeyType.Int:
+                CollectTyped((BTree<int, PersistentStore>)index, (int)scanMin, (int)scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.Long:
+                CollectTyped((BTree<long, PersistentStore>)index, scanMin, scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.Float:
+                CollectTyped((BTree<float, PersistentStore>)index, BitConverter.Int32BitsToSingle((int)scanMin), BitConverter.Int32BitsToSingle((int)scanMax),
+                    allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.Double:
+                CollectTyped((BTree<double, PersistentStore>)index, BitConverter.Int64BitsToDouble(scanMin), BitConverter.Int64BitsToDouble(scanMax),
+                    allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.Short:
+                CollectTyped((BTree<short, PersistentStore>)index, (short)scanMin, (short)scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.Byte:
+                CollectTyped((BTree<byte, PersistentStore>)index, (byte)scanMin, (byte)scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.SByte:
+                CollectTyped((BTree<sbyte, PersistentStore>)index, (sbyte)scanMin, (sbyte)scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.UShort:
+                CollectTyped((BTree<ushort, PersistentStore>)index, (ushort)scanMin, (ushort)scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.UInt:
+                CollectTyped((BTree<uint, PersistentStore>)index, (uint)scanMin, (uint)scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+            case KeyType.ULong:
+                CollectTyped((BTree<long, PersistentStore>)index, scanMin, scanMax, allowMultiple, matchBitsArr, ref hasAny);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Typed B+Tree range scan that collects ClusterLocations into per-cluster bitmasks.
+    /// </summary>
+    private static void CollectTyped<TKey>(BTree<TKey, PersistentStore> tree, TKey minKey, TKey maxKey, bool allowMultiple, ulong[] matchBitsArr, 
+        ref bool hasAny) where TKey : unmanaged
+    {
+        if (allowMultiple)
+        {
+            using var enumerator = tree.EnumerateRangeMultiple(minKey, maxKey);
+            while (enumerator.MoveNextKey())
+            {
+                do
+                {
+                    var values = enumerator.CurrentValues;
+                    for (int i = 0; i < values.Length; i++)
+                    {
+                        int clusterLocation = values[i];
+                        int chunkId = clusterLocation >> 6;
+                        int slotIdx = clusterLocation & 0x3F;
+                        matchBitsArr[chunkId] |= 1UL << slotIdx;
+                        hasAny = true;
+                    }
+                } while (enumerator.NextChunk());
+            }
+        }
+        else
+        {
+            using var enumerator = tree.EnumerateRange(minKey, maxKey);
+            while (enumerator.MoveNext())
+            {
+                var item = enumerator.Current;
+                int clusterLocation = item.Value;
+                int chunkId = clusterLocation >> 6;
+                int slotIdx = clusterLocation & 0x3F;
+                matchBitsArr[chunkId] |= 1UL << slotIdx;
+                hasAny = true;
+            }
         }
     }
 
