@@ -270,24 +270,30 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         _whereComponentTable = ct;
         _whereFieldReader = EcsViewFieldReader<T>.Instance;
 
-        // Compile the expression as a fallback filter for pending spawns (read-your-own-writes).
+        // Build fallback filter for pending spawns (read-your-own-writes).
         // Pending spawns have no secondary index entries — they can't be found by the targeted scan.
         // This compiled predicate is evaluated via tx.Open() + TryRead() for pending spawn entities only.
         // Kept separate from _whereFilter to avoid re-evaluating committed entities that the index already filtered.
-        var compiledPredicate = predicate.Compile();
+        //
+        // Deferred compilation: Expression.Compile() costs ~100+ µs. Since pending spawns are rare (only entities
+        // spawned in the current, not-yet-committed transaction), defer compilation until the predicate is actually
+        // needed. We store the expression as an untyped object and compile only on first invocation of the filter.
+        // The compiled delegate is cached in a local captured by the closure.
+        object predicateExpr = predicate;
+        Func<T, bool> compiledPredicate = null;
         var prevPendingFilter = _pendingSpawnFieldFilter;
-        _pendingSpawnFieldFilter = prevPendingFilter == null 
-            ? (id, tx) =>
+        _pendingSpawnFieldFilter = prevPendingFilter == null ? (id, tx) =>
             {
+                compiledPredicate ??= ((Expression<Func<T, bool>>)predicateExpr).Compile();
                 var entity = tx.Open(id);
                 return entity.TryRead<T>(out var value) && compiledPredicate(value);
-            } 
-            : (id, tx) =>
+            } : (id, tx) =>
             {
                 if (!prevPendingFilter(id, tx))
                 {
                     return false;
                 }
+                compiledPredicate ??= ((Expression<Func<T, bool>>)predicateExpr).Compile();
                 var entity = tx.Open(id);
                 return entity.TryRead<T>(out var value) && compiledPredicate(value);
             };
@@ -538,7 +544,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
         }
 
-        var result = new HashSet<EntityId>();
+        var result = new HashSet<EntityId>(_take > 0 ? _take : 64);
         if (MaskIsEmpty)
         {
             activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, 0);
@@ -637,8 +643,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             return ExecuteOrderedClustered(plan, evaluators);
         }
 
-        // Mixed path: merge cluster K-way results with non-cluster PipelineExecutor results
-        return ExecuteOrderedMixed(plan, evaluators);
+        // Mixed path: sort fallback handles true global ordering across cluster + non-cluster archetypes
+        return ExecuteOrderedViaSortFallback(evaluators, plan);
     }
 
     /// <summary>Original non-cluster ordered execution path via PipelineExecutor.</summary>
@@ -687,6 +693,10 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         // Typical K is 1-3 archetypes; rent 8 to avoid resize in common cases.
         var streams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(8);
         int streamCount = 0;
+
+        // Early termination: each per-archetype stream only needs skip+take entries at most.
+        // The B+Tree enumerator yields in sort order, so stopping early is correct.
+        int maxPerStream = _take > 0 ? _skip + _take : 0;
 
         // The plan's PrimaryFieldIndex may be -1 when the shared B+Tree has 0 entries (cluster archetypes store entries in per-archetype B+Trees,
         // not the shared one). In that case, use the OrderBy field index directly and full type range for scan bounds.
@@ -782,7 +792,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 }
 
                 streams[streamCount++] = ArchetypeSortedStream.Create(field.Index, keyType, scanMin, scanMax, field.AllowMultiple, descending,
-                    clusterState, clusterState.Layout);
+                    clusterState, clusterState.Layout, maxPerStream);
             }
 
             if (streamCount == 0)
@@ -814,141 +824,6 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         }
     }
 
-    /// <summary>
-    /// Mixed ordered execution: merge cluster K-way results with non-cluster PipelineExecutor results.
-    /// Both sources produce sorted results; two-pointer merge combines them.
-    /// </summary>
-    private List<EntityId> ExecuteOrderedMixed(ExecutionPlan plan, FieldEvaluator[] evaluators)
-    {
-        int orderByFieldIdx = _orderBy?.FieldIndex ?? -1;
-        bool descending = plan.Descending;
-
-        // Collect non-cluster results via PipelineExecutor (already sorted by B+Tree scan order)
-        var ct = _whereComponentTable;
-        var nonClusterPKs = new List<long>();
-        _whereFieldReader.ExecuteOrderedScan(plan, plan.OrderedEvaluators, ct, _tx, nonClusterPKs);
-
-        // Filter in-place: remove cluster entities and non-matching archetypes (preserves sort order)
-        var dbe = _tx.DBE;
-        int write = 0;
-        for (int i = 0; i < nonClusterPKs.Count; i++)
-        {
-            var entityId = EntityId.FromRaw(nonClusterPKs[i]);
-            if (!MaskTest(entityId.ArchetypeId))
-            {
-                continue;
-            }
-            var engineState = dbe._archetypeStates[entityId.ArchetypeId];
-            var clusterState = engineState?.ClusterState;
-            if (clusterState?.IndexSlots != null)
-            {
-                continue; // Skip cluster entities (handled by K-way merge)
-            }
-            nonClusterPKs[write++] = nonClusterPKs[i];
-        }
-        nonClusterPKs.RemoveRange(write, nonClusterPKs.Count - write);
-
-        // Build K-way merge for cluster archetypes (rented array, no List + ToArray)
-        var streams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(8);
-        int streamCount = 0;
-        try
-        {
-            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
-            {
-                if (!MaskTest(meta.ArchetypeId) || !meta.HasClusterIndexes)
-                {
-                    continue;
-                }
-
-                var engineState = dbe._archetypeStates[meta.ArchetypeId];
-                var clusterState = engineState?.ClusterState;
-                if (clusterState?.IndexSlots == null)
-                {
-                    continue;
-                }
-
-                int ixSlotIdx = FindClusterIndexSlot(clusterState, meta);
-                if (ixSlotIdx < 0)
-                {
-                    continue;
-                }
-
-                ref var matchSlot = ref clusterState.IndexSlots[ixSlotIdx];
-
-                int fieldIdx = plan.PrimaryFieldIndex >= 0 ? plan.PrimaryFieldIndex : orderByFieldIdx;
-                if (fieldIdx < 0 || fieldIdx >= matchSlot.Fields.Length)
-                {
-                    continue;
-                }
-
-                ref var field = ref matchSlot.Fields[fieldIdx];
-
-                long sMin, sMax;
-                KeyType kType;
-                if (plan.PrimaryFieldIndex >= 0)
-                {
-                    sMin = plan.PrimaryScanMin;
-                    sMax = plan.PrimaryScanMax;
-                    kType = plan.PrimaryKeyType;
-                }
-                else
-                {
-                    kType = KeyType.Int;
-                    sMin = long.MinValue;
-                    sMax = long.MaxValue;
-                    for (int e = 0; e < evaluators.Length; e++)
-                    {
-                        if (evaluators[e].FieldIndex == fieldIdx)
-                        {
-                            kType = evaluators[e].KeyType;
-                            sMin = GetTypeMinAsLong(kType);
-                            sMax = GetTypeMaxAsLong(kType);
-                            break;
-                        }
-                    }
-
-                    IntersectEvaluatorBounds(evaluators, fieldIdx, kType, ref sMin, ref sMax);
-                }
-
-                if (streamCount >= streams.Length)
-                {
-                    var newStreams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(streams.Length * 2);
-                    Array.Copy(streams, newStreams, streamCount);
-                    System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
-                    streams = newStreams;
-                }
-
-                streams[streamCount++] = ArchetypeSortedStream.Create(field.Index, kType, sMin, sMax, field.AllowMultiple, descending, clusterState,
-                    clusterState.Layout);
-            }
-
-            if (streamCount == 0)
-            {
-                System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
-                return ApplySkipTake(nonClusterPKs);
-            }
-
-            var merge = KWayMergeState.Create(streams, streamCount, descending, ownsArray: true);
-            try
-            {
-                return MergeTwoSortedSources(ref merge, nonClusterPKs, descending, plan.PrimaryKeyType);
-            }
-            finally
-            {
-                merge.Dispose();
-            }
-        }
-        catch
-        {
-            for (int i = 0; i < streamCount; i++)
-            {
-                streams[i].Dispose();
-            }
-            System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
-            throw;
-        }
-    }
-
     /// <summary>Collect results from a K-way merge, applying Skip/Take.</summary>
     private List<EntityId> CollectMergedResults(ref KWayMergeState merge, FieldEvaluator[] evaluators)
     {
@@ -970,70 +845,6 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             {
                 break;
             }
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Two-pointer merge of K-way cluster merge and sorted non-cluster PKs, with Skip/Take.
-    /// LIMITATION: non-cluster results are yielded first, then cluster results. For true global sort order
-    /// across cluster + non-cluster archetypes, use ExecuteOrderedViaSortFallback instead.
-    /// Mixed cluster + non-cluster ordered queries are rare (requires both SV and Versioned archetypes
-    /// with the same indexed field in a polymorphic query).
-    /// </summary>
-    private List<EntityId> MergeTwoSortedSources(ref KWayMergeState clusterMerge, List<long> nonClusterPKs, bool descending, KeyType orderKeyType)
-    {
-        var result = new List<EntityId>(_take > 0 ? _take : 64);
-        int skipped = 0;
-        int taken = 0;
-        int take = _take > 0 ? _take : int.MaxValue;
-        int ncIdx = 0;
-
-        while (taken < take)
-        {
-            bool hasCluster = !clusterMerge.IsEmpty;
-            bool hasNonCluster = ncIdx < nonClusterPKs.Count;
-
-            if (!hasCluster && !hasNonCluster)
-            {
-                break;
-            }
-
-            bool takeFromCluster;
-            if (!hasCluster)
-            {
-                takeFromCluster = false;
-            }
-            else if (!hasNonCluster)
-            {
-                takeFromCluster = true;
-            }
-            else
-            {
-                // Non-cluster PKs don't have ordered keys readily available, so we yield non-cluster first.
-                // A full implementation would resolve each non-cluster entity's field value to compare with
-                // clusterMerge.PeekKey. For the rare mixed case, use ExecuteOrderedViaSortFallback instead.
-                takeFromCluster = false;
-            }
-
-            long entityPK;
-            if (takeFromCluster)
-            {
-                clusterMerge.MoveNext(out entityPK);
-            }
-            else
-            {
-                entityPK = nonClusterPKs[ncIdx++];
-            }
-
-            if (skipped < _skip)
-            {
-                skipped++;
-                continue;
-            }
-            result.Add(EntityId.FromRaw(entityPK));
-            taken++;
         }
 
         return result;
@@ -1106,8 +917,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             ref var field = ref clusterState.IndexSlots[ixSlotIdx].Fields[orderByFieldIdx];
 
             // Scan the full B+Tree to build PK→key mapping for entities in our result set
-            var stream = ArchetypeSortedStream.Create(field.Index, plan.PrimaryKeyType >= 0 ? plan.PrimaryKeyType : evaluators[0].KeyType,
-                GetTypeMinAsLong(evaluators[0].KeyType), GetTypeMaxAsLong(evaluators[0].KeyType),
+            var stream = ArchetypeSortedStream.Create(field.Index, plan.PrimaryKeyType, GetTypeMinAsLong(evaluators[0].KeyType), 
+                GetTypeMaxAsLong(evaluators[0].KeyType),
                 field.AllowMultiple, false, clusterState, clusterState.Layout);
             try
             {
@@ -1175,10 +986,10 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         // Scan for matching entities across all matching archetypes.
         // Cluster archetypes: direct cluster scan with evaluator predicates (bypasses shared B+Tree).
         // Non-cluster archetypes: shared ComponentTable B+Tree via PipelineExecutor.
-        var result = new HashSet<EntityId>();
+        var result = new HashSet<EntityId>(_take > 0 ? _take : 64);
         bool hasNonClusterArchetypes = false;
 
-        // Phase 3a: direct cluster scan for cluster-eligible archetypes with indexed fields
+        // Direct cluster scan for cluster-eligible archetypes with indexed fields
         {
             var dbe = _tx.DBE;
             foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
@@ -1201,7 +1012,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                     continue;
                 }
 
-                // Query planner: choose Path A (B+Tree selective) vs Path B (zone map + eval) based on selectivity (Phase 4a)
+                // Query planner: choose Path A (B+Tree selective) vs Path B (zone map + eval) based on selectivity
                 if (plan.UsesSecondaryIndex && EstimateClusterSelectivity(plan, clusterState) < 0.05f)
                 {
                     ScanPerArchetypeBTreeSelective(plan, evaluators, clusterState, meta, result);
@@ -1264,7 +1075,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         int compSize = layout.ComponentSize(compSlot);
         int compOffset = layout.ComponentOffset(compSlot);
 
-        // Pre-compute zone map query bounds for each evaluator (Phase 4a: zone map pruning).
+        // Pre-compute zone map query bounds for each evaluator (zone map pruning).
         // Bounds stored on stack; zone map references accessed via field iteration (no ref-type array allocation).
         int evalCount = evaluators.Length;
         var zoneMapMins = evalCount <= 8 ? stackalloc long[evalCount] : new long[evalCount];
@@ -1591,9 +1402,39 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 scanMin = BitConverter.DoubleToInt64Bits(dMin);
                 scanMax = BitConverter.DoubleToInt64Bits(dMax);
             }
+            else if (keyType is KeyType.UInt or KeyType.ULong or KeyType.UShort or KeyType.Byte)
+            {
+                // Unsigned types: compare as ulong to avoid sign issues.
+                // Threshold values are stored as signed long but represent unsigned values —
+                // e.g. ulong.MaxValue is stored as -1L. Math.Min/Max on signed longs gives wrong results.
+                ulong uMin = (ulong)scanMin;
+                ulong uMax = (ulong)scanMax;
+                ulong uThr = (ulong)thr;
+                switch (evaluators[e].CompareOp)
+                {
+                    case CompareOp.Equal:
+                        uMin = Math.Max(uMin, uThr);
+                        uMax = Math.Min(uMax, uThr);
+                        break;
+                    case CompareOp.GreaterThan:
+                        uMin = Math.Max(uMin, uThr + 1);
+                        break;
+                    case CompareOp.GreaterThanOrEqual:
+                        uMin = Math.Max(uMin, uThr);
+                        break;
+                    case CompareOp.LessThan:
+                        uMax = Math.Min(uMax, uThr - 1);
+                        break;
+                    case CompareOp.LessThanOrEqual:
+                        uMax = Math.Min(uMax, uThr);
+                        break;
+                }
+                scanMin = (long)uMin;
+                scanMax = (long)uMax;
+            }
             else
             {
-                // Integer types: direct long comparison preserves ordering.
+                // Signed integer types: direct long comparison preserves ordering.
                 switch (evaluators[e].CompareOp)
                 {
                     case CompareOp.Equal:
@@ -1885,7 +1726,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private HashSet<EntityId> ExecuteSpatial()
     {
         var state = _spatialTable.SpatialIndex;
-        var result = new HashSet<EntityId>();
+        var result = new HashSet<EntityId>(_take > 0 ? _take : 64);
         var tx = _tx;
 
         // Fan out to both trees (SD1 guarantees no overlap). With per-component-type mode, only one is non-null.
@@ -1898,7 +1739,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             QuerySingleTree(state.DynamicTree, state, result);
         }
 
-        // Fan out to per-archetype cluster spatial R-Trees (Phase 3b).
+        // Fan out to per-archetype cluster spatial R-Trees.
         // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype trees.
         // QuerySingleTree internally uses MaskTest(archetypeId) on each result, so we don't need to pre-filter here.
         if (state.ClusterArchetypes != null)

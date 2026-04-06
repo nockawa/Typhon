@@ -823,7 +823,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
                 }
 
-                // Process per-archetype shadow entries for B+Tree index maintenance (Phase 3a).
+                // Process per-archetype shadow entries for B+Tree index maintenance.
                 // MUST run regardless of entryCount — destroyed entities with pending shadows need index cleanup.
                 if (clusterState.IndexSlots != null)
                 {
@@ -831,7 +831,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     RecomputeClusterZoneMaps(clusterState, dirtyBits);
                 }
 
-                // Process per-archetype spatial entries for cluster archetypes with spatial fields (Phase 3b).
+                // Process per-archetype spatial entries for cluster archetypes with spatial fields.
                 // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup. Only Dynamic mode is updated.
                 if (clusterState.SpatialSlot.Tree != null
                     && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
@@ -847,7 +847,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     continue;
                 }
 
-                // Store dirty snapshot for change-filtered runtime dispatch (Phase 4a).
+                // Store dirty snapshot for change-filtered runtime dispatch.
                 // BuildFilteredClusterEntities reads this to find dirty cluster entities.
                 clusterState.PreviousTickDirtySnapshot = dirtyBits;
 
@@ -1040,7 +1040,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// <summary>
     /// Iterate dirty cluster entities and update per-archetype spatial R-Tree positions.
     /// For each dirty entity: read current spatial bounds from cluster SoA, check fat AABB containment via back-pointer,
-    /// reinsert if escaped. Called at tick boundary from <see cref="WriteClusterTickFence"/> (Phase 3b).
+    /// reinsert if escaped. Called at tick boundary from <see cref="WriteClusterTickFence"/>.
     /// </summary>
     private unsafe void ProcessClusterSpatialEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState,
         long[] dirtyBits, ref ChunkAccessor<PersistentStore> clusterAccessor)
@@ -2033,7 +2033,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 MMF.Bootstrap.SetInt($"clusterindex.{meta.ArchetypeId}", state.ClusterState.IndexSegment.RootPageIndex);
             }
 
-            // Persist per-archetype cluster spatial segment SPIs via bootstrap dictionary (Phase 3b)
+            // Persist per-archetype cluster spatial segment SPIs via bootstrap dictionary
             if (state.ClusterState?.SpatialSlot.Tree != null)
             {
                 ref var ss = ref state.ClusterState.SpatialSlot;
@@ -2208,7 +2208,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 if (diff.HasBreakingChanges && schemaValidation != SchemaValidationMode.Skip)
                 {
 
-                    // Backward compat: databases created before Phase 4 have SchemaRevision=0.
+                    // Backward compat: databases created before schema migration have SchemaRevision=0.
                     // Try the persisted value first, then fall back to searching the registry.
                     var chain = _migrationRegistry?.GetChain(schemaName, persistedRevision, targetRevision);
                     if (chain == null && persistedRevision == 0 && _migrationRegistry != null)
@@ -2485,7 +2485,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             // ═══════════════════════════════════════════════════════════════════════
             // Cluster storage eligibility: SV + Versioned allowed (Transient excluded)
-            // Phase 5: Versioned components store HEAD in cluster slot, chain separate.
+            // Versioned components store HEAD in cluster slot, chain separate.
             // Requires at least one SV component — pure-Versioned archetypes stay on
             // legacy path because many code paths (PTA, EcsView, WAL, migration) haven't
             // been updated for cluster+Versioned yet.
@@ -2521,7 +2521,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
             }
 
-            // Phase 5 gating: require at least one SV component for cluster eligibility.
+            // Require at least one SV component for cluster eligibility.
             // Pure-Versioned archetypes stay on legacy path for now.
             if (isClusterEligible && !hasSvSlot)
             {
@@ -2598,7 +2598,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 if (isFreshAllocation)
                 {
                     // Start with 4 pages (grows dynamically). Original 20 caused page exhaustion when many
-                    // archetypes become cluster-eligible (Phase 5: Versioned components accepted).
+                    // archetypes become cluster-eligible (Versioned components accepted).
                     var clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 4, meta.ClusterLayout.ClusterStride);
                     if (clusterSegment == null)
                     {
@@ -2667,7 +2667,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
                 }
 
-                // Initialize per-archetype spatial R-Tree for cluster archetypes with spatial fields (Phase 3b).
+                // Initialize per-archetype spatial R-Tree for cluster archetypes with spatial fields.
                 if (meta.HasClusterSpatial)
                 {
                     var clusterState = _archetypeStates[meta.ArchetypeId].ClusterState;
@@ -2746,7 +2746,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
                 }
 
-                // Phase 5: Rebuild Versioned HEAD values in cluster slots from revision chains on reopen.
+                // Rebuild Versioned HEAD values in cluster slots from revision chains on reopen.
                 // Crash between commit (chain WAL'd) and tick fence (cluster slot WAL'd) can leave stale HEADs.
                 if (!isFreshAllocation && meta.VersionedSlotMask != 0)
                 {

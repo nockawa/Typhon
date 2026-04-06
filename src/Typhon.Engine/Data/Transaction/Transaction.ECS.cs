@@ -858,10 +858,19 @@ public unsafe partial class Transaction
         int recordSize = meta._entityRecordSize;
         byte* readBuf = stackalloc byte[recordSize];
 
-        using var guard = EpochGuard.Enter(_epochManager);
-        var accessor = es.EntityMap.Segment.CreateChunkAccessor();
-        bool found = es.EntityMap.TryGet(id.EntityKey, readBuf, ref accessor);
-        accessor.Dispose();
+        // Transaction already holds an epoch scope (entered during Init) — no per-call EpochGuard needed.
+        // Reuse cached EntityMap accessor (same pattern as IsEntityVisible)
+        if (!_hasEntityMapCache || _entityMapCacheArchId != id.ArchetypeId)
+        {
+            if (_hasEntityMapCache)
+            {
+                _entityMapCacheAccessor.Dispose();
+            }
+            _entityMapCacheAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+            _entityMapCacheArchId = id.ArchetypeId;
+            _hasEntityMapCache = true;
+        }
+        bool found = es.EntityMap.TryGet(id.EntityKey, readBuf, ref _entityMapCacheAccessor);
 
         if (!found)
         {
@@ -917,7 +926,7 @@ public unsafe partial class Transaction
                 result._clusterChunkId = clusterChunkId;
                 result._clusterLayout = es.ClusterState.Layout;
 
-                // Phase 5: For Versioned slots, walk chain and store resolved content chunkId in _locations.
+                // For Versioned slots, walk chain and store resolved content chunkId in _locations.
                 // Versioned reads via EntityRef.Read use _locations (not cluster slot) for MVCC correctness.
                 // Bulk iteration (GetClusterEnumerator) reads HEAD directly from cluster SoA.
                 if (meta.VersionedSlotMask != 0)
@@ -925,10 +934,6 @@ public unsafe partial class Transaction
                     var layout = es.ClusterState.Layout;
                     for (int slot = 0; slot < meta.ComponentCount; slot++)
                     {
-                        if (layout.SlotToVersionedIndex == null)
-                        {
-                            break;
-                        }
                         int vi = layout.SlotToVersionedIndex[slot];
                         if (vi < 0)
                         {
@@ -941,8 +946,8 @@ public unsafe partial class Transaction
                             continue;
                         }
 
-                        var compType = meta._slotToComponentType[slot];
-                        var info = GetComponentInfo(compType);
+                        var compTypeId = meta._componentTypeIds[slot];
+                        var info = GetComponentInfoByTypeId(compTypeId, meta._slotToComponentType[slot]);
                         long pk = (long)id.RawValue;
 
                         // Check cache first (prior Open or Write in this transaction)
@@ -981,8 +986,8 @@ public unsafe partial class Transaction
                         continue;
                     }
 
-                    var compType = meta._slotToComponentType[slot];
-                    var info = GetComponentInfo(compType);
+                    var compTypeId = meta._componentTypeIds[slot];
+                    var info = GetComponentInfoByTypeId(compTypeId, meta._slotToComponentType[slot]);
                     long pk = (long)id.RawValue;
 
                     // If already resolved in this transaction (prior Open or Write), reuse cached entry
@@ -997,19 +1002,19 @@ public unsafe partial class Transaction
                     if (compRevFirstChunkId == 0)
                     {
                         continue;
-                }
+                    }
 
-                var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
-                if (chainResult.IsFailure)
-                {
-                    continue;
-                }
+                    var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
+                    if (chainResult.IsFailure)
+                    {
+                        continue;
+                    }
 
-                // Cache CompRevInfo for conflict detection
-                var compRevInfo = chainResult.Value;
-                compRevInfo.Operations = ComponentInfo.OperationType.Read;
-                info.AddNew(pk, compRevInfo);
-                result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
+                    // Cache CompRevInfo for conflict detection
+                    var compRevInfo = chainResult.Value;
+                    compRevInfo.Operations = ComponentInfo.OperationType.Read;
+                    info.AddNew(pk, compRevInfo);
+                    result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
                 }
             }
 
@@ -1291,14 +1296,14 @@ public unsafe partial class Transaction
                             clusterSrcAccessors[slot] = engineState.SlotToComponentTable[slot].ComponentSegment.CreateChunkAccessor(_changeSet);
                         }
 
-                        // Per-archetype index accessor for cluster B+Tree insertion (Phase 3a)
+                        // Per-archetype index accessor for cluster B+Tree insertion
                         if (clusterState.IndexSegment != null)
                         {
                             clusterIdxAccessor = clusterState.IndexSegment.CreateChunkAccessor(_changeSet);
                             hasClusterIdxAccessor = true;
                         }
 
-                        // Per-archetype spatial accessors for cluster R-Tree insertion (Phase 3b)
+                        // Per-archetype spatial accessors for cluster R-Tree insertion
                         if (clusterState.SpatialSlot.Tree != null)
                         {
                             clusterSpatialTreeAccessor = clusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
@@ -1470,7 +1475,7 @@ public unsafe partial class Transaction
                     ClusterEntityRecordAccessor.SetClusterChunkId(recordPtr, clusterChunkId);
                     ClusterEntityRecordAccessor.SetSlotIndex(recordPtr, (byte)slotIdx);
 
-                    // Store compRevFirstChunkId for each Versioned slot (Phase 5)
+                    // Store compRevFirstChunkId for each Versioned slot
                     if (meta.VersionedSlotMask != 0)
                     {
                         for (int slot = 0; slot < componentCount; slot++)
@@ -1490,7 +1495,7 @@ public unsafe partial class Transaction
                     // Checkpoint persists them. We do NOT set ClusterDirtyBitmap here — that bitmap tracks write mutations for change-filtered dispatch,
                     // same as per-ComponentTable DirtyBitmap (which is also not set during FinalizeSpawns for non-cluster SV entities).
 
-                    // Insert per-archetype B+Tree entries for cluster entity (Phase 3a)
+                    // Insert per-archetype B+Tree entries for cluster entity
                     if (clusterState.IndexSlots != null)
                     {
                         int clusterLocation = clusterChunkId * 64 + slotIdx;
@@ -1507,7 +1512,7 @@ public unsafe partial class Transaction
                                 field.Index.Add(fieldPtr, clusterLocation, ref clusterIdxAccessor);
                                 field.ZoneMap?.Widen(clusterChunkId, fieldPtr);
 
-                                // Notify views of creation (Phase 4a: isCreation flag so incremental views detect the new entity)
+                                // Notify views of creation (isCreation flag so incremental views detect the new entity)
                                 var spawnTable = engineState.SlotToComponentTable[ixSlot.Slot];
                                 var views = spawnTable.ViewRegistry.GetViewsForField(fi);
                                 for (int v = 0; v < views.Length; v++)
@@ -1526,7 +1531,7 @@ public unsafe partial class Transaction
                         }
                     }
 
-                    // Insert per-archetype spatial R-Tree entry for cluster entity (Phase 3b)
+                    // Insert per-archetype spatial R-Tree entry for cluster entity
                     if (clusterState.SpatialSlot.Tree != null)
                     {
                         int clusterLocation = clusterChunkId * 64 + slotIdx;
@@ -1644,7 +1649,7 @@ public unsafe partial class Transaction
                 // Insert SV spatial indexes (Transient excluded by schema validation).
                 // Must iterate all component slots (not just svSlots) because spatial-only components
                 // without B+Tree indexes are not in the svSlots array.
-                // Skip for cluster entities — per-archetype R-Tree is used instead (Phase 3b).
+                // Skip for cluster entities — per-archetype R-Tree is used instead.
                 if (!useCluster)
                 {
                     for (int slot = 0; slot < componentCount; slot++)
@@ -1796,7 +1801,7 @@ public unsafe partial class Transaction
                 state.BackPointerSegment.EnsureCapacity(compCapNeeded, _changeSet);
             }
 
-            // Pre-grow per-archetype cluster spatial segments (Phase 3b)
+            // Pre-grow per-archetype cluster spatial segments
             if (es.ClusterState?.SpatialSlot.Tree != null)
             {
                 var cs = es.ClusterState;
@@ -1920,7 +1925,7 @@ public unsafe partial class Transaction
                         int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(readBuf);
                         byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
 
-                        // Remove per-archetype B+Tree entries before releasing the slot (Phase 3a).
+                        // Remove per-archetype B+Tree entries before releasing the slot.
                         // If the entity was written this tick (shadow bitmap set), skip B+Tree removal here — ProcessClusterShadowEntries at tick fence will
                         // detect occupancy=0 and Remove the OLD key.
                         // This is necessary because the current cluster data may contain the post-mutation value, but the B+Tree still holds the pre-mutation
@@ -1947,7 +1952,7 @@ public unsafe partial class Transaction
                                         var key = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
                                         field.Index.Remove(&key, out _, ref destroyClusterIdxAccessor);
 
-                                        // Notify views of deletion (Phase 4a)
+                                        // Notify views of deletion
                                         var destroyTable = engineState.SlotToComponentTable[ixSlot.Slot];
                                         var views = destroyTable.ViewRegistry.GetViewsForField(fi);
                                         for (int v = 0; v < views.Length; v++)
@@ -1967,7 +1972,7 @@ public unsafe partial class Transaction
                             // else: shadow processing at tick fence will handle removal
                         }
 
-                        // Remove per-archetype spatial R-Tree entry before releasing the slot (Phase 3b).
+                        // Remove per-archetype spatial R-Tree entry before releasing the slot.
                         // Spatial doesn't need shadow logic — back-pointer provides O(1) leaf lookup.
                         if (destroyClusterState.SpatialSlot.Tree != null)
                         {

@@ -42,7 +42,7 @@ internal sealed unsafe class ArchetypeClusterState
     public long[] PreviousTickDirtySnapshot;
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Per-archetype B+Tree indexes (Phase 3a). Null if archetype has no indexed fields.
+    // Per-archetype B+Tree indexes. Null if archetype has no indexed fields.
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>Per-archetype B+Tree index slots, one per component slot with indexed fields. Null if no indexed fields.</summary>
@@ -55,7 +55,7 @@ internal sealed unsafe class ArchetypeClusterState
     public ChunkBasedSegment<PersistentStore> IndexSegment;
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Per-archetype Spatial R-Tree (Phase 3b). Null if archetype has no spatial fields.
+    // Per-archetype Spatial R-Tree. Null if archetype has no spatial fields.
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>Per-archetype spatial R-Tree state. Check <c>SpatialSlot.Tree != null</c> for presence.</summary>
@@ -158,7 +158,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     /// <remarks>
     /// <para>Uses CAS on OccupancyBits for correctness under future concurrent commit scenarios.
-    /// In Phase 1, FinalizeSpawns is single-writer, so CAS always succeeds on first try.</para>
+    /// FinalizeSpawns is single-writer (no concurrent commit), so CAS always succeeds on first try.</para>
     /// <para>The OccupancyBit is set immediately by this method. The caller MUST write component data and EntityKey before the next iteration boundary to
     /// maintain the invariant that occupied slots contain valid data.</para>
     /// </remarks>
@@ -178,7 +178,7 @@ internal sealed unsafe class ArchetypeClusterState
                 int slot = BitOperations.TrailingZeroCount(available);
                 ulong desired = current | (1UL << slot);
 
-                // CAS for future-proof concurrent commit. Single-writer in Phase 1.
+                // CAS for future-proof concurrent commit. Single-writer (no concurrent commit).
                 if (Interlocked.CompareExchange(ref occupancy, desired, current) == current)
                 {
                     // If cluster is now full, reset head — next call allocates new (O(1))
@@ -197,7 +197,7 @@ internal sealed unsafe class ArchetypeClusterState
                 {
                     slot = BitOperations.TrailingZeroCount(available);
                     desired = current | (1UL << slot);
-                    occupancy = desired; // Direct write — single-writer in Phase 1
+                    occupancy = desired; // Direct write — single-writer (no concurrent commit)
                     if (desired == Layout.FullMask)
                     {
                         FreeClusterHead = -1;
@@ -446,8 +446,7 @@ internal sealed unsafe class ArchetypeClusterState
             tree.BackPointerSegment = bpSeg;
 
             // Create a modified SpatialFieldInfo with cluster-relative offset
-            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType,
-                tableFi.Margin, tableFi.CellSize, tableFi.Mode);
+            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode);
 
             // Occupancy map (Layer 1) if CellSize > 0
             PagedHashMap<long, int, PersistentStore> occupancyMap = null;
@@ -533,6 +532,19 @@ internal sealed unsafe class ArchetypeClusterState
         int recordSize = meta._entityRecordSize;
         byte* recordBuf = stackalloc byte[recordSize];
 
+        // Pre-create accessors for each Versioned slot's tables (hoisted out of entity/slot loops)
+        var compRevAccessors = new ChunkAccessor<PersistentStore>[meta.ComponentCount];
+        var contentAccessors = new ChunkAccessor<PersistentStore>[meta.ComponentCount];
+        for (int slot = 0; slot < meta.ComponentCount; slot++)
+        {
+            if (Layout.SlotToVersionedIndex != null && Layout.SlotToVersionedIndex[slot] >= 0)
+            {
+                var table = engineState.SlotToComponentTable[slot];
+                compRevAccessors[slot] = table.CompRevTableSegment.CreateChunkAccessor();
+                contentAccessors[slot] = table.ComponentSegment.CreateChunkAccessor();
+            }
+        }
+
         try
         {
             for (int c = 0; c < ActiveClusterCount; c++)
@@ -559,10 +571,6 @@ internal sealed unsafe class ArchetypeClusterState
                     // For each Versioned slot: walk chain → find HEAD → copy to cluster slot
                     for (int slot = 0; slot < meta.ComponentCount; slot++)
                     {
-                        if (Layout.SlotToVersionedIndex == null)
-                        {
-                            break;
-                        }
                         int vi = Layout.SlotToVersionedIndex[slot];
                         if (vi < 0)
                         {
@@ -575,42 +583,37 @@ internal sealed unsafe class ArchetypeClusterState
                             continue;
                         }
 
-                        var table = engineState.SlotToComponentTable[slot];
-                        var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
-                        try
+                        // Walk chain to find HEAD (latest committed entry)
+                        ref var compRevAccessor = ref compRevAccessors[slot];
+                        var chainResult = RevisionChainReader.WalkChain(ref compRevAccessor, compRevFirstChunkId, long.MaxValue);
+                        if (chainResult.IsFailure)
                         {
-                            // Walk chain to find HEAD (latest committed entry)
-                            var chainResult = RevisionChainReader.WalkChain(ref compRevAccessor, compRevFirstChunkId, long.MaxValue);
-                            if (chainResult.IsFailure)
-                            {
-                                continue;
-                            }
+                            continue;
+                        }
 
-                            // Read HEAD value from content chunk and copy to cluster slot
-                            int headChunkId = chainResult.Value.CurCompContentChunkId;
-                            var contentAccessor = table.ComponentSegment.CreateChunkAccessor();
-                            try
-                            {
-                                byte* srcAddr = contentAccessor.GetChunkAddress(headChunkId);
-                                int compSize = Layout.ComponentSize(slot);
-                                byte* dstSlot = clusterBase + Layout.ComponentOffset(slot) + slotIndex * compSize;
-                                Unsafe.CopyBlockUnaligned(dstSlot, srcAddr + table.ComponentOverhead, (uint)compSize);
-                            }
-                            finally
-                            {
-                                contentAccessor.Dispose();
-                            }
-                        }
-                        finally
-                        {
-                            compRevAccessor.Dispose();
-                        }
+                        // Read HEAD value from content chunk and copy to cluster slot
+                        int headChunkId = chainResult.Value.CurCompContentChunkId;
+                        ref var contentAccessor = ref contentAccessors[slot];
+                        byte* srcAddr = contentAccessor.GetChunkAddress(headChunkId);
+                        int compSize = Layout.ComponentSize(slot);
+                        byte* dstSlot = clusterBase + Layout.ComponentOffset(slot) + slotIndex * compSize;
+                        Unsafe.CopyBlockUnaligned(dstSlot, srcAddr + engineState.SlotToComponentTable[slot].ComponentOverhead, (uint)compSize);
                     }
                 }
             }
         }
         finally
         {
+            // Dispose all hoisted accessors
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                if (Layout.SlotToVersionedIndex != null && Layout.SlotToVersionedIndex[slot] >= 0)
+                {
+                    compRevAccessors[slot].Dispose();
+                    contentAccessors[slot].Dispose();
+                }
+            }
+
             mapAccessor.Dispose();
             clusterAccessor.Dispose();
         }

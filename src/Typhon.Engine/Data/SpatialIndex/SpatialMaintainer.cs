@@ -231,7 +231,7 @@ internal static unsafe partial class SpatialMaintainer
         }
     }
 
-    // ── Cluster-specific API (Phase 3b) ────────────────────────────────────
+    // ── Cluster-specific API ────────────────────────────────────
 
     /// <summary>
     /// Insert a newly spawned cluster entity into a per-archetype spatial R-Tree.

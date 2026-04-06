@@ -299,7 +299,7 @@ internal sealed unsafe class SpatialInterestSystem
                 }
             }
 
-            // Fan out to per-archetype cluster spatial R-Trees (Phase 3b).
+            // Fan out to per-archetype cluster spatial R-Trees.
             // Cluster entities have their own DirtyBitmapRing indexed by ClusterLocation.
             if (_spatialState.ClusterArchetypes != null)
             {
@@ -403,7 +403,7 @@ internal sealed unsafe class SpatialInterestSystem
                 state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
             }
 
-            // Fan out to per-archetype cluster spatial R-Trees (Phase 3b)
+            // Fan out to per-archetype cluster spatial R-Trees
             if (_spatialState.ClusterArchetypes != null)
             {
                 foreach (var clusterState in _spatialState.ClusterArchetypes)

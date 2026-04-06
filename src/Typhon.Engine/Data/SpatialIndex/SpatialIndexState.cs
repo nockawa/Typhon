@@ -48,7 +48,7 @@ internal class SpatialIndexState
         return TriggerSystem;
     }
 
-    // ── Cluster archetype references for fan-out (Phase 3b) ────────────
+    // ── Cluster archetype references for fan-out ────────────
 
     /// <summary>Per-archetype cluster spatial state references, registered during InitializeArchetypes.</summary>
     internal System.Collections.Generic.List<ArchetypeClusterState> ClusterArchetypes { get; private set; }

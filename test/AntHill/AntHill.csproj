@@ -7,6 +7,11 @@
     <LangVersion>default</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Exclude profiling runner subfolder and Godot cache — their obj/ generated files conflict with this project's compilation -->
+    <Compile Remove="profiling\**" />
+    <Compile Remove=".godot\**" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
     <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj"
                       ReferenceOutputAssembly="false" OutputItemType="Analyzer" />

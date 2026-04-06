@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
@@ -581,6 +582,217 @@ class ClusterVersionedTests : TestBase<ClusterVersionedTests>
             {
                 var entity = tx.Open(ids[i]);
                 Assert.That(entity.Read(ClVMixed.Health).Current, Is.EqualTo(count - i));
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // 8. Regression tests — bugs caught during code review
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void TryRead_VersionedCluster_ReturnsCorrectValue()
+    {
+        // Regression for B1: TryRead<T> was reading Versioned from cluster HEAD cache,
+        // bypassing MVCC. Should read from content chunk via _locations[slot].
+        using var dbe = SetupEngine();
+        EntityId id;
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var pos = new ClV5SvPos(1, 2);
+            var hp = new ClV5Health(42, 100);
+            id = tx.Spawn<ClVMixed>(ClVMixed.Pos.Set(in pos), ClVMixed.Health.Set(in hp));
+            tx.Commit();
+        }
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var entity = tx.Open(id);
+            bool found = entity.TryRead(out ClV5Health hp);
+            Assert.That(found, Is.True);
+            Assert.That(hp.Current, Is.EqualTo(42), "TryRead should return MVCC-visible value, not stale HEAD");
+            Assert.That(hp.Max, Is.EqualTo(100));
+        }
+    }
+
+    [Test]
+    public void TryRead_AfterVersionedWrite_SeesNewValue()
+    {
+        // Ensures TryRead sees committed writes, not stale cluster HEAD
+        using var dbe = SetupEngine();
+        EntityId id;
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var pos = new ClV5SvPos(1, 1);
+            var hp = new ClV5Health(100, 200);
+            id = tx.Spawn<ClVMixed>(ClVMixed.Pos.Set(in pos), ClVMixed.Health.Set(in hp));
+            tx.Commit();
+        }
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var entity = tx.OpenMut(id);
+            ref var hp = ref entity.Write(ClVMixed.Health);
+            hp.Current = 55;
+            tx.Commit();
+        }
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var entity = tx.Open(id);
+            bool found = entity.TryRead(out ClV5Health hp);
+            Assert.That(found, Is.True);
+            Assert.That(hp.Current, Is.EqualTo(55));
+        }
+    }
+
+    [Test]
+    public void WriteVersioned_ThenReadSv_BothCorrect()
+    {
+        // Mixed archetype: writing Versioned doesn't corrupt SV, and vice versa
+        using var dbe = SetupEngine();
+        EntityId id;
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var pos = new ClV5SvPos(10, 20);
+            var hp = new ClV5Health(100, 200);
+            id = tx.Spawn<ClVMixed>(ClVMixed.Pos.Set(in pos), ClVMixed.Health.Set(in hp));
+            tx.Commit();
+        }
+
+        // Write both in same transaction
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var entity = tx.OpenMut(id);
+            ref var pos = ref entity.Write(ClVMixed.Pos);
+            pos.X = 99;
+            ref var hp = ref entity.Write(ClVMixed.Health);
+            hp.Current = 77;
+            tx.Commit();
+        }
+
+        // Verify both
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var entity = tx.Open(id);
+            Assert.That(entity.Read(ClVMixed.Pos).X, Is.EqualTo(99), "SV component should be updated");
+            Assert.That(entity.Read(ClVMixed.Health).Current, Is.EqualTo(77), "Versioned component should be updated");
+        }
+    }
+
+    [Test]
+    public void Rollback_VersionedWrite_ClusterSlotUnchanged()
+    {
+        // Versioned write that's rolled back should NOT update the cluster slot
+        using var dbe = SetupEngine();
+        EntityId id;
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var pos = new ClV5SvPos(1, 1);
+            var hp = new ClV5Health(100, 200);
+            id = tx.Spawn<ClVMixed>(ClVMixed.Pos.Set(in pos), ClVMixed.Health.Set(in hp));
+            tx.Commit();
+        }
+
+        // Write and rollback
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var entity = tx.OpenMut(id);
+            ref var hp = ref entity.Write(ClVMixed.Health);
+            hp.Current = 999;
+            tx.Rollback();
+        }
+
+        // Should still see original value
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var entity = tx.Open(id);
+            Assert.That(entity.Read(ClVMixed.Health).Current, Is.EqualTo(100), "Rolled-back write should not persist");
+        }
+
+        // Bulk iteration should also see original
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            using var accessor = tx.For<ClVMixed>();
+            foreach (var cluster in accessor.GetClusterEnumerator())
+            {
+                var healths = cluster.GetReadOnlySpan(ClVMixed.Health);
+                ulong bits = cluster.OccupancyBits;
+                while (bits != 0)
+                {
+                    int idx = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    Assert.That(healths[idx].Current, Is.EqualTo(100), "Cluster HEAD should be unchanged after rollback");
+                }
+            }
+        }
+    }
+
+    [Test]
+    public void BulkIteration_MatchesIndividualReads()
+    {
+        // Ensures bulk iteration HEAD and individual Open reads agree
+        using var dbe = SetupEngine();
+        const int count = 30;
+        var ids = new EntityId[count];
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < count; i++)
+            {
+                var pos = new ClV5SvPos(i, i);
+                var hp = new ClV5Health(i * 10, 1000);
+                ids[i] = tx.Spawn<ClVMixed>(ClVMixed.Pos.Set(in pos), ClVMixed.Health.Set(in hp));
+            }
+            tx.Commit();
+        }
+
+        // Write to half
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < count; i += 2)
+            {
+                var entity = tx.OpenMut(ids[i]);
+                ref var hp = ref entity.Write(ClVMixed.Health);
+                hp.Current = 999;
+            }
+            tx.Commit();
+        }
+
+        // Collect bulk iteration values
+        var bulkValues = new Dictionary<long, int>();
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            using var accessor = tx.For<ClVMixed>();
+            foreach (var cluster in accessor.GetClusterEnumerator())
+            {
+                ulong bits = cluster.OccupancyBits;
+                var healths = cluster.GetReadOnlySpan(ClVMixed.Health);
+                var entityIds = cluster.EntityIds;
+                while (bits != 0)
+                {
+                    int idx = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    bulkValues[entityIds[idx]] = healths[idx].Current;
+                }
+            }
+        }
+
+        // Compare with individual reads
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < count; i++)
+            {
+                var entity = tx.Open(ids[i]);
+                int individualValue = entity.Read(ClVMixed.Health).Current;
+                long pk = (long)ids[i].RawValue;
+                Assert.That(bulkValues.ContainsKey(pk), Is.True, $"Entity {i} not found in bulk iteration");
+                Assert.That(bulkValues[pk], Is.EqualTo(individualValue),
+                    $"Entity {i}: bulk iteration ({bulkValues[pk]}) != individual read ({individualValue})");
             }
         }
     }

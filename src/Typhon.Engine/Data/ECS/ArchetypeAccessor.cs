@@ -110,7 +110,7 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             result._clusterChunkId = clusterChunkId;
             result._clusterLayout = _clusterState.Layout;
 
-            // Phase 5: For Versioned slots, walk chain and populate _locations for MVCC reads
+            // For Versioned slots, walk chain and populate _locations for MVCC reads
             if (_hasVersionedSlots)
             {
                 ResolveClusterVersionedSlots(readBuf, id, ref result);
@@ -180,13 +180,15 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             // Cache CompRevInfo for conflict detection and COW (EcsVersionedCopyOnWrite reads from this cache)
             var compRevInfo = chainResult.Value;
             compRevInfo.Operations = ComponentInfo.OperationType.Read;
-            info.SingleCache[pk] = compRevInfo;
+            info.AddNew(pk, compRevInfo);
             result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
         }
     }
 
     private void ResolveVersionedSlots(ref EntityRef result)
     {
+        long pk = (long)result._id.RawValue;
+
         for (int slot = 0; slot < _archetype.ComponentCount; slot++)
         {
             var table = _engineState.SlotToComponentTable[slot];
@@ -204,13 +206,24 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             var compTypeId = _archetype._componentTypeIds[slot];
             var info = _accessor.GetComponentInfoInternal(compTypeId, _archetype._slotToComponentType[slot]);
 
+            // Check cache first (prior Open or Write in this transaction)
+            if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+            {
+                result.SetLocation(slot, cached.CurCompContentChunkId);
+                continue;
+            }
+
             var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, _tsn, skipTimeout: true);
             if (chainResult.IsFailure)
             {
                 continue;
             }
 
-            result.SetLocation(slot, chainResult.Value.CurCompContentChunkId);
+            // Cache CompRevInfo for conflict detection and COW
+            var compRevInfo = chainResult.Value;
+            compRevInfo.Operations = ComponentInfo.OperationType.Read;
+            info.AddNew(pk, compRevInfo);
+            result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
         }
     }
 
@@ -235,6 +248,20 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             throw new InvalidOperationException($"Archetype {typeof(TArch).Name} does not use cluster storage");
         }
         return ClusterEnumerator<TArch>.Create(_clusterState, _archetype, _clusterState.ClusterSegment);
+    }
+
+    /// <summary>
+    /// Get a scoped enumerator over a range of active clusters for parallel dispatch.
+    /// Each worker gets a non-overlapping range [startIndex, endIndex) into <see cref="ArchetypeClusterState.ActiveClusterIds"/>.
+    /// Use <see cref="TickContext.StartClusterIndex"/>/<see cref="TickContext.EndClusterIndex"/> for the range.
+    /// </summary>
+    public ClusterEnumerator<TArch> GetClusterEnumerator(int startIndex, int endIndex)
+    {
+        if (!_hasClusterStorage)
+        {
+            throw new InvalidOperationException($"Archetype {typeof(TArch).Name} does not use cluster storage");
+        }
+        return ClusterEnumerator<TArch>.CreateScoped(_clusterState, _archetype, _clusterState.ClusterSegment, startIndex, endIndex);
     }
 
     /// <summary>Release the cached EntityMap and cluster ChunkAccessors.</summary>

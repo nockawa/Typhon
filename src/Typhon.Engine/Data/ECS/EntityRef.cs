@@ -282,7 +282,7 @@ public unsafe ref struct EntityRef
         {
             ref var ixSlot = ref slots[s];
 
-            // Phase 5: Skip Versioned component slots — their indexes are updated at commit time (CommitComponentCore), not at tick fence.
+            // Skip Versioned component slots — their indexes are updated at commit time (CommitComponentCore), not at tick fence.
             // Shadow capture would cause double index updates.
             if ((versionedMask & (1 << ixSlot.Slot)) != 0)
             {
@@ -342,13 +342,22 @@ public unsafe ref struct EntityRef
 
         if (_clusterBase != null)
         {
+            // Versioned slots read from content chunk (_locations populated by chain walk), not cluster slot.
+            if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
+            {
+                int chunkId = _locations[slot];
+                var table = _engineState.SlotToComponentTable[slot];
+                value = _accessor.ReadEcsComponentData<T>(table, chunkId);
+                return true;
+            }
+
             value = Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
             return true;
         }
 
-        int chunkId = _locations[slot];
-        var table = _engineState.SlotToComponentTable[slot];
-        value = _accessor.ReadEcsComponentData<T>(table, chunkId);
+        int chunkId2 = _locations[slot];
+        var table2 = _engineState.SlotToComponentTable[slot];
+        value = _accessor.ReadEcsComponentData<T>(table2, chunkId2);
         return true;
     }
 

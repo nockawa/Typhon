@@ -107,6 +107,7 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
     public ref T Get<T>(Comp<T> comp, int slotIndex) where T : unmanaged
     {
         byte slot = _meta.GetSlot(comp._componentTypeId);
+        Debug.Assert((_meta.VersionedSlotMask & (1 << slot)) == 0, "Get on Versioned component bypasses revision chain. Use OpenMut+Write for writes.");
         return ref Unsafe.Add(ref Unsafe.AsRef<T>(_base + _layout.ComponentOffset(slot)), slotIndex);
     }
 
@@ -195,7 +196,7 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
         get
         {
             int chunkId = _state.ActiveClusterIds[_index];
-            byte* basePtr = _accessor.GetChunkAddress(chunkId, false);
+            byte* basePtr = _accessor.GetChunkAddress(chunkId);
             return new ClusterRef<TArch>(basePtr, _state.Layout, _meta);
         }
     }

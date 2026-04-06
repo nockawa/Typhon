@@ -49,7 +49,7 @@ internal sealed class RegionOccupantState
     /// <summary>MutationVersion of the static tree when cache was built. -1 = invalidated.</summary>
     internal int StaticCacheVersion;
 
-    /// <summary>Previous cluster occupants tracked by EntityId (Phase 3b — separate from bitmap to avoid namespace collision).</summary>
+    /// <summary>Previous cluster occupants tracked by EntityId (separate from bitmap to avoid namespace collision).</summary>
     internal HashSet<long> PreviousClusterOccupants;
 }
 
@@ -248,7 +248,7 @@ internal sealed unsafe class SpatialTriggerSystem
                 QueryAndPopulateBitmap(_spatialState.DynamicTree, queryCoords, config.CategoryMask, wordCount);
             }
 
-            // Per-archetype cluster spatial R-Trees (Phase 3b fan-out)
+            // Per-archetype cluster spatial R-Trees (fan-out)
             // Cluster trees store ClusterLocation in leaf entries, NOT ComponentChunkId.
             // These share the same integer space and would collide in the bitmap — use a HashSet keyed by EntityId instead.
             if (_spatialState.ClusterArchetypes != null)
@@ -344,7 +344,7 @@ internal sealed unsafe class SpatialTriggerSystem
             }
         }
 
-        // Cluster entity enter/leave via HashSet diff (Phase 3b — avoids bitmap namespace collision with per-table ComponentChunkIds)
+        // Cluster entity enter/leave via HashSet diff (avoids bitmap namespace collision with per-table ComponentChunkIds)
         if (clusterOccupants != null || occ.PreviousClusterOccupants != null)
         {
             var prev = occ.PreviousClusterOccupants;

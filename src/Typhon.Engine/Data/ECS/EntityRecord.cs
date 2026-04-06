@@ -222,9 +222,6 @@ public static unsafe class ClusterEntityRecordAccessor
     public static void InitializeRecord(byte* record, int versionedSlotCount) =>
         Unsafe.InitBlock(record, 0, (uint)RecordSize(versionedSlotCount));
 
-    /// <summary>Zero-initialize a base cluster entity record (19 bytes, no Versioned slots).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void InitializeRecord(byte* record) => Unsafe.InitBlock(record, 0, BaseRecordSize);
 }
 
 /// <summary>

@@ -1,0 +1,9 @@
+# Godot build artifacts
+.godot/
+
+# Godot engine binaries (local installation)
+godot/
+
+# IDE
+.vs/
+*.user

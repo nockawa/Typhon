@@ -37,6 +37,7 @@ public sealed class TyphonRuntime : IDisposable
 
     private readonly ViewBase[] _systemViews;                      // Resolved View per system (null if no input)
     private readonly ComponentTable[][] _systemChangeFilterTables; // ComponentTables for changeFilter types (null if no filter)
+    private readonly ArchetypeClusterState[] _systemClusterStates; // Cluster state for single-archetype cluster-eligible systems (null if not applicable)
     private readonly PooledEntityList[] _systemEntityLists;        // For returning ArrayPool buffers
     private readonly EventQueueBase[][] _systemConsumedQueues;     // Pre-allocated consumed queue refs per system (null if none)
     private readonly PooledEntityList[] _parallelEntityLists;      // Full entity set for parallel QuerySystem chunk slicing
@@ -139,6 +140,7 @@ public sealed class TyphonRuntime : IDisposable
         _systemTransactions = new Transaction[scheduler.SystemCount];
         _systemViews = new ViewBase[scheduler.SystemCount];
         _systemChangeFilterTables = new ComponentTable[scheduler.SystemCount][];
+        _systemClusterStates = new ArchetypeClusterState[scheduler.SystemCount];
         _systemEntityLists = new PooledEntityList[scheduler.SystemCount];
         _systemConsumedQueues = new EventQueueBase[scheduler.SystemCount][];
         _parallelEntityLists = new PooledEntityList[scheduler.SystemCount];
@@ -315,6 +317,24 @@ public sealed class TyphonRuntime : IDisposable
                 }
 
                 _systemViews[i].IsSystemInput = true;
+
+                // Detect cluster-eligible archetype for parallel cluster dispatch.
+                // Checks if any entity already in the view belongs to a cluster-eligible archetype.
+                if (sys.IsParallelQuery && Engine != null)
+                {
+                    foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+                    {
+                        if (meta.IsClusterEligible && meta.ArchetypeId < Engine._archetypeStates.Length)
+                        {
+                            var es = Engine._archetypeStates[meta.ArchetypeId];
+                            if (es?.ClusterState is { ActiveClusterCount: > 0 })
+                            {
+                                _systemClusterStates[i] = es.ClusterState;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
 
             // Resolve changeFilter component types → ComponentTable references
@@ -866,6 +886,8 @@ public sealed class TyphonRuntime : IDisposable
         var hasChangeFilter = _systemChangeFilterTables[sysIdx] != null;
 
         IReadOnlyCollection<EntityId> entities;
+        int clusterStart = 0, clusterEnd = 0;
+
         if (hasChangeFilter)
         {
             // Path 2: Filtered — slice the materialized dirty entity list
@@ -883,6 +905,19 @@ public sealed class TyphonRuntime : IDisposable
             var partView = _partitionViews[sysIdx][chunkIndex];
             partView.Reset(_systemViews[sysIdx].EntityIdsInternal, chunkIndex, totalChunks);
             entities = partView;
+
+            // Cluster-aware parallel dispatch: partition ActiveClusterIds range for this chunk.
+            // Systems that use GetClusterEnumerator(ctx.StartClusterIndex, ctx.EndClusterIndex) get
+            // correct work partitioning without iterating the full cluster set on every worker.
+            var cs = _systemClusterStates[sysIdx];
+            if (cs != null)
+            {
+                var totalClusters = cs.ActiveClusterCount;
+                var cBase = totalClusters / totalChunks;
+                var cRemainder = totalClusters % totalChunks;
+                clusterStart = chunkIndex * cBase + Math.Min(chunkIndex, cRemainder);
+                clusterEnd = clusterStart + cBase + (chunkIndex < cRemainder ? 1 : 0);
+            }
         }
 
         // Get this worker's EntityAccessor — direct array lookup, zero dictionary overhead
@@ -897,7 +932,9 @@ public sealed class TyphonRuntime : IDisposable
                 Accessor = workerAccessor,
                 CreateSideTransaction = _createSideTxDelegate,
                 Entities = entities,
-                ConsumedQueues = null
+                ConsumedQueues = null,
+                StartClusterIndex = clusterStart,
+                EndClusterIndex = clusterEnd
             };
 
             Scheduler.Systems[sysIdx].CallbackAction(ctx);

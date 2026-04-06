@@ -46,17 +46,19 @@ internal unsafe struct ArchetypeSortedStream : IDisposable
 
     /// <summary>
     /// Create and fill a sorted stream from a per-archetype B+Tree range scan.
-    /// Collects all entries in the [scanMin, scanMax] range in key order.
+    /// Collects entries in the [scanMin, scanMax] range in key order.
+    /// When <paramref name="maxEntries"/> is greater than 0, stops after collecting that many entries
+    /// (the B+Tree enumerator yields in sort order, so early termination is correct for Skip/Take).
     /// </summary>
     public static ArchetypeSortedStream Create(BTreeBase<PersistentStore> tree, KeyType keyType, long scanMin, long scanMax, bool allowMultiple, bool descending,
-        ArchetypeClusterState clusterState, ArchetypeClusterInfo layout)
+        ArchetypeClusterState clusterState, ArchetypeClusterInfo layout, int maxEntries = 0)
     {
         var stream = new ArchetypeSortedStream();
         stream._pos = 0;
         stream._count = 0;
 
-        // Initial capacity — most ordered queries with Skip/Take need < 1K entries per archetype
-        int initialCapacity = 256;
+        // Initial capacity — use maxEntries as hint when available to avoid over-allocating
+        int initialCapacity = maxEntries > 0 ? Math.Min(maxEntries, 256) : 256;
         stream._orderedKeys = ArrayPool<long>.Shared.Rent(initialCapacity);
         stream._entityPKs = ArrayPool<long>.Shared.Rent(initialCapacity);
 
@@ -64,43 +66,46 @@ internal unsafe struct ArchetypeSortedStream : IDisposable
         switch (keyType)
         {
             case KeyType.Int:
-                FillTypedUnique((BTree<int, PersistentStore>)tree, (int)scanMin, (int)scanMax, allowMultiple, descending, keyType, ref stream, clusterState, layout);
+                FillTypedUnique((BTree<int, PersistentStore>)tree, (int)scanMin, (int)scanMax, allowMultiple, descending, keyType, ref stream, clusterState, layout,
+                    maxEntries);
                 break;
             case KeyType.Long:
-                FillTypedUnique((BTree<long, PersistentStore>)tree, scanMin, scanMax, allowMultiple, descending, keyType, ref stream, clusterState, layout);
+                FillTypedUnique((BTree<long, PersistentStore>)tree, scanMin, scanMax, allowMultiple, descending, keyType, ref stream, clusterState, layout,
+                    maxEntries);
                 break;
             case KeyType.Float:
                 FillTypedUnique((BTree<float, PersistentStore>)tree,
-                    BitConverter.Int32BitsToSingle((int)scanMin), BitConverter.Int32BitsToSingle((int)scanMax), allowMultiple, descending, keyType, 
-                    ref stream, clusterState, layout);
+                    BitConverter.Int32BitsToSingle((int)scanMin), BitConverter.Int32BitsToSingle((int)scanMax), allowMultiple, descending, keyType,
+                    ref stream, clusterState, layout, maxEntries);
                 break;
             case KeyType.Double:
                 FillTypedUnique((BTree<double, PersistentStore>)tree, BitConverter.Int64BitsToDouble(scanMin), BitConverter.Int64BitsToDouble(scanMax),
-                    allowMultiple, descending, keyType, ref stream, clusterState, layout);
+                    allowMultiple, descending, keyType, ref stream, clusterState, layout, maxEntries);
                 break;
             case KeyType.Short:
-                FillTypedUnique((BTree<short, PersistentStore>)tree, (short)scanMin, (short)scanMax, allowMultiple, descending, keyType, ref stream, 
-                    clusterState, layout);
+                FillTypedUnique((BTree<short, PersistentStore>)tree, (short)scanMin, (short)scanMax, allowMultiple, descending, keyType, ref stream,
+                    clusterState, layout, maxEntries);
                 break;
             case KeyType.UShort:
-                FillTypedUnique((BTree<ushort, PersistentStore>)tree, (ushort)scanMin, (ushort)scanMax, allowMultiple, descending, keyType, ref stream, 
-                    clusterState, layout);
+                FillTypedUnique((BTree<ushort, PersistentStore>)tree, (ushort)scanMin, (ushort)scanMax, allowMultiple, descending, keyType, ref stream,
+                    clusterState, layout, maxEntries);
                 break;
             case KeyType.Byte:
-                FillTypedUnique((BTree<byte, PersistentStore>)tree, (byte)scanMin, (byte)scanMax, allowMultiple, descending, keyType, ref stream, 
-                    clusterState, layout);
+                FillTypedUnique((BTree<byte, PersistentStore>)tree, (byte)scanMin, (byte)scanMax, allowMultiple, descending, keyType, ref stream,
+                    clusterState, layout, maxEntries);
                 break;
             case KeyType.SByte:
-                FillTypedUnique((BTree<sbyte, PersistentStore>)tree, (sbyte)scanMin, (sbyte)scanMax, allowMultiple, descending, keyType, ref stream, 
-                    clusterState, layout);
+                FillTypedUnique((BTree<sbyte, PersistentStore>)tree, (sbyte)scanMin, (sbyte)scanMax, allowMultiple, descending, keyType, ref stream,
+                    clusterState, layout, maxEntries);
                 break;
             case KeyType.UInt:
-                FillTypedUnique((BTree<uint, PersistentStore>)tree, (uint)scanMin, (uint)scanMax, allowMultiple, descending, keyType, ref stream, 
-                    clusterState, layout);
+                FillTypedUnique((BTree<uint, PersistentStore>)tree, (uint)scanMin, (uint)scanMax, allowMultiple, descending, keyType, ref stream,
+                    clusterState, layout, maxEntries);
                 break;
             case KeyType.ULong:
                 // ULong stored as BTree<long> (same convention as PipelineExecutor)
-                FillTypedUnique((BTree<long, PersistentStore>)tree, scanMin, scanMax, allowMultiple, descending, keyType, ref stream, clusterState, layout);
+                FillTypedUnique((BTree<long, PersistentStore>)tree, scanMin, scanMax, allowMultiple, descending, keyType, ref stream, clusterState, layout,
+                    maxEntries);
                 break;
         }
 
@@ -109,18 +114,18 @@ internal unsafe struct ArchetypeSortedStream : IDisposable
 
     /// <summary>Fill the stream from a typed B+Tree (handles both unique and AllowMultiple).</summary>
     private static void FillTypedUnique<TKey>(BTree<TKey, PersistentStore> tree, TKey minKey, TKey maxKey, bool allowMultiple, bool descending, KeyType keyType,
-        ref ArchetypeSortedStream stream, ArchetypeClusterState clusterState, ArchetypeClusterInfo layout) where TKey : unmanaged
+        ref ArchetypeSortedStream stream, ArchetypeClusterState clusterState, ArchetypeClusterInfo layout, int maxEntries) where TKey : unmanaged
     {
         var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
         try
         {
             if (allowMultiple)
             {
-                FillMultiple(tree, minKey, maxKey, descending, keyType, ref stream, ref clusterAccessor, layout);
+                FillMultiple(tree, minKey, maxKey, descending, keyType, ref stream, ref clusterAccessor, layout, maxEntries);
             }
             else
             {
-                FillUnique(tree, minKey, maxKey, descending, keyType, ref stream, ref clusterAccessor, layout);
+                FillUnique(tree, minKey, maxKey, descending, keyType, ref stream, ref clusterAccessor, layout, maxEntries);
             }
         }
         finally
@@ -129,8 +134,8 @@ internal unsafe struct ArchetypeSortedStream : IDisposable
         }
     }
 
-    private static void FillUnique<TKey>(BTree<TKey, PersistentStore> tree, TKey minKey, TKey maxKey, bool descending, KeyType keyType, 
-        ref ArchetypeSortedStream stream, ref ChunkAccessor<PersistentStore> clusterAccessor, ArchetypeClusterInfo layout) where TKey : unmanaged
+    private static void FillUnique<TKey>(BTree<TKey, PersistentStore> tree, TKey minKey, TKey maxKey, bool descending, KeyType keyType,
+        ref ArchetypeSortedStream stream, ref ChunkAccessor<PersistentStore> clusterAccessor, ArchetypeClusterInfo layout, int maxEntries) where TKey : unmanaged
     {
         using var enumerator = descending ? tree.EnumerateRangeDescending(minKey, maxKey) : tree.EnumerateRange(minKey, maxKey);
 
@@ -141,11 +146,16 @@ internal unsafe struct ArchetypeSortedStream : IDisposable
             long entityPK = ResolveEntityPK(item.Value, ref clusterAccessor, layout);
 
             AppendEntry(ref stream, orderedKey, entityPK);
+
+            if (maxEntries > 0 && stream._count >= maxEntries)
+            {
+                break;
+            }
         }
     }
 
-    private static void FillMultiple<TKey>(BTree<TKey, PersistentStore> tree, TKey minKey, TKey maxKey, bool descending, KeyType keyType, 
-        ref ArchetypeSortedStream stream, ref ChunkAccessor<PersistentStore> clusterAccessor, ArchetypeClusterInfo layout) where TKey : unmanaged
+    private static void FillMultiple<TKey>(BTree<TKey, PersistentStore> tree, TKey minKey, TKey maxKey, bool descending, KeyType keyType,
+        ref ArchetypeSortedStream stream, ref ChunkAccessor<PersistentStore> clusterAccessor, ArchetypeClusterInfo layout, int maxEntries) where TKey : unmanaged
     {
         using var enumerator = descending ? tree.EnumerateRangeMultipleDescending(minKey, maxKey) : tree.EnumerateRangeMultiple(minKey, maxKey);
 
@@ -159,6 +169,11 @@ internal unsafe struct ArchetypeSortedStream : IDisposable
                 {
                     long entityPK = ResolveEntityPK(values[i], ref clusterAccessor, layout);
                     AppendEntry(ref stream, orderedKey, entityPK);
+
+                    if (maxEntries > 0 && stream._count >= maxEntries)
+                    {
+                        return;
+                    }
                 }
             }
             while (enumerator.NextChunk());
@@ -220,9 +235,9 @@ internal unsafe struct ArchetypeSortedStream : IDisposable
             case KeyType.Double:
                 return ZoneMapArray.DoubleToOrderedLong(Unsafe.As<TKey, double>(ref key));
             case KeyType.UShort:
-                return (long)Unsafe.As<TKey, ushort>(ref key) ^ (1L << 15);
+                return Unsafe.As<TKey, ushort>(ref key) ^ (1L << 15);
             case KeyType.UInt:
-                return (long)Unsafe.As<TKey, uint>(ref key) ^ (1L << 31);
+                return Unsafe.As<TKey, uint>(ref key) ^ (1L << 31);
             case KeyType.ULong:
                 return Unsafe.As<TKey, long>(ref key) ^ long.MinValue;
             case KeyType.Byte:
@@ -265,7 +280,7 @@ internal struct KWayMergeState : IDisposable
 {
     private ArchetypeSortedStream[] _streams;
     private int _streamCount;       // Actual number of streams (array may be larger if rented)
-    private int[] _heap;            // Heap of stream indices, ordered by current key
+    private int[] _heap;            // Heap of stream indices, rented from ArrayPool to avoid GC allocation
     private int _heapSize;
     private bool _descending;
     private bool _ownsStreamsArray; // True if _streams was rented from ArrayPool
@@ -280,11 +295,12 @@ internal struct KWayMergeState : IDisposable
     /// <param name="ownsArray">True if the array was rented from ArrayPool and should be returned on Dispose.</param>
     public static KWayMergeState Create(ArchetypeSortedStream[] streams, int streamCount, bool descending, bool ownsArray = false)
     {
+        int heapCapacity = streamCount <= 16 ? 16 : streamCount;
         var state = new KWayMergeState
         {
             _streams = streams,
             _streamCount = streamCount,
-            _heap = streamCount <= 16 ? new int[16] : new int[streamCount],
+            _heap = ArrayPool<int>.Shared.Rent(heapCapacity),
             _heapSize = 0,
             _descending = descending,
             _ownsStreamsArray = ownsArray
@@ -404,6 +420,12 @@ internal struct KWayMergeState : IDisposable
             }
 
             _streams = null;
+        }
+
+        if (_heap != null)
+        {
+            ArrayPool<int>.Shared.Return(_heap);
+            _heap = null;
         }
     }
 }

@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
@@ -74,6 +76,37 @@ struct AaBenchIdxData
 
 [Archetype(512)]
 partial class AaBenchIdxUnit : Archetype<AaBenchIdxUnit>
+{
+    public static readonly Comp<AaBenchPosition> Position = Register<AaBenchPosition>();
+    public static readonly Comp<AaBenchIdxData> Data = Register<AaBenchIdxData>();
+}
+
+// ── Mixed SV+Versioned cluster benchmark archetype (Phase 5) ──────────
+[Component("Typhon.Bench.AA.VcHealth", 1, StorageMode = StorageMode.Versioned)]
+[StructLayout(LayoutKind.Sequential)]
+struct AaVcHealth
+{
+    public int Current, Max;
+}
+
+[Archetype(516)]
+partial class AaBenchMixedCluster : Archetype<AaBenchMixedCluster>
+{
+    public static readonly Comp<AaBenchPosition> Position = Register<AaBenchPosition>();  // SV
+    public static readonly Comp<AaBenchMovement> Movement = Register<AaBenchMovement>();  // SV
+    public static readonly Comp<AaVcHealth> Health = Register<AaVcHealth>();              // Versioned
+}
+
+// ── Additional indexed archetypes for ordered query benchmark ─────────
+[Archetype(517)]
+partial class AaBenchIdxUnit2 : Archetype<AaBenchIdxUnit2>
+{
+    public static readonly Comp<AaBenchPosition> Position = Register<AaBenchPosition>();
+    public static readonly Comp<AaBenchIdxData> Data = Register<AaBenchIdxData>();
+}
+
+[Archetype(518)]
+partial class AaBenchIdxUnit3 : Archetype<AaBenchIdxUnit3>
 {
     public static readonly Comp<AaBenchPosition> Position = Register<AaBenchPosition>();
     public static readonly Comp<AaBenchIdxData> Data = Register<AaBenchIdxData>();
@@ -910,6 +943,540 @@ static class ArchetypeAccessorBenchmark
         // Initial tick fence to establish baseline index state
         dbe.WriteTickFence(0);
 
+        return new BenchEnv(sp, dbe, ids);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Benchmark 1: Versioned Cluster (Mixed SV + Versioned)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public static void RunVersionedCluster(int entityCount = 50_000, int iterations = 500)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  Versioned Cluster Benchmark — {entityCount:N0} entities");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+
+        using var env = CreateMixedClusterEnv(entityCount);
+        var dbe = env.Dbe;
+        var ids = env.EntityIds;
+
+        // ── (a) Bulk iteration via GetClusterEnumerator ─────────────
+        // Warmup
+        for (int w = 0; w < 10; w++)
+        {
+            RunMixedClusterBulk(dbe, 1);
+        }
+
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        var sw = Stopwatch.StartNew();
+        RunMixedClusterBulk(dbe, iterations);
+        sw.Stop();
+        double bulkUs = sw.Elapsed.TotalMicroseconds / iterations;
+        double bulkNs = bulkUs * 1000.0 / entityCount;
+
+        // ── (b) Random access via ArchetypeAccessor.Open ────────────
+        // Warmup
+        for (int w = 0; w < 10; w++)
+        {
+            RunMixedClusterRandomRead(dbe, ids, 1);
+        }
+
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        sw.Restart();
+        RunMixedClusterRandomRead(dbe, ids, iterations);
+        sw.Stop();
+        double randomUs = sw.Elapsed.TotalMicroseconds / iterations;
+        double randomNs = randomUs * 1000.0 / entityCount;
+
+        // ── (c) Write + Commit ──────────────────────────────────────
+        // Warmup
+        for (int w = 0; w < 10; w++)
+        {
+            RunMixedClusterWrite(dbe, ids, 1);
+        }
+
+        GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        sw.Restart();
+        RunMixedClusterWrite(dbe, ids, iterations);
+        sw.Stop();
+        double writeUs = sw.Elapsed.TotalMicroseconds / iterations;
+        double writeNs = writeUs * 1000.0 / entityCount;
+
+        Console.WriteLine($"  Bulk iteration (SoA):          {bulkUs,8:F0} µs/iter  ({bulkNs:F1} ns/entity)");
+        Console.WriteLine($"  Random access (Open):          {randomUs,8:F0} µs/iter  ({randomNs:F1} ns/entity)");
+        Console.WriteLine($"  Write + Commit:                {writeUs,8:F0} µs/iter  ({writeNs:F1} ns/entity)");
+        Console.WriteLine();
+    }
+
+    static void RunMixedClusterBulk(DatabaseEngine dbe, int iterations)
+    {
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var accessor = tx.For<AaBenchMixedCluster>();
+            foreach (var cluster in accessor.GetClusterEnumerator())
+            {
+                ulong bits = cluster.OccupancyBits;
+                var positions = cluster.GetReadOnlySpan(AaBenchMixedCluster.Position);
+                var healths = cluster.GetReadOnlySpan(AaBenchMixedCluster.Health);
+                while (bits != 0)
+                {
+                    int idx = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    var p = positions[idx];
+                    var h = healths[idx];
+                }
+            }
+            accessor.Dispose();
+        }
+    }
+
+    static void RunMixedClusterRandomRead(DatabaseEngine dbe, EntityId[] ids, int iterations)
+    {
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var accessor = tx.For<AaBenchMixedCluster>();
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var entity = accessor.Open(ids[i]);
+                var p = entity.Read(AaBenchMixedCluster.Position);
+                var h = entity.Read(AaBenchMixedCluster.Health);
+            }
+            accessor.Dispose();
+        }
+    }
+
+    static void RunMixedClusterWrite(DatabaseEngine dbe, EntityId[] ids, int iterations)
+    {
+        for (int iter = 0; iter < iterations; iter++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var accessor = tx.For<AaBenchMixedCluster>();
+            for (int i = 0; i < ids.Length; i++)
+            {
+                var entity = accessor.OpenMut(ids[i]);
+                ref var h = ref entity.Write(AaBenchMixedCluster.Health);
+                h.Current -= 1;
+            }
+            accessor.Dispose();
+            tx.Commit();
+        }
+    }
+
+    static BenchEnv CreateMixedClusterEnv(int entityCount)
+    {
+        var name = $"AABenchMixed_{Environment.ProcessId}";
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(o =>
+          {
+              o.DatabaseName = name;
+              o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
+              o.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine(o => { o.Wal = null; });
+
+        var sp = sc.BuildServiceProvider();
+        sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+        Archetype<AaBenchMixedCluster>.Touch();
+        dbe.RegisterComponentFromAccessor<AaBenchPosition>();
+        dbe.RegisterComponentFromAccessor<AaBenchMovement>();
+        dbe.RegisterComponentFromAccessor<AaVcHealth>();
+        dbe.InitializeArchetypes();
+
+        var rng = new Random(42);
+        var ids = new EntityId[entityCount];
+        int remaining = entityCount;
+        int offset = 0;
+        while (remaining > 0)
+        {
+            int batch = Math.Min(1000, remaining);
+            remaining -= batch;
+            using var tx = dbe.CreateQuickTransaction();
+            for (int i = 0; i < batch; i++)
+            {
+                var pos = new AaBenchPosition((float)(rng.NextDouble() * WorldSize), (float)(rng.NextDouble() * WorldSize));
+                var mov = new AaBenchMovement((float)(rng.NextDouble() * 100), (float)(rng.NextDouble() * 100));
+                var health = new AaVcHealth { Current = 100, Max = 100 };
+                ids[offset + i] = tx.Spawn<AaBenchMixedCluster>(
+                    AaBenchMixedCluster.Position.Set(in pos),
+                    AaBenchMixedCluster.Movement.Set(in mov),
+                    AaBenchMixedCluster.Health.Set(in health));
+            }
+            tx.Commit();
+            offset += batch;
+        }
+
+        dbe.WriteTickFence(0);
+        return new BenchEnv(sp, dbe, ids);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Benchmark 2: SIMD Query
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public static void RunSimdQuery(int entityCount = 100_000, int iterations = 200)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  SIMD Query Benchmark — {entityCount:N0} entities, {iterations} iterations");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+
+        using var env = CreateSimdQueryEnv(entityCount);
+        var dbe = env.Dbe;
+
+        // Selectivity thresholds: Score is sequential 0..entityCount-1
+        // Score >= threshold → (entityCount - threshold) results
+        var cases = new[]
+        {
+            (label: " 1% selectivity", threshold: entityCount - entityCount / 100, expected: entityCount / 100),
+            (label: "10% selectivity", threshold: entityCount - entityCount / 10,  expected: entityCount / 10),
+            (label: "50% selectivity", threshold: entityCount / 2,                 expected: entityCount - entityCount / 2),
+        };
+
+        foreach (var (label, threshold, expected) in cases)
+        {
+            // Warmup
+            for (int w = 0; w < 10; w++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>().WhereField<AaBenchIdxData>(d => d.Score >= threshold).Execute();
+            }
+
+            int actualCount = 0;
+            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+            var sw = Stopwatch.StartNew();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                var results = tx.Query<AaBenchIdxUnit>().WhereField<AaBenchIdxData>(d => d.Score >= threshold).Execute();
+                if (iter == 0)
+                {
+                    actualCount = results.Count;
+                }
+            }
+            sw.Stop();
+            double meanUs = sw.Elapsed.TotalMicroseconds / iterations;
+
+            Console.WriteLine($"  {label} (Score >= {threshold,6}):  {meanUs,8:F1} µs/query  ({actualCount} results)");
+        }
+
+        Console.WriteLine();
+    }
+
+    static BenchEnv CreateSimdQueryEnv(int entityCount)
+    {
+        var name = $"AABenchSimd_{Environment.ProcessId}";
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(o =>
+          {
+              o.DatabaseName = name;
+              o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
+              o.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine(o => { o.Wal = null; });
+
+        var sp = sc.BuildServiceProvider();
+        sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+        Archetype<AaBenchIdxUnit>.Touch();
+        dbe.RegisterComponentFromAccessor<AaBenchPosition>();
+        dbe.RegisterComponentFromAccessor<AaBenchIdxData>();
+        dbe.InitializeArchetypes();
+
+        var ids = new EntityId[entityCount];
+        int remaining = entityCount;
+        int offset = 0;
+        while (remaining > 0)
+        {
+            int batch = Math.Min(1000, remaining);
+            remaining -= batch;
+            using var tx = dbe.CreateQuickTransaction();
+            for (int i = 0; i < batch; i++)
+            {
+                var pos = new AaBenchPosition(offset + i, 0);
+                var data = new AaBenchIdxData(offset + i, 0); // Sequential unique Score
+                ids[offset + i] = tx.Spawn<AaBenchIdxUnit>(AaBenchIdxUnit.Position.Set(in pos), AaBenchIdxUnit.Data.Set(in data));
+            }
+            tx.Commit();
+            offset += batch;
+        }
+
+        dbe.WriteTickFence(0);
+        return new BenchEnv(sp, dbe, ids);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Benchmark 3: Ordered Query
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public static void RunOrderedQuery(int entityCount = 50_000, int iterations = 200)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  Ordered Query Benchmark — {entityCount:N0} entities, {iterations} iterations");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+
+        using var env = CreateOrderedQueryEnv(entityCount);
+        var dbe = env.Dbe;
+
+        // Case 1: Take(100) from start
+        {
+            // Warmup
+            for (int w = 0; w < 10; w++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>()
+                    .WhereField<AaBenchIdxData>(d => d.Score >= 0)
+                    .OrderByField<AaBenchIdxData, int>(d => d.Score)
+                    .Take(100)
+                    .ExecuteOrdered();
+            }
+
+            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+            var sw = Stopwatch.StartNew();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>()
+                    .WhereField<AaBenchIdxData>(d => d.Score >= 0)
+                    .OrderByField<AaBenchIdxData, int>(d => d.Score)
+                    .Take(100)
+                    .ExecuteOrdered();
+            }
+            sw.Stop();
+            double meanUs = sw.Elapsed.TotalMicroseconds / iterations;
+            Console.WriteLine($"  Take(100) from start:          {meanUs,8:F1} µs/query");
+        }
+
+        // Case 2: Skip(25000).Take(100) (middle page)
+        {
+            int skip = entityCount / 2;
+
+            // Warmup
+            for (int w = 0; w < 10; w++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>()
+                    .WhereField<AaBenchIdxData>(d => d.Score >= 0)
+                    .OrderByField<AaBenchIdxData, int>(d => d.Score)
+                    .Skip(skip).Take(100)
+                    .ExecuteOrdered();
+            }
+
+            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+            var sw = Stopwatch.StartNew();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>()
+                    .WhereField<AaBenchIdxData>(d => d.Score >= 0)
+                    .OrderByField<AaBenchIdxData, int>(d => d.Score)
+                    .Skip(skip).Take(100)
+                    .ExecuteOrdered();
+            }
+            sw.Stop();
+            double meanUs = sw.Elapsed.TotalMicroseconds / iterations;
+            Console.WriteLine($"  Skip({skip}).Take(100):        {meanUs,8:F1} µs/query");
+        }
+
+        // Case 3: Full ordered (no skip/take, all entities)
+        {
+            // Warmup
+            for (int w = 0; w < 10; w++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>()
+                    .WhereField<AaBenchIdxData>(d => d.Score >= 0)
+                    .OrderByField<AaBenchIdxData, int>(d => d.Score)
+                    .ExecuteOrdered();
+            }
+
+            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+            var sw = Stopwatch.StartNew();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>()
+                    .WhereField<AaBenchIdxData>(d => d.Score >= 0)
+                    .OrderByField<AaBenchIdxData, int>(d => d.Score)
+                    .ExecuteOrdered();
+            }
+            sw.Stop();
+            double meanUs = sw.Elapsed.TotalMicroseconds / iterations;
+            Console.WriteLine($"  Full ordered ({entityCount:N0}):          {meanUs,8:F1} µs/query");
+        }
+
+        Console.WriteLine();
+    }
+
+    static BenchEnv CreateOrderedQueryEnv(int entityCount)
+    {
+        var name = $"AABenchOrdered_{Environment.ProcessId}";
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(o =>
+          {
+              o.DatabaseName = name;
+              o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
+              o.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine(o => { o.Wal = null; });
+
+        var sp = sc.BuildServiceProvider();
+        sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+        Archetype<AaBenchIdxUnit>.Touch();
+        dbe.RegisterComponentFromAccessor<AaBenchPosition>();
+        dbe.RegisterComponentFromAccessor<AaBenchIdxData>();
+        dbe.InitializeArchetypes();
+
+        var ids = new EntityId[entityCount];
+        int remaining = entityCount;
+        int offset = 0;
+        while (remaining > 0)
+        {
+            int batch = Math.Min(1000, remaining);
+            remaining -= batch;
+            using var tx = dbe.CreateQuickTransaction();
+            for (int i = 0; i < batch; i++)
+            {
+                var pos = new AaBenchPosition(offset + i, 0);
+                var data = new AaBenchIdxData(offset + i, 0); // Sequential Score for deterministic ordering
+                ids[offset + i] = tx.Spawn<AaBenchIdxUnit>(AaBenchIdxUnit.Position.Set(in pos), AaBenchIdxUnit.Data.Set(in data));
+            }
+            tx.Commit();
+            offset += batch;
+        }
+
+        dbe.WriteTickFence(0);
+        return new BenchEnv(sp, dbe, ids);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Benchmark 4: Zone Map Pruning
+    // ═══════════════════════════════════════════════════════════════════════
+
+    public static void RunZoneMapPruning(int entityCount = 100_000, int iterations = 200)
+    {
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine($"  Zone Map Pruning Benchmark — {entityCount:N0} entities, {iterations} iterations");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+
+        using var env = CreateZoneMapEnv(entityCount);
+        var dbe = env.Dbe;
+
+        // Selectivity thresholds: Score = entityIndex (0..entityCount-1)
+        // Score >= threshold → (entityCount - threshold) results
+        var cases = new[]
+        {
+            (label: "0.1% selectivity", threshold: entityCount - entityCount / 1000, expected: entityCount / 1000),
+            (label: "  1% selectivity", threshold: entityCount - entityCount / 100,  expected: entityCount / 100),
+            (label: " 10% selectivity", threshold: entityCount - entityCount / 10,   expected: entityCount / 10),
+            (label: " 50% selectivity", threshold: entityCount / 2,                  expected: entityCount - entityCount / 2),
+        };
+
+        foreach (var (label, threshold, expected) in cases)
+        {
+            // Warmup
+            for (int w = 0; w < 10; w++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                tx.Query<AaBenchIdxUnit>().WhereField<AaBenchIdxData>(d => d.Score >= threshold).Execute();
+            }
+
+            int actualCount = 0;
+            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+            var sw = Stopwatch.StartNew();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                using var tx = dbe.CreateQuickTransaction();
+                var results = tx.Query<AaBenchIdxUnit>().WhereField<AaBenchIdxData>(d => d.Score >= threshold).Execute();
+                if (iter == 0)
+                {
+                    actualCount = results.Count;
+                }
+            }
+            sw.Stop();
+            double meanUs = sw.Elapsed.TotalMicroseconds / iterations;
+
+            Console.WriteLine($"  {label} (Score >= {threshold,6}):  {meanUs,8:F1} µs/query  ({actualCount} results)");
+        }
+
+        Console.WriteLine();
+    }
+
+    static BenchEnv CreateZoneMapEnv(int entityCount)
+    {
+        var name = $"AABenchZoneMap_{Environment.ProcessId}";
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(o =>
+          {
+              o.DatabaseName = name;
+              o.DatabaseCacheSize = (ulong)(200 * 1024 * PagedMMF.PageSize);
+              o.PagesDebugPattern = false;
+          })
+          .AddScopedDatabaseEngine(o => { o.Wal = null; });
+
+        var sp = sc.BuildServiceProvider();
+        sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+        Archetype<AaBenchIdxUnit>.Touch();
+        dbe.RegisterComponentFromAccessor<AaBenchPosition>();
+        dbe.RegisterComponentFromAccessor<AaBenchIdxData>();
+        dbe.InitializeArchetypes();
+
+        // Spawn with Score = entityIndex for contiguous cluster ranges (natural zone map clustering)
+        var ids = new EntityId[entityCount];
+        int remaining = entityCount;
+        int offset = 0;
+        while (remaining > 0)
+        {
+            int batch = Math.Min(1000, remaining);
+            remaining -= batch;
+            using var tx = dbe.CreateQuickTransaction();
+            for (int i = 0; i < batch; i++)
+            {
+                var pos = new AaBenchPosition(offset + i, 0);
+                var data = new AaBenchIdxData(offset + i, 0); // Sequential → natural cluster range partitions
+                ids[offset + i] = tx.Spawn<AaBenchIdxUnit>(AaBenchIdxUnit.Position.Set(in pos), AaBenchIdxUnit.Data.Set(in data));
+            }
+            tx.Commit();
+            offset += batch;
+        }
+
+        // Tick fence to compute zone maps from cluster data
+        dbe.WriteTickFence(0);
         return new BenchEnv(sp, dbe, ids);
     }
 }

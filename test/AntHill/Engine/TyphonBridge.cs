@@ -14,7 +14,7 @@ namespace AntHill.Engine;
 /// </summary>
 public sealed class TyphonBridge : IDisposable
 {
-    public const int AntCount = 50_000;
+    public const int AntCount = 100_000;
     public const float WorldSize = 10_000f;
 
     private ServiceProvider _serviceProvider;
@@ -78,11 +78,14 @@ public sealed class TyphonBridge : IDisposable
         // 5. Create Runtime with systems
         _runtime = TyphonRuntime.Create(_dbe, schedule =>
         {
-            // Movement system: parallel, cluster iteration (fast path)
+            // Movement system: parallel, cluster iteration (fast path — 2-3 ns/entity vs 150 ns/entity)
             schedule.QuerySystem("AntMovement", ctx =>
             {
+                // Scoped cluster enumerator: each worker gets a non-overlapping range of clusters
                 var ants = ctx.Accessor.For<Ant>();
-                using var clusters = ants.GetClusterEnumerator();
+                using var clusters = ctx.EndClusterIndex > ctx.StartClusterIndex
+                    ? ants.GetClusterEnumerator(ctx.StartClusterIndex, ctx.EndClusterIndex)
+                    : ants.GetClusterEnumerator(); // Fallback for non-parallel or single-worker
                 foreach (var cluster in clusters)
                 {
                     ulong bits = cluster.OccupancyBits;
@@ -118,11 +121,13 @@ public sealed class TyphonBridge : IDisposable
                 _renderBufferWriteIdx = 0;
             }, after: "AntMovement");
 
-            // FillRenderBuffer: parallel read via cluster iteration (fast path)
+            // FillRenderBuffer: parallel read via scoped cluster iteration (fast path)
             schedule.QuerySystem("FillRenderBuffer", ctx =>
             {
                 var ants = ctx.Accessor.For<Ant>();
-                using var clusters = ants.GetClusterEnumerator();
+                using var clusters = ctx.EndClusterIndex > ctx.StartClusterIndex
+                    ? ants.GetClusterEnumerator(ctx.StartClusterIndex, ctx.EndClusterIndex)
+                    : ants.GetClusterEnumerator();
                 foreach (var cluster in clusters)
                 {
                     int liveCount = cluster.LiveCount;
@@ -166,7 +171,7 @@ public sealed class TyphonBridge : IDisposable
         }, new RuntimeOptions
         {
             BaseTickRate = 60,
-            WorkerCount = 4
+            WorkerCount = 8
         });
     }
 
