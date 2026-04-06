@@ -158,11 +158,11 @@ internal sealed unsafe class ZoneMapArray
             // Maps unsigned 0 → signed MIN, unsigned MAX → signed MAX.
             return _fieldSize switch
             {
-                1 => *(byte*)ptr,                                              // byte: 0..255 fits, no XOR needed
-                2 => (long)(*(ushort*)ptr) ^ (1L << 15),                       // ushort: XOR bit 15
-                4 => (long)(*(uint*)ptr) ^ (1L << 31),                         // uint: XOR bit 31
-                8 => *(long*)ptr ^ long.MinValue,                              // ulong: XOR bit 63
-                _ => (long)(*(uint*)ptr) ^ (1L << 31),
+                1 => *ptr,                                             // byte: 0..255 fits, no XOR needed
+                2 => *(ushort*)ptr ^ (1L << 15),                       // ushort: XOR bit 15
+                4 => *(uint*)ptr ^ (1L << 31),                         // uint: XOR bit 31
+                8 => *(long*)ptr ^ long.MinValue,                      // ulong: XOR bit 63
+                _ => *(uint*)ptr ^ (1L << 31),
             };
         }
 
@@ -180,17 +180,17 @@ internal sealed unsafe class ZoneMapArray
     // Float ordering: flip all bits if negative (sign bit set), else flip only sign bit.
     // This converts IEEE 754 to a representation where memcmp order = numeric order.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long FloatToOrderedLong(float value)
+    internal static long FloatToOrderedLong(float value)
     {
         int bits = BitConverter.SingleToInt32Bits(value);
         // Cast to long BEFORE XOR/NOT to avoid sign-extension of int result to long.
         // Without cast: (0 ^ int.MinValue) = int -2147483648, sign-extends to long -2147483648 (wrong ordering).
         // With cast: (0L ^ (long)(uint)int.MinValue) = long 2147483648 (correct ordering).
-        return bits < 0 ? ~(long)bits : (long)(uint)(bits ^ int.MinValue);
+        return bits < 0 ? ~(long)bits : (uint)(bits ^ int.MinValue);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long DoubleToOrderedLong(double value)
+    internal static long DoubleToOrderedLong(double value)
     {
         long bits = BitConverter.DoubleToInt64Bits(value);
         return bits < 0 ? ~bits : bits ^ long.MinValue;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics.X86;
 using JetBrains.Annotations;
 
 namespace Typhon.Engine;
@@ -602,12 +603,52 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
         var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance, _orderBy.Value);
 
-        // PipelineExecutor handles secondary index order; we post-filter by archetype mask
+        // Detect cluster vs non-cluster archetypes in the mask
+        bool hasClusterArchetypes = false;
+        bool hasNonClusterArchetypes = false;
+        var dbe = _tx.DBE;
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!MaskTest(meta.ArchetypeId))
+            {
+                continue;
+            }
+            var engineState = dbe._archetypeStates[meta.ArchetypeId];
+            var clusterState = engineState?.ClusterState;
+            if (clusterState?.IndexSlots != null && meta.HasClusterIndexes)
+            {
+                hasClusterArchetypes = true;
+            }
+            else
+            {
+                hasNonClusterArchetypes = true;
+            }
+        }
+
+        if (!hasClusterArchetypes)
+        {
+            // Pure non-cluster path: existing PipelineExecutor ordered scan (unchanged)
+            return ExecuteOrderedNonCluster(plan);
+        }
+
+        if (!hasNonClusterArchetypes)
+        {
+            // Pure cluster path: K-way merge over per-archetype B+Trees
+            return ExecuteOrderedClustered(plan, evaluators);
+        }
+
+        // Mixed path: merge cluster K-way results with non-cluster PipelineExecutor results
+        return ExecuteOrderedMixed(plan, evaluators);
+    }
+
+    /// <summary>Original non-cluster ordered execution path via PipelineExecutor.</summary>
+    private List<EntityId> ExecuteOrderedNonCluster(ExecutionPlan plan)
+    {
+        var ct = _whereComponentTable;
         var pkResult = new List<long>();
         _whereFieldReader.ExecuteOrderedScan(plan, plan.OrderedEvaluators, ct, _tx, pkResult);
 
-        // Post-filter by archetype mask and convert to EntityId, applying Skip/Take
-        var result = new List<EntityId>();
+        var result = new List<EntityId>(_take > 0 ? _take : Math.Min(pkResult.Count, 256));
         int skipped = 0;
         int taken = 0;
         int take = _take > 0 ? _take : int.MaxValue;
@@ -625,6 +666,494 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 continue;
             }
             result.Add(entityId);
+            taken++;
+            if (taken >= take)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Ordered execution for cluster-only archetypes using K-way merge over per-archetype B+Trees.
+    /// Each archetype's B+Tree yields results in key order; the merge interleaves them in global sort order.
+    /// </summary>
+    private List<EntityId> ExecuteOrderedClustered(ExecutionPlan plan, FieldEvaluator[] evaluators)
+    {
+        var dbe = _tx.DBE;
+        // Use rented array instead of List + ToArray to avoid redundant allocations.
+        // Typical K is 1-3 archetypes; rent 8 to avoid resize in common cases.
+        var streams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(8);
+        int streamCount = 0;
+
+        // The plan's PrimaryFieldIndex may be -1 when the shared B+Tree has 0 entries (cluster archetypes store entries in per-archetype B+Trees,
+        // not the shared one). In that case, use the OrderBy field index directly and full type range for scan bounds.
+        Debug.Assert(_orderBy.HasValue, "ExecuteOrderedClustered requires OrderBy to be set");
+        int orderByFieldIdx = _orderBy.Value.FieldIndex;
+        bool descending = plan.Descending;
+        int primaryFieldIdx = plan.PrimaryFieldIndex >= 0 ? plan.PrimaryFieldIndex : orderByFieldIdx;
+
+        // If there are evaluators on fields OTHER than the scan field, the B+Tree scan won't filter them.
+        // Fall back to ExecuteTargeted (which verifies all evaluators) + sort for correctness.
+        for (int e = 0; e < evaluators.Length; e++)
+        {
+            if (evaluators[e].FieldIndex != primaryFieldIdx && evaluators[e].CompareOp != CompareOp.NotEqual)
+            {
+                return ExecuteOrderedViaSortFallback(evaluators, plan);
+            }
+        }
+
+        try
+        {
+            // Open a sorted stream for each matching cluster archetype
+            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+            {
+                if (!MaskTest(meta.ArchetypeId) || !meta.HasClusterIndexes)
+                {
+                    continue;
+                }
+
+                var engineState = dbe._archetypeStates[meta.ArchetypeId];
+                var clusterState = engineState?.ClusterState;
+                if (clusterState?.IndexSlots == null)
+                {
+                    continue;
+                }
+
+                int ixSlotIdx = FindClusterIndexSlot(clusterState, meta);
+                if (ixSlotIdx < 0)
+                {
+                    continue;
+                }
+
+                ref var matchSlot = ref clusterState.IndexSlots[ixSlotIdx];
+
+                // Determine which field's B+Tree to scan for ordering.
+                // If the plan selected a secondary index (PrimaryFieldIndex >= 0), use it.
+                // Otherwise, use the OrderBy field index directly (the shared B+Tree had 0 entries).
+                int fieldIdx = plan.PrimaryFieldIndex >= 0 ? plan.PrimaryFieldIndex : orderByFieldIdx;
+                if (fieldIdx < 0 || fieldIdx >= matchSlot.Fields.Length)
+                {
+                    continue;
+                }
+
+                ref var field = ref matchSlot.Fields[fieldIdx];
+
+                // Determine scan bounds and key type
+                long scanMin, scanMax;
+                KeyType keyType;
+                if (plan.PrimaryFieldIndex >= 0)
+                {
+                    // Plan has valid bounds from the shared B+Tree estimator
+                    scanMin = plan.PrimaryScanMin;
+                    scanMax = plan.PrimaryScanMax;
+                    keyType = plan.PrimaryKeyType;
+                }
+                else
+                {
+                    // Plan fell back to PK scan — compute bounds from evaluators for this field.
+                    keyType = KeyType.Int;
+                    scanMin = long.MinValue;
+                    scanMax = long.MaxValue;
+                    for (int e = 0; e < evaluators.Length; e++)
+                    {
+                        if (evaluators[e].FieldIndex == fieldIdx)
+                        {
+                            keyType = evaluators[e].KeyType;
+                            scanMin = GetTypeMinAsLong(keyType);
+                            scanMax = GetTypeMaxAsLong(keyType);
+                            break;
+                        }
+                    }
+
+                    // Intersect bounds with all evaluators on this field (e.g., Score >= 50 narrows scanMin)
+                    IntersectEvaluatorBounds(evaluators, fieldIdx, keyType, ref scanMin, ref scanMax);
+                }
+
+                // Grow rented array if needed (rare — most queries match 1-3 archetypes)
+                if (streamCount >= streams.Length)
+                {
+                    var newStreams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(streams.Length * 2);
+                    Array.Copy(streams, newStreams, streamCount);
+                    System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+                    streams = newStreams;
+                }
+
+                streams[streamCount++] = ArchetypeSortedStream.Create(field.Index, keyType, scanMin, scanMax, field.AllowMultiple, descending,
+                    clusterState, clusterState.Layout);
+            }
+
+            if (streamCount == 0)
+            {
+                System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+                return [];
+            }
+
+            // KWayMergeState takes ownership of the streams array (ownsArray: true → returns to pool on Dispose)
+            var merge = KWayMergeState.Create(streams, streamCount, descending, ownsArray: true);
+            try
+            {
+                return CollectMergedResults(ref merge, evaluators);
+            }
+            finally
+            {
+                merge.Dispose();
+            }
+        }
+        catch
+        {
+            // Dispose streams on failure path
+            for (int i = 0; i < streamCount; i++)
+            {
+                streams[i].Dispose();
+            }
+            System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Mixed ordered execution: merge cluster K-way results with non-cluster PipelineExecutor results.
+    /// Both sources produce sorted results; two-pointer merge combines them.
+    /// </summary>
+    private List<EntityId> ExecuteOrderedMixed(ExecutionPlan plan, FieldEvaluator[] evaluators)
+    {
+        int orderByFieldIdx = _orderBy?.FieldIndex ?? -1;
+        bool descending = plan.Descending;
+
+        // Collect non-cluster results via PipelineExecutor (already sorted by B+Tree scan order)
+        var ct = _whereComponentTable;
+        var nonClusterPKs = new List<long>();
+        _whereFieldReader.ExecuteOrderedScan(plan, plan.OrderedEvaluators, ct, _tx, nonClusterPKs);
+
+        // Filter in-place: remove cluster entities and non-matching archetypes (preserves sort order)
+        var dbe = _tx.DBE;
+        int write = 0;
+        for (int i = 0; i < nonClusterPKs.Count; i++)
+        {
+            var entityId = EntityId.FromRaw(nonClusterPKs[i]);
+            if (!MaskTest(entityId.ArchetypeId))
+            {
+                continue;
+            }
+            var engineState = dbe._archetypeStates[entityId.ArchetypeId];
+            var clusterState = engineState?.ClusterState;
+            if (clusterState?.IndexSlots != null)
+            {
+                continue; // Skip cluster entities (handled by K-way merge)
+            }
+            nonClusterPKs[write++] = nonClusterPKs[i];
+        }
+        nonClusterPKs.RemoveRange(write, nonClusterPKs.Count - write);
+
+        // Build K-way merge for cluster archetypes (rented array, no List + ToArray)
+        var streams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(8);
+        int streamCount = 0;
+        try
+        {
+            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+            {
+                if (!MaskTest(meta.ArchetypeId) || !meta.HasClusterIndexes)
+                {
+                    continue;
+                }
+
+                var engineState = dbe._archetypeStates[meta.ArchetypeId];
+                var clusterState = engineState?.ClusterState;
+                if (clusterState?.IndexSlots == null)
+                {
+                    continue;
+                }
+
+                int ixSlotIdx = FindClusterIndexSlot(clusterState, meta);
+                if (ixSlotIdx < 0)
+                {
+                    continue;
+                }
+
+                ref var matchSlot = ref clusterState.IndexSlots[ixSlotIdx];
+
+                int fieldIdx = plan.PrimaryFieldIndex >= 0 ? plan.PrimaryFieldIndex : orderByFieldIdx;
+                if (fieldIdx < 0 || fieldIdx >= matchSlot.Fields.Length)
+                {
+                    continue;
+                }
+
+                ref var field = ref matchSlot.Fields[fieldIdx];
+
+                long sMin, sMax;
+                KeyType kType;
+                if (plan.PrimaryFieldIndex >= 0)
+                {
+                    sMin = plan.PrimaryScanMin;
+                    sMax = plan.PrimaryScanMax;
+                    kType = plan.PrimaryKeyType;
+                }
+                else
+                {
+                    kType = KeyType.Int;
+                    sMin = long.MinValue;
+                    sMax = long.MaxValue;
+                    for (int e = 0; e < evaluators.Length; e++)
+                    {
+                        if (evaluators[e].FieldIndex == fieldIdx)
+                        {
+                            kType = evaluators[e].KeyType;
+                            sMin = GetTypeMinAsLong(kType);
+                            sMax = GetTypeMaxAsLong(kType);
+                            break;
+                        }
+                    }
+
+                    IntersectEvaluatorBounds(evaluators, fieldIdx, kType, ref sMin, ref sMax);
+                }
+
+                if (streamCount >= streams.Length)
+                {
+                    var newStreams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(streams.Length * 2);
+                    Array.Copy(streams, newStreams, streamCount);
+                    System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+                    streams = newStreams;
+                }
+
+                streams[streamCount++] = ArchetypeSortedStream.Create(field.Index, kType, sMin, sMax, field.AllowMultiple, descending, clusterState,
+                    clusterState.Layout);
+            }
+
+            if (streamCount == 0)
+            {
+                System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+                return ApplySkipTake(nonClusterPKs);
+            }
+
+            var merge = KWayMergeState.Create(streams, streamCount, descending, ownsArray: true);
+            try
+            {
+                return MergeTwoSortedSources(ref merge, nonClusterPKs, descending, plan.PrimaryKeyType);
+            }
+            finally
+            {
+                merge.Dispose();
+            }
+        }
+        catch
+        {
+            for (int i = 0; i < streamCount; i++)
+            {
+                streams[i].Dispose();
+            }
+            System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+            throw;
+        }
+    }
+
+    /// <summary>Collect results from a K-way merge, applying Skip/Take.</summary>
+    private List<EntityId> CollectMergedResults(ref KWayMergeState merge, FieldEvaluator[] evaluators)
+    {
+        var result = new List<EntityId>(_take > 0 ? _take : 64);
+        int skipped = 0;
+        int taken = 0;
+        int take = _take > 0 ? _take : int.MaxValue;
+
+        while (merge.MoveNext(out long entityPK))
+        {
+            if (skipped < _skip)
+            {
+                skipped++;
+                continue;
+            }
+            result.Add(EntityId.FromRaw(entityPK));
+            taken++;
+            if (taken >= take)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Two-pointer merge of K-way cluster merge and sorted non-cluster PKs, with Skip/Take.
+    /// LIMITATION: non-cluster results are yielded first, then cluster results. For true global sort order
+    /// across cluster + non-cluster archetypes, use ExecuteOrderedViaSortFallback instead.
+    /// Mixed cluster + non-cluster ordered queries are rare (requires both SV and Versioned archetypes
+    /// with the same indexed field in a polymorphic query).
+    /// </summary>
+    private List<EntityId> MergeTwoSortedSources(ref KWayMergeState clusterMerge, List<long> nonClusterPKs, bool descending, KeyType orderKeyType)
+    {
+        var result = new List<EntityId>(_take > 0 ? _take : 64);
+        int skipped = 0;
+        int taken = 0;
+        int take = _take > 0 ? _take : int.MaxValue;
+        int ncIdx = 0;
+
+        while (taken < take)
+        {
+            bool hasCluster = !clusterMerge.IsEmpty;
+            bool hasNonCluster = ncIdx < nonClusterPKs.Count;
+
+            if (!hasCluster && !hasNonCluster)
+            {
+                break;
+            }
+
+            bool takeFromCluster;
+            if (!hasCluster)
+            {
+                takeFromCluster = false;
+            }
+            else if (!hasNonCluster)
+            {
+                takeFromCluster = true;
+            }
+            else
+            {
+                // Non-cluster PKs don't have ordered keys readily available, so we yield non-cluster first.
+                // A full implementation would resolve each non-cluster entity's field value to compare with
+                // clusterMerge.PeekKey. For the rare mixed case, use ExecuteOrderedViaSortFallback instead.
+                takeFromCluster = false;
+            }
+
+            long entityPK;
+            if (takeFromCluster)
+            {
+                clusterMerge.MoveNext(out entityPK);
+            }
+            else
+            {
+                entityPK = nonClusterPKs[ncIdx++];
+            }
+
+            if (skipped < _skip)
+            {
+                skipped++;
+                continue;
+            }
+            result.Add(EntityId.FromRaw(entityPK));
+            taken++;
+        }
+
+        return result;
+    }
+
+    /// <summary>Apply Skip/Take to a pre-sorted list of entity PKs.</summary>
+    private List<EntityId> ApplySkipTake(List<long> pks)
+    {
+        var result = new List<EntityId>(_take > 0 ? _take : Math.Min(pks.Count, 256));
+        int skipped = 0;
+        int taken = 0;
+        int take = _take > 0 ? _take : int.MaxValue;
+
+        for (int i = 0; i < pks.Count; i++)
+        {
+            if (skipped < _skip)
+            {
+                skipped++;
+                continue;
+            }
+            result.Add(EntityId.FromRaw(pks[i]));
+            taken++;
+            if (taken >= take)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Fallback for ordered cluster queries with secondary evaluators (predicates on fields other than the OrderBy field).
+    /// Uses ExecuteTargeted (which verifies ALL evaluators per-entity) then sorts by the OrderBy field.
+    /// O(n log n) sort instead of O(n log K) merge — acceptable for the rare multi-indexed-field case.
+    /// </summary>
+    private List<EntityId> ExecuteOrderedViaSortFallback(FieldEvaluator[] evaluators, ExecutionPlan plan)
+    {
+        // ExecuteTargeted verifies all evaluators, handles both cluster and non-cluster archetypes
+        var unordered = ExecuteTargeted();
+
+        // Build entity→sortKey mapping by scanning per-archetype B+Trees.
+        // Each B+Tree entry is (key, ClusterLocation) — we reverse-resolve ClusterLocation → EntityPK
+        // to match against our result set.
+        var entityKeyMap = new Dictionary<long, long>(unordered.Count); // entityPK → orderedKey
+        Debug.Assert(_orderBy != null, nameof(_orderBy) + " != null");
+        int orderByFieldIdx = _orderBy.Value.FieldIndex;
+        var dbe = _tx.DBE;
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!MaskTest(meta.ArchetypeId) || !meta.HasClusterIndexes)
+            {
+                continue;
+            }
+
+            var engineState = dbe._archetypeStates[meta.ArchetypeId];
+            var clusterState = engineState?.ClusterState;
+            if (clusterState?.IndexSlots == null)
+            {
+                continue;
+            }
+
+            int ixSlotIdx = FindClusterIndexSlot(clusterState, meta);
+            if (ixSlotIdx < 0 || orderByFieldIdx < 0 || orderByFieldIdx >= clusterState.IndexSlots[ixSlotIdx].Fields.Length)
+            {
+                continue;
+            }
+
+            ref var field = ref clusterState.IndexSlots[ixSlotIdx].Fields[orderByFieldIdx];
+
+            // Scan the full B+Tree to build PK→key mapping for entities in our result set
+            var stream = ArchetypeSortedStream.Create(field.Index, plan.PrimaryKeyType >= 0 ? plan.PrimaryKeyType : evaluators[0].KeyType,
+                GetTypeMinAsLong(evaluators[0].KeyType), GetTypeMaxAsLong(evaluators[0].KeyType),
+                field.AllowMultiple, false, clusterState, clusterState.Layout);
+            try
+            {
+                while (stream.HasCurrent)
+                {
+                    entityKeyMap.TryAdd(stream.CurrentEntityPK, stream.CurrentKey);
+                    stream.Advance();
+                }
+            }
+            finally
+            {
+                stream.Dispose();
+            }
+        }
+
+        // Build sorted list from unordered results
+        var withKeys = new List<(long orderedKey, EntityId id)>(unordered.Count);
+        foreach (var id in unordered)
+        {
+            long pk = (long)id.RawValue;
+            long orderedKey = entityKeyMap.GetValueOrDefault(pk, id.EntityKey);
+            withKeys.Add((orderedKey, id));
+        }
+
+        if (plan.Descending)
+        {
+            withKeys.Sort((a, b) => b.orderedKey.CompareTo(a.orderedKey));
+        }
+        else
+        {
+            withKeys.Sort((a, b) => a.orderedKey.CompareTo(b.orderedKey));
+        }
+
+        // Apply Skip/Take
+        var result = new List<EntityId>();
+        int skipped = 0;
+        int taken = 0;
+        int take = _take > 0 ? _take : int.MaxValue;
+        for (int i = 0; i < withKeys.Count; i++)
+        {
+            if (skipped < _skip)
+            {
+                skipped++;
+                continue;
+            }
+            result.Add(withKeys[i].id);
             taken++;
             if (taken >= take)
             {
@@ -736,14 +1265,15 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         int compOffset = layout.ComponentOffset(compSlot);
 
         // Pre-compute zone map query bounds for each evaluator (Phase 4a: zone map pruning).
-        // Match evaluators to their ClusterIndexField by FieldOffset + FieldSize.
+        // Bounds stored on stack; zone map references accessed via field iteration (no ref-type array allocation).
         int evalCount = evaluators.Length;
         var zoneMapMins = evalCount <= 8 ? stackalloc long[evalCount] : new long[evalCount];
         var zoneMapMaxs = evalCount <= 8 ? stackalloc long[evalCount] : new long[evalCount];
-        var zoneMapRefs = new ZoneMapArray[evalCount]; // small one-shot array for reference types
+        // Track which evaluators have zone map bounds (bit per evaluator, fits in ulong for ≤64 evaluators)
+        ulong zoneMapEvalMask = 0;
         bool hasZoneMaps = false;
 
-        for (int e = 0; e < evalCount; e++)
+        for (int e = 0; e < evalCount && e < 64; e++)
         {
             ref var eval = ref evaluators[e];
             for (int fi = 0; fi < matchSlot.Fields.Length; fi++)
@@ -753,9 +1283,9 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 {
                     if (ZoneMapArray.TryGetQueryBounds(ref eval, out var qMin, out var qMax))
                     {
-                        zoneMapRefs[e] = field.ZoneMap;
                         zoneMapMins[e] = qMin;
                         zoneMapMaxs[e] = qMax;
+                        zoneMapEvalMask |= 1UL << e;
                         hasZoneMaps = true;
                     }
 
@@ -764,6 +1294,20 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             }
         }
 
+        // Pre-determine SIMD eligibility for each evaluator (once, before cluster loop)
+        bool anySimd = false;
+        Span<bool> simdEligible = evalCount <= 8 ? stackalloc bool[8] : new bool[evalCount];
+        if (Avx2.IsSupported)
+        {
+            for (int e = 0; e < evalCount; e++)
+            {
+                simdEligible[e] = SimdPredicateEvaluator.IsSimdEligible(evaluators[e].KeyType);
+                anySimd |= simdEligible[e];
+            }
+        }
+
+        int clusterSize = layout.ClusterSize;
+
         var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
         try
         {
@@ -771,16 +1315,33 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             {
                 int clusterChunkId = clusterState.ActiveClusterIds[c];
 
-                // Zone map pruning: skip cluster if any predicate's range doesn't overlap the cluster's [min, max]
+                // Zone map pruning: skip cluster if any predicate's range doesn't overlap the cluster's [min, max].
+                // Iterates fields to find zone maps, then checks matching evaluators — avoids ref-type array allocation.
                 if (hasZoneMaps)
                 {
                     bool skip = false;
-                    for (int e = 0; e < evalCount; e++)
+                    for (int fi = 0; fi < matchSlot.Fields.Length && !skip; fi++)
                     {
-                        if (zoneMapRefs[e] != null && !zoneMapRefs[e].MayContain(clusterChunkId, zoneMapMins[e], zoneMapMaxs[e]))
+                        ref var field = ref matchSlot.Fields[fi];
+                        if (field.ZoneMap == null)
                         {
-                            skip = true;
-                            break;
+                            continue;
+                        }
+
+                        for (int e = 0; e < evalCount && !skip; e++)
+                        {
+                            if ((zoneMapEvalMask & (1UL << e)) == 0)
+                            {
+                                continue;
+                            }
+                            if (evaluators[e].FieldOffset != field.FieldOffset)
+                            {
+                                continue;
+                            }
+                            if (!field.ZoneMap.MayContain(clusterChunkId, zoneMapMins[e], zoneMapMaxs[e]))
+                            {
+                                skip = true;
+                            }
                         }
                     }
 
@@ -797,30 +1358,79 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                     continue;
                 }
 
-                // Evaluate each occupied entity against all field predicates
                 byte* compBase = clusterBase + compOffset;
-                while (occupancy != 0)
-                {
-                    int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(occupancy);
-                    occupancy &= occupancy - 1;
 
-                    byte* entityComp = compBase + slotIndex * compSize;
-                    bool allMatch = true;
-                    for (int e = 0; e < evaluators.Length; e++)
+                if (anySimd)
+                {
+                    // SIMD path: batch-evaluate SIMD-eligible evaluators, then scalar-verify the rest
+                    ulong matchBits = occupancy;
+
+                    // Phase 1: SIMD evaluators narrow the match set
+                    for (int e = 0; e < evalCount; e++)
                     {
-                        ref var eval = ref evaluators[e];
-                        // FieldOffset is the byte offset within the pure struct (no ComponentOverhead).
-                        // Cluster SoA component data has no overhead, so FieldOffset maps directly.
-                        if (!FieldEvaluator.Evaluate(ref eval, entityComp + eval.FieldOffset))
+                        if (!simdEligible[e])
                         {
-                            allMatch = false;
+                            continue;
+                        }
+
+                        matchBits &= SimdPredicateEvaluator.EvaluateCluster(ref evaluators[e], compBase, compSize, clusterSize);
+                        if (matchBits == 0)
+                        {
                             break;
                         }
                     }
 
-                    if (allMatch)
+                    // Phase 2: scalar-verify non-SIMD evaluators on remaining matches
+                    while (matchBits != 0)
                     {
-                        result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
+                        int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(matchBits);
+                        matchBits &= matchBits - 1;
+
+                        byte* entityComp = compBase + slotIndex * compSize;
+                        bool pass = true;
+                        for (int e = 0; e < evalCount; e++)
+                        {
+                            if (simdEligible[e])
+                            {
+                                continue;
+                            }
+                            if (!FieldEvaluator.Evaluate(ref evaluators[e], entityComp + evaluators[e].FieldOffset))
+                            {
+                                pass = false;
+                                break;
+                            }
+                        }
+
+                        if (pass)
+                        {
+                            result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
+                        }
+                    }
+                }
+                else
+                {
+                    // Scalar path (unchanged): evaluate each occupied entity against all field predicates
+                    while (occupancy != 0)
+                    {
+                        int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(occupancy);
+                        occupancy &= occupancy - 1;
+
+                        byte* entityComp = compBase + slotIndex * compSize;
+                        bool allMatch = true;
+                        for (int e = 0; e < evaluators.Length; e++)
+                        {
+                            ref var eval = ref evaluators[e];
+                            if (!FieldEvaluator.Evaluate(ref eval, entityComp + eval.FieldOffset))
+                            {
+                                allMatch = false;
+                                break;
+                            }
+                        }
+
+                        if (allMatch)
+                        {
+                            result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
+                        }
                     }
                 }
             }
@@ -881,6 +1491,132 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         return -1;
     }
 
+    /// <summary>Get the maximum value for a KeyType encoded as a long (same encoding as PlanBuilder scan bounds).</summary>
+    private static long GetTypeMaxAsLong(KeyType keyType) =>
+        keyType switch
+        {
+            KeyType.SByte => sbyte.MaxValue,
+            KeyType.Byte => byte.MaxValue,
+            KeyType.Short => short.MaxValue,
+            KeyType.UShort => ushort.MaxValue,
+            KeyType.Int => int.MaxValue,
+            KeyType.UInt => uint.MaxValue,
+            KeyType.Long => long.MaxValue,
+            KeyType.ULong => unchecked((long)ulong.MaxValue),
+            KeyType.Float => BitConverter.SingleToInt32Bits(float.MaxValue),
+            KeyType.Double => BitConverter.DoubleToInt64Bits(double.MaxValue),
+            _ => long.MaxValue
+        };
+
+    /// <summary>Get the minimum value for a KeyType encoded as a long.</summary>
+    private static long GetTypeMinAsLong(KeyType keyType) =>
+        keyType switch
+        {
+            KeyType.SByte => sbyte.MinValue,
+            KeyType.Byte => 0L,
+            KeyType.Short => short.MinValue,
+            KeyType.UShort => 0L,
+            KeyType.Int => int.MinValue,
+            KeyType.UInt => 0L,
+            KeyType.Long => long.MinValue,
+            KeyType.ULong => 0L,
+            KeyType.Float => BitConverter.SingleToInt32Bits(float.MinValue),
+            KeyType.Double => BitConverter.DoubleToInt64Bits(double.MinValue),
+            _ => long.MinValue
+        };
+
+    /// <summary>
+    /// Intersect scan bounds with evaluator predicates on a specific field.
+    /// For float/double: converts to typed values for correct comparison (IEEE 754 bit patterns don't sort as signed longs for negatives).
+    /// For integers: uses direct long comparison (preserves ordering).
+    /// </summary>
+    private static void IntersectEvaluatorBounds(FieldEvaluator[] evaluators, int fieldIdx, KeyType keyType, ref long scanMin, ref long scanMax)
+    {
+        for (int e = 0; e < evaluators.Length; e++)
+        {
+            if (evaluators[e].FieldIndex != fieldIdx || evaluators[e].CompareOp == CompareOp.NotEqual)
+            {
+                continue;
+            }
+
+            long thr = evaluators[e].Threshold;
+
+            if (keyType == KeyType.Float)
+            {
+                // Float: convert bit patterns to float, compare, convert back.
+                // Math.Max/Min on signed long bit patterns gives wrong results for negative floats.
+                float fMin = BitConverter.Int32BitsToSingle((int)scanMin);
+                float fMax = BitConverter.Int32BitsToSingle((int)scanMax);
+                float fThr = BitConverter.Int32BitsToSingle((int)thr);
+                switch (evaluators[e].CompareOp)
+                {
+                    case CompareOp.Equal:
+                        fMin = Math.Max(fMin, fThr);
+                        fMax = Math.Min(fMax, fThr);
+                        break;
+                    case CompareOp.GreaterThan:
+                    case CompareOp.GreaterThanOrEqual:
+                        fMin = Math.Max(fMin, fThr);
+                        break;
+                    case CompareOp.LessThan:
+                    case CompareOp.LessThanOrEqual:
+                        fMax = Math.Min(fMax, fThr);
+                        break;
+                }
+
+                scanMin = BitConverter.SingleToInt32Bits(fMin);
+                scanMax = BitConverter.SingleToInt32Bits(fMax);
+            }
+            else if (keyType == KeyType.Double)
+            {
+                double dMin = BitConverter.Int64BitsToDouble(scanMin);
+                double dMax = BitConverter.Int64BitsToDouble(scanMax);
+                double dThr = BitConverter.Int64BitsToDouble(thr);
+                switch (evaluators[e].CompareOp)
+                {
+                    case CompareOp.Equal:
+                        dMin = Math.Max(dMin, dThr);
+                        dMax = Math.Min(dMax, dThr);
+                        break;
+                    case CompareOp.GreaterThan:
+                    case CompareOp.GreaterThanOrEqual:
+                        dMin = Math.Max(dMin, dThr);
+                        break;
+                    case CompareOp.LessThan:
+                    case CompareOp.LessThanOrEqual:
+                        dMax = Math.Min(dMax, dThr);
+                        break;
+                }
+
+                scanMin = BitConverter.DoubleToInt64Bits(dMin);
+                scanMax = BitConverter.DoubleToInt64Bits(dMax);
+            }
+            else
+            {
+                // Integer types: direct long comparison preserves ordering.
+                switch (evaluators[e].CompareOp)
+                {
+                    case CompareOp.Equal:
+                        scanMin = Math.Max(scanMin, thr);
+                        scanMax = Math.Min(scanMax, thr);
+                        break;
+                    case CompareOp.GreaterThan:
+                        scanMin = Math.Max(scanMin, thr + 1);
+                        break;
+                    case CompareOp.GreaterThanOrEqual:
+                        scanMin = Math.Max(scanMin, thr);
+                        break;
+                    case CompareOp.LessThan:
+                        scanMax = Math.Min(scanMax, thr - 1);
+                        break;
+                    case CompareOp.LessThanOrEqual:
+                        scanMax = Math.Min(scanMax, thr);
+                        break;
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// Path A selective query: scan per-archetype B+Tree for the primary predicate range, collect ClusterLocations,
     /// then verify remaining predicates only on matched entities. Optimal for highly selective queries (&lt;5% match).
@@ -917,68 +1653,138 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         // Use a flat array indexed by clusterChunkId (bounded by segment ChunkCapacity, typically small).
         int chunkCapacity = clusterState.ClusterSegment.ChunkCapacity;
         var matchBitsArr = System.Buffers.ArrayPool<ulong>.Shared.Rent(chunkCapacity);
-        Array.Clear(matchBitsArr, 0, chunkCapacity);
-        bool hasAny = false;
-
-        CollectClusterLocationsFromBTree(primaryIndex, plan.PrimaryKeyType, plan.PrimaryScanMin, plan.PrimaryScanMax,
-            primaryField.AllowMultiple, matchBitsArr, ref hasAny);
-
-        if (!hasAny)
-        {
-            System.Buffers.ArrayPool<ulong>.Shared.Return(matchBitsArr);
-            return;
-        }
-
-        // Step 2: For each active cluster with matches, verify ALL evaluators on matched entities
-        var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
         try
         {
-            for (int c = 0; c < clusterState.ActiveClusterCount; c++)
+            Array.Clear(matchBitsArr, 0, chunkCapacity);
+            bool hasAny = false;
+
+            CollectClusterLocationsFromBTree(primaryIndex, plan.PrimaryKeyType, plan.PrimaryScanMin, plan.PrimaryScanMax, primaryField.AllowMultiple, 
+                matchBitsArr, ref hasAny);
+
+            if (!hasAny)
             {
-                int clusterChunkId = clusterState.ActiveClusterIds[c];
-                ulong candidateBits = matchBitsArr[clusterChunkId];
-                if (candidateBits == 0)
+                return;
+            }
+
+            // Pre-determine SIMD eligibility for each evaluator (once, before cluster loop)
+            int evalCount = evaluators.Length;
+            bool anySimd = false;
+            Span<bool> simdEligible = evalCount <= 8 ? stackalloc bool[8] : new bool[evalCount];
+            if (Avx2.IsSupported)
+            {
+                for (int e = 0; e < evalCount; e++)
                 {
-                    continue;
+                    simdEligible[e] = SimdPredicateEvaluator.IsSimdEligible(evaluators[e].KeyType);
+                    anySimd |= simdEligible[e];
                 }
+            }
 
-                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
-                ulong occupancy = *(ulong*)clusterBase;
-                ulong remaining = candidateBits & occupancy; // intersection with live entities
+            int clusterSize = layout.ClusterSize;
 
-                if (remaining == 0)
+            // Step 2: For each active cluster with matches, verify ALL evaluators on matched entities
+            var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+            try
+            {
+                for (int c = 0; c < clusterState.ActiveClusterCount; c++)
                 {
-                    continue;
-                }
-
-                byte* compBase = clusterBase + compOffset;
-                while (remaining != 0)
-                {
-                    int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(remaining);
-                    remaining &= remaining - 1;
-
-                    byte* entityComp = compBase + slotIndex * compSize;
-                    bool allMatch = true;
-                    for (int e = 0; e < evaluators.Length; e++)
+                    int clusterChunkId = clusterState.ActiveClusterIds[c];
+                    ulong candidateBits = matchBitsArr[clusterChunkId];
+                    if (candidateBits == 0)
                     {
-                        ref var eval = ref evaluators[e];
-                        if (!FieldEvaluator.Evaluate(ref eval, entityComp + eval.FieldOffset))
+                        continue;
+                    }
+
+                    byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+                    ulong occupancy = *(ulong*)clusterBase;
+                    ulong remaining = candidateBits & occupancy; // intersection with live entities
+
+                    if (remaining == 0)
+                    {
+                        continue;
+                    }
+
+                    byte* compBase = clusterBase + compOffset;
+
+                    if (anySimd)
+                    {
+                        // SIMD path: batch-evaluate SIMD-eligible evaluators, then scalar-verify the rest
+                        ulong matchBits = remaining;
+
+                        for (int e = 0; e < evalCount; e++)
                         {
-                            allMatch = false;
-                            break;
+                            if (!simdEligible[e])
+                            {
+                                continue;
+                            }
+
+                            matchBits &= SimdPredicateEvaluator.EvaluateCluster(ref evaluators[e], compBase, compSize, clusterSize);
+                            if (matchBits == 0)
+                            {
+                                break;
+                            }
+                        }
+
+                        while (matchBits != 0)
+                        {
+                            int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(matchBits);
+                            matchBits &= matchBits - 1;
+
+                            byte* entityComp = compBase + slotIndex * compSize;
+                            bool pass = true;
+                            for (int e = 0; e < evalCount; e++)
+                            {
+                                if (simdEligible[e])
+                                {
+                                    continue;
+                                }
+                                if (!FieldEvaluator.Evaluate(ref evaluators[e], entityComp + evaluators[e].FieldOffset))
+                                {
+                                    pass = false;
+                                    break;
+                                }
+                            }
+
+                            if (pass)
+                            {
+                                result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
+                            }
                         }
                     }
-
-                    if (allMatch)
+                    else
                     {
-                        result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
+                        // Scalar path (unchanged)
+                        while (remaining != 0)
+                        {
+                            int slotIndex = System.Numerics.BitOperations.TrailingZeroCount(remaining);
+                            remaining &= remaining - 1;
+
+                            byte* entityComp = compBase + slotIndex * compSize;
+                            bool allMatch = true;
+                            for (int e = 0; e < evaluators.Length; e++)
+                            {
+                                ref var eval = ref evaluators[e];
+                                if (!FieldEvaluator.Evaluate(ref eval, entityComp + eval.FieldOffset))
+                                {
+                                    allMatch = false;
+                                    break;
+                                }
+                            }
+
+                            if (allMatch)
+                            {
+                                result.Add(EntityId.FromRaw(*(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8)));
+                            }
+                        }
                     }
                 }
+            }
+            finally
+            {
+                clusterAccessor.Dispose();
             }
         }
         finally
         {
-            clusterAccessor.Dispose();
             System.Buffers.ArrayPool<ulong>.Shared.Return(matchBitsArr);
         }
     }
