@@ -916,12 +916,41 @@ public unsafe partial class Transaction
                     {
                         _clusterCacheAccessor.Dispose();
                     }
-                    _clusterCacheAccessor = es.ClusterState.ClusterSegment.CreateChunkAccessor();
+                    if (_hasTransientClusterCache)
+                    {
+                        _transientClusterCacheAccessor.Dispose();
+                        _hasTransientClusterCache = false;
+                    }
+
+                    if (es.ClusterState.ClusterSegment != null)
+                    {
+                        _clusterCacheAccessor = es.ClusterState.ClusterSegment.CreateChunkAccessor();
+                    }
+                    if (es.ClusterState.TransientSegment != null)
+                    {
+                        _transientClusterCacheAccessor = es.ClusterState.TransientSegment.CreateChunkAccessor();
+                        _hasTransientClusterCache = true;
+                    }
                     _clusterCacheArchId = id.ArchetypeId;
                     _hasClusterCache = true;
                 }
 
-                result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+                // Primary base: PersistentStore for mixed/SV, TransientStore for pure-Transient
+                if (es.ClusterState.ClusterSegment != null)
+                {
+                    result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+                }
+                else
+                {
+                    result._clusterBase = _transientClusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+                }
+
+                // Mixed archetype: also set TransientStore base for Transient component reads
+                if (_hasTransientClusterCache && es.ClusterState.ClusterSegment != null)
+                {
+                    result._transientClusterBase = _transientClusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+                }
+
                 result._clusterSlotIndex = slotIndex;
                 result._clusterChunkId = clusterChunkId;
                 result._clusterLayout = es.ClusterState.Layout;
@@ -1193,6 +1222,11 @@ public unsafe partial class Transaction
         ChunkAccessor<PersistentStore>[] clusterSrcAccessors = null;
         int clusterSrcAccessorCount = 0;
 
+        // TransientStore cluster accessors for archetypes with Transient components
+        var clusterTransientAccessor = default(ChunkAccessor<TransientStore>);
+        bool hasClusterTransientAccessor = false;
+        ChunkAccessor<TransientStore>[] clusterTransientSrcAccessors = null;
+
         try
         {
             foreach (var entry in _spawnedEntities)
@@ -1225,22 +1259,39 @@ public unsafe partial class Transaction
                         if (hasClusterAccessor)
                         {
                             clusterAccessor.Dispose();
-                            for (int ci = 0; ci < clusterSrcAccessorCount; ci++)
+                            hasClusterAccessor = false;
+                        }
+                        if (hasClusterTransientAccessor)
+                        {
+                            clusterTransientAccessor.Dispose();
+                            hasClusterTransientAccessor = false;
+                        }
+                        for (int ci = 0; ci < clusterSrcAccessorCount; ci++)
+                        {
+                            var table = engineState.SlotToComponentTable[ci];
+                            if (table.StorageMode == StorageMode.Transient)
+                            {
+                                if (clusterTransientSrcAccessors != null)
+                                {
+                                    clusterTransientSrcAccessors[ci].Dispose();
+                                }
+                            }
+                            else
                             {
                                 clusterSrcAccessors[ci].Dispose();
                             }
-                            hasClusterAccessor = false;
-                            if (hasClusterIdxAccessor)
-                            {
-                                clusterIdxAccessor.Dispose();
-                                hasClusterIdxAccessor = false;
-                            }
-                            if (hasClusterSpatialAccessors)
-                            {
-                                clusterSpatialTreeAccessor.Dispose();
-                                clusterSpatialBpAccessor.Dispose();
-                                hasClusterSpatialAccessors = false;
-                            }
+                        }
+                        clusterSrcAccessorCount = 0;
+                        if (hasClusterIdxAccessor)
+                        {
+                            clusterIdxAccessor.Dispose();
+                            hasClusterIdxAccessor = false;
+                        }
+                        if (hasClusterSpatialAccessors)
+                        {
+                            clusterSpatialTreeAccessor.Dispose();
+                            clusterSpatialBpAccessor.Dispose();
+                            hasClusterSpatialAccessors = false;
                         }
                         for (int si = 0; si < svSlotCount; si++)
                         {
@@ -1282,18 +1333,47 @@ public unsafe partial class Transaction
                     if (useCluster)
                     {
                         clusterState = engineState.ClusterState;
-                        clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
-                        hasClusterAccessor = true;
 
-                        // Create per-component accessors for reading from per-component chunks
+                        // PersistentStore cluster accessor (null for pure-Transient)
+                        if (clusterState.ClusterSegment != null)
+                        {
+                            clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
+                            hasClusterAccessor = true;
+                        }
+
+                        // TransientStore cluster accessor (for archetypes with Transient components)
+                        if (clusterState.TransientSegment != null)
+                        {
+                            clusterTransientAccessor = clusterState.TransientSegment.CreateChunkAccessor();
+                            hasClusterTransientAccessor = true;
+                        }
+
+                        // Create per-component accessors for reading from per-component spawn chunks.
+                        // Transient slots use TransientComponentSegment; SV/V use ComponentSegment.
                         clusterSrcAccessorCount = componentCount;
                         if (clusterSrcAccessors == null || clusterSrcAccessors.Length < componentCount)
                         {
                             clusterSrcAccessors = new ChunkAccessor<PersistentStore>[componentCount];
                         }
+                        bool hasTransientSlots = meta.TransientSlotMask != 0;
+                        if (hasTransientSlots)
+                        {
+                            if (clusterTransientSrcAccessors == null || clusterTransientSrcAccessors.Length < componentCount)
+                            {
+                                clusterTransientSrcAccessors = new ChunkAccessor<TransientStore>[componentCount];
+                            }
+                        }
                         for (int slot = 0; slot < componentCount; slot++)
                         {
-                            clusterSrcAccessors[slot] = engineState.SlotToComponentTable[slot].ComponentSegment.CreateChunkAccessor(_changeSet);
+                            var table = engineState.SlotToComponentTable[slot];
+                            if (table.StorageMode == StorageMode.Transient)
+                            {
+                                clusterTransientSrcAccessors[slot] = table.TransientComponentSegment.CreateChunkAccessor();
+                            }
+                            else
+                            {
+                                clusterSrcAccessors[slot] = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+                            }
                         }
 
                         // Per-archetype index accessor for cluster B+Tree insertion
@@ -1435,10 +1515,30 @@ public unsafe partial class Transaction
                     // Cluster path: claim slot, copy data to cluster, write ClusterEntityRecord
                     // ═══════════════════════════════════════════════════════════════
                     var layout = clusterState.Layout;
-                    var (clusterChunkId, slotIdx) = clusterState.ClaimSlot(ref clusterAccessor, _changeSet);
-                    byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId, true);
+                    int clusterChunkId, slotIdx;
+                    byte* clusterBase; // Primary segment base (has metadata: OccupancyBits, EnabledBits, EntityIds)
+                    byte* clusterTransientBase = null; // TransientStore base (only for mixed archetypes)
 
-                    // Copy component data from per-component chunks to cluster SoA slots
+                    if (clusterState.ClusterSegment != null)
+                    {
+                        // Mixed or pure-SV/V: PersistentStore is primary
+                        (clusterChunkId, slotIdx) = clusterState.ClaimSlot(ref clusterAccessor, _changeSet);
+                        clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId, true);
+                        if (hasClusterTransientAccessor)
+                        {
+                            clusterTransientBase = clusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
+                        }
+                    }
+                    else
+                    {
+                        // Pure-Transient: TransientStore is primary
+                        (clusterChunkId, slotIdx) = clusterState.ClaimSlot(ref clusterTransientAccessor);
+                        clusterBase = clusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
+                    }
+
+                    // Copy component data from per-component chunks to cluster SoA slots.
+                    // Transient slots are copied to TransientSegment; SV/V to ClusterSegment.
+                    ushort transientMask = meta.TransientSlotMask;
                     for (int slot = 0; slot < componentCount; slot++)
                     {
                         int srcChunkId = entry.Loc[slot];
@@ -1448,12 +1548,27 @@ public unsafe partial class Transaction
                         }
                         var table = engineState.SlotToComponentTable[slot];
                         int overhead = table.ComponentOverhead;
-                        byte* srcAddr = clusterSrcAccessors[slot].GetChunkAddress(srcChunkId);
-                        byte* dstAddr = clusterBase + layout.ComponentOffset(slot) + slotIdx * layout.ComponentSize(slot);
-                        Unsafe.CopyBlockUnaligned(dstAddr, srcAddr + overhead, (uint)layout.ComponentSize(slot));
+                        int compSize = layout.ComponentSize(slot);
+
+                        byte* srcAddr;
+                        byte* dstBase;
+                        if ((transientMask & (1 << slot)) != 0)
+                        {
+                            // Transient slot: read from TransientComponentSegment, write to TransientSegment (or primary for pure-T)
+                            srcAddr = clusterTransientSrcAccessors[slot].GetChunkAddress(srcChunkId);
+                            dstBase = clusterTransientBase != null ? clusterTransientBase : clusterBase; // pure-T: clusterBase IS TransientStore
+                        }
+                        else
+                        {
+                            // SV/V slot: read from ComponentSegment, write to ClusterSegment
+                            srcAddr = clusterSrcAccessors[slot].GetChunkAddress(srcChunkId);
+                            dstBase = clusterBase;
+                        }
+                        byte* dstAddr = dstBase + layout.ComponentOffset(slot) + slotIdx * compSize;
+                        Unsafe.CopyBlockUnaligned(dstAddr, srcAddr + overhead, (uint)compSize);
                     }
 
-                    // Write full EntityId to cluster (stores ArchetypeId alongside EntityKey — eliminates conversion at read sites)
+                    // Write full EntityId to cluster primary segment
                     *(long*)(clusterBase + layout.EntityIdsOffset + slotIdx * 8) = (long)entry.Id.RawValue;
 
                     // Set EnabledBits in cluster
@@ -1545,6 +1660,47 @@ public unsafe partial class Transaction
                         SpatialMaintainer.InsertSpatialCluster(
                             (long)entry.Id.RawValue, clusterLocation, spatialFieldPtr,
                             ref ss, ref clusterSpatialTreeAccessor, ref clusterSpatialBpAccessor, _changeSet);
+                    }
+
+                    // Insert Transient indexed fields into per-ComponentTable TransientIndex.
+                    // Note: archetypes with Transient indexed fields are excluded from cluster eligibility (see DatabaseEngine.InitializeArchetypes) because
+                    // write-time index maintenance for cluster-backed Transient data would require reading old/new values from the cluster SoA slot and
+                    // calling TransientIndex.Move — which conflicts with the ref-return pattern of Write<T>.
+                    // This code path handles the theoretical case where eligibility rules are relaxed in the future.
+                    if (trSlotCount > 0 && trCompAccessors != null)
+                    {
+                        for (int si = 0; si < trSlotCount; si++)
+                        {
+                            int trSlot = trSlots[si];
+                            var table = engineState.SlotToComponentTable[trSlot];
+                            int srcChunkId = entry.Loc[trSlot];
+                            if (srcChunkId == 0)
+                            {
+                                continue;
+                            }
+                            byte* chunkAddr = trCompAccessors[si].GetChunkAddress(srcChunkId, true);
+                            
+                            // Write EntityPK into the chunk's overhead area (TransientIndex expects it there)
+                            if (table.Definition.EntityPKOverheadSize > 0)
+                            {
+                                *(long*)chunkAddr = (long)entry.Id.RawValue;
+                            }
+                            var indexedFieldInfos = table.IndexedFieldInfos;
+                            for (int i = 0; i < indexedFieldInfos.Length; i++)
+                            {
+                                ref var ifi = ref indexedFieldInfos[i];
+                                var index = ifi.TransientIndex;
+                                if (ifi.AllowMultiple)
+                                {
+                                    *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
+                                        index.Add(&chunkAddr[ifi.OffsetToField], srcChunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i], out _);
+                                }
+                                else
+                                {
+                                    index.Add(&chunkAddr[ifi.OffsetToField], srcChunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i]);
+                                }
+                            }
+                        }
                     }
                 }
                 else
@@ -1704,19 +1860,21 @@ public unsafe partial class Transaction
                 if (hasClusterAccessor)
                 {
                     clusterAccessor.Dispose();
-                    for (int ci = 0; ci < clusterSrcAccessorCount; ci++)
-                    {
-                        clusterSrcAccessors[ci].Dispose();
-                    }
-                    if (hasClusterIdxAccessor)
-                    {
-                        clusterIdxAccessor.Dispose();
-                    }
-                    if (hasClusterSpatialAccessors)
-                    {
-                        clusterSpatialTreeAccessor.Dispose();
-                        clusterSpatialBpAccessor.Dispose();
-                    }
+                }
+                if (hasClusterTransientAccessor)
+                {
+                    clusterTransientAccessor.Dispose();
+                }
+                // Note: clusterSrcAccessors and clusterTransientSrcAccessors were already disposed in the archetype-change cleanup above.
+                // Only dispose if cleanup didn't run (exception path).
+                if (hasClusterIdxAccessor)
+                {
+                    clusterIdxAccessor.Dispose();
+                }
+                if (hasClusterSpatialAccessors)
+                {
+                    clusterSpatialTreeAccessor.Dispose();
+                    clusterSpatialBpAccessor.Dispose();
                 }
                 for (int si = 0; si < svSlotCount; si++)
                 {
@@ -1847,6 +2005,8 @@ public unsafe partial class Transaction
         // Cluster accessor — hoisted per-archetype
         var clusterAccessor = default(ChunkAccessor<PersistentStore>);
         bool hasClusterAccessor = false;
+        var destroyTransientClusterAccessor = default(ChunkAccessor<TransientStore>);
+        bool hasDestroyTransientClusterAccessor = false;
         bool destroyUseCluster = false;
         ArchetypeClusterState destroyClusterState = null;
         var destroyClusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
@@ -1880,6 +2040,11 @@ public unsafe partial class Transaction
                             clusterAccessor.Dispose();
                             hasClusterAccessor = false;
                         }
+                        if (hasDestroyTransientClusterAccessor)
+                        {
+                            destroyTransientClusterAccessor.Dispose();
+                            hasDestroyTransientClusterAccessor = false;
+                        }
                         if (hasDestroyClusterIdxAccessor)
                         {
                             destroyClusterIdxAccessor.Dispose();
@@ -1901,8 +2066,16 @@ public unsafe partial class Transaction
                     if (destroyUseCluster)
                     {
                         destroyClusterState = engineState.ClusterState;
-                        clusterAccessor = destroyClusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
-                        hasClusterAccessor = true;
+                        if (destroyClusterState.ClusterSegment != null)
+                        {
+                            clusterAccessor = destroyClusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
+                            hasClusterAccessor = true;
+                        }
+                        else if (destroyClusterState.TransientSegment != null)
+                        {
+                            destroyTransientClusterAccessor = destroyClusterState.TransientSegment.CreateChunkAccessor();
+                            hasDestroyTransientClusterAccessor = true;
+                        }
                         if (destroyClusterState.IndexSegment != null)
                         {
                             destroyClusterIdxAccessor = destroyClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
@@ -1930,7 +2103,7 @@ public unsafe partial class Transaction
                         // detect occupancy=0 and Remove the OLD key.
                         // This is necessary because the current cluster data may contain the post-mutation value, but the B+Tree still holds the pre-mutation
                         // key (Move hasn't happened yet).
-                        if (destroyClusterState.IndexSlots != null)
+                        if (destroyClusterState.IndexSlots != null && destroyClusterState.IndexSlots.Length > 0)
                         {
                             int entityIndex = clusterChunkId * 64 + slotIndex;
                             bool hasPendingShadow = destroyClusterState.ClusterShadowBitmap != null && destroyClusterState.ClusterShadowBitmap.Test(entityIndex);
@@ -1983,7 +2156,14 @@ public unsafe partial class Transaction
                                 ref destroyClusterSpatialTreeAccessor, ref destroyClusterSpatialBpAccessor, _changeSet);
                         }
 
-                        destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet);
+                        if (hasClusterAccessor)
+                        {
+                            destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet);
+                        }
+                        else if (hasDestroyTransientClusterAccessor)
+                        {
+                            destroyClusterState.ReleaseSlot(ref destroyTransientClusterAccessor, clusterChunkId, slotIndex);
+                        }
                     }
 
                     // Set DiedTSN (header layout is the same for both cluster and legacy records)
@@ -2004,6 +2184,10 @@ public unsafe partial class Transaction
             if (hasClusterAccessor)
             {
                 clusterAccessor.Dispose();
+            }
+            if (hasDestroyTransientClusterAccessor)
+            {
+                destroyTransientClusterAccessor.Dispose();
             }
             if (hasDestroyClusterIdxAccessor)
             {

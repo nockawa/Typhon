@@ -153,15 +153,79 @@ public unsafe partial class EntityAccessor
                 {
                     _clusterCacheAccessor.Dispose();
                 }
-                _clusterCacheAccessor = es.ClusterState.ClusterSegment.CreateChunkAccessor();
+                if (_hasTransientClusterCache)
+                {
+                    _transientClusterCacheAccessor.Dispose();
+                    _hasTransientClusterCache = false;
+                }
+
+                if (es.ClusterState.ClusterSegment != null)
+                {
+                    _clusterCacheAccessor = es.ClusterState.ClusterSegment.CreateChunkAccessor();
+                }
+                if (es.ClusterState.TransientSegment != null)
+                {
+                    _transientClusterCacheAccessor = es.ClusterState.TransientSegment.CreateChunkAccessor();
+                    _hasTransientClusterCache = true;
+                }
                 _clusterCacheArchId = id.ArchetypeId;
                 _hasClusterCache = true;
             }
 
-            result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+            // Primary base: PersistentStore for mixed/SV, TransientStore for pure-Transient
+            if (es.ClusterState.ClusterSegment != null)
+            {
+                result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+            }
+            else
+            {
+                result._clusterBase = _transientClusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+            }
+
+            // Mixed archetype: also set TransientStore base
+            if (_hasTransientClusterCache && es.ClusterState.ClusterSegment != null)
+            {
+                result._transientClusterBase = _transientClusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+            }
+
             result._clusterSlotIndex = slotIndex;
             result._clusterChunkId = clusterChunkId;
             result._clusterLayout = es.ClusterState.Layout;
+
+            // For Versioned slots, walk chain and store resolved content chunkId in _locations.
+            // Versioned reads via EntityRef.Read use _locations (not cluster slot) for MVCC correctness.
+            if (meta.VersionedSlotMask != 0)
+            {
+                var layout = es.ClusterState.Layout;
+                if (layout.SlotToVersionedIndex == null)
+                {
+                    goto skipVersionedWalk;
+                }
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    int vi = layout.SlotToVersionedIndex[slot];
+                    if (vi < 0)
+                    {
+                        continue;
+                    }
+
+                    int compRevFirstChunkId = ClusterEntityRecordAccessor.GetCompRevFirstChunkId(readBuf, vi);
+                    if (compRevFirstChunkId == 0)
+                    {
+                        continue;
+                    }
+
+                    var compTypeId = meta._componentTypeIds[slot];
+                    var info = GetComponentInfoInternal(compTypeId, meta._slotToComponentType[slot]);
+
+                    var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, skipTimeout: true);
+                    if (chainResult.IsSuccess)
+                    {
+                        result.SetLocation(slot, chainResult.Value.CurCompContentChunkId);
+                    }
+                }
+                skipVersionedWalk:;
+            }
         }
         else
         {

@@ -78,6 +78,12 @@ internal class ArchetypeMetadata
     /// <summary>Number of Versioned component slots (PopCount of <see cref="VersionedSlotMask"/>).</summary>
     internal byte VersionedSlotCount;
 
+    /// <summary>Bitmask of component slots that use Transient storage mode. Bit N set = slot N is Transient.</summary>
+    internal ushort TransientSlotMask;
+
+    /// <summary>Number of Transient component slots (PopCount of <see cref="TransientSlotMask"/>).</summary>
+    internal byte TransientSlotCount;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Cascade delete graph (populated during Freeze)
     // ═══════════════════════════════════════════════════════════════════════

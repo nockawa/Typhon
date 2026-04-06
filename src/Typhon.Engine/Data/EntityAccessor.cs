@@ -57,6 +57,8 @@ public partial class EntityAccessor : IDisposable
     private protected ushort _clusterCacheArchId;
     private protected ChunkAccessor<PersistentStore> _clusterCacheAccessor;
     private protected bool _hasClusterCache;
+    private protected ChunkAccessor<TransientStore> _transientClusterCacheAccessor;
+    private protected bool _hasTransientClusterCache;
 
     private protected int _entityOperationCount;
     private protected ChangeSet _changeSet;
@@ -332,6 +334,11 @@ public partial class EntityAccessor : IDisposable
             _clusterCacheAccessor.Dispose();
             _hasClusterCache = false;
         }
+        if (_hasTransientClusterCache)
+        {
+            _transientClusterCacheAccessor.Dispose();
+            _hasTransientClusterCache = false;
+        }
         if (_componentInfos.Capacity <= ComponentInfosMaxCapacity)
         {
             _componentInfos.Clear();
@@ -360,6 +367,11 @@ public partial class EntityAccessor : IDisposable
             {
                 _clusterCacheAccessor.Dispose();
                 _hasClusterCache = false;
+            }
+            if (_hasTransientClusterCache)
+            {
+                _transientClusterCacheAccessor.Dispose();
+                _hasTransientClusterCache = false;
             }
             return;
         }

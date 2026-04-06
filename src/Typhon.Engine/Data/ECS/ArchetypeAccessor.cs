@@ -40,6 +40,8 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
     private readonly bool _hasClusterStorage;
     private readonly ArchetypeClusterState _clusterState;
     private ChunkAccessor<PersistentStore> _clusterAccessor;
+    private ChunkAccessor<TransientStore> _transientClusterAccessor;
+    private readonly bool _hasTransientCluster;
 
     internal ArchetypeAccessor(ArchetypeMetadata archetype, ArchetypeEngineState engineState, EntityAccessor accessor, DatabaseEngine dbe)
     {
@@ -67,7 +69,9 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
         // Cluster storage setup
         _hasClusterStorage = archetype.IsClusterEligible && engineState.ClusterState != null;
         _clusterState = engineState.ClusterState;
-        _clusterAccessor = _hasClusterStorage ? _clusterState.ClusterSegment.CreateChunkAccessor() : default;
+        _clusterAccessor = _hasClusterStorage && _clusterState.ClusterSegment != null ? _clusterState.ClusterSegment.CreateChunkAccessor() : default;
+        _hasTransientCluster = _hasClusterStorage && _clusterState.TransientSegment != null;
+        _transientClusterAccessor = _hasTransientCluster ? _clusterState.TransientSegment.CreateChunkAccessor() : default;
     }
 
     /// <summary>Open an entity for read-only access.</summary>
@@ -105,7 +109,17 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             // Cluster path: read ClusterEntityRecord → resolve cluster base + slot
             int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(readBuf);
             byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
-            result._clusterBase = _clusterAccessor.GetChunkAddress(clusterChunkId, writable);
+
+            // Primary base: PersistentStore for mixed/SV, TransientStore for pure-Transient
+            result._clusterBase = _clusterState.ClusterSegment != null ? 
+                _clusterAccessor.GetChunkAddress(clusterChunkId, writable) : _transientClusterAccessor.GetChunkAddress(clusterChunkId, writable);
+
+            // Mixed archetype: also set TransientStore base for Transient component reads
+            if (_hasTransientCluster && _clusterState.ClusterSegment != null)
+            {
+                result._transientClusterBase = _transientClusterAccessor.GetChunkAddress(clusterChunkId, writable);
+            }
+
             result._clusterSlotIndex = slotIndex;
             result._clusterChunkId = clusterChunkId;
             result._clusterLayout = _clusterState.Layout;
@@ -247,7 +261,7 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
         {
             throw new InvalidOperationException($"Archetype {typeof(TArch).Name} does not use cluster storage");
         }
-        return ClusterEnumerator<TArch>.Create(_clusterState, _archetype, _clusterState.ClusterSegment);
+        return ClusterEnumerator<TArch>.Create(_clusterState, _archetype, _clusterState.ClusterSegment, _clusterState.TransientSegment);
     }
 
     /// <summary>
@@ -261,16 +275,20 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
         {
             throw new InvalidOperationException($"Archetype {typeof(TArch).Name} does not use cluster storage");
         }
-        return ClusterEnumerator<TArch>.CreateScoped(_clusterState, _archetype, _clusterState.ClusterSegment, startIndex, endIndex);
+        return ClusterEnumerator<TArch>.CreateScoped(_clusterState, _archetype, _clusterState.ClusterSegment, _clusterState.TransientSegment, startIndex, endIndex);
     }
 
     /// <summary>Release the cached EntityMap and cluster ChunkAccessors.</summary>
     public void Dispose()
     {
         _entityMapAccessor.Dispose();
-        if (_hasClusterStorage)
+        if (_hasClusterStorage && _clusterState.ClusterSegment != null)
         {
             _clusterAccessor.Dispose();
+        }
+        if (_hasTransientCluster)
+        {
+            _transientClusterAccessor.Dispose();
         }
     }
 }

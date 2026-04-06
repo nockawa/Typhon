@@ -53,13 +53,18 @@ internal sealed class ArchetypeClusterInfo
     /// </summary>
     internal readonly sbyte[] SlotToVersionedIndex;
 
-    private ArchetypeClusterInfo(int clusterSize, int componentCount, int[] componentOffsets, int[] componentSizes, sbyte[] slotToVersionedIndex)
+    /// <summary>Bitmask of Transient component slots. Stored here for WAL recovery access (which has layout but not ArchetypeMetadata).</summary>
+    internal readonly ushort TransientSlotMask;
+
+    private ArchetypeClusterInfo(int clusterSize, int componentCount, int[] componentOffsets, int[] componentSizes,
+        sbyte[] slotToVersionedIndex, ushort transientSlotMask)
     {
         ClusterSize = clusterSize;
         ComponentCount = componentCount;
         _componentOffsets = componentOffsets;
         _componentSizes = componentSizes;
         SlotToVersionedIndex = slotToVersionedIndex;
+        TransientSlotMask = transientSlotMask;
 
         HeaderSize = 8 + 8 * componentCount;
         EntityIdsOffset = HeaderSize;
@@ -90,7 +95,7 @@ internal sealed class ArchetypeClusterInfo
     /// <param name="versionedSlotMask">Bitmask of Versioned component slots (0 for pure-SV archetypes).</param>
     /// <returns>A fully initialized <see cref="ArchetypeClusterInfo"/>.</returns>
     /// <exception cref="InvalidOperationException">Thrown if components are too large to fit even N=8 in one page.</exception>
-    public static ArchetypeClusterInfo Compute(int componentCount, ReadOnlySpan<int> componentSizes, ushort versionedSlotMask = 0)
+    public static ArchetypeClusterInfo Compute(int componentCount, ReadOnlySpan<int> componentSizes, ushort versionedSlotMask = 0, ushort transientSlotMask = 0)
     {
         int fixedHeader = 8 + 8 * componentCount; // OccupancyBits + EnabledBits[C]
         int perEntitySize = 8; // EntityKey (long)
@@ -131,7 +136,7 @@ internal sealed class ArchetypeClusterInfo
             }
         }
 
-        return new ArchetypeClusterInfo(bestN, componentCount, offsets, sizes, slotToVersionedIndex);
+        return new ArchetypeClusterInfo(bestN, componentCount, offsets, sizes, slotToVersionedIndex, transientSlotMask);
     }
 
     /// <summary>

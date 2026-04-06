@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -16,8 +17,16 @@ namespace Typhon.Engine;
 /// </remarks>
 internal sealed unsafe class ArchetypeClusterState
 {
-    /// <summary>ChunkBasedSegment backing cluster data. Stride = cluster total size.</summary>
+    /// <summary>ChunkBasedSegment backing cluster data (SV + V components). Null for pure-Transient archetypes.</summary>
     public ChunkBasedSegment<PersistentStore> ClusterSegment;
+
+    /// <summary>ChunkBasedSegment backing Transient component data. Null if archetype has no Transient components.
+    /// Uses identical layout as <see cref="ClusterSegment"/> (same stride, same offsets). Chunk IDs are synchronized
+    /// via lockstep allocation/free.</summary>
+    public ChunkBasedSegment<TransientStore> TransientSegment;
+
+    /// <summary>TransientStore instance kept alive for heap-backed TransientSegment. Null if no Transient components.</summary>
+    internal TransientStore? TransientClusterStore;
 
     /// <summary>Precomputed layout info (offsets, sizes, cluster size N).</summary>
     public ArchetypeClusterInfo Layout;
@@ -63,6 +72,9 @@ internal sealed unsafe class ArchetypeClusterState
 
     private ArchetypeClusterState() { }
 
+    /// <summary>Chunk capacity of the primary (non-null) segment.</summary>
+    internal int PrimarySegmentCapacity => ClusterSegment?.ChunkCapacity ?? TransientSegment.ChunkCapacity;
+
     /// <summary>Mark an entity slot as dirty for tick fence processing.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void SetDirty(int clusterChunkId, int slotIndex)
@@ -74,35 +86,51 @@ internal sealed unsafe class ArchetypeClusterState
     /// <summary>
     /// Create a new ArchetypeClusterState for a cluster-eligible archetype (fresh database).
     /// </summary>
-    public static ArchetypeClusterState Create(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment) =>
-        new()
+    /// <param name="layout">Precomputed cluster layout (shared by both segments).</param>
+    /// <param name="segment">PersistentStore backing segment for SV+V components. Null for pure-Transient archetypes.</param>
+    /// <param name="transientSegment">TransientStore backing segment for Transient components. Default (null) if no Transient.</param>
+    /// <param name="transientStore">TransientStore instance to keep alive. Null if no Transient.</param>
+    public static ArchetypeClusterState Create(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment,
+        ChunkBasedSegment<TransientStore> transientSegment = default, TransientStore? transientStore = null)
+    {
+        Debug.Assert(segment != null || transientSegment != null, "At least one cluster segment must be provided");
+        int capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
+        return new ArchetypeClusterState
         {
             ClusterSegment = segment,
+            TransientSegment = transientSegment,
+            TransientClusterStore = transientStore,
             Layout = layout,
             ActiveClusterIds = new int[16],
             ActiveClusterCount = 0,
             FreeClusterHead = -1,
             // Index = clusterChunkId * 64 + slotIndex. The 64 multiplier is fixed (not cluster size N)
             // because it aligns each cluster to exactly one bitmap word for O(1) per-cluster dirty scan.
-            ClusterDirtyBitmap = new DirtyBitmap(Math.Max(64, segment.ChunkCapacity * 64)),
+            ClusterDirtyBitmap = new DirtyBitmap(Math.Max(64, capacity * 64)),
         };
+    }
 
     /// <summary>
     /// Create an ArchetypeClusterState from an existing persisted segment (database reopen).
     /// Scans cluster occupancy bitmaps to rebuild <see cref="ActiveClusterIds"/> and <see cref="FreeClusterHead"/>.
     /// </summary>
-    public static ArchetypeClusterState CreateFromExisting(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment)
+    public static ArchetypeClusterState CreateFromExisting(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment,
+        ChunkBasedSegment<TransientStore> transientSegment = default, TransientStore? transientStore = null)
     {
+        Debug.Assert(segment != null || transientSegment != null, "At least one cluster segment must be provided");
+        int capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
         var state = new ArchetypeClusterState
         {
             ClusterSegment = segment,
+            TransientSegment = transientSegment,
+            TransientClusterStore = transientStore,
             Layout = layout,
             ActiveClusterIds = new int[16],
             ActiveClusterCount = 0,
             FreeClusterHead = -1,
             // Index = clusterChunkId * 64 + slotIndex. The 64 multiplier is fixed (not cluster size N)
             // because it aligns each cluster to exactly one bitmap word for O(1) per-cluster dirty scan.
-            ClusterDirtyBitmap = new DirtyBitmap(Math.Max(64, segment.ChunkCapacity * 64)),
+            ClusterDirtyBitmap = new DirtyBitmap(Math.Max(64, capacity * 64)),
         };
 
         state.RebuildActiveList();
@@ -118,37 +146,82 @@ internal sealed unsafe class ArchetypeClusterState
         ActiveClusterCount = 0;
         FreeClusterHead = -1;
 
-        var accessor = ClusterSegment.CreateChunkAccessor();
-        try
+        // Scan primary segment (PersistentStore for mixed/SV, TransientStore for pure-Transient)
+        if (ClusterSegment != null)
         {
-            int capacity = ClusterSegment.ChunkCapacity;
-            for (int chunkId = 1; chunkId < capacity; chunkId++)
+            var accessor = ClusterSegment.CreateChunkAccessor();
+            try
             {
-                if (!ClusterSegment.IsChunkAllocated(chunkId))
-                {
-                    continue;
-                }
-
-                byte* clusterBase = accessor.GetChunkAddress(chunkId);
-                ulong occupancy = *(ulong*)clusterBase;
-
-                if (occupancy == 0)
-                {
-                    continue; // Empty cluster — shouldn't exist normally, skip defensively
-                }
-
-                AddToActiveList(chunkId);
-
-                // If cluster has free slots, set as free head (first-fit)
-                if (FreeClusterHead < 0 && (~occupancy & Layout.FullMask) != 0)
-                {
-                    FreeClusterHead = chunkId;
-                }
+                ScanActiveChunks(ref accessor, ClusterSegment.ChunkCapacity);
+            }
+            finally
+            {
+                accessor.Dispose();
             }
         }
-        finally
+        else if (TransientSegment != null)
         {
-            accessor.Dispose();
+            var accessor = TransientSegment.CreateChunkAccessor();
+            try
+            {
+                ScanActiveChunksTransient(ref accessor, TransientSegment.ChunkCapacity);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+    }
+
+    private void ScanActiveChunks(ref ChunkAccessor<PersistentStore> accessor, int capacity)
+    {
+        for (int chunkId = 1; chunkId < capacity; chunkId++)
+        {
+            if (!ClusterSegment.IsChunkAllocated(chunkId))
+            {
+                continue;
+            }
+
+            byte* clusterBase = accessor.GetChunkAddress(chunkId);
+            ulong occupancy = *(ulong*)clusterBase;
+
+            if (occupancy == 0)
+            {
+                continue;
+            }
+
+            AddToActiveList(chunkId);
+
+            if (FreeClusterHead < 0 && (~occupancy & Layout.FullMask) != 0)
+            {
+                FreeClusterHead = chunkId;
+            }
+        }
+    }
+
+    private void ScanActiveChunksTransient(ref ChunkAccessor<TransientStore> accessor, int capacity)
+    {
+        for (int chunkId = 1; chunkId < capacity; chunkId++)
+        {
+            if (!TransientSegment.IsChunkAllocated(chunkId))
+            {
+                continue;
+            }
+
+            byte* clusterBase = accessor.GetChunkAddress(chunkId);
+            ulong occupancy = *(ulong*)clusterBase;
+
+            if (occupancy == 0)
+            {
+                continue;
+            }
+
+            AddToActiveList(chunkId);
+
+            if (FreeClusterHead < 0 && (~occupancy & Layout.FullMask) != 0)
+            {
+                FreeClusterHead = chunkId;
+            }
         }
     }
 
@@ -223,11 +296,82 @@ internal sealed unsafe class ArchetypeClusterState
     }
 
     /// <summary>
-    /// Allocate a new cluster from the segment. Initializes to zero and adds to active list.
+    /// Claim a free slot for pure-Transient archetypes (no PersistentStore segment).
+    /// Same logic as the PersistentStore overload but using TransientStore accessor.
+    /// </summary>
+    public (int clusterChunkId, int slotIndex) ClaimSlot(ref ChunkAccessor<TransientStore> accessor)
+    {
+        if (FreeClusterHead >= 0)
+        {
+            int clusterId = FreeClusterHead;
+            byte* clusterBase = accessor.GetChunkAddress(clusterId, true);
+            ref ulong occupancy = ref *(ulong*)clusterBase;
+
+            ulong current = occupancy;
+            ulong available = ~current & Layout.FullMask;
+            if (available != 0)
+            {
+                int slot = BitOperations.TrailingZeroCount(available);
+                ulong desired = current | (1UL << slot);
+
+                if (Interlocked.CompareExchange(ref occupancy, desired, current) == current)
+                {
+                    if (desired == Layout.FullMask)
+                    {
+                        FreeClusterHead = -1;
+                    }
+                    return (clusterId, slot);
+                }
+
+                current = occupancy;
+                available = ~current & Layout.FullMask;
+                if (available != 0)
+                {
+                    slot = BitOperations.TrailingZeroCount(available);
+                    desired = current | (1UL << slot);
+                    occupancy = desired;
+                    if (desired == Layout.FullMask)
+                    {
+                        FreeClusterHead = -1;
+                    }
+                    return (clusterId, slot);
+                }
+            }
+
+            FreeClusterHead = -1;
+        }
+
+        int newClusterId = AllocateNewCluster(null);
+        byte* newBase = accessor.GetChunkAddress(newClusterId, true);
+        *(ulong*)newBase = 1UL;
+        FreeClusterHead = Layout.ClusterSize > 1 ? newClusterId : -1;
+
+        return (newClusterId, 0);
+    }
+
+    /// <summary>
+    /// Allocate a new cluster from both segments (lockstep). Initializes to zero and adds to active list.
     /// </summary>
     public int AllocateNewCluster(ChangeSet changeSet)
     {
-        int chunkId = ClusterSegment.AllocateChunk(true, changeSet);
+        int chunkId;
+        if (ClusterSegment != null)
+        {
+            chunkId = ClusterSegment.AllocateChunk(true, changeSet);
+        }
+        else
+        {
+            // Pure-Transient: allocate from TransientStore only
+            chunkId = TransientSegment.AllocateChunk(true);
+        }
+
+        // Dual-segment: allocate matching chunk in TransientSegment (lockstep ensures same chunk IDs)
+        if (TransientSegment != null && ClusterSegment != null)
+        {
+            int transientChunkId = TransientSegment.AllocateChunk(true);
+            Debug.Assert(transientChunkId == chunkId, $"Dual-segment chunk ID mismatch: PS={chunkId}, TS={transientChunkId}");
+        }
+
         AddToActiveList(chunkId);
         return chunkId;
     }
@@ -264,42 +408,62 @@ internal sealed unsafe class ArchetypeClusterState
     }
 
     /// <summary>
-    /// Release a slot in a cluster: clear OccupancyBit, EnabledBits, EntityKey.
-    /// If the cluster becomes empty, free it to the segment.
+    /// Release a slot in a cluster: clear OccupancyBit, EnabledBits, EntityKey on the primary segment.
+    /// If the cluster becomes empty, free it from both segments.
     /// </summary>
     public void ReleaseSlot(ref ChunkAccessor<PersistentStore> accessor, int clusterChunkId, int slotIndex, ChangeSet changeSet)
     {
         byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
+        ClearSlotMetadata(clusterBase, clusterChunkId, slotIndex);
+
+        ref ulong occupancy = ref *(ulong*)clusterBase;
+        if (BitOperations.PopCount(occupancy) == 0)
+        {
+            RemoveFromActiveList(clusterChunkId);
+            ClusterSegment.FreeChunk(clusterChunkId);
+            TransientSegment?.FreeChunk(clusterChunkId);
+        }
+        else if (FreeClusterHead < 0)
+        {
+            FreeClusterHead = clusterChunkId;
+        }
+    }
+
+    /// <summary>
+    /// Release a slot for pure-Transient archetypes (no PersistentStore segment).
+    /// </summary>
+    public void ReleaseSlot(ref ChunkAccessor<TransientStore> accessor, int clusterChunkId, int slotIndex)
+    {
+        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
+        ClearSlotMetadata(clusterBase, clusterChunkId, slotIndex);
+
+        ref ulong occupancy = ref *(ulong*)clusterBase;
+        if (BitOperations.PopCount(occupancy) == 0)
+        {
+            RemoveFromActiveList(clusterChunkId);
+            TransientSegment.FreeChunk(clusterChunkId);
+        }
+        else if (FreeClusterHead < 0)
+        {
+            FreeClusterHead = clusterChunkId;
+        }
+    }
+
+    /// <summary>Clear EnabledBits, OccupancyBit, and EntityId for a slot (store-agnostic pointer math).</summary>
+    private void ClearSlotMetadata(byte* clusterBase, int clusterChunkId, int slotIndex)
+    {
         ulong slotMask = 1UL << slotIndex;
 
-        // Clear EnabledBits for all component slots
         for (int slot = 0; slot < Layout.ComponentCount; slot++)
         {
             ref ulong enabledBits = ref *(ulong*)(clusterBase + Layout.EnabledBitsOffset(slot));
             enabledBits &= ~slotMask;
         }
 
-        // Clear OccupancyBit
         ref ulong occupancy = ref *(ulong*)clusterBase;
         occupancy &= ~slotMask;
 
-        // Clear EntityId
         *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8) = 0;
-
-        // If cluster now empty, free it
-        if (BitOperations.PopCount(occupancy) == 0)
-        {
-            RemoveFromActiveList(clusterChunkId);
-            ClusterSegment.FreeChunk(clusterChunkId);
-        }
-        else
-        {
-            // Cluster has free space — make it the free head if nothing better
-            if (FreeClusterHead < 0)
-            {
-                FreeClusterHead = clusterChunkId;
-            }
-        }
     }
 
     /// <summary>
@@ -313,6 +477,11 @@ internal sealed unsafe class ArchetypeClusterState
         int slotCount = 0;
         for (int slot = 0; slot < slotToTable.Length; slot++)
         {
+            // Skip Transient slots — their indexes use per-ComponentTable TransientIndex (BTree<TransientStore>)
+            if (slotToTable[slot].StorageMode == StorageMode.Transient)
+            {
+                continue;
+            }
             var infos = slotToTable[slot].IndexedFieldInfos;
             if (infos != null && infos.Length > 0)
             {
@@ -325,6 +494,11 @@ internal sealed unsafe class ArchetypeClusterState
         for (int slot = 0; slot < slotToTable.Length; slot++)
         {
             var table = slotToTable[slot];
+            // Skip Transient slots — indexes maintained per-ComponentTable, not per-archetype
+            if (table.StorageMode == StorageMode.Transient)
+            {
+                continue;
+            }
             var infos = table.IndexedFieldInfos;
             if (infos == null || infos.Length == 0)
             {
@@ -354,7 +528,7 @@ internal sealed unsafe class ArchetypeClusterState
                     FieldSize = ifi.Size,
                     Index = btree,
                     AllowMultiple = ifi.AllowMultiple,
-                    ZoneMap = new ZoneMapArray(ClusterSegment.ChunkCapacity, ifi.Size,
+                    ZoneMap = new ZoneMapArray(PrimarySegmentCapacity, ifi.Size,
                         isFloat: fieldDef.Type == FieldType.Float, isDouble: fieldDef.Type == FieldType.Double,
                         isUnsigned: (fieldDef.Type & FieldType.Unsigned) != 0),
                 };
@@ -370,7 +544,7 @@ internal sealed unsafe class ArchetypeClusterState
             };
         }
 
-        ClusterShadowBitmap = new DirtyBitmap(Math.Max(64, ClusterSegment.ChunkCapacity * 64));
+        ClusterShadowBitmap = new DirtyBitmap(Math.Max(64, PrimarySegmentCapacity * 64));
     }
 
     /// <summary>
@@ -379,11 +553,12 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     public void RebuildIndexesFromData(ChangeSet changeSet)
     {
-        if (IndexSlots == null)
+        if (IndexSlots == null || IndexSlots.Length == 0)
         {
             return;
         }
 
+        // Index rebuild reads from primary segment (SV/V data — Transient excluded from IndexSlots)
         var clusterAccessor = ClusterSegment.CreateChunkAccessor();
         var idxAccessor = IndexSegment.CreateChunkAccessor(changeSet);
         try

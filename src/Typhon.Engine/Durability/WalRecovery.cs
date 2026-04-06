@@ -555,7 +555,15 @@ internal sealed class WalRecovery : IDisposable
             }
 
             var layout = clusterState.Layout;
+
+            // Pure-Transient archetypes have no WAL entries — skip
+            if (clusterState.ClusterSegment == null)
+            {
+                continue;
+            }
+
             var accessor = clusterState.ClusterSegment.CreateChunkAccessor(cs);
+            ushort transientMask = layout.TransientSlotMask;
 
             foreach (var (entityIndex, allCompData) in scanEntry.Entries)
             {
@@ -574,6 +582,11 @@ internal sealed class WalRecovery : IDisposable
                 int dataOffset = 0;
                 for (int slot = 0; slot < layout.ComponentCount; slot++)
                 {
+                    // Transient slots were not serialized to WAL — skip during replay
+                    if ((transientMask & (1 << slot)) != 0)
+                    {
+                        continue;
+                    }
                     int compOffset = layout.ComponentOffset(slot);
                     int compSize = layout.ComponentSize(slot);
                     if (dataOffset + compSize > allCompData.Length)

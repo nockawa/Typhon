@@ -25,7 +25,8 @@ public unsafe ref struct EntityRef
     private fixed int _locations[16];
 
     // ── Cluster storage fields (non-null when entity uses cluster storage) ──
-    internal byte* _clusterBase;                    // Pointer to cluster chunk data; null = legacy path
+    internal byte* _clusterBase;                    // Pointer to primary cluster chunk data; null = legacy path
+    internal byte* _transientClusterBase;           // Pointer to TransientStore cluster base; null = no Transient segment (or pure-T where _clusterBase is TS)
     internal byte _clusterSlotIndex;                // Slot within cluster (0..63)
     internal int _clusterChunkId;                   // Cluster chunk ID (for dirty tracking: entityIndex = chunkId * 64 + slot)
     internal ArchetypeClusterInfo _clusterLayout;   // Layout info for offset computation
@@ -103,6 +104,11 @@ public unsafe ref struct EntityRef
 
         if (_clusterBase != null)
         {
+            // Transient slots read from TransientStore cluster segment (mixed archetypes only; for pure-T, _clusterBase IS the TS base)
+            if (_transientClusterBase != null && (_archetype.TransientSlotMask & (1 << slot)) != 0)
+            {
+                return ref Unsafe.AsRef<T>(_transientClusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+            }
             // Versioned slots read from content chunk (_locations populated by chain walk), not cluster slot.
             // Cluster slot is the HEAD cache — used by bulk iteration only. MVCC-correct reads use content chunk.
             if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
@@ -141,10 +147,26 @@ public unsafe ref struct EntityRef
                 return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
             }
 
-            // SV cluster fast path: direct pointer arithmetic into SoA array.
-            // Page was already marked dirty at resolve time (OpenMut → GetChunkAddress(dirty:true)).
             var clusterState = _engineState.ClusterState;
 
+            // Transient cluster: in-place write to TransientStore segment (no COW, no revision chain)
+            if (_transientClusterBase != null && (_archetype.TransientSlotMask & (1 << slot)) != 0)
+            {
+                // Shadow capture for SV indexed fields (first write per entity per tick — captures SV fields, skips T and V)
+                if (clusterState.IndexSlots != null)
+                {
+                    int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+                    if (!clusterState.ClusterShadowBitmap.TestAndSet(entityIndex))
+                    {
+                        ShadowClusterIndexedFields(clusterState);
+                    }
+                }
+                clusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
+                return ref Unsafe.AsRef<T>(_transientClusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+            }
+
+            // SV cluster fast path: direct pointer arithmetic into SoA array.
+            // Page was already marked dirty at resolve time (OpenMut → GetChunkAddress(dirty:true)).
             // Shadow capture for per-archetype B+Tree index maintenance (first write per entity per tick)
             if (clusterState.IndexSlots != null)
             {
@@ -276,15 +298,14 @@ public unsafe ref struct EntityRef
         long pk = (long)_id.RawValue;
         int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
         var slots = clusterState.IndexSlots;
-        ushort versionedMask = _archetype.VersionedSlotMask;
+        // Skip Versioned slots (indexes updated at commit time) and Transient slots (indexes maintained per-ComponentTable)
+        ushort skipMask = (ushort)(_archetype.VersionedSlotMask | _archetype.TransientSlotMask);
 
         for (int s = 0; s < slots.Length; s++)
         {
             ref var ixSlot = ref slots[s];
 
-            // Skip Versioned component slots — their indexes are updated at commit time (CommitComponentCore), not at tick fence.
-            // Shadow capture would cause double index updates.
-            if ((versionedMask & (1 << ixSlot.Slot)) != 0)
+            if ((skipMask & (1 << ixSlot.Slot)) != 0)
             {
                 continue;
             }
@@ -342,6 +363,12 @@ public unsafe ref struct EntityRef
 
         if (_clusterBase != null)
         {
+            // Transient slots read from TransientStore cluster segment
+            if (_transientClusterBase != null && (_archetype.TransientSlotMask & (1 << slot)) != 0)
+            {
+                value = Unsafe.AsRef<T>(_transientClusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+                return true;
+            }
             // Versioned slots read from content chunk (_locations populated by chain walk), not cluster slot.
             if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
             {

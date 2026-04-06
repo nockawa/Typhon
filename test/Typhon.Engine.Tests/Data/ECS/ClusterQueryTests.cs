@@ -527,7 +527,7 @@ class ClusterQueryTests : TestBase<ClusterQueryTests>
         // Scoped enumerator — first half of clusters
         int halfPoint = cs.ActiveClusterCount / 2;
         int scopedCount = 0;
-        var scoped = ClusterEnumerator<ClQUnit>.CreateScoped(cs, meta, cs.ClusterSegment, 0, halfPoint);
+        var scoped = ClusterEnumerator<ClQUnit>.CreateScoped(cs, meta, cs.ClusterSegment, cs.TransientSegment, 0, halfPoint);
         try
         {
             while (scoped.MoveNext())

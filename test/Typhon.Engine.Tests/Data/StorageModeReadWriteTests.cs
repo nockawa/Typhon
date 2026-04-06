@@ -417,8 +417,17 @@ class StorageModeReadWriteTests : TestBase<StorageModeReadWriteTests>
         entity.Write(MixedModeArchetype.SV).Value = 200;
         entity.Write(MixedModeArchetype.Trans).Value = 300;
 
-        // Only SV table should have dirty bits
-        Assert.That(svTable.DirtyBitmap.HasDirty, Is.True, "SV DirtyBitmap should be set after write");
+        // Dirty tracking: cluster-eligible archetypes use per-archetype ClusterDirtyBitmap, not per-ComponentTable DirtyBitmap.
+        var meta = ArchetypeRegistry.GetMetadata<MixedModeArchetype>();
+        if (meta.IsClusterEligible)
+        {
+            var clusterState = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True, "ClusterDirtyBitmap should be set after write");
+        }
+        else
+        {
+            Assert.That(svTable.DirtyBitmap.HasDirty, Is.True, "SV DirtyBitmap should be set after write");
+        }
     }
 
     [Test]

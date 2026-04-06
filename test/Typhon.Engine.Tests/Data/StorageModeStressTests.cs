@@ -383,8 +383,17 @@ class StorageModeStressTests : TestBase<StorageModeStressTests>
         Task.WaitAll(tasks);
         Assert.That(errors, Is.Empty, () => $"Mixed concurrent writes failed: {string.Join("; ", errors)}");
 
-        // SV DirtyBitmap reflects writes
-        Assert.That(svTable.DirtyBitmap.HasDirty, Is.True, "SV DirtyBitmap must reflect writes");
+        // Dirty tracking: cluster-eligible archetypes use ClusterDirtyBitmap, not per-ComponentTable DirtyBitmap
+        var meta = ArchetypeRegistry.GetMetadata<MixedModeArchetype>();
+        if (meta.IsClusterEligible)
+        {
+            var clusterState = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True, "ClusterDirtyBitmap must reflect writes");
+        }
+        else
+        {
+            Assert.That(svTable.DirtyBitmap.HasDirty, Is.True, "SV DirtyBitmap must reflect writes");
+        }
 
         // Verify all 3 modes read back correctly
         using var txRead = dbe.CreateQuickTransaction();

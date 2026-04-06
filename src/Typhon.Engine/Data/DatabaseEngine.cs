@@ -778,6 +778,52 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// Serializes dirty cluster entity data to WAL for all cluster-eligible archetypes.
     /// Called from <see cref="WriteTickFence"/> after per-ComponentTable processing.
     /// </summary>
+    /// <summary>Create a fresh CBS&lt;TransientStore&gt; for cluster Transient component storage.</summary>
+    private void CreateTransientClusterSegment(int stride, out TransientStore? store, out ChunkBasedSegment<TransientStore> segment)
+    {
+        store = new TransientStore(TransientOptions, MemoryAllocator, EpochManager, this);
+        var tsValue = store.Value;
+        segment = new ChunkBasedSegment<TransientStore>(EpochManager, tsValue, stride);
+        Span<int> tsPages = stackalloc int[4];
+        tsValue.AllocatePages(ref tsPages, 0, null);
+        segment.Create(PageBlockType.None, tsPages, false);
+    }
+
+    /// <summary>
+    /// After reopening a mixed archetype with Transient components, allocate matching chunks in the fresh
+    /// TransientSegment so chunk IDs stay synchronized with the persisted PersistentStore segment.
+    /// </summary>
+    /// <remarks>
+    /// <para>Relies on the TransientSegment being freshly created (no prior allocations/frees), which guarantees
+    /// sequential chunk ID assignment (1, 2, 3, ...). This is always true because TransientStore data doesn't
+    /// survive restart — the segment is created fresh in every reopen path.</para>
+    /// </remarks>
+    private static void SyncTransientSegmentToActive(ArchetypeClusterState clusterState)
+    {
+        if (clusterState.TransientSegment == null)
+        {
+            return;
+        }
+
+        // Find max chunk ID among active clusters
+        int maxChunkId = 0;
+        for (int i = 0; i < clusterState.ActiveClusterCount; i++)
+        {
+            if (clusterState.ActiveClusterIds[i] > maxChunkId)
+            {
+                maxChunkId = clusterState.ActiveClusterIds[i];
+            }
+        }
+
+        // Allocate chunks in TransientStore sequentially up to maxChunkId so IDs match.
+        // TransientStore is always fresh — sequential allocation produces IDs 1..maxChunkId.
+        for (int id = 1; id <= maxChunkId; id++)
+        {
+            int allocatedId = clusterState.TransientSegment.AllocateChunk(true);
+            Debug.Assert(allocatedId == id, $"TransientSegment sync: expected chunk ID {id}, got {allocatedId}");
+        }
+    }
+
     private unsafe void WriteClusterTickFence(long tickNumber, ref long highestLSN)
     {
         foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
@@ -791,6 +837,27 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             var clusterState = engineState?.ClusterState;
             if (clusterState == null)
             {
+                continue;
+            }
+
+            // Pure-Transient archetypes have no PersistentStore segment — nothing to persist to WAL
+            if (clusterState.ClusterSegment == null)
+            {
+                // Still snapshot dirty bitmap for change-filtered dispatch
+                if (clusterState.ClusterDirtyBitmap.HasDirty)
+                {
+                    clusterState.PreviousTickDirtySnapshot = clusterState.ClusterDirtyBitmap.Snapshot();
+                    // Propagate dirty status to per-ComponentTable flags
+                    for (int slot = 0; slot < clusterState.Layout.ComponentCount; slot++)
+                    {
+                        engineState.SlotToComponentTable[slot].PreviousTickHadDirtyEntities = true;
+                        engineState.SlotToComponentTable[slot].PreviousTickDirtyBitmap ??= Array.Empty<long>();
+                    }
+                }
+                else
+                {
+                    clusterState.PreviousTickDirtySnapshot = null;
+                }
                 continue;
             }
 
@@ -868,9 +935,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 }
 
                 var layout = clusterState.Layout;
+                ushort transientMask = meta.TransientSlotMask;
                 int perEntityPayload = 0;
                 for (int slot = 0; slot < layout.ComponentCount; slot++)
                 {
+                    if ((transientMask & (1 << slot)) != 0)
+                    {
+                        continue; // Transient data not persisted to WAL
+                    }
                     perEntityPayload += layout.ComponentSize(slot);
                 }
 
@@ -953,10 +1025,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                             MemoryMarshal.Write(claim.DataSpan[offset..], in entityIndex);
                             offset += 4;
 
-                            // Write all component data from cluster SoA arrays
+                            // Write non-Transient component data from cluster SoA arrays
                             byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
                             for (int slot = 0; slot < layout.ComponentCount; slot++)
                             {
+                                if ((transientMask & (1 << slot)) != 0)
+                                {
+                                    continue; // Transient data not persisted to WAL
+                                }
                                 int compOffset = layout.ComponentOffset(slot);
                                 int compSize = layout.ComponentSize(slot);
                                 byte* src = clusterBase + compOffset + slotIndex * compSize;
@@ -2024,7 +2100,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             var arch = persisted.Arch;
             arch.EntityMapSPI = state.EntityMap.Segment.RootPageIndex;
-            arch.ClusterSegmentSPI = state.ClusterState?.ClusterSegment.RootPageIndex ?? 0;
+            arch.ClusterSegmentSPI = state.ClusterState?.ClusterSegment?.RootPageIndex ?? 0;
             arch.NextEntityKey = Interlocked.Read(ref state.NextEntityKey);
 
             // Persist per-archetype cluster index segment SPI via bootstrap dictionary
@@ -2484,25 +2560,20 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // ═══════════════════════════════════════════════════════════════════════
-            // Cluster storage eligibility: SV + Versioned allowed (Transient excluded)
-            // Versioned components store HEAD in cluster slot, chain separate.
-            // Requires at least one SV component — pure-Versioned archetypes stay on
-            // legacy path because many code paths (PTA, EcsView, WAL, migration) haven't
-            // been updated for cluster+Versioned yet.
+            // Cluster storage eligibility: SV, Versioned, and Transient all allowed.
+            // Versioned stores HEAD in cluster slot, chain separate. Transient stores component data in a parallel CBS<TransientStore> segment (zero page cache).
+            // Pure-Versioned archetypes stay on legacy path (must have ≥1 SV or Transient).
             // ═══════════════════════════════════════════════════════════════════════
             bool isClusterEligible = true;
-            bool hasIndexedFields = false;
+            bool hasClusterIndexableFields = false;  // Non-Transient indexed fields (for per-archetype cluster B+Trees)
             bool hasSpatialField = false;
             bool hasSvSlot = false;
+            bool hasTransientSlot = false;
             ushort versionedSlotMask = 0;
+            ushort transientSlotMask = 0;
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
                 var table = slotToTable[slot];
-                if (table.StorageMode == StorageMode.Transient)
-                {
-                    isClusterEligible = false;
-                    break;
-                }
                 if (table.StorageMode == StorageMode.Versioned)
                 {
                     versionedSlotMask |= (ushort)(1 << slot);
@@ -2511,28 +2582,44 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 {
                     hasSvSlot = true;
                 }
+                else if (table.StorageMode == StorageMode.Transient)
+                {
+                    transientSlotMask |= (ushort)(1 << slot);
+                    hasTransientSlot = true;
+                    // Transient components with indexed fields stay on legacy per-entity path.
+                    // Reason: cluster Write<T> returns a ref into the SoA slot — there's no hook to update TransientIndex.Move(oldKey→newKey) after the
+                    // caller modifies the value. The shadow/tick-fence mechanism used by SV indexed fields reads from ClusterSegment (PersistentStore),
+                    // not TransientSegment.
+                    // Since Transient indexed fields are rare (most Transient components are unindexed runtime state), this exclusion has minimal impact.
+                    if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0)
+                    {
+                        isClusterEligible = false;
+                        break;
+                    }
+                }
                 if (table.SpatialIndex != null)
                 {
                     hasSpatialField = true;
                 }
-                if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0)
+                if (table.IndexedFieldInfos != null && table.IndexedFieldInfos.Length > 0 && table.StorageMode != StorageMode.Transient)
                 {
-                    hasIndexedFields = true;
+                    hasClusterIndexableFields = true;
                 }
             }
 
-            // Require at least one SV component for cluster eligibility.
-            // Pure-Versioned archetypes stay on legacy path for now.
-            if (isClusterEligible && !hasSvSlot)
+            // Require at least one SV or Transient slot. Pure-Versioned stays on legacy path.
+            if (isClusterEligible && !hasSvSlot && !hasTransientSlot)
             {
                 isClusterEligible = false;
             }
 
             meta.IsClusterEligible = isClusterEligible;
-            meta.HasClusterIndexes = isClusterEligible && hasIndexedFields;
+            meta.HasClusterIndexes = isClusterEligible && hasClusterIndexableFields;
             meta.HasClusterSpatial = isClusterEligible && hasSpatialField;
             meta.VersionedSlotMask = isClusterEligible ? versionedSlotMask : (ushort)0;
             meta.VersionedSlotCount = isClusterEligible ? (byte)System.Numerics.BitOperations.PopCount(versionedSlotMask) : (byte)0;
+            meta.TransientSlotMask = isClusterEligible ? transientSlotMask : (ushort)0;
+            meta.TransientSlotCount = isClusterEligible ? (byte)BitOperations.PopCount(transientSlotMask) : (byte)0;
 
             if (isClusterEligible)
             {
@@ -2542,7 +2629,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 {
                     componentSizes[slot] = slotToTable[slot].Definition.ComponentStorageSize;
                 }
-                meta.ClusterLayout = ArchetypeClusterInfo.Compute(meta.ComponentCount, componentSizes, versionedSlotMask);
+                meta.ClusterLayout = ArchetypeClusterInfo.Compute(meta.ComponentCount, componentSizes, versionedSlotMask, transientSlotMask);
 
                 // Override entity record size: base 19 bytes + 4 bytes per Versioned component slot
                 meta._entityRecordSize = ClusterEntityRecordAccessor.RecordSize(meta.VersionedSlotCount);
@@ -2595,38 +2682,71 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Create or reload ClusterState for cluster-eligible archetypes.
             if (isClusterEligible)
             {
+                bool isPureTransient = transientSlotMask != 0 && !hasSvSlot && versionedSlotMask == 0;
+
                 if (isFreshAllocation)
                 {
-                    // Start with 4 pages (grows dynamically). Original 20 caused page exhaustion when many
-                    // archetypes become cluster-eligible (Versioned components accepted).
-                    var clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 4, meta.ClusterLayout.ClusterStride);
-                    if (clusterSegment == null)
+                    // PersistentStore segment for SV+V components (null for pure-Transient)
+                    ChunkBasedSegment<PersistentStore> clusterSegment = null;
+                    if (!isPureTransient)
                     {
-                        throw new InvalidOperationException(
-                            $"Failed to allocate cluster segment for archetype {meta.ArchetypeType?.Name} (Id={meta.ArchetypeId}, Stride={meta.ClusterLayout.ClusterStride})");
+                        clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 4, meta.ClusterLayout.ClusterStride);
+                        if (clusterSegment == null)
+                        {
+                            throw new InvalidOperationException(
+                                $"Failed to allocate cluster segment for archetype {meta.ArchetypeType?.Name} (Id={meta.ArchetypeId}, Stride={meta.ClusterLayout.ClusterStride})");
+                        }
                     }
-                    _archetypeStates[meta.ArchetypeId].ClusterState = ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment);
+
+                    // TransientStore segment for Transient components (null if no Transient)
+                    ChunkBasedSegment<TransientStore> transientClusterSegment = null;
+                    TransientStore? transientClusterStore = null;
+                    if (transientSlotMask != 0)
+                    {
+                        CreateTransientClusterSegment(meta.ClusterLayout.ClusterStride, out transientClusterStore, out transientClusterSegment);
+                    }
+
+                    _archetypeStates[meta.ArchetypeId].ClusterState =
+                        ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment, transientClusterSegment, transientClusterStore);
                 }
                 else if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var clusterPersisted)
                          && clusterPersisted.Arch.ClusterSegmentSPI > 0)
                 {
-                    if (MMF.TryLoadChunkBasedSegment(clusterPersisted.Arch.ClusterSegmentSPI, meta.ClusterLayout.ClusterStride,
-                            out var loadedCluster))
+                    ChunkBasedSegment<PersistentStore> loadedCluster = null;
+                    bool loaded = !isPureTransient && MMF.TryLoadChunkBasedSegment(
+                        clusterPersisted.Arch.ClusterSegmentSPI, meta.ClusterLayout.ClusterStride, out loadedCluster);
+
+                    // TransientStore segment always created fresh on reopen (Transient data doesn't survive restart)
+                    ChunkBasedSegment<TransientStore> transientClusterSegment = default;
+                    TransientStore? transientClusterStore = null;
+                    if (transientSlotMask != 0)
                     {
-                        // Reopen persisted cluster segment and rebuild runtime state from occupancy bitmaps.
-                        // RebuildActiveList needs an epoch scope to create a ChunkAccessor for reading occupancy bits.
+                        CreateTransientClusterSegment(meta.ClusterLayout.ClusterStride, out transientClusterStore, out transientClusterSegment);
+                    }
+
+                    if (loaded)
+                    {
                         using var clusterEpoch = EpochGuard.Enter(EpochManager);
+                        var clusterState = ArchetypeClusterState.CreateFromExisting(meta.ClusterLayout, loadedCluster, transientClusterSegment, transientClusterStore);
+                        _archetypeStates[meta.ArchetypeId].ClusterState = clusterState;
+
+                        // Sync TransientSegment chunk IDs with PersistentStore's active clusters
+                        if (transientSlotMask != 0 && clusterState.ActiveClusterCount > 0)
+                        {
+                            SyncTransientSegmentToActive(clusterState);
+                        }
+                    }
+                    else if (!isPureTransient)
+                    {
+                        var fallbackSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
                         _archetypeStates[meta.ArchetypeId].ClusterState =
-                            ArchetypeClusterState.CreateFromExisting(meta.ClusterLayout, loadedCluster);
+                            ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment, transientClusterSegment, transientClusterStore);
                     }
                     else
                     {
-                        // Cluster segment corrupted or unavailable — allocate fresh.
-                        // Existing ClusterEntityRecords in the EntityMap reference the old segment;
-                        // those entities will read zeroed component data until next write.
-                        var fallbackSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
+                        // Pure-Transient reopen: no persisted data, create fresh
                         _archetypeStates[meta.ArchetypeId].ClusterState =
-                            ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment);
+                            ArchetypeClusterState.Create(meta.ClusterLayout, null, transientClusterSegment, transientClusterStore);
                     }
                 }
 
