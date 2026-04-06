@@ -916,6 +916,55 @@ public unsafe partial class Transaction
                 result._clusterSlotIndex = slotIndex;
                 result._clusterChunkId = clusterChunkId;
                 result._clusterLayout = es.ClusterState.Layout;
+
+                // Phase 5: For Versioned slots, walk chain and store resolved content chunkId in _locations.
+                // Versioned reads via EntityRef.Read use _locations (not cluster slot) for MVCC correctness.
+                // Bulk iteration (GetClusterEnumerator) reads HEAD directly from cluster SoA.
+                if (meta.VersionedSlotMask != 0)
+                {
+                    var layout = es.ClusterState.Layout;
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        if (layout.SlotToVersionedIndex == null)
+                        {
+                            break;
+                        }
+                        int vi = layout.SlotToVersionedIndex[slot];
+                        if (vi < 0)
+                        {
+                            continue;
+                        }
+
+                        int compRevFirstChunkId = ClusterEntityRecordAccessor.GetCompRevFirstChunkId(readBuf, vi);
+                        if (compRevFirstChunkId == 0)
+                        {
+                            continue;
+                        }
+
+                        var compType = meta._slotToComponentType[slot];
+                        var info = GetComponentInfo(compType);
+                        long pk = (long)id.RawValue;
+
+                        // Check cache first (prior Open or Write in this transaction)
+                        if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+                        {
+                            result.SetLocation(slot, cached.CurCompContentChunkId);
+                            continue;
+                        }
+
+                        // Walk revision chain
+                        var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN);
+                        if (chainResult.IsFailure)
+                        {
+                            continue;
+                        }
+
+                        var compRevInfo = chainResult.Value;
+                        compRevInfo.Operations = ComponentInfo.OperationType.Read;
+                        info.AddNew(pk, compRevInfo);
+                        result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
+                    }
+                }
             }
             else
             {
@@ -1091,8 +1140,8 @@ public unsafe partial class Transaction
 
         using var guard = EpochGuard.Enter(_epochManager);
 
-        // Hoist stackalloc outside the loop — max record size is 78B (14B header + 16 components × 4B)
-        byte* recordPtr = stackalloc byte[EntityRecordAccessor.MaxRecordSize];
+        // Hoist stackalloc outside the loop — cluster record is the largest: 19B base + 16 × 4B Versioned = 83B (≥ legacy 78B)
+        byte* recordPtr = stackalloc byte[ClusterEntityRecordAccessor.BaseRecordSize + EntityRecordAccessor.MaxComponentCount * sizeof(int)];
 
         // Hoist all accessors outside the per-entity loop.
         // Track last-used archetype — covers the dominant case (single archetype per TX).
@@ -1119,7 +1168,7 @@ public unsafe partial class Transaction
         int trIdxAccessorTotal = 0;
 
         // Per-archetype cached state — avoids per-entity metadata lookups
-        ArchetypeMetadata meta;
+        ArchetypeMetadata meta = null;
         ArchetypeEngineState engineState = null;
         int componentCount = 0;
         ushort versionedMask = 0; // bit set for Versioned slots — eliminates per-slot table dereference
@@ -1413,13 +1462,26 @@ public unsafe partial class Transaction
 
                     // OccupancyBit was already set by ClaimSlot
 
-                    // Build 19-byte ClusterEntityRecord
-                    ClusterEntityRecordAccessor.InitializeRecord(recordPtr);
+                    // Build ClusterEntityRecord (19 bytes base + 4 bytes per Versioned slot)
+                    ClusterEntityRecordAccessor.InitializeRecord(recordPtr, meta.VersionedSlotCount);
                     ref var clusterHeader = ref ClusterEntityRecordAccessor.GetHeader(recordPtr);
                     clusterHeader.BornTSN = TSN;
                     clusterHeader.EnabledBits = enabledBits;
                     ClusterEntityRecordAccessor.SetClusterChunkId(recordPtr, clusterChunkId);
                     ClusterEntityRecordAccessor.SetSlotIndex(recordPtr, (byte)slotIdx);
+
+                    // Store compRevFirstChunkId for each Versioned slot (Phase 5)
+                    if (meta.VersionedSlotMask != 0)
+                    {
+                        for (int slot = 0; slot < componentCount; slot++)
+                        {
+                            int vi = layout.SlotToVersionedIndex[slot];
+                            if (vi >= 0)
+                            {
+                                ClusterEntityRecordAccessor.SetCompRevFirstChunkId(recordPtr, vi, entry.Rev[slot]);
+                            }
+                        }
+                    }
 
                     // Insert ClusterEntityRecord into EntityMap
                     engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);

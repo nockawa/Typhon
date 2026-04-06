@@ -2484,18 +2484,32 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // ═══════════════════════════════════════════════════════════════════════
-            // Cluster storage eligibility: all SV (indexes + Dynamic spatial allowed since Phase 3a/3b)
+            // Cluster storage eligibility: SV + Versioned allowed (Transient excluded)
+            // Phase 5: Versioned components store HEAD in cluster slot, chain separate.
+            // Requires at least one SV component — pure-Versioned archetypes stay on
+            // legacy path because many code paths (PTA, EcsView, WAL, migration) haven't
+            // been updated for cluster+Versioned yet.
             // ═══════════════════════════════════════════════════════════════════════
             bool isClusterEligible = true;
             bool hasIndexedFields = false;
             bool hasSpatialField = false;
+            bool hasSvSlot = false;
+            ushort versionedSlotMask = 0;
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
                 var table = slotToTable[slot];
-                if (table.StorageMode != StorageMode.SingleVersion)
+                if (table.StorageMode == StorageMode.Transient)
                 {
                     isClusterEligible = false;
                     break;
+                }
+                if (table.StorageMode == StorageMode.Versioned)
+                {
+                    versionedSlotMask |= (ushort)(1 << slot);
+                }
+                else if (table.StorageMode == StorageMode.SingleVersion)
+                {
+                    hasSvSlot = true;
                 }
                 if (table.SpatialIndex != null)
                 {
@@ -2506,9 +2520,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     hasIndexedFields = true;
                 }
             }
+
+            // Phase 5 gating: require at least one SV component for cluster eligibility.
+            // Pure-Versioned archetypes stay on legacy path for now.
+            if (isClusterEligible && !hasSvSlot)
+            {
+                isClusterEligible = false;
+            }
+
             meta.IsClusterEligible = isClusterEligible;
             meta.HasClusterIndexes = isClusterEligible && hasIndexedFields;
             meta.HasClusterSpatial = isClusterEligible && hasSpatialField;
+            meta.VersionedSlotMask = isClusterEligible ? versionedSlotMask : (ushort)0;
+            meta.VersionedSlotCount = isClusterEligible ? (byte)System.Numerics.BitOperations.PopCount(versionedSlotMask) : (byte)0;
 
             if (isClusterEligible)
             {
@@ -2518,10 +2542,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 {
                     componentSizes[slot] = slotToTable[slot].Definition.ComponentStorageSize;
                 }
-                meta.ClusterLayout = ArchetypeClusterInfo.Compute(meta.ComponentCount, componentSizes);
+                meta.ClusterLayout = ArchetypeClusterInfo.Compute(meta.ComponentCount, componentSizes, versionedSlotMask);
 
-                // Override entity record size to use the compact 19-byte ClusterEntityRecord format
-                meta._entityRecordSize = ClusterEntityRecordAccessor.RecordSize;
+                // Override entity record size: base 19 bytes + 4 bytes per Versioned component slot
+                meta._entityRecordSize = ClusterEntityRecordAccessor.RecordSize(meta.VersionedSlotCount);
             }
 
             // Allocate or reload per-archetype entity storage (RawValueHashMap) on THIS engine's MMF
@@ -2573,7 +2597,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 if (isFreshAllocation)
                 {
-                    var clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride);
+                    // Start with 4 pages (grows dynamically). Original 20 caused page exhaustion when many
+                    // archetypes become cluster-eligible (Phase 5: Versioned components accepted).
+                    var clusterSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 4, meta.ClusterLayout.ClusterStride);
+                    if (clusterSegment == null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Failed to allocate cluster segment for archetype {meta.ArchetypeType?.Name} (Id={meta.ArchetypeId}, Stride={meta.ClusterLayout.ClusterStride})");
+                    }
                     _archetypeStates[meta.ArchetypeId].ClusterState = ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment);
                 }
                 else if (_persistedArchetypes.TryGetValue(meta.ArchetypeId, out var clusterPersisted)
@@ -2712,6 +2743,26 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     finally
                     {
                         changeSet.SaveChanges();
+                    }
+                }
+
+                // Phase 5: Rebuild Versioned HEAD values in cluster slots from revision chains on reopen.
+                // Crash between commit (chain WAL'd) and tick fence (cluster slot WAL'd) can leave stale HEADs.
+                if (!isFreshAllocation && meta.VersionedSlotMask != 0)
+                {
+                    var clusterState = _archetypeStates[meta.ArchetypeId].ClusterState;
+                    if (clusterState != null && clusterState.ActiveClusterCount > 0)
+                    {
+                        var changeSet = MMF.CreateChangeSet();
+                        try
+                        {
+                            using var vEpoch = EpochGuard.Enter(EpochManager);
+                            clusterState.RebuildVersionedHeadFromChain(meta, _archetypeStates[meta.ArchetypeId], changeSet);
+                        }
+                        finally
+                        {
+                            changeSet.SaveChanges();
+                        }
                     }
                 }
             }

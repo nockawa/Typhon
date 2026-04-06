@@ -109,6 +109,12 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             result._clusterSlotIndex = slotIndex;
             result._clusterChunkId = clusterChunkId;
             result._clusterLayout = _clusterState.Layout;
+
+            // Phase 5: For Versioned slots, walk chain and populate _locations for MVCC reads
+            if (_hasVersionedSlots)
+            {
+                ResolveClusterVersionedSlots(readBuf, id, ref result);
+            }
         }
         else
         {
@@ -124,6 +130,59 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Resolve Versioned component slots for cluster entities.
+    /// Walks the revision chain for each Versioned slot and stores the visible content chunkId in _locations.
+    /// This enables EntityRef.Read to route Versioned reads through the content chunk (MVCC-correct) while SV reads go through the cluster slot (fast path).
+    /// </summary>
+    private void ResolveClusterVersionedSlots(byte* record, EntityId id, ref EntityRef result)
+    {
+        var layout = _archetype.ClusterLayout;
+        if (layout.SlotToVersionedIndex == null)
+        {
+            return;
+        }
+
+        long pk = (long)id.RawValue;
+
+        for (int slot = 0; slot < _archetype.ComponentCount; slot++)
+        {
+            int vi = layout.SlotToVersionedIndex[slot];
+            if (vi < 0)
+            {
+                continue;
+            }
+
+            int compRevFirstChunkId = ClusterEntityRecordAccessor.GetCompRevFirstChunkId(record, vi);
+            if (compRevFirstChunkId == 0)
+            {
+                continue;
+            }
+
+            var compTypeId = _archetype._componentTypeIds[slot];
+            var info = _accessor.GetComponentInfoInternal(compTypeId, _archetype._slotToComponentType[slot]);
+
+            // Check cache first (prior Open or Write in this transaction)
+            if (!info.IsMultiple && info.SingleCache.TryGetValue(pk, out var cached))
+            {
+                result.SetLocation(slot, cached.CurCompContentChunkId);
+                continue;
+            }
+
+            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, _tsn, skipTimeout: true);
+            if (chainResult.IsFailure)
+            {
+                continue;
+            }
+
+            // Cache CompRevInfo for conflict detection and COW (EcsVersionedCopyOnWrite reads from this cache)
+            var compRevInfo = chainResult.Value;
+            compRevInfo.Operations = ComponentInfo.OperationType.Read;
+            info.SingleCache[pk] = compRevInfo;
+            result.SetLocation(slot, compRevInfo.CurCompContentChunkId);
+        }
     }
 
     private void ResolveVersionedSlots(ref EntityRef result)

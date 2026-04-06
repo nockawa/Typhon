@@ -445,11 +445,11 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
     {
         using var dbe = SetupEngine();
 
-        // ClSpatialUnit is cluster-eligible, ClSpatialNonClusterUnit is NOT (has Versioned component)
+        // Both archetypes are cluster-eligible since Phase 5 (mixed SV+Versioned allowed)
         var metaCluster = Archetype<ClSpatialUnit>.Metadata;
         var metaNonCluster = Archetype<ClSpatialNonClusterUnit>.Metadata;
         Assert.That(metaCluster.HasClusterSpatial, Is.True);
-        Assert.That(metaNonCluster.IsClusterEligible, Is.False);
+        Assert.That(metaNonCluster.IsClusterEligible, Is.True); // Phase 5: SV+Versioned → cluster-eligible
 
         EntityId clusterEntityId, nonClusterEntityId;
         {
@@ -466,13 +466,12 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        // Per-table tree should have the non-cluster entity
-        var table = dbe.GetComponentTable<ClSpatialPos>();
-        Assert.That(table.SpatialIndex.DynamicTree.EntityCount, Is.EqualTo(1), "Shared tree should have non-cluster entity");
-
-        // Per-archetype tree should have the cluster entity
+        // Phase 5: both archetypes are cluster-eligible — both use per-archetype spatial trees
         var cs = dbe._archetypeStates[metaCluster.ArchetypeId].ClusterState;
         Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(1), "Per-archetype tree should have cluster entity");
+
+        var csNonCluster = dbe._archetypeStates[metaNonCluster.ArchetypeId].ClusterState;
+        Assert.That(csNonCluster.SpatialSlot.Tree.EntityCount, Is.EqualTo(1), "Per-archetype tree should have non-cluster entity (now cluster-eligible)");
 
         // Spatial query covering both should find BOTH entities
         {
@@ -482,7 +481,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             // Note: non-cluster entity is a different archetype, Query<ClSpatialUnit> filters by archetype mask
         }
 
-        // Query for non-cluster archetype should find only its entity via per-table tree
+        // Query for non-cluster archetype should find only its entity via per-archetype tree
         {
             using var tx = dbe.CreateQuickTransaction();
             var results = tx.Query<ClSpatialNonClusterUnit>().WhereInAABB<ClSpatialPos>(0, 0, 0, 30, 30, 30).Execute();

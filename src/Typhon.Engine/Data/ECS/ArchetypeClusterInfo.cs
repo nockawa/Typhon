@@ -46,12 +46,20 @@ internal sealed class ArchetypeClusterInfo
     /// <summary>Per-component data sizes in bytes (pure struct size, no overhead). Length == ComponentCount.</summary>
     private readonly int[] _componentSizes;
 
-    private ArchetypeClusterInfo(int clusterSize, int componentCount, int[] componentOffsets, int[] componentSizes)
+    /// <summary>
+    /// Maps component slot index to versioned index (0-based position within Versioned-only slots).
+    /// -1 for SV/Transient slots. E.g. archetype [SV, V, SV, V] → [-1, 0, -1, 1].
+    /// Null if no Versioned components.
+    /// </summary>
+    internal readonly sbyte[] SlotToVersionedIndex;
+
+    private ArchetypeClusterInfo(int clusterSize, int componentCount, int[] componentOffsets, int[] componentSizes, sbyte[] slotToVersionedIndex)
     {
         ClusterSize = clusterSize;
         ComponentCount = componentCount;
         _componentOffsets = componentOffsets;
         _componentSizes = componentSizes;
+        SlotToVersionedIndex = slotToVersionedIndex;
 
         HeaderSize = 8 + 8 * componentCount;
         EntityIdsOffset = HeaderSize;
@@ -79,9 +87,10 @@ internal sealed class ArchetypeClusterInfo
     /// </summary>
     /// <param name="componentCount">Number of component slots (1..16).</param>
     /// <param name="componentSizes">Per-slot component data sizes in bytes (pure struct size, no overhead).</param>
+    /// <param name="versionedSlotMask">Bitmask of Versioned component slots (0 for pure-SV archetypes).</param>
     /// <returns>A fully initialized <see cref="ArchetypeClusterInfo"/>.</returns>
     /// <exception cref="InvalidOperationException">Thrown if components are too large to fit even N=8 in one page.</exception>
-    public static ArchetypeClusterInfo Compute(int componentCount, ReadOnlySpan<int> componentSizes)
+    public static ArchetypeClusterInfo Compute(int componentCount, ReadOnlySpan<int> componentSizes, ushort versionedSlotMask = 0)
     {
         int fixedHeader = 8 + 8 * componentCount; // OccupancyBits + EnabledBits[C]
         int perEntitySize = 8; // EntityKey (long)
@@ -103,7 +112,26 @@ internal sealed class ArchetypeClusterInfo
             offset += componentSizes[i] * bestN;
         }
 
-        return new ArchetypeClusterInfo(bestN, componentCount, offsets, sizes);
+        // Build slot-to-versioned-index mapping
+        sbyte[] slotToVersionedIndex = null;
+        if (versionedSlotMask != 0)
+        {
+            slotToVersionedIndex = new sbyte[componentCount];
+            int vi = 0;
+            for (int i = 0; i < componentCount; i++)
+            {
+                if ((versionedSlotMask & (1 << i)) != 0)
+                {
+                    slotToVersionedIndex[i] = (sbyte)vi++;
+                }
+                else
+                {
+                    slotToVersionedIndex[i] = -1;
+                }
+            }
+        }
+
+        return new ArchetypeClusterInfo(bestN, componentCount, offsets, sizes, slotToVersionedIndex);
     }
 
     /// <summary>

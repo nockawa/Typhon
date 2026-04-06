@@ -1099,6 +1099,24 @@ public unsafe partial class Transaction : EntityAccessor
             }
         }
 
+        // Phase 5: Copy committed Versioned value to cluster slot (HEAD cache).
+        // The cluster slot is the read cache for bulk iteration — updated here at commit time.
+        // SV components are written in-place; only Versioned needs this commit-time copy.
+        if ((compRevInfo.Operations & ComponentInfo.OperationType.Created) == 0)
+        {
+            // For updates (not spawns — spawns copy to cluster in FinalizeSpawns):
+            var archId = EntityId.FromRaw(pk).ArchetypeId;
+            var meta = ArchetypeRegistry.GetMetadata(archId);
+            if (meta.IsClusterEligible && meta.VersionedSlotMask != 0)
+            {
+                var es = _dbe._archetypeStates[archId];
+                if (es?.ClusterState != null)
+                {
+                    CopyVersionedHeadToCluster(pk, ref compRevInfo, info.ComponentTable, meta, es);
+                }
+            }
+        }
+
         // Enqueue for deferred cleanup
         _deferredEnqueueBatch ??= new List<DeferredCleanupManager.CleanupEntry>(16);
         _deferredEnqueueBatch.Add(new DeferredCleanupManager.CleanupEntry { Table = info.ComponentTable, PrimaryKey = pk, FirstChunkId = firstChunkId });
@@ -1110,6 +1128,75 @@ public unsafe partial class Transaction : EntityAccessor
 
         compRevInfo.PrevCompContentChunkId = -1;
         compRevInfo.PrevRevisionIndex = 0;
+    }
+
+    /// <summary>
+    /// Copy the committed Versioned component value from its COW content chunk to the cluster slot.
+    /// Called after CommitComponentCore finalizes the revision entry. The cluster slot serves as the HEAD cache
+    /// for bulk iteration — it always reflects the latest committed value.
+    /// </summary>
+    private void CopyVersionedHeadToCluster(long pk, ref ComponentInfo.CompRevInfo compRevInfo, ComponentTable table, ArchetypeMetadata meta, 
+        ArchetypeEngineState es)
+    {
+        var clusterState = es.ClusterState;
+        var layout = clusterState.Layout;
+
+        // Read entity's cluster location from EntityMap
+        int recordSize = meta._entityRecordSize;
+        byte* recordBuf = stackalloc byte[recordSize];
+        var mapAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+        try
+        {
+            long entityKey = EntityId.FromRaw(pk).EntityKey;
+            if (!es.EntityMap.TryGet(entityKey, recordBuf, ref mapAccessor))
+            {
+                return; // Entity not in EntityMap (shouldn't happen, but defensive)
+            }
+
+            int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(recordBuf);
+            byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(recordBuf);
+
+            // Find the component's slot in the archetype
+            int compSlot = -1;
+            for (int s = 0; s < meta.ComponentCount; s++)
+            {
+                if (es.SlotToComponentTable[s] == table)
+                {
+                    compSlot = s;
+                    break;
+                }
+            }
+            if (compSlot < 0)
+            {
+                return; // Shouldn't happen
+            }
+
+            // Read new value from COW content chunk (includes ComponentOverhead at start)
+            var contentAccessor = table.ComponentSegment.CreateChunkAccessor();
+            var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+            try
+            {
+                byte* srcAddr = contentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId);
+                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId, true);
+
+                // Copy pure component data (skip ComponentOverhead) to cluster slot
+                int compSize = layout.ComponentSize(compSlot);
+                byte* dstSlot = clusterBase + layout.ComponentOffset(compSlot) + slotIndex * compSize;
+                Unsafe.CopyBlockUnaligned(dstSlot, srcAddr + table.ComponentOverhead, (uint)compSize);
+
+                // Mark cluster dirty for tick fence WAL serialization
+                clusterState.SetDirty(clusterChunkId, slotIndex);
+            }
+            finally
+            {
+                contentAccessor.Dispose();
+                clusterAccessor.Dispose();
+            }
+        }
+        finally
+        {
+            mapAccessor.Dispose();
+        }
     }
 
     public bool Rollback(ref UnitOfWorkContext ctx)

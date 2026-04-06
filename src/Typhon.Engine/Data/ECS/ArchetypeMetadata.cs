@@ -72,6 +72,12 @@ internal class ArchetypeMetadata
     /// <summary>Precomputed cluster layout. Non-null only when <see cref="IsClusterEligible"/> is true.</summary>
     internal ArchetypeClusterInfo ClusterLayout;
 
+    /// <summary>Bitmask of component slots that use Versioned storage mode. Bit N set = slot N is Versioned.</summary>
+    internal ushort VersionedSlotMask;
+
+    /// <summary>Number of Versioned component slots (PopCount of <see cref="VersionedSlotMask"/>).</summary>
+    internal byte VersionedSlotCount;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Cascade delete graph (populated during Freeze)
     // ═══════════════════════════════════════════════════════════════════════

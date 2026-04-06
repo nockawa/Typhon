@@ -158,11 +158,12 @@ internal unsafe struct EntityLocations
 
 /// <summary>
 /// Static accessor for cluster entity records stored as raw bytes in the per-archetype RawValueHashMap.
-/// Record layout: [EntityRecordHeader (14B)] [ClusterChunkId (4B)] [SlotIndex (1B)]
-/// Total: 19 bytes (fixed, regardless of component count — components live in the cluster, not in the record).
 /// </summary>
 /// <remarks>
-/// <para>Used for SV-only, non-indexed archetypes that use cluster storage.</para>
+/// <para>Base record layout: [EntityRecordHeader (14B)] [ClusterChunkId (4B)] [SlotIndex (1B)] = 19 bytes.</para>
+/// <para>For archetypes with Versioned components, the record extends with per-Versioned-slot compRevFirstChunkId (4B each):
+/// [Base (19B)] [CompRevFirstChunkId₀ (4B)] ... [CompRevFirstChunkId_{V-1} (4B)]</para>
+/// <para>Total: 19 + 4 * versionedSlotCount bytes.</para>
 /// <para>The EntityRecordHeader is identical to the legacy format (same BornTSN/DiedTSN/EnabledBits).</para>
 /// </remarks>
 [PublicAPI]
@@ -171,14 +172,21 @@ public static unsafe class ClusterEntityRecordAccessor
     /// <summary>Size of the <see cref="EntityRecordHeader"/> in bytes (same as legacy).</summary>
     public const int HeaderSize = 14;
 
-    /// <summary>Total cluster entity record size in bytes: Header(14) + ClusterChunkId(4) + SlotIndex(1) = 19.</summary>
-    public const int RecordSize = 19;
+    /// <summary>Base cluster entity record size (no Versioned slots): Header(14) + ClusterChunkId(4) + SlotIndex(1) = 19.</summary>
+    public const int BaseRecordSize = 19;
 
     /// <summary>Byte offset of ClusterChunkId within the record.</summary>
     public const int ClusterChunkIdOffset = HeaderSize;
 
     /// <summary>Byte offset of SlotIndex within the record.</summary>
     public const int SlotIndexOffset = HeaderSize + sizeof(int);
+
+    /// <summary>Byte offset where compRevFirstChunkId array starts (immediately after SlotIndex).</summary>
+    public const int CompRevOffset = BaseRecordSize;
+
+    /// <summary>Compute the total record size for a cluster archetype with <paramref name="versionedSlotCount"/> Versioned components.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int RecordSize(int versionedSlotCount) => BaseRecordSize + versionedSlotCount * sizeof(int);
 
     /// <summary>Get a reference to the header at the start of the record.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -200,9 +208,23 @@ public static unsafe class ClusterEntityRecordAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void SetSlotIndex(byte* record, byte slotIndex) => *(record + SlotIndexOffset) = slotIndex;
 
-    /// <summary>Zero-initialize an entire cluster entity record (19 bytes).</summary>
+    /// <summary>Read the compRevFirstChunkId for the given versioned index (0-based within Versioned slots only).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void InitializeRecord(byte* record) => Unsafe.InitBlock(record, 0, RecordSize);
+    public static int GetCompRevFirstChunkId(byte* record, int versionedIndex) => *(int*)(record + CompRevOffset + versionedIndex * sizeof(int));
+
+    /// <summary>Write the compRevFirstChunkId for the given versioned index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void SetCompRevFirstChunkId(byte* record, int versionedIndex, int chunkId) =>
+        *(int*)(record + CompRevOffset + versionedIndex * sizeof(int)) = chunkId;
+
+    /// <summary>Zero-initialize an entire cluster entity record (base + versioned extensions).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void InitializeRecord(byte* record, int versionedSlotCount) =>
+        Unsafe.InitBlock(record, 0, (uint)RecordSize(versionedSlotCount));
+
+    /// <summary>Zero-initialize a base cluster entity record (19 bytes, no Versioned slots).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void InitializeRecord(byte* record) => Unsafe.InitBlock(record, 0, BaseRecordSize);
 }
 
 /// <summary>

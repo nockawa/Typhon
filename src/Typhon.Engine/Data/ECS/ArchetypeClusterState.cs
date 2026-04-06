@@ -515,6 +515,106 @@ internal sealed unsafe class ArchetypeClusterState
             clusterAccessor.Dispose();
         }
     }
+
+    /// <summary>
+    /// Rebuild Versioned component HEAD values in cluster slots from revision chains.
+    /// Called on database reopen when the cluster slot WAL might be stale (crash between commit and tick fence).
+    /// For each occupied entity, walks the revision chain to find the HEAD and copies its value to the cluster slot.
+    /// </summary>
+    public void RebuildVersionedHeadFromChain(ArchetypeMetadata meta, ArchetypeEngineState engineState, ChangeSet changeSet)
+    {
+        if (meta.VersionedSlotMask == 0)
+        {
+            return;
+        }
+
+        var clusterAccessor = ClusterSegment.CreateChunkAccessor();
+        var mapAccessor = engineState.EntityMap.Segment.CreateChunkAccessor();
+        int recordSize = meta._entityRecordSize;
+        byte* recordBuf = stackalloc byte[recordSize];
+
+        try
+        {
+            for (int c = 0; c < ActiveClusterCount; c++)
+            {
+                int chunkId = ActiveClusterIds[c];
+                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId, true);
+                ulong occupancy = *(ulong*)clusterBase;
+
+                while (occupancy != 0)
+                {
+                    int slotIndex = BitOperations.TrailingZeroCount(occupancy);
+                    occupancy &= occupancy - 1;
+
+                    // Read entity key from cluster
+                    long entityPK = *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8);
+                    long entityKey = EntityId.FromRaw(entityPK).EntityKey;
+
+                    // Read ClusterEntityRecord from EntityMap to get compRevFirstChunkId
+                    if (!engineState.EntityMap.TryGet(entityKey, recordBuf, ref mapAccessor))
+                    {
+                        continue;
+                    }
+
+                    // For each Versioned slot: walk chain → find HEAD → copy to cluster slot
+                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    {
+                        if (Layout.SlotToVersionedIndex == null)
+                        {
+                            break;
+                        }
+                        int vi = Layout.SlotToVersionedIndex[slot];
+                        if (vi < 0)
+                        {
+                            continue;
+                        }
+
+                        int compRevFirstChunkId = ClusterEntityRecordAccessor.GetCompRevFirstChunkId(recordBuf, vi);
+                        if (compRevFirstChunkId == 0)
+                        {
+                            continue;
+                        }
+
+                        var table = engineState.SlotToComponentTable[slot];
+                        var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
+                        try
+                        {
+                            // Walk chain to find HEAD (latest committed entry)
+                            var chainResult = RevisionChainReader.WalkChain(ref compRevAccessor, compRevFirstChunkId, long.MaxValue);
+                            if (chainResult.IsFailure)
+                            {
+                                continue;
+                            }
+
+                            // Read HEAD value from content chunk and copy to cluster slot
+                            int headChunkId = chainResult.Value.CurCompContentChunkId;
+                            var contentAccessor = table.ComponentSegment.CreateChunkAccessor();
+                            try
+                            {
+                                byte* srcAddr = contentAccessor.GetChunkAddress(headChunkId);
+                                int compSize = Layout.ComponentSize(slot);
+                                byte* dstSlot = clusterBase + Layout.ComponentOffset(slot) + slotIndex * compSize;
+                                Unsafe.CopyBlockUnaligned(dstSlot, srcAddr + table.ComponentOverhead, (uint)compSize);
+                            }
+                            finally
+                            {
+                                contentAccessor.Dispose();
+                            }
+                        }
+                        finally
+                        {
+                            compRevAccessor.Dispose();
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            mapAccessor.Dispose();
+            clusterAccessor.Dispose();
+        }
+    }
 }
 
 /// <summary>

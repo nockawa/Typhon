@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
@@ -81,11 +82,15 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         get => _layout.FullMask;
     }
 
-    /// <summary>Get a mutable span of component data for all N slots (SoA array).</summary>
+    /// <summary>Get a mutable span of component data for all N slots (SoA array).
+    /// For Versioned components, use <see cref="GetReadOnlySpan{T}"/> — writing directly to the cluster slot
+    /// bypasses the revision chain and breaks MVCC snapshot isolation.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetSpan<T>(Comp<T> comp) where T : unmanaged
     {
         byte slot = _meta.GetSlot(comp._componentTypeId);
+        Debug.Assert((_meta.VersionedSlotMask & (1 << slot)) == 0,
+            $"GetSpan on Versioned component bypasses revision chain. Use GetReadOnlySpan for reads, OpenMut+Write for writes.");
         return new Span<T>(_base + _layout.ComponentOffset(slot), _layout.ClusterSize);
     }
 
