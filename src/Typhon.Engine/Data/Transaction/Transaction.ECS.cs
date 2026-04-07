@@ -1132,6 +1132,39 @@ public unsafe partial class Transaction
         FlushPendingDestroys();
     }
 
+    private ref struct SpawnContext
+    {
+        public ArchetypeMetadata Meta;
+        public ArchetypeEngineState EngineState;
+        public int ComponentCount;
+        public ushort VersionedMask;
+        public ChunkAccessor<PersistentStore> MapAccessor;
+        public bool HasMapAccessor;
+        public ushort LastArchId;
+        public bool UseCluster;
+        public ArchetypeClusterState ClusterState;
+        public ChunkAccessor<PersistentStore> ClusterAccessor;
+        public bool HasClusterAccessor;
+        public ChunkAccessor<TransientStore> ClusterTransientAccessor;
+        public bool HasClusterTransientAccessor;
+        public ChunkAccessor<PersistentStore> ClusterIdxAccessor;
+        public bool HasClusterIdxAccessor;
+        public ChunkAccessor<PersistentStore> ClusterSpatialTreeAccessor;
+        public ChunkAccessor<PersistentStore> ClusterSpatialBpAccessor;
+        public bool HasClusterSpatialAccessors;
+        public ChunkAccessor<PersistentStore>[] ClusterSrcAccessors;
+        public int ClusterSrcAccessorCount;
+        public ChunkAccessor<TransientStore>[] ClusterTransientSrcAccessors;
+        public int SvSlotCount;
+        public int SvIdxAccessorTotal;
+        public ChunkAccessor<PersistentStore>[] SvCompAccessors;
+        public ChunkAccessor<PersistentStore>[] SvIdxAccessors;
+        public int TrSlotCount;
+        public int TrIdxAccessorTotal;
+        public ChunkAccessor<TransientStore>[] TrCompAccessors;
+        public ChunkAccessor<TransientStore>[] TrIdxAccessors;
+    }
+
     /// <summary>
     /// Finalize spawned entities: set BornTSN from sentinel (MaxValue) to actual TSN, making them visible.
     /// Also inserts SV secondary indexes (Versioned secondary indexes are handled by CommitComponentCore).
@@ -1180,52 +1213,11 @@ public unsafe partial class Transaction
         // Hoist all accessors outside the per-entity loop.
         // Track last-used archetype — covers the dominant case (single archetype per TX).
         // When archetype changes, dispose old accessors and create new ones.
-        ushort lastArchId = 0;
-        var mapAccessor = default(ChunkAccessor<PersistentStore>);
-        bool hasMapAccessor = false;
-
-        // Hoisted SV index accessors — one compAccessor per SV indexed slot, one idxAccessor per indexed field.
-        // Allocated lazily with exact sizes when archetype changes (typically 1-3 slots, 2-8 indexes).
+        var ctx = new SpawnContext();
         Span<int> svSlots = stackalloc int[16];
-        int svSlotCount = 0;
-        ChunkAccessor<PersistentStore>[] svCompAccessors = null;
-        ChunkAccessor<PersistentStore>[] svIdxAccessors = null;
         Span<int> svIdxAccessorBase = stackalloc int[16]; // offset into svIdxAccessors for each slot
-        int svIdxAccessorTotal = 0;
-
-        // Hoisted Transient index accessors — same pattern as SV but with TransientStore.
         Span<int> trSlots = stackalloc int[16];
-        int trSlotCount = 0;
-        ChunkAccessor<TransientStore>[] trCompAccessors = null;
-        ChunkAccessor<TransientStore>[] trIdxAccessors = null;
         Span<int> trIdxAccessorBase = stackalloc int[16];
-        int trIdxAccessorTotal = 0;
-
-        // Per-archetype cached state — avoids per-entity metadata lookups
-        ArchetypeMetadata meta = null;
-        ArchetypeEngineState engineState = null;
-        int componentCount = 0;
-        ushort versionedMask = 0; // bit set for Versioned slots — eliminates per-slot table dereference
-
-        // Cluster storage hoisted state — set when archetype changes and is cluster-eligible
-        bool useCluster = false;
-        ArchetypeClusterState clusterState = null;
-        var clusterAccessor = default(ChunkAccessor<PersistentStore>);
-        bool hasClusterAccessor = false;
-        var clusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
-        bool hasClusterIdxAccessor = false;
-        var clusterSpatialTreeAccessor = default(ChunkAccessor<PersistentStore>);
-        var clusterSpatialBpAccessor = default(ChunkAccessor<PersistentStore>);
-        bool hasClusterSpatialAccessors = false;
-
-        // Per-component accessors for reading source data from per-component chunks during cluster copy
-        ChunkAccessor<PersistentStore>[] clusterSrcAccessors = null;
-        int clusterSrcAccessorCount = 0;
-
-        // TransientStore cluster accessors for archetypes with Transient components
-        var clusterTransientAccessor = default(ChunkAccessor<TransientStore>);
-        bool hasClusterTransientAccessor = false;
-        ChunkAccessor<TransientStore>[] clusterTransientSrcAccessors = null;
 
         try
         {
@@ -1250,303 +1242,52 @@ public unsafe partial class Transaction
                 header.EnabledBits = enabledBits;
 
                 // Hoist all per-archetype state — recycle when archetype changes
-                if (!hasMapAccessor || entry.Id.ArchetypeId != lastArchId)
+                if (!ctx.HasMapAccessor || entry.Id.ArchetypeId != ctx.LastArchId)
                 {
                     // Dispose previous archetype's accessors
-                    if (hasMapAccessor)
-                    {
-                        mapAccessor.Dispose();
-                        if (hasClusterAccessor)
-                        {
-                            clusterAccessor.Dispose();
-                            hasClusterAccessor = false;
-                        }
-                        if (hasClusterTransientAccessor)
-                        {
-                            clusterTransientAccessor.Dispose();
-                            hasClusterTransientAccessor = false;
-                        }
-                        for (int ci = 0; ci < clusterSrcAccessorCount; ci++)
-                        {
-                            var table = engineState.SlotToComponentTable[ci];
-                            if (table.StorageMode == StorageMode.Transient)
-                            {
-                                if (clusterTransientSrcAccessors != null)
-                                {
-                                    clusterTransientSrcAccessors[ci].Dispose();
-                                }
-                            }
-                            else
-                            {
-                                clusterSrcAccessors[ci].Dispose();
-                            }
-                        }
-                        clusterSrcAccessorCount = 0;
-                        if (hasClusterIdxAccessor)
-                        {
-                            clusterIdxAccessor.Dispose();
-                            hasClusterIdxAccessor = false;
-                        }
-                        if (hasClusterSpatialAccessors)
-                        {
-                            clusterSpatialTreeAccessor.Dispose();
-                            clusterSpatialBpAccessor.Dispose();
-                            hasClusterSpatialAccessors = false;
-                        }
-                        for (int si = 0; si < svSlotCount; si++)
-                        {
-                            svCompAccessors[si].Dispose();
-                        }
-                        for (int ai = 0; ai < svIdxAccessorTotal; ai++)
-                        {
-                            svIdxAccessors[ai].Dispose();
-                        }
-                        for (int si = 0; si < trSlotCount; si++)
-                        {
-                            trCompAccessors[si].Dispose();
-                        }
-                        for (int ai = 0; ai < trIdxAccessorTotal; ai++)
-                        {
-                            trIdxAccessors[ai].Dispose();
-                        }
-                    }
+                    DisposeSpawnAccessors(ref ctx);
 
-                    // Cache archetype metadata + compute versioned slot mask
-                    meta = ArchetypeRegistry.GetMetadata(entry.Id.ArchetypeId);
-                    engineState = _dbe._archetypeStates[meta.ArchetypeId];
-                    componentCount = meta.ComponentCount;
-                    versionedMask = 0;
-                    for (int slot = 0; slot < componentCount; slot++)
-                    {
-                        if (engineState.SlotToComponentTable[slot].StorageMode == StorageMode.Versioned)
-                        {
-                            versionedMask |= (ushort)(1 << slot);
-                        }
-                    }
-
-                    mapAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
-                    lastArchId = entry.Id.ArchetypeId;
-                    hasMapAccessor = true;
-
-                    // Set up cluster accessors if this archetype uses cluster storage
-                    useCluster = meta.IsClusterEligible && engineState.ClusterState != null;
-                    if (useCluster)
-                    {
-                        clusterState = engineState.ClusterState;
-
-                        // PersistentStore cluster accessor (null for pure-Transient)
-                        if (clusterState.ClusterSegment != null)
-                        {
-                            clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
-                            hasClusterAccessor = true;
-                        }
-
-                        // TransientStore cluster accessor (for archetypes with Transient components)
-                        if (clusterState.TransientSegment != null)
-                        {
-                            clusterTransientAccessor = clusterState.TransientSegment.CreateChunkAccessor();
-                            hasClusterTransientAccessor = true;
-                        }
-
-                        // Create per-component accessors for reading from per-component spawn chunks.
-                        // Transient slots use TransientComponentSegment; SV/V use ComponentSegment.
-                        clusterSrcAccessorCount = componentCount;
-                        if (clusterSrcAccessors == null || clusterSrcAccessors.Length < componentCount)
-                        {
-                            clusterSrcAccessors = new ChunkAccessor<PersistentStore>[componentCount];
-                        }
-                        bool hasTransientSlots = meta.TransientSlotMask != 0;
-                        if (hasTransientSlots)
-                        {
-                            if (clusterTransientSrcAccessors == null || clusterTransientSrcAccessors.Length < componentCount)
-                            {
-                                clusterTransientSrcAccessors = new ChunkAccessor<TransientStore>[componentCount];
-                            }
-                        }
-                        for (int slot = 0; slot < componentCount; slot++)
-                        {
-                            var table = engineState.SlotToComponentTable[slot];
-                            if (table.StorageMode == StorageMode.Transient)
-                            {
-                                clusterTransientSrcAccessors[slot] = table.TransientComponentSegment.CreateChunkAccessor();
-                            }
-                            else
-                            {
-                                clusterSrcAccessors[slot] = table.ComponentSegment.CreateChunkAccessor(_changeSet);
-                            }
-                        }
-
-                        // Per-archetype index accessor for cluster B+Tree insertion
-                        if (clusterState.IndexSegment != null)
-                        {
-                            clusterIdxAccessor = clusterState.IndexSegment.CreateChunkAccessor(_changeSet);
-                            hasClusterIdxAccessor = true;
-                        }
-
-                        // Per-archetype spatial accessors for cluster R-Tree insertion
-                        if (clusterState.SpatialSlot.Tree != null)
-                        {
-                            clusterSpatialTreeAccessor = clusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
-                            clusterSpatialBpAccessor = clusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
-                            hasClusterSpatialAccessors = true;
-                        }
-                    }
-
-                    // Build SV indexed slot accessors for this archetype (Transient handled separately below).
-                    // First pass: count SV indexed slots, then allocate exact sizes.
-                    svSlotCount = 0;
-                    svIdxAccessorTotal = 0;
-                    int idxCount = 0;
-                    for (int slot = 0; slot < meta.ComponentCount; slot++)
-                    {
-                        var table = engineState.SlotToComponentTable[slot];
-                        if (table.StorageMode != StorageMode.SingleVersion)
-                        {
-                            continue;
-                        }
-                        var ifi = table.IndexedFieldInfos;
-                        if (ifi == null || ifi.Length == 0)
-                        {
-                            continue;
-                        }
-                        svSlotCount++;
-                        idxCount += ifi.Length;
-                    }
-
-                    if (svSlotCount > 0)
-                    {
-                        // Reuse arrays if large enough, otherwise allocate exact size
-                        if (svCompAccessors == null || svCompAccessors.Length < svSlotCount)
-                        {
-                            svCompAccessors = new ChunkAccessor<PersistentStore>[svSlotCount];
-                        }
-                        if (svIdxAccessors == null || svIdxAccessors.Length < idxCount)
-                        {
-                            svIdxAccessors = new ChunkAccessor<PersistentStore>[idxCount];
-                        }
-                    }
-
-                    svSlotCount = 0;
-                    svIdxAccessorTotal = 0;
-                    for (int slot = 0; slot < meta.ComponentCount; slot++)
-                    {
-                        var table = engineState.SlotToComponentTable[slot];
-                        if (table.StorageMode != StorageMode.SingleVersion)
-                        {
-                            continue;
-                        }
-                        var indexedFieldInfos = table.IndexedFieldInfos;
-                        if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
-                        {
-                            continue;
-                        }
-
-                        svSlots[svSlotCount] = slot;
-                        svCompAccessors[svSlotCount] = table.ComponentSegment.CreateChunkAccessor(_changeSet);
-                        svIdxAccessorBase[svSlotCount] = svIdxAccessorTotal;
-                        for (int i = 0; i < indexedFieldInfos.Length; i++)
-                        {
-                            svIdxAccessors[svIdxAccessorTotal++] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
-                        }
-                        svSlotCount++;
-                    }
-
-                    // Build Transient indexed slot accessors — same two-pass pattern.
-                    trSlotCount = 0;
-                    trIdxAccessorTotal = 0;
-                    int trIdxCount = 0;
-                    for (int slot = 0; slot < meta.ComponentCount; slot++)
-                    {
-                        var table = engineState.SlotToComponentTable[slot];
-                        if (table.StorageMode != StorageMode.Transient)
-                        {
-                            continue;
-                        }
-                        var ifi = table.IndexedFieldInfos;
-                        if (ifi == null || ifi.Length == 0)
-                        {
-                            continue;
-                        }
-                        trSlotCount++;
-                        trIdxCount += ifi.Length;
-                    }
-
-                    if (trSlotCount > 0)
-                    {
-                        if (trCompAccessors == null || trCompAccessors.Length < trSlotCount)
-                        {
-                            trCompAccessors = new ChunkAccessor<TransientStore>[trSlotCount];
-                        }
-                        if (trIdxAccessors == null || trIdxAccessors.Length < trIdxCount)
-                        {
-                            trIdxAccessors = new ChunkAccessor<TransientStore>[trIdxCount];
-                        }
-                    }
-
-                    trSlotCount = 0;
-                    trIdxAccessorTotal = 0;
-                    for (int slot = 0; slot < meta.ComponentCount; slot++)
-                    {
-                        var table = engineState.SlotToComponentTable[slot];
-                        if (table.StorageMode != StorageMode.Transient)
-                        {
-                            continue;
-                        }
-                        var indexedFieldInfos = table.IndexedFieldInfos;
-                        if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
-                        {
-                            continue;
-                        }
-
-                        trSlots[trSlotCount] = slot;
-                        trCompAccessors[trSlotCount] = table.TransientComponentSegment.CreateChunkAccessor();
-                        trIdxAccessorBase[trSlotCount] = trIdxAccessorTotal;
-                        for (int i = 0; i < indexedFieldInfos.Length; i++)
-                        {
-                            trIdxAccessors[trIdxAccessorTotal++] = indexedFieldInfos[i].TransientIndex.Segment.CreateChunkAccessor();
-                        }
-                        trSlotCount++;
-                    }
+                    SetupSpawnAccessors(ref ctx, entry.Id.ArchetypeId, svSlots, svIdxAccessorBase, trSlots, trIdxAccessorBase);
                 }
 
-                if (useCluster)
+                if (ctx.UseCluster)
                 {
                     // ═══════════════════════════════════════════════════════════════
                     // Cluster path: claim slot, copy data to cluster, write ClusterEntityRecord
                     // ═══════════════════════════════════════════════════════════════
-                    var layout = clusterState.Layout;
+                    var layout = ctx.ClusterState.Layout;
                     int clusterChunkId, slotIdx;
                     byte* clusterBase; // Primary segment base (has metadata: OccupancyBits, EnabledBits, EntityIds)
                     byte* clusterTransientBase = null; // TransientStore base (only for mixed archetypes)
 
-                    if (clusterState.ClusterSegment != null)
+                    if (ctx.ClusterState.ClusterSegment != null)
                     {
                         // Mixed or pure-SV/V: PersistentStore is primary
-                        (clusterChunkId, slotIdx) = clusterState.ClaimSlot(ref clusterAccessor, _changeSet);
-                        clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId, true);
-                        if (hasClusterTransientAccessor)
+                        (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterAccessor, _changeSet);
+                        clusterBase = ctx.ClusterAccessor.GetChunkAddress(clusterChunkId, true);
+                        if (ctx.HasClusterTransientAccessor)
                         {
-                            clusterTransientBase = clusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
+                            clusterTransientBase = ctx.ClusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
                         }
                     }
                     else
                     {
                         // Pure-Transient: TransientStore is primary
-                        (clusterChunkId, slotIdx) = clusterState.ClaimSlot(ref clusterTransientAccessor);
-                        clusterBase = clusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
+                        (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterTransientAccessor);
+                        clusterBase = ctx.ClusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
                     }
 
                     // Copy component data from per-component chunks to cluster SoA slots.
                     // Transient slots are copied to TransientSegment; SV/V to ClusterSegment.
-                    ushort transientMask = meta.TransientSlotMask;
-                    for (int slot = 0; slot < componentCount; slot++)
+                    ushort transientMask = ctx.Meta.TransientSlotMask;
+                    for (int slot = 0; slot < ctx.ComponentCount; slot++)
                     {
                         int srcChunkId = entry.Loc[slot];
                         if (srcChunkId == 0)
                         {
                             continue;
                         }
-                        var table = engineState.SlotToComponentTable[slot];
+                        var table = ctx.EngineState.SlotToComponentTable[slot];
                         int overhead = table.ComponentOverhead;
                         int compSize = layout.ComponentSize(slot);
 
@@ -1555,13 +1296,13 @@ public unsafe partial class Transaction
                         if ((transientMask & (1 << slot)) != 0)
                         {
                             // Transient slot: read from TransientComponentSegment, write to TransientSegment (or primary for pure-T)
-                            srcAddr = clusterTransientSrcAccessors[slot].GetChunkAddress(srcChunkId);
+                            srcAddr = ctx.ClusterTransientSrcAccessors[slot].GetChunkAddress(srcChunkId);
                             dstBase = clusterTransientBase != null ? clusterTransientBase : clusterBase; // pure-T: clusterBase IS TransientStore
                         }
                         else
                         {
                             // SV/V slot: read from ComponentSegment, write to ClusterSegment
-                            srcAddr = clusterSrcAccessors[slot].GetChunkAddress(srcChunkId);
+                            srcAddr = ctx.ClusterSrcAccessors[slot].GetChunkAddress(srcChunkId);
                             dstBase = clusterBase;
                         }
                         byte* dstAddr = dstBase + layout.ComponentOffset(slot) + slotIdx * compSize;
@@ -1572,7 +1313,7 @@ public unsafe partial class Transaction
                     *(long*)(clusterBase + layout.EntityIdsOffset + slotIdx * 8) = (long)entry.Id.RawValue;
 
                     // Set EnabledBits in cluster
-                    for (int slot = 0; slot < componentCount; slot++)
+                    for (int slot = 0; slot < ctx.ComponentCount; slot++)
                     {
                         if ((enabledBits & (1 << slot)) != 0)
                         {
@@ -1583,7 +1324,7 @@ public unsafe partial class Transaction
                     // OccupancyBit was already set by ClaimSlot
 
                     // Build ClusterEntityRecord (19 bytes base + 4 bytes per Versioned slot)
-                    ClusterEntityRecordAccessor.InitializeRecord(recordPtr, meta.VersionedSlotCount);
+                    ClusterEntityRecordAccessor.InitializeRecord(recordPtr, ctx.Meta.VersionedSlotCount);
                     ref var clusterHeader = ref ClusterEntityRecordAccessor.GetHeader(recordPtr);
                     clusterHeader.BornTSN = TSN;
                     clusterHeader.EnabledBits = enabledBits;
@@ -1591,9 +1332,9 @@ public unsafe partial class Transaction
                     ClusterEntityRecordAccessor.SetSlotIndex(recordPtr, (byte)slotIdx);
 
                     // Store compRevFirstChunkId for each Versioned slot
-                    if (meta.VersionedSlotMask != 0)
+                    if (ctx.Meta.VersionedSlotMask != 0)
                     {
-                        for (int slot = 0; slot < componentCount; slot++)
+                        for (int slot = 0; slot < ctx.ComponentCount; slot++)
                         {
                             int vi = layout.SlotToVersionedIndex[slot];
                             if (vi >= 0)
@@ -1604,17 +1345,17 @@ public unsafe partial class Transaction
                     }
 
                     // Insert ClusterEntityRecord into EntityMap
-                    engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
+                    ctx.EngineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref ctx.MapAccessor, _changeSet);
 
                     // Note: cluster pages are marked dirty at page level (GetChunkAddress(dirty:true) above).
                     // Checkpoint persists them. We do NOT set ClusterDirtyBitmap here — that bitmap tracks write mutations for change-filtered dispatch,
                     // same as per-ComponentTable DirtyBitmap (which is also not set during FinalizeSpawns for non-cluster SV entities).
 
                     // Insert per-archetype B+Tree entries for cluster entity
-                    if (clusterState.IndexSlots != null)
+                    if (ctx.ClusterState.IndexSlots != null)
                     {
                         int clusterLocation = clusterChunkId * 64 + slotIdx;
-                        var ixSlots = clusterState.IndexSlots;
+                        var ixSlots = ctx.ClusterState.IndexSlots;
                         for (int ixs = 0; ixs < ixSlots.Length; ixs++)
                         {
                             ref var ixSlot = ref ixSlots[ixs];
@@ -1624,11 +1365,11 @@ public unsafe partial class Transaction
                             {
                                 ref var field = ref ixSlot.Fields[fi];
                                 byte* fieldPtr = compBase + field.FieldOffset;
-                                field.Index.Add(fieldPtr, clusterLocation, ref clusterIdxAccessor);
+                                field.Index.Add(fieldPtr, clusterLocation, ref ctx.ClusterIdxAccessor);
                                 field.ZoneMap?.Widen(clusterChunkId, fieldPtr);
 
                                 // Notify views of creation (isCreation flag so incremental views detect the new entity)
-                                var spawnTable = engineState.SlotToComponentTable[ixSlot.Slot];
+                                var spawnTable = ctx.EngineState.SlotToComponentTable[ixSlot.Slot];
                                 var views = spawnTable.ViewRegistry.GetViewsForField(fi);
                                 for (int v = 0; v < views.Length; v++)
                                 {
@@ -1647,19 +1388,19 @@ public unsafe partial class Transaction
                     }
 
                     // Insert per-archetype spatial R-Tree entry for cluster entity
-                    if (clusterState.SpatialSlot.Tree != null)
+                    if (ctx.ClusterState.SpatialSlot.Tree != null)
                     {
                         int clusterLocation = clusterChunkId * 64 + slotIdx;
-                        ref var ss = ref clusterState.SpatialSlot;
+                        ref var ss = ref ctx.ClusterState.SpatialSlot;
                         int spatialCompSize = layout.ComponentSize(ss.Slot);
                         byte* spatialFieldPtr = clusterBase + layout.ComponentOffset(ss.Slot) + slotIdx * spatialCompSize + ss.FieldOffset;
 
                         // Zero back-pointer before insert (same safety pattern as legacy path)
-                        SpatialBackPointerHelper.Clear(ref clusterSpatialBpAccessor, clusterLocation);
+                        SpatialBackPointerHelper.Clear(ref ctx.ClusterSpatialBpAccessor, clusterLocation);
 
                         SpatialMaintainer.InsertSpatialCluster(
                             (long)entry.Id.RawValue, clusterLocation, spatialFieldPtr,
-                            ref ss, ref clusterSpatialTreeAccessor, ref clusterSpatialBpAccessor, _changeSet);
+                            ref ss, ref ctx.ClusterSpatialTreeAccessor, ref ctx.ClusterSpatialBpAccessor, _changeSet);
                     }
 
                     // Insert Transient indexed fields into per-ComponentTable TransientIndex.
@@ -1667,19 +1408,19 @@ public unsafe partial class Transaction
                     // write-time index maintenance for cluster-backed Transient data would require reading old/new values from the cluster SoA slot and
                     // calling TransientIndex.Move — which conflicts with the ref-return pattern of Write<T>.
                     // This code path handles the theoretical case where eligibility rules are relaxed in the future.
-                    if (trSlotCount > 0 && trCompAccessors != null)
+                    if (ctx.TrSlotCount > 0 && ctx.TrCompAccessors != null)
                     {
-                        for (int si = 0; si < trSlotCount; si++)
+                        for (int si = 0; si < ctx.TrSlotCount; si++)
                         {
                             int trSlot = trSlots[si];
-                            var table = engineState.SlotToComponentTable[trSlot];
+                            var table = ctx.EngineState.SlotToComponentTable[trSlot];
                             int srcChunkId = entry.Loc[trSlot];
                             if (srcChunkId == 0)
                             {
                                 continue;
                             }
-                            byte* chunkAddr = trCompAccessors[si].GetChunkAddress(srcChunkId, true);
-                            
+                            byte* chunkAddr = ctx.TrCompAccessors[si].GetChunkAddress(srcChunkId, true);
+
                             // Write EntityPK into the chunk's overhead area (TransientIndex expects it there)
                             if (table.Definition.EntityPKOverheadSize > 0)
                             {
@@ -1693,11 +1434,11 @@ public unsafe partial class Transaction
                                 if (ifi.AllowMultiple)
                                 {
                                     *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
-                                        index.Add(&chunkAddr[ifi.OffsetToField], srcChunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i], out _);
+                                        index.Add(&chunkAddr[ifi.OffsetToField], srcChunkId, ref ctx.TrIdxAccessors[trIdxAccessorBase[si] + i], out _);
                                 }
                                 else
                                 {
-                                    index.Add(&chunkAddr[ifi.OffsetToField], srcChunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i]);
+                                    index.Add(&chunkAddr[ifi.OffsetToField], srcChunkId, ref ctx.TrIdxAccessors[trIdxAccessorBase[si] + i]);
                                 }
                             }
                         }
@@ -1709,32 +1450,32 @@ public unsafe partial class Transaction
                     // Legacy path: build location array from SpawnEntry
                     // ═══════════════════════════════════════════════════════════════
                     var locDest = (int*)(recordPtr + EntityRecordAccessor.HeaderSize);
-                    for (int slot = 0; slot < componentCount; slot++)
+                    for (int slot = 0; slot < ctx.ComponentCount; slot++)
                     {
-                        locDest[slot] = (versionedMask & (1 << slot)) != 0 ? entry.Rev[slot] : entry.Loc[slot];
+                        locDest[slot] = (ctx.VersionedMask & (1 << slot)) != 0 ? entry.Rev[slot] : entry.Loc[slot];
                     }
 
                     // Insert into EntityMap — skip duplicate check (EntityKey is freshly generated, guaranteed unique)
-                    engineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref mapAccessor, _changeSet);
+                    ctx.EngineState.EntityMap.InsertNew(entry.Id.EntityKey, recordPtr, ref ctx.MapAccessor, _changeSet);
                 }
 
                 // Insert shared ComponentTable secondary indexes — ONLY for non-cluster (legacy) entities.
                 // Cluster entities use per-archetype B+Trees (inserted in the cluster path above).
                 // Accessors are hoisted: created once when archetype changes (alongside mapAccessor),
                 // reused across all entities of the same archetype.
-                if (!useCluster)
+                if (!ctx.UseCluster)
                 {
-                    for (int si = 0; si < svSlotCount; si++)
+                    for (int si = 0; si < ctx.SvSlotCount; si++)
                     {
                         int slot = svSlots[si];
-                        var table = engineState.SlotToComponentTable[slot];
+                        var table = ctx.EngineState.SlotToComponentTable[slot];
                         int chunkId = entry.Loc[slot];
                         if (chunkId == 0)
                         {
                             continue;
                         }
 
-                        byte* chunkAddr = svCompAccessors[si].GetChunkAddress(chunkId, true);
+                        byte* chunkAddr = ctx.SvCompAccessors[si].GetChunkAddress(chunkId, true);
 
                         // Write inline entityPK at offset 0 (SV indexed components store entityPK in overhead to enable chunkId → entityPK resolution during
                         // index-based queries).
@@ -1752,11 +1493,11 @@ public unsafe partial class Transaction
                             if (ifi.AllowMultiple)
                             {
                                 *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
-                                    index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i], out _);
+                                    index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref ctx.SvIdxAccessors[svIdxAccessorBase[si] + i], out _);
                             }
                             else
                             {
-                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref svIdxAccessors[svIdxAccessorBase[si] + i]);
+                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref ctx.SvIdxAccessors[svIdxAccessorBase[si] + i]);
                             }
                         }
                     }
@@ -1764,19 +1505,19 @@ public unsafe partial class Transaction
 
                 // Insert Transient secondary indexes (hoisted accessors, same pattern as SV).
                 // Cluster archetypes are always all-SV, so trSlotCount == 0. Guard for safety.
-                if (!useCluster)
+                if (!ctx.UseCluster)
                 {
-                    for (int si = 0; si < trSlotCount; si++)
+                    for (int si = 0; si < ctx.TrSlotCount; si++)
                     {
                         int slot = trSlots[si];
-                        var table = engineState.SlotToComponentTable[slot];
+                        var table = ctx.EngineState.SlotToComponentTable[slot];
                         int chunkId = entry.Loc[slot];
                         if (chunkId == 0)
                         {
                             continue;
                         }
 
-                        byte* chunkAddr = trCompAccessors[si].GetChunkAddress(chunkId, true);
+                        byte* chunkAddr = ctx.TrCompAccessors[si].GetChunkAddress(chunkId, true);
 
                         if (table.Definition.EntityPKOverheadSize > 0)
                         {
@@ -1792,11 +1533,11 @@ public unsafe partial class Transaction
                             if (ifi.AllowMultiple)
                             {
                                 *(int*)&chunkAddr[ifi.OffsetToIndexElementId] =
-                                    index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i], out _);
+                                    index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref ctx.TrIdxAccessors[trIdxAccessorBase[si] + i], out _);
                             }
                             else
                             {
-                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref trIdxAccessors[trIdxAccessorBase[si] + i]);
+                                index.Add(&chunkAddr[ifi.OffsetToField], chunkId, ref ctx.TrIdxAccessors[trIdxAccessorBase[si] + i]);
                             }
                         }
                     }
@@ -1806,15 +1547,15 @@ public unsafe partial class Transaction
                 // Must iterate all component slots (not just svSlots) because spatial-only components
                 // without B+Tree indexes are not in the svSlots array.
                 // Skip for cluster entities — per-archetype R-Tree is used instead.
-                if (!useCluster)
+                if (!ctx.UseCluster)
                 {
-                    for (int slot = 0; slot < componentCount; slot++)
+                    for (int slot = 0; slot < ctx.ComponentCount; slot++)
                     {
-                        if ((versionedMask & (1 << slot)) != 0)
+                        if ((ctx.VersionedMask & (1 << slot)) != 0)
                         {
                             continue; // Versioned — handled by CommitComponentCore
                         }
-                        var table = engineState.SlotToComponentTable[slot];
+                        var table = ctx.EngineState.SlotToComponentTable[slot];
                         if (table.SpatialIndex == null)
                         {
                             continue;
@@ -1854,45 +1595,277 @@ public unsafe partial class Transaction
         }
         finally
         {
-            if (hasMapAccessor)
+            DisposeSpawnAccessors(ref ctx);
+        }
+    }
+
+    /// <summary>
+    /// Dispose all hoisted accessors in the spawn context. Called on archetype change and in the finally block.
+    /// </summary>
+    private void DisposeSpawnAccessors(ref SpawnContext ctx)
+    {
+        if (!ctx.HasMapAccessor)
+        {
+            return;
+        }
+        ctx.MapAccessor.Dispose();
+        if (ctx.HasClusterAccessor)
+        {
+            ctx.ClusterAccessor.Dispose();
+            ctx.HasClusterAccessor = false;
+        }
+        if (ctx.HasClusterTransientAccessor)
+        {
+            ctx.ClusterTransientAccessor.Dispose();
+            ctx.HasClusterTransientAccessor = false;
+        }
+        for (int ci = 0; ci < ctx.ClusterSrcAccessorCount; ci++)
+        {
+            var table = ctx.EngineState.SlotToComponentTable[ci];
+            if (table.StorageMode == StorageMode.Transient)
             {
-                mapAccessor.Dispose();
-                if (hasClusterAccessor)
+                if (ctx.ClusterTransientSrcAccessors != null)
                 {
-                    clusterAccessor.Dispose();
-                }
-                if (hasClusterTransientAccessor)
-                {
-                    clusterTransientAccessor.Dispose();
-                }
-                // Note: clusterSrcAccessors and clusterTransientSrcAccessors were already disposed in the archetype-change cleanup above.
-                // Only dispose if cleanup didn't run (exception path).
-                if (hasClusterIdxAccessor)
-                {
-                    clusterIdxAccessor.Dispose();
-                }
-                if (hasClusterSpatialAccessors)
-                {
-                    clusterSpatialTreeAccessor.Dispose();
-                    clusterSpatialBpAccessor.Dispose();
-                }
-                for (int si = 0; si < svSlotCount; si++)
-                {
-                    svCompAccessors[si].Dispose();
-                }
-                for (int ai = 0; ai < svIdxAccessorTotal; ai++)
-                {
-                    svIdxAccessors[ai].Dispose();
-                }
-                for (int si = 0; si < trSlotCount; si++)
-                {
-                    trCompAccessors[si].Dispose();
-                }
-                for (int ai = 0; ai < trIdxAccessorTotal; ai++)
-                {
-                    trIdxAccessors[ai].Dispose();
+                    ctx.ClusterTransientSrcAccessors[ci].Dispose();
                 }
             }
+            else
+            {
+                ctx.ClusterSrcAccessors[ci].Dispose();
+            }
+        }
+        ctx.ClusterSrcAccessorCount = 0;
+        if (ctx.HasClusterIdxAccessor)
+        {
+            ctx.ClusterIdxAccessor.Dispose();
+            ctx.HasClusterIdxAccessor = false;
+        }
+        if (ctx.HasClusterSpatialAccessors)
+        {
+            ctx.ClusterSpatialTreeAccessor.Dispose();
+            ctx.ClusterSpatialBpAccessor.Dispose();
+            ctx.HasClusterSpatialAccessors = false;
+        }
+        for (int si = 0; si < ctx.SvSlotCount; si++)
+        {
+            ctx.SvCompAccessors[si].Dispose();
+        }
+        for (int ai = 0; ai < ctx.SvIdxAccessorTotal; ai++)
+        {
+            ctx.SvIdxAccessors[ai].Dispose();
+        }
+        for (int si = 0; si < ctx.TrSlotCount; si++)
+        {
+            ctx.TrCompAccessors[si].Dispose();
+        }
+        for (int ai = 0; ai < ctx.TrIdxAccessorTotal; ai++)
+        {
+            ctx.TrIdxAccessors[ai].Dispose();
+        }
+        ctx.HasMapAccessor = false;
+    }
+
+    /// <summary>
+    /// Set up all hoisted accessors for a new archetype: metadata caching, cluster accessors, SV/Transient index accessors.
+    /// </summary>
+    private void SetupSpawnAccessors(ref SpawnContext ctx, ushort archetypeId, scoped Span<int> svSlots, scoped Span<int> svIdxAccessorBase, 
+        scoped Span<int> trSlots, scoped Span<int> trIdxAccessorBase)
+    {
+        // Cache archetype metadata + compute versioned slot mask
+        ctx.Meta = ArchetypeRegistry.GetMetadata(archetypeId);
+        ctx.EngineState = _dbe._archetypeStates[ctx.Meta.ArchetypeId];
+        ctx.ComponentCount = ctx.Meta.ComponentCount;
+        ctx.VersionedMask = 0;
+        for (int slot = 0; slot < ctx.ComponentCount; slot++)
+        {
+            if (ctx.EngineState.SlotToComponentTable[slot].StorageMode == StorageMode.Versioned)
+            {
+                ctx.VersionedMask |= (ushort)(1 << slot);
+            }
+        }
+
+        ctx.MapAccessor = ctx.EngineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
+        ctx.LastArchId = archetypeId;
+        ctx.HasMapAccessor = true;
+
+        // Set up cluster accessors if this archetype uses cluster storage
+        ctx.UseCluster = ctx.Meta.IsClusterEligible && ctx.EngineState.ClusterState != null;
+        if (ctx.UseCluster)
+        {
+            ctx.ClusterState = ctx.EngineState.ClusterState;
+
+            // PersistentStore cluster accessor (null for pure-Transient)
+            if (ctx.ClusterState.ClusterSegment != null)
+            {
+                ctx.ClusterAccessor = ctx.ClusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
+                ctx.HasClusterAccessor = true;
+            }
+
+            // TransientStore cluster accessor (for archetypes with Transient components)
+            if (ctx.ClusterState.TransientSegment != null)
+            {
+                ctx.ClusterTransientAccessor = ctx.ClusterState.TransientSegment.CreateChunkAccessor();
+                ctx.HasClusterTransientAccessor = true;
+            }
+
+            // Create per-component accessors for reading from per-component spawn chunks.
+            // Transient slots use TransientComponentSegment; SV/V use ComponentSegment.
+            ctx.ClusterSrcAccessorCount = ctx.ComponentCount;
+            if (ctx.ClusterSrcAccessors == null || ctx.ClusterSrcAccessors.Length < ctx.ComponentCount)
+            {
+                ctx.ClusterSrcAccessors = new ChunkAccessor<PersistentStore>[ctx.ComponentCount];
+            }
+            bool hasTransientSlots = ctx.Meta.TransientSlotMask != 0;
+            if (hasTransientSlots)
+            {
+                if (ctx.ClusterTransientSrcAccessors == null || ctx.ClusterTransientSrcAccessors.Length < ctx.ComponentCount)
+                {
+                    ctx.ClusterTransientSrcAccessors = new ChunkAccessor<TransientStore>[ctx.ComponentCount];
+                }
+            }
+            for (int slot = 0; slot < ctx.ComponentCount; slot++)
+            {
+                var table = ctx.EngineState.SlotToComponentTable[slot];
+                if (table.StorageMode == StorageMode.Transient)
+                {
+                    ctx.ClusterTransientSrcAccessors[slot] = table.TransientComponentSegment.CreateChunkAccessor();
+                }
+                else
+                {
+                    ctx.ClusterSrcAccessors[slot] = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+                }
+            }
+
+            // Per-archetype index accessor for cluster B+Tree insertion
+            if (ctx.ClusterState.IndexSegment != null)
+            {
+                ctx.ClusterIdxAccessor = ctx.ClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
+                ctx.HasClusterIdxAccessor = true;
+            }
+
+            // Per-archetype spatial accessors for cluster R-Tree insertion
+            if (ctx.ClusterState.SpatialSlot.Tree != null)
+            {
+                ctx.ClusterSpatialTreeAccessor = ctx.ClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
+                ctx.ClusterSpatialBpAccessor = ctx.ClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
+                ctx.HasClusterSpatialAccessors = true;
+            }
+        }
+
+        // Build SV indexed slot accessors for this archetype (Transient handled separately below).
+        // First pass: count SV indexed slots, then allocate exact sizes.
+        ctx.SvSlotCount = 0;
+        ctx.SvIdxAccessorTotal = 0;
+        int idxCount = 0;
+        for (int slot = 0; slot < ctx.Meta.ComponentCount; slot++)
+        {
+            var table = ctx.EngineState.SlotToComponentTable[slot];
+            if (table.StorageMode != StorageMode.SingleVersion)
+            {
+                continue;
+            }
+            var ifi = table.IndexedFieldInfos;
+            if (ifi == null || ifi.Length == 0)
+            {
+                continue;
+            }
+            ctx.SvSlotCount++;
+            idxCount += ifi.Length;
+        }
+
+        if (ctx.SvSlotCount > 0)
+        {
+            // Reuse arrays if large enough, otherwise allocate exact size
+            if (ctx.SvCompAccessors == null || ctx.SvCompAccessors.Length < ctx.SvSlotCount)
+            {
+                ctx.SvCompAccessors = new ChunkAccessor<PersistentStore>[ctx.SvSlotCount];
+            }
+            if (ctx.SvIdxAccessors == null || ctx.SvIdxAccessors.Length < idxCount)
+            {
+                ctx.SvIdxAccessors = new ChunkAccessor<PersistentStore>[idxCount];
+            }
+        }
+
+        ctx.SvSlotCount = 0;
+        ctx.SvIdxAccessorTotal = 0;
+        for (int slot = 0; slot < ctx.Meta.ComponentCount; slot++)
+        {
+            var table = ctx.EngineState.SlotToComponentTable[slot];
+            if (table.StorageMode != StorageMode.SingleVersion)
+            {
+                continue;
+            }
+            var indexedFieldInfos = table.IndexedFieldInfos;
+            if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
+            {
+                continue;
+            }
+
+            svSlots[ctx.SvSlotCount] = slot;
+            ctx.SvCompAccessors[ctx.SvSlotCount] = table.ComponentSegment.CreateChunkAccessor(_changeSet);
+            svIdxAccessorBase[ctx.SvSlotCount] = ctx.SvIdxAccessorTotal;
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                ctx.SvIdxAccessors[ctx.SvIdxAccessorTotal++] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
+            }
+            ctx.SvSlotCount++;
+        }
+
+        // Build Transient indexed slot accessors — same two-pass pattern.
+        ctx.TrSlotCount = 0;
+        ctx.TrIdxAccessorTotal = 0;
+        int trIdxCount = 0;
+        for (int slot = 0; slot < ctx.Meta.ComponentCount; slot++)
+        {
+            var table = ctx.EngineState.SlotToComponentTable[slot];
+            if (table.StorageMode != StorageMode.Transient)
+            {
+                continue;
+            }
+            var ifi = table.IndexedFieldInfos;
+            if (ifi == null || ifi.Length == 0)
+            {
+                continue;
+            }
+            ctx.TrSlotCount++;
+            trIdxCount += ifi.Length;
+        }
+
+        if (ctx.TrSlotCount > 0)
+        {
+            if (ctx.TrCompAccessors == null || ctx.TrCompAccessors.Length < ctx.TrSlotCount)
+            {
+                ctx.TrCompAccessors = new ChunkAccessor<TransientStore>[ctx.TrSlotCount];
+            }
+            if (ctx.TrIdxAccessors == null || ctx.TrIdxAccessors.Length < trIdxCount)
+            {
+                ctx.TrIdxAccessors = new ChunkAccessor<TransientStore>[trIdxCount];
+            }
+        }
+
+        ctx.TrSlotCount = 0;
+        ctx.TrIdxAccessorTotal = 0;
+        for (int slot = 0; slot < ctx.Meta.ComponentCount; slot++)
+        {
+            var table = ctx.EngineState.SlotToComponentTable[slot];
+            if (table.StorageMode != StorageMode.Transient)
+            {
+                continue;
+            }
+            var indexedFieldInfos = table.IndexedFieldInfos;
+            if (indexedFieldInfos == null || indexedFieldInfos.Length == 0)
+            {
+                continue;
+            }
+
+            trSlots[ctx.TrSlotCount] = slot;
+            ctx.TrCompAccessors[ctx.TrSlotCount] = table.TransientComponentSegment.CreateChunkAccessor();
+            trIdxAccessorBase[ctx.TrSlotCount] = ctx.TrIdxAccessorTotal;
+            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            {
+                ctx.TrIdxAccessors[ctx.TrIdxAccessorTotal++] = indexedFieldInfos[i].TransientIndex.Segment.CreateChunkAccessor();
+            }
+            ctx.TrSlotCount++;
         }
     }
 

@@ -601,8 +601,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// Initialize per-archetype spatial R-Tree infrastructure from the component tables.
     /// Called after cluster state creation for archetypes with <see cref="ArchetypeMetadata.HasClusterSpatial"/>.
     /// </summary>
-    public void InitializeSpatial(ComponentTable[] slotToTable, ChunkBasedSegment<PersistentStore> treeSeg, ChunkBasedSegment<PersistentStore> bpSeg, bool load, 
-        ChangeSet changeSet)
+    public void InitializeSpatial(ComponentTable[] slotToTable, ChunkBasedSegment<PersistentStore> treeSeg, ChunkBasedSegment<PersistentStore> bpSeg, bool load)
     {
         for (int slot = 0; slot < slotToTable.Length; slot++)
         {

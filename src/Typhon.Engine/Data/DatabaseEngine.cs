@@ -2617,7 +2617,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             meta.HasClusterIndexes = isClusterEligible && hasClusterIndexableFields;
             meta.HasClusterSpatial = isClusterEligible && hasSpatialField;
             meta.VersionedSlotMask = isClusterEligible ? versionedSlotMask : (ushort)0;
-            meta.VersionedSlotCount = isClusterEligible ? (byte)System.Numerics.BitOperations.PopCount(versionedSlotMask) : (byte)0;
+            meta.VersionedSlotCount = isClusterEligible ? (byte)BitOperations.PopCount(versionedSlotMask) : (byte)0;
             meta.TransientSlotMask = isClusterEligible ? transientSlotMask : (ushort)0;
             meta.TransientSlotCount = isClusterEligible ? (byte)BitOperations.PopCount(transientSlotMask) : (byte)0;
 
@@ -2838,7 +2838,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                             bpSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, 8, changeSet);
                         }
 
-                        clusterState.InitializeSpatial(slotToTable, treeSeg, bpSeg, loadSpatial, changeSet);
+                        clusterState.InitializeSpatial(slotToTable, treeSeg, bpSeg, loadSpatial);
 
                         // Register with per-table SpatialInterestSystem for fan-out
                         for (int slot = 0; slot < meta.ComponentCount; slot++)
