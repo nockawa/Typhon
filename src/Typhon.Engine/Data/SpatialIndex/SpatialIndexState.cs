@@ -48,6 +48,18 @@ internal class SpatialIndexState
         return TriggerSystem;
     }
 
+    // ── Cluster archetype references for fan-out ────────────
+
+    /// <summary>Per-archetype cluster spatial state references, registered during InitializeArchetypes.</summary>
+    internal System.Collections.Generic.List<ArchetypeClusterState> ClusterArchetypes { get; private set; }
+
+    /// <summary>Register a cluster archetype that has spatial fields for this component. Called from DatabaseEngine.InitializeArchetypes.</summary>
+    internal void RegisterClusterArchetype(ArchetypeClusterState clusterState)
+    {
+        ClusterArchetypes ??= new System.Collections.Generic.List<ArchetypeClusterState>(4);
+        ClusterArchetypes.Add(clusterState);
+    }
+
     internal SpatialIndexState(SpatialRTree<PersistentStore> staticTree, SpatialRTree<PersistentStore> dynamicTree,
         ChunkBasedSegment<PersistentStore> backPointerSegment, SpatialFieldInfo fieldInfo, SpatialNodeDescriptor descriptor,
         PagedHashMap<long, int, PersistentStore> occupancyMap = null)

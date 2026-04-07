@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "AntHill": {
+      "commandName": "Executable",
+      "executablePath": "godot\\godot.exe",
+      "commandLineArgs": "--path .",
+      "workingDirectory": "$(ProjectDir)"
+    }
+  }
+}

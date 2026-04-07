@@ -51,8 +51,38 @@ internal class ArchetypeMetadata
     /// <summary>[slotIndex] → CLR Type of the component at this slot. Length == ComponentCount.</summary>
     internal Type[] _slotToComponentType;
 
-    /// <summary>Cached entity record size: 14 + ComponentCount * 4 bytes.</summary>
+    /// <summary>Cached entity record size: 14 + ComponentCount * 4 bytes (legacy), or 19 bytes (cluster).</summary>
     internal int _entityRecordSize;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Cluster storage (set during DatabaseEngine.InitializeArchetypes)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>True if this archetype uses cluster storage (all SV, no non-Dynamic spatial).</summary>
+    internal bool IsClusterEligible;
+
+    /// <summary>True if cluster-eligible AND at least one component has indexed fields.
+    /// Gates per-archetype B+Tree creation and shadow capture in the cluster write path.</summary>
+    internal bool HasClusterIndexes;
+
+    /// <summary>True if cluster-eligible AND has a dynamic spatial-indexed component.
+    /// Gates per-archetype R-Tree creation and cluster spatial maintenance.</summary>
+    internal bool HasClusterSpatial;
+
+    /// <summary>Precomputed cluster layout. Non-null only when <see cref="IsClusterEligible"/> is true.</summary>
+    internal ArchetypeClusterInfo ClusterLayout;
+
+    /// <summary>Bitmask of component slots that use Versioned storage mode. Bit N set = slot N is Versioned.</summary>
+    internal ushort VersionedSlotMask;
+
+    /// <summary>Number of Versioned component slots (PopCount of <see cref="VersionedSlotMask"/>).</summary>
+    internal byte VersionedSlotCount;
+
+    /// <summary>Bitmask of component slots that use Transient storage mode. Bit N set = slot N is Transient.</summary>
+    internal ushort TransientSlotMask;
+
+    /// <summary>Number of Transient component slots (PopCount of <see cref="TransientSlotMask"/>).</summary>
+    internal byte TransientSlotCount;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Cascade delete graph (populated during Freeze)
@@ -119,6 +149,9 @@ internal class ArchetypeEngineState
 
     /// <summary>Monotonic entity key counter. Use Interlocked.Increment for thread-safe generation.</summary>
     public long NextEntityKey;
+
+    /// <summary>Cluster storage state. Non-null for cluster-eligible archetypes.</summary>
+    public ArchetypeClusterState ClusterState;
 }
 
 /// <summary>

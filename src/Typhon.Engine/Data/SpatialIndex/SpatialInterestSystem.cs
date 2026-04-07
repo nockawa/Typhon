@@ -49,6 +49,9 @@ internal sealed unsafe class SpatialInterestSystem
     // Shared scratch — accumulated dirty bitmap (reused across GetSpatialChanges calls)
     private long[] _accumScratch;
 
+    // Shared scratch — per-archetype cluster dirty accumulation (reused across calls)
+    private long[] _clusterAccumScratch;
+
     // Owner references
     private readonly ComponentTable _table;
     private readonly SpatialIndexState _spatialState;
@@ -171,33 +174,65 @@ internal sealed unsafe class SpatialInterestSystem
             return PerformFullSync(ref config, state, currentTick);
         }
 
-        // If no new data in ring since last consumption → nothing changed
+        // Compute effective head tick across per-table and per-archetype rings
         long startTick = lastTick + 1;
-        if (startTick > _dirtyRing.HeadTick)
+        long effectiveHeadTick = _dirtyRing.HeadTick;
+        if (_spatialState.ClusterArchetypes != null)
+        {
+            foreach (var clSt in _spatialState.ClusterArchetypes)
+            {
+                var clRing = clSt.SpatialSlot.DirtyRing;
+                if (clRing != null && clRing.HeadTick > effectiveHeadTick)
+                {
+                    effectiveHeadTick = clRing.HeadTick;
+                }
+            }
+        }
+
+        // If no new data in any ring since last consumption → nothing changed
+        if (startTick > effectiveHeadTick)
         {
             return SpatialChangeResult.Empty(currentTick);
         }
 
         // If requested range fell off the ring → full sync
-        if (_dirtyRing.HeadTick == 0 || !_dirtyRing.IsTickAvailable(startTick))
+        if (effectiveHeadTick == 0)
+        {
+            return PerformFullSync(ref config, state, currentTick);
+        }
+
+        bool anyRingAvailable = _dirtyRing.IsTickAvailable(startTick);
+        if (_spatialState.ClusterArchetypes != null)
+        {
+            foreach (var clSt in _spatialState.ClusterArchetypes)
+            {
+                var clRing = clSt.SpatialSlot.DirtyRing;
+                if (clRing != null && clRing.IsTickAvailable(startTick))
+                {
+                    anyRingAvailable = true;
+                }
+            }
+        }
+
+        if (!anyRingAvailable)
         {
             return PerformFullSync(ref config, state, currentTick);
         }
 
         // Clamp endTick to what's actually in the ring
-        long endTick = Math.Min(currentTick, _dirtyRing.HeadTick);
+        long endTick = Math.Min(currentTick, effectiveHeadTick);
 
-        // Accumulate dirty bitmaps for the tick range
+        // Accumulate dirty bitmaps for the tick range (per-table ring)
         int maxWords = _dirtyRing.MaxWordCount;
-        if (maxWords == 0)
-        {
-            state.LastConsumedTick = currentTick;
-            return SpatialChangeResult.Empty(currentTick);
-        }
+        bool hasPerTableDirty = maxWords > 0;
 
-        EnsureAccumCapacity(maxWords);
-        Array.Clear(_accumScratch, 0, maxWords);
-        int accumWords = _dirtyRing.AccumulateDirty(startTick, endTick, _accumScratch);
+        int accumWords = 0;
+        if (hasPerTableDirty)
+        {
+            EnsureAccumCapacity(maxWords);
+            Array.Clear(_accumScratch, 0, maxWords);
+            accumWords = _dirtyRing.AccumulateDirty(startTick, endTick, _accumScratch);
+        }
 
         // Inverted iteration: for each dirty entity, test containment against this observer
         state.ChangeCount = 0;
@@ -208,8 +243,8 @@ internal sealed unsafe class SpatialInterestSystem
         var guard = EpochGuard.Enter(_table.DBE.EpochManager);
         try
         {
-            var bpAccessor = _spatialState.BackPointerSegment.CreateChunkAccessor();
-            var treeAccessor = tree.Segment.CreateChunkAccessor();
+            var bpAccessor = hasPerTableDirty ? _spatialState.BackPointerSegment.CreateChunkAccessor() : default;
+            var treeAccessor = hasPerTableDirty ? tree.Segment.CreateChunkAccessor() : default;
             try
             {
                 Span<double> coords = stackalloc double[coordCount];
@@ -257,8 +292,86 @@ internal sealed unsafe class SpatialInterestSystem
             }
             finally
             {
-                treeAccessor.Dispose();
-                bpAccessor.Dispose();
+                if (hasPerTableDirty)
+                {
+                    treeAccessor.Dispose();
+                    bpAccessor.Dispose();
+                }
+            }
+
+            // Fan out to per-archetype cluster spatial R-Trees.
+            // Cluster entities have their own DirtyBitmapRing indexed by ClusterLocation.
+            if (_spatialState.ClusterArchetypes != null)
+            {
+                Span<double> clCoords = stackalloc double[coordCount];
+                foreach (var clusterState in _spatialState.ClusterArchetypes)
+                {
+                    var ring = clusterState.SpatialSlot.DirtyRing;
+                    if (ring == null || ring.HeadTick == 0 || !ring.IsTickAvailable(startTick))
+                    {
+                        continue;
+                    }
+
+                    int clMaxWords = ring.MaxWordCount;
+                    if (clMaxWords == 0)
+                    {
+                        continue;
+                    }
+
+                    // Accumulate per-archetype dirty ring for tick range (reuse cached scratch)
+                    if (_clusterAccumScratch == null || _clusterAccumScratch.Length < clMaxWords)
+                    {
+                        _clusterAccumScratch = new long[clMaxWords];
+                    }
+                    Array.Clear(_clusterAccumScratch, 0, clMaxWords);
+                    int clAccumWords = ring.AccumulateDirty(startTick, endTick, _clusterAccumScratch);
+
+                    ref var ss = ref clusterState.SpatialSlot;
+                    var clBpAccessor = ss.BackPointerSegment.CreateChunkAccessor();
+                    var clTreeAccessor = ss.Tree.Segment.CreateChunkAccessor();
+                    try
+                    {
+                        for (int wordIdx = 0; wordIdx < clAccumWords; wordIdx++)
+                        {
+                            long word = _clusterAccumScratch[wordIdx];
+                            while (word != 0)
+                            {
+                                int bit = BitOperations.TrailingZeroCount((ulong)word);
+                                int clusterLocation = wordIdx * 64 + bit;
+                                word &= word - 1;
+
+                                var bp = SpatialBackPointerHelper.Read(ref clBpAccessor, clusterLocation);
+                                if (bp.LeafChunkId == 0)
+                                {
+                                    continue;
+                                }
+
+                                byte* leafBase = clTreeAccessor.GetChunkAddress(bp.LeafChunkId);
+                                SpatialNodeHelper.ReadLeafEntryCoords(leafBase, bp.SlotIndex, clCoords, desc);
+                                uint category = SpatialNodeHelper.ReadLeafCategoryMask(leafBase, bp.SlotIndex, desc);
+
+                                if (config.CategoryMask != 0 && (category & config.CategoryMask) != config.CategoryMask)
+                                {
+                                    continue;
+                                }
+
+                                if (!OverlapsObserver(in config, clCoords, coordCount))
+                                {
+                                    continue;
+                                }
+
+                                long entityId = SpatialNodeHelper.ReadLeafEntityId(leafBase, bp.SlotIndex, desc);
+                                EnsureChangeBufferCapacity(state);
+                                state.ChangeBuffer[state.ChangeCount++] = entityId;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        clTreeAccessor.Dispose();
+                        clBpAccessor.Dispose();
+                    }
+                }
             }
         }
         finally
@@ -288,6 +401,23 @@ internal sealed unsafe class SpatialInterestSystem
             {
                 EnsureChangeBufferCapacity(state);
                 state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
+            }
+
+            // Fan out to per-archetype cluster spatial R-Trees
+            if (_spatialState.ClusterArchetypes != null)
+            {
+                foreach (var clusterState in _spatialState.ClusterArchetypes)
+                {
+                    if (clusterState.SpatialSlot.Tree == null)
+                    {
+                        continue;
+                    }
+                    foreach (var hit in clusterState.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
+                    {
+                        EnsureChangeBufferCapacity(state);
+                        state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
+                    }
+                }
             }
         }
         finally

@@ -13,6 +13,25 @@ public unsafe partial class EntityAccessor
     // Public entity access API
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Create a fast-path <see cref="ArchetypeAccessor{TArch}"/> pre-bound to a specific archetype.
+    /// Bypasses epoch checks, archetype lookup, and MVCC visibility on every Open/OpenMut call.
+    /// Intended for PTA workers in parallel QuerySystems where these checks are redundant.
+    /// </summary>
+    public ArchetypeAccessor<TArch> For<TArch>() where TArch : class
+    {
+        var meta = ArchetypeRegistry.GetMetadata<TArch>();
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        return new ArchetypeAccessor<TArch>(meta, es, this, _dbe);
+    }
+
+    /// <summary>Pre-warm the ComponentInfo cache for a given component type. Called by ArchetypeAccessor during construction.</summary>
+    internal void EnsureComponentInfoCached(Type componentType) => GetComponentInfo(componentType);
+
+    /// <summary>Get cached ComponentInfo by type ID. For ArchetypeAccessor's Versioned chain walk.</summary>
+    internal ComponentInfo GetComponentInfoInternal(int componentTypeId, Type componentType) =>
+        GetComponentInfoByTypeId(componentTypeId, componentType);
+
     /// <summary>Open an entity for reading. Throws if not found or not visible.</summary>
     public EntityRef Open(EntityId id)
     {
@@ -120,36 +139,128 @@ public unsafe partial class EntityAccessor
         ushort enabledBits = _dbe.EnabledBitsOverrides.ResolveEnabledBits(id.EntityKey, header.EnabledBits, TSN);
 
         var result = new EntityRef(id, meta, es, this, enabledBits, writable);
-        result.CopyLocationsFrom(readBuf, meta.ComponentCount);
 
-        // For Versioned components: walk revision chain to find visible version.
-        // skipTimeout: base EntityAccessor is used by PTA — no concurrent writers, chain lock is uncontended.
-        // This avoids Stopwatch.GetTimestamp() overhead per entity (~25ns).
-        for (int slot = 0; slot < meta.ComponentCount; slot++)
+        if (meta.IsClusterEligible && es.ClusterState != null)
         {
-            var table = es.SlotToComponentTable[slot];
-            if (table.StorageMode != StorageMode.Versioned)
+            // Cluster path: read ClusterEntityRecord → resolve cluster base + slot
+            int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(readBuf);
+            byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(readBuf);
+
+            // Cache cluster accessor for same-archetype repeated lookups
+            if (!_hasClusterCache || _clusterCacheArchId != id.ArchetypeId)
             {
-                continue;
+                if (_hasClusterCache)
+                {
+                    _clusterCacheAccessor.Dispose();
+                }
+                if (_hasTransientClusterCache)
+                {
+                    _transientClusterCacheAccessor.Dispose();
+                    _hasTransientClusterCache = false;
+                }
+
+                if (es.ClusterState.ClusterSegment != null)
+                {
+                    _clusterCacheAccessor = es.ClusterState.ClusterSegment.CreateChunkAccessor();
+                }
+                if (es.ClusterState.TransientSegment != null)
+                {
+                    _transientClusterCacheAccessor = es.ClusterState.TransientSegment.CreateChunkAccessor();
+                    _hasTransientClusterCache = true;
+                }
+                _clusterCacheArchId = id.ArchetypeId;
+                _hasClusterCache = true;
             }
 
-            int compRevFirstChunkId = result.GetLocation(slot);
-            if (compRevFirstChunkId == 0)
+            // Primary base: PersistentStore for mixed/SV, TransientStore for pure-Transient
+            if (es.ClusterState.ClusterSegment != null)
             {
-                continue;
+                result._clusterBase = _clusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
+            }
+            else
+            {
+                result._clusterBase = _transientClusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
             }
 
-            // Use componentTypeId directly from archetype metadata — avoids Dictionary<Type, int> lookup in GetComponentInfo
-            var compTypeId = meta._componentTypeIds[slot];
-            var info = GetComponentInfoByTypeId(compTypeId, meta._slotToComponentType[slot]);
-
-            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, skipTimeout: true);
-            if (chainResult.IsFailure)
+            // Mixed archetype: also set TransientStore base
+            if (_hasTransientClusterCache && es.ClusterState.ClusterSegment != null)
             {
-                continue;
+                result._transientClusterBase = _transientClusterCacheAccessor.GetChunkAddress(clusterChunkId, writable);
             }
 
-            result.SetLocation(slot, chainResult.Value.CurCompContentChunkId);
+            result._clusterSlotIndex = slotIndex;
+            result._clusterChunkId = clusterChunkId;
+            result._clusterLayout = es.ClusterState.Layout;
+
+            // For Versioned slots, walk chain and store resolved content chunkId in _locations.
+            // Versioned reads via EntityRef.Read use _locations (not cluster slot) for MVCC correctness.
+            if (meta.VersionedSlotMask != 0)
+            {
+                var layout = es.ClusterState.Layout;
+                if (layout.SlotToVersionedIndex == null)
+                {
+                    goto skipVersionedWalk;
+                }
+                for (int slot = 0; slot < meta.ComponentCount; slot++)
+                {
+                    int vi = layout.SlotToVersionedIndex[slot];
+                    if (vi < 0)
+                    {
+                        continue;
+                    }
+
+                    int compRevFirstChunkId = ClusterEntityRecordAccessor.GetCompRevFirstChunkId(readBuf, vi);
+                    if (compRevFirstChunkId == 0)
+                    {
+                        continue;
+                    }
+
+                    var compTypeId = meta._componentTypeIds[slot];
+                    var info = GetComponentInfoInternal(compTypeId, meta._slotToComponentType[slot]);
+
+                    var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, skipTimeout: true);
+                    if (chainResult.IsSuccess)
+                    {
+                        result.SetLocation(slot, chainResult.Value.CurCompContentChunkId);
+                    }
+                }
+                skipVersionedWalk:;
+            }
+        }
+        else
+        {
+            // Legacy path: per-component locations + Versioned chain walk
+            result.CopyLocationsFrom(readBuf, meta.ComponentCount);
+
+            // For Versioned components: walk revision chain to find visible version.
+            // skipTimeout: base EntityAccessor is used by PTA — no concurrent writers, chain lock is uncontended.
+            // This avoids Stopwatch.GetTimestamp() overhead per entity (~25ns).
+            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            {
+                var table = es.SlotToComponentTable[slot];
+                if (table.StorageMode != StorageMode.Versioned)
+                {
+                    continue;
+                }
+
+                int compRevFirstChunkId = result.GetLocation(slot);
+                if (compRevFirstChunkId == 0)
+                {
+                    continue;
+                }
+
+                // Use componentTypeId directly from archetype metadata — avoids Dictionary<Type, int> lookup in GetComponentInfo
+                var compTypeId = meta._componentTypeIds[slot];
+                var info = GetComponentInfoByTypeId(compTypeId, meta._slotToComponentType[slot]);
+
+                var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, skipTimeout: true);
+                if (chainResult.IsFailure)
+                {
+                    continue;
+                }
+
+                result.SetLocation(slot, chainResult.Value.CurCompContentChunkId);
+            }
         }
 
         return result;

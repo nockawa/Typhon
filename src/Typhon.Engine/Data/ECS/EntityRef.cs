@@ -24,6 +24,13 @@ public unsafe ref struct EntityRef
     internal readonly bool _writable;
     private fixed int _locations[16];
 
+    // ── Cluster storage fields (non-null when entity uses cluster storage) ──
+    internal byte* _clusterBase;                    // Pointer to primary cluster chunk data; null = legacy path
+    internal byte* _transientClusterBase;           // Pointer to TransientStore cluster base; null = no Transient segment (or pure-T where _clusterBase is TS)
+    internal byte _clusterSlotIndex;                // Slot within cluster (0..63)
+    internal int _clusterChunkId;                   // Cluster chunk ID (for dirty tracking: entityIndex = chunkId * 64 + slot)
+    internal ArchetypeClusterInfo _clusterLayout;   // Layout info for offset computation
+
     internal EntityRef(EntityId id, ArchetypeMetadata archetype, ArchetypeEngineState engineState, EntityAccessor accessor, ushort enabledBits, bool writable)
     {
         _id = id;
@@ -87,7 +94,7 @@ public unsafe ref struct EntityRef
     // Component access — by handle (O(1), preferred)
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Read a component by handle. Zero-copy — returns a ref into the chunk page.</summary>
+    /// <summary>Read a component by handle. Zero-copy — returns a ref into the chunk page (or cluster slot).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref readonly T Read<T>(Comp<T> comp) where T : unmanaged
     {
@@ -95,12 +102,30 @@ public unsafe ref struct EntityRef
         Debug.Assert(slot < _archetype.ComponentCount, $"Slot {slot} out of range for archetype with {_archetype.ComponentCount} components");
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component at slot {slot} is disabled");
 
-        int chunkId = _locations[slot];
-        var table = _engineState.SlotToComponentTable[slot];
-        return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
+        if (_clusterBase != null)
+        {
+            // Transient slots read from TransientStore cluster segment (mixed archetypes only; for pure-T, _clusterBase IS the TS base)
+            if (_transientClusterBase != null && (_archetype.TransientSlotMask & (1 << slot)) != 0)
+            {
+                return ref Unsafe.AsRef<T>(_transientClusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+            }
+            // Versioned slots read from content chunk (_locations populated by chain walk), not cluster slot.
+            // Cluster slot is the HEAD cache — used by bulk iteration only. MVCC-correct reads use content chunk.
+            if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
+            {
+                int chunkId = _locations[slot];
+                var table = _engineState.SlotToComponentTable[slot];
+                return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
+            }
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+        }
+
+        int chunkId2 = _locations[slot];
+        var table2 = _engineState.SlotToComponentTable[slot];
+        return ref _accessor.ReadEcsComponentData<T>(table2, chunkId2);
     }
 
-    /// <summary>Write a component by handle. Returns a mutable ref into the chunk page.
+    /// <summary>Write a component by handle. Returns a mutable ref into the chunk page (or cluster slot).
     /// For Versioned: copy-on-write (allocates new chunk, preserves old for concurrent readers).
     /// For SingleVersion with indexes: shadows old field values on first write per tick for deferred index maintenance.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -111,22 +136,69 @@ public unsafe ref struct EntityRef
         Debug.Assert(slot < _archetype.ComponentCount);
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component at slot {slot} is disabled");
 
-        int chunkId = _locations[slot];
-        var table = _engineState.SlotToComponentTable[slot];
-
-        if (table.StorageMode == StorageMode.Versioned)
+        if (_clusterBase != null)
         {
-            var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
-            _locations[slot] = newChunkId;
-            return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+            // Versioned cluster: COW path (same as legacy Versioned — cluster slot updated at commit)
+            if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
+            {
+                var table = _engineState.SlotToComponentTable[slot];
+                var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+                _locations[slot] = newChunkId;
+                return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+            }
+
+            var clusterState = _engineState.ClusterState;
+
+            // Transient cluster: in-place write to TransientStore segment (no COW, no revision chain)
+            if (_transientClusterBase != null && (_archetype.TransientSlotMask & (1 << slot)) != 0)
+            {
+                // Shadow capture for SV indexed fields (first write per entity per tick — captures SV fields, skips T and V)
+                if (clusterState.IndexSlots != null)
+                {
+                    int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+                    if (!clusterState.ClusterShadowBitmap.TestAndSet(entityIndex))
+                    {
+                        ShadowClusterIndexedFields(clusterState);
+                    }
+                }
+                clusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
+                return ref Unsafe.AsRef<T>(_transientClusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+            }
+
+            // SV cluster fast path: direct pointer arithmetic into SoA array.
+            // Page was already marked dirty at resolve time (OpenMut → GetChunkAddress(dirty:true)).
+            // Shadow capture for per-archetype B+Tree index maintenance (first write per entity per tick)
+            if (clusterState.IndexSlots != null)
+            {
+                int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+                if (!clusterState.ClusterShadowBitmap.TestAndSet(entityIndex))
+                {
+                    ShadowClusterIndexedFields(clusterState);
+                }
+            }
+
+            clusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
         }
 
-        if (table.HasShadowableIndexes)
         {
-            _accessor.ShadowIndexedFields<T>(table, chunkId, _id);
-        }
+            int chunkId = _locations[slot];
+            var table = _engineState.SlotToComponentTable[slot];
 
-        return ref _accessor.WriteEcsComponentData<T>(table, chunkId);
+            if (table.StorageMode == StorageMode.Versioned)
+            {
+                var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+                _locations[slot] = newChunkId;
+                return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+            }
+
+            if (table.HasShadowableIndexes)
+            {
+                _accessor.ShadowIndexedFields<T>(table, chunkId, _id);
+            }
+
+            return ref _accessor.WriteEcsComponentData<T>(table, chunkId);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -141,9 +213,21 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(typeId);
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component {typeof(T).Name} at slot {slot} is disabled");
 
-        int chunkId = _locations[slot];
-        var table = _engineState.SlotToComponentTable[slot];
-        return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
+        if (_clusterBase != null)
+        {
+            // Versioned slots read from content chunk for MVCC correctness
+            if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
+            {
+                int chunkId = _locations[slot];
+                var table = _engineState.SlotToComponentTable[slot];
+                return ref _accessor.ReadEcsComponentData<T>(table, chunkId);
+            }
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+        }
+
+        int chunkId2 = _locations[slot];
+        var table2 = _engineState.SlotToComponentTable[slot];
+        return ref _accessor.ReadEcsComponentData<T>(table2, chunkId2);
     }
 
     /// <summary>Write a component by type. Resolves slot via archetype metadata.
@@ -157,22 +241,85 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(typeId);
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component {typeof(T).Name} at slot {slot} is disabled");
 
-        int chunkId = _locations[slot];
-        var table = _engineState.SlotToComponentTable[slot];
-
-        if (table.StorageMode == StorageMode.Versioned)
+        if (_clusterBase != null)
         {
-            var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
-            _locations[slot] = newChunkId;
-            return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+            // Versioned cluster: COW path
+            if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
+            {
+                var table = _engineState.SlotToComponentTable[slot];
+                var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+                _locations[slot] = newChunkId;
+                return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+            }
+
+            // SV cluster fast path
+            var clusterState = _engineState.ClusterState;
+
+            // Shadow capture for per-archetype B+Tree index maintenance (first write per entity per tick)
+            if (clusterState.IndexSlots != null)
+            {
+                int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+                if (!clusterState.ClusterShadowBitmap.TestAndSet(entityIndex))
+                {
+                    ShadowClusterIndexedFields(clusterState);
+                }
+            }
+
+            clusterState.SetDirty(_clusterChunkId, _clusterSlotIndex);
+            return ref Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
         }
 
-        if (table.HasShadowableIndexes)
         {
-            _accessor.ShadowIndexedFields<T>(table, chunkId, _id);
-        }
+            int chunkId = _locations[slot];
+            var table = _engineState.SlotToComponentTable[slot];
 
-        return ref _accessor.WriteEcsComponentData<T>(table, chunkId);
+            if (table.StorageMode == StorageMode.Versioned)
+            {
+                var (newChunkId, rawPtr) = _accessor.EcsVersionedCopyOnWrite(typeof(T), _id, table);
+                _locations[slot] = newChunkId;
+                return ref Unsafe.AsRef<T>((byte*)rawPtr + table.ComponentOverhead);
+            }
+
+            if (table.HasShadowableIndexes)
+            {
+                _accessor.ShadowIndexedFields<T>(table, chunkId, _id);
+            }
+
+            return ref _accessor.WriteEcsComponentData<T>(table, chunkId);
+        }
+    }
+
+    /// <summary>
+    /// Capture old indexed field values from cluster SoA for all indexed components.
+    /// Called once per entity per tick, before the first write mutation.
+    /// </summary>
+    private void ShadowClusterIndexedFields(ArchetypeClusterState clusterState)
+    {
+        long pk = (long)_id.RawValue;
+        int entityIndex = _clusterChunkId * 64 + _clusterSlotIndex;
+        var slots = clusterState.IndexSlots;
+        // Skip Versioned slots (indexes updated at commit time) and Transient slots (indexes maintained per-ComponentTable)
+        ushort skipMask = (ushort)(_archetype.VersionedSlotMask | _archetype.TransientSlotMask);
+
+        for (int s = 0; s < slots.Length; s++)
+        {
+            ref var ixSlot = ref slots[s];
+
+            if ((skipMask & (1 << ixSlot.Slot)) != 0)
+            {
+                continue;
+            }
+
+            int compSize = _clusterLayout.ComponentSize(ixSlot.Slot);
+            byte* compBase = _clusterBase + _clusterLayout.ComponentOffset(ixSlot.Slot) + _clusterSlotIndex * compSize;
+
+            for (int f = 0; f < ixSlot.Fields.Length; f++)
+            {
+                ref var field = ref ixSlot.Fields[f];
+                var oldKey = KeyBytes8.FromPointer(compBase + field.FieldOffset, field.FieldSize);
+                ixSlot.ShadowBuffers[f].Append(entityIndex, pk, oldKey);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -213,9 +360,31 @@ public unsafe ref struct EntityRef
             value = default;
             return false;
         }
-        int chunkId = _locations[slot];
-        var table = _engineState.SlotToComponentTable[slot];
-        value = _accessor.ReadEcsComponentData<T>(table, chunkId);
+
+        if (_clusterBase != null)
+        {
+            // Transient slots read from TransientStore cluster segment
+            if (_transientClusterBase != null && (_archetype.TransientSlotMask & (1 << slot)) != 0)
+            {
+                value = Unsafe.AsRef<T>(_transientClusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+                return true;
+            }
+            // Versioned slots read from content chunk (_locations populated by chain walk), not cluster slot.
+            if ((_archetype.VersionedSlotMask & (1 << slot)) != 0)
+            {
+                int chunkId = _locations[slot];
+                var table = _engineState.SlotToComponentTable[slot];
+                value = _accessor.ReadEcsComponentData<T>(table, chunkId);
+                return true;
+            }
+
+            value = Unsafe.AsRef<T>(_clusterBase + _clusterLayout.ComponentOffset(slot) + _clusterSlotIndex * _clusterLayout.ComponentSize(slot));
+            return true;
+        }
+
+        int chunkId2 = _locations[slot];
+        var table2 = _engineState.SlotToComponentTable[slot];
+        value = _accessor.ReadEcsComponentData<T>(table2, chunkId2);
         return true;
     }
 
@@ -226,6 +395,13 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         _enabledBits &= (ushort)~(1 << slot);
         _accessor.StageEnableDisable(_id, _enabledBits);
+
+        // Update cluster EnabledBits so cluster iteration sees the change immediately
+        if (_clusterBase != null)
+        {
+            ref ulong clusterBits = ref *(ulong*)(_clusterBase + _clusterLayout.EnabledBitsOffset(slot));
+            clusterBits &= ~(1UL << _clusterSlotIndex);
+        }
     }
 
     /// <summary>Enable a component by handle. Stages the change for commit.</summary>
@@ -235,5 +411,12 @@ public unsafe ref struct EntityRef
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         _enabledBits |= (ushort)(1 << slot);
         _accessor.StageEnableDisable(_id, _enabledBits);
+
+        // Update cluster EnabledBits so cluster iteration sees the change immediately
+        if (_clusterBase != null)
+        {
+            ref ulong clusterBits = ref *(ulong*)(_clusterBase + _clusterLayout.EnabledBitsOffset(slot));
+            clusterBits |= 1UL << _clusterSlotIndex;
+        }
     }
 }

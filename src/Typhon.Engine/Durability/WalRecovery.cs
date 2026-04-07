@@ -79,6 +79,16 @@ internal class TickFenceScanEntry
 }
 
 /// <summary>
+/// Collected ClusterTickFence chunk data during WAL scan. One entry per chunk (one chunk per cluster-eligible archetype per tick).
+/// </summary>
+internal class ClusterTickFenceScanEntry
+{
+    public long LSN;
+    public ushort ArchetypeId;
+    public List<(int EntityIndex, byte[] AllComponentData)> Entries;
+}
+
+/// <summary>
 /// Orchestrates WAL crash recovery: scans WAL segments, identifies committed UoWs,
 /// voids pending ones, and replays committed records to restore data consistency.
 /// </summary>
@@ -134,6 +144,7 @@ internal sealed class WalRecovery : IDisposable
         var uowStates = new Dictionary<ushort, UowScanState>();
         var fpiMap = new Dictionary<int, FpiScanEntry>();
         var tickFenceEntries = new List<TickFenceScanEntry>();
+        var clusterTickFenceEntries = new List<ClusterTickFenceScanEntry>();
 
         using var reader = new WalSegmentReader(_fileIO);
 
@@ -162,6 +173,10 @@ internal sealed class WalRecovery : IDisposable
 
                     case WalChunkType.TickFence:
                         CollectTickFenceChunk(tickFenceEntries, body);
+                        break;
+
+                    case WalChunkType.ClusterTickFence:
+                        CollectClusterTickFenceChunk(clusterTickFenceEntries, body);
                         break;
                 }
             }
@@ -262,6 +277,11 @@ internal sealed class WalRecovery : IDisposable
         if (dbe != null && tickFenceEntries.Count > 0)
         {
             ReplayTickFences(dbe, tickFenceEntries, ref result);
+        }
+
+        if (dbe != null && clusterTickFenceEntries.Count > 0)
+        {
+            ReplayClusterTickFences(dbe, clusterTickFenceEntries, ref result);
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -457,6 +477,127 @@ internal sealed class WalRecovery : IDisposable
             {
                 var dst = accessor.GetChunkAsSpan(chunkId, true);
                 componentData.AsSpan().CopyTo(dst.Slice(overhead));
+                result.TickFenceEntriesReplayed++;
+            }
+
+            accessor.Dispose();
+            result.TickFenceChunksProcessed++;
+        }
+
+        cs.SaveChanges();
+        dbe.MMF.FlushToDisk();
+    }
+
+    /// <summary>
+    /// Parses a ClusterTickFence chunk body and collects entries for later replay.
+    /// </summary>
+    private static void CollectClusterTickFenceChunk(List<ClusterTickFenceScanEntry> entries, ReadOnlySpan<byte> body)
+    {
+        if (body.Length < ClusterTickFenceHeader.SizeInBytes)
+        {
+            return; // Malformed — skip
+        }
+
+        var header = MemoryMarshal.Read<ClusterTickFenceHeader>(body);
+        var entryData = body.Slice(ClusterTickFenceHeader.SizeInBytes);
+        int entrySize = 4 + header.PerEntityPayload;
+
+        if (entryData.Length < header.EntryCount * entrySize)
+        {
+            return; // Truncated — skip
+        }
+
+        var scanEntry = new ClusterTickFenceScanEntry
+        {
+            LSN = header.LSN,
+            ArchetypeId = header.ArchetypeId,
+            Entries = new List<(int, byte[])>(header.EntryCount),
+        };
+
+        int offset = 0;
+        for (int i = 0; i < header.EntryCount; i++)
+        {
+            int entityIndex = MemoryMarshal.Read<int>(entryData.Slice(offset));
+            offset += 4;
+
+            var allCompData = entryData.Slice(offset, header.PerEntityPayload).ToArray();
+            offset += header.PerEntityPayload;
+
+            scanEntry.Entries.Add((entityIndex, allCompData));
+        }
+
+        entries.Add(scanEntry);
+    }
+
+    /// <summary>
+    /// Replays collected ClusterTickFence entries by overwriting component data in the appropriate cluster SoA slots.
+    /// Entries are applied in LSN order (last-writer-wins). Only applies to cluster-eligible archetypes with active ClusterState.
+    /// </summary>
+    private unsafe void ReplayClusterTickFences(DatabaseEngine dbe, List<ClusterTickFenceScanEntry> entries, ref WalRecoveryResult result)
+    {
+        entries.Sort((a, b) => a.LSN.CompareTo(b.LSN));
+
+        using var epochGuard = EpochGuard.Enter(dbe.EpochManager);
+        var cs = dbe.MMF.CreateChangeSet();
+
+        foreach (var scanEntry in entries)
+        {
+            if (scanEntry.ArchetypeId >= dbe._archetypeStates.Length)
+            {
+                continue;
+            }
+
+            var engineState = dbe._archetypeStates[scanEntry.ArchetypeId];
+            var clusterState = engineState?.ClusterState;
+            if (clusterState == null)
+            {
+                continue; // Cluster segment not loaded — skip
+            }
+
+            var layout = clusterState.Layout;
+
+            // Pure-Transient archetypes have no WAL entries — skip
+            if (clusterState.ClusterSegment == null)
+            {
+                continue;
+            }
+
+            var accessor = clusterState.ClusterSegment.CreateChunkAccessor(cs);
+            ushort transientMask = layout.TransientSlotMask;
+
+            foreach (var (entityIndex, allCompData) in scanEntry.Entries)
+            {
+                int clusterChunkId = entityIndex >> 6;
+                int slotIndex = entityIndex & 0x3F;
+
+                byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
+
+                // Verify slot is occupied — skip entries for freed slots (stale WAL entries)
+                ulong occupancy = *(ulong*)clusterBase;
+                if ((occupancy & (1UL << slotIndex)) == 0)
+                {
+                    continue; // Slot freed — skip this entry
+                }
+
+                int dataOffset = 0;
+                for (int slot = 0; slot < layout.ComponentCount; slot++)
+                {
+                    // Transient slots were not serialized to WAL — skip during replay
+                    if ((transientMask & (1 << slot)) != 0)
+                    {
+                        continue;
+                    }
+                    int compOffset = layout.ComponentOffset(slot);
+                    int compSize = layout.ComponentSize(slot);
+                    if (dataOffset + compSize > allCompData.Length)
+                    {
+                        break; // Truncated entry — skip remaining components
+                    }
+                    byte* dst = clusterBase + compOffset + slotIndex * compSize;
+                    allCompData.AsSpan(dataOffset, compSize).CopyTo(new Span<byte>(dst, compSize));
+                    dataOffset += compSize;
+                }
+
                 result.TickFenceEntriesReplayed++;
             }
 

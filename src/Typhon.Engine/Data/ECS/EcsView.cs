@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -23,6 +22,9 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
     // Typed delegate for reading component data + evaluating fields (captures component type T at construction)
     private readonly EcsViewFieldReader _fieldReader;
+
+    // Reusable scratch list for pull-mode refresh removals (avoids per-refresh allocation)
+    private List<long> _pullRemoveScratch;
 
     // OR branch state (null for single-branch / pull mode)
     private readonly FieldEvaluator[][] _branchEvaluators;
@@ -229,20 +231,21 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             }
         }
 
-        // Check for removals
-        var toRemove = new List<long>();
+        // Check for removals (reuse scratch list to avoid per-refresh allocation)
+        _pullRemoveScratch ??= [];
+        _pullRemoveScratch.Clear();
         foreach (var pk in _entityIds)
         {
             if (!newSet.Contains(EntityId.FromRaw(pk)))
             {
-                toRemove.Add(pk);
+                _pullRemoveScratch.Add(pk);
             }
         }
 
-        for (var i = 0; i < toRemove.Count; i++)
+        for (var i = 0; i < _pullRemoveScratch.Count; i++)
         {
-            _entityIds.TryRemove(toRemove[i]);
-            CompactDelta(toRemove[i], DeltaKind.Removed);
+            _entityIds.TryRemove(_pullRemoveScratch[i]);
+            CompactDelta(_pullRemoveScratch[i], DeltaKind.Removed);
         }
 
         SetLastRefreshTSN(tx.TSN);

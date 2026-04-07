@@ -53,10 +53,24 @@ public partial class EntityAccessor : IDisposable
     private protected ChunkAccessor<PersistentStore> _entityMapCacheAccessor;
     private protected bool _hasEntityMapCache;
 
+    /// <summary>Cached cluster accessor for same-archetype repeated lookups (cluster-eligible archetypes only).</summary>
+    private protected ushort _clusterCacheArchId;
+    private protected ChunkAccessor<PersistentStore> _clusterCacheAccessor;
+    private protected bool _hasClusterCache;
+    private protected ChunkAccessor<TransientStore> _transientClusterCacheAccessor;
+    private protected bool _hasTransientClusterCache;
+
     private protected int _entityOperationCount;
     private protected ChangeSet _changeSet;
 
     public long TSN { get; private protected set; }
+
+    /// <summary>
+    /// Prepare this accessor for mutation. Called once by <see cref="ArchetypeAccessor{TArch}"/>
+    /// on first <c>OpenMut</c> to ensure the underlying accessor is in the correct state for writes.
+    /// Base implementation is a no-op. Transaction overrides to call EnsureMutable + set InProgress state.
+    /// </summary>
+    internal virtual void PrepareForMutation() { }
 
     public EntityAccessor()
     {
@@ -315,6 +329,16 @@ public partial class EntityAccessor : IDisposable
             _entityMapCacheAccessor.Dispose();
             _hasEntityMapCache = false;
         }
+        if (_hasClusterCache)
+        {
+            _clusterCacheAccessor.Dispose();
+            _hasClusterCache = false;
+        }
+        if (_hasTransientClusterCache)
+        {
+            _transientClusterCacheAccessor.Dispose();
+            _hasTransientClusterCache = false;
+        }
         if (_componentInfos.Capacity <= ComponentInfosMaxCapacity)
         {
             _componentInfos.Clear();
@@ -338,6 +362,16 @@ public partial class EntityAccessor : IDisposable
             {
                 _entityMapCacheAccessor.Dispose();
                 _hasEntityMapCache = false;
+            }
+            if (_hasClusterCache)
+            {
+                _clusterCacheAccessor.Dispose();
+                _hasClusterCache = false;
+            }
+            if (_hasTransientClusterCache)
+            {
+                _transientClusterCacheAccessor.Dispose();
+                _hasTransientClusterCache = false;
             }
             return;
         }

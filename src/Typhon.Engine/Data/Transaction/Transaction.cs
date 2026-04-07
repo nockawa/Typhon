@@ -41,6 +41,13 @@ public unsafe partial class Transaction : EntityAccessor
     private bool _batchIndexActive;
     private int _batchEntityCount;
 
+    // Lazy-cached accessors for CommitClusterVersionedSlot — persists across calls within same commit, keyed by archetype ID
+    private ushort _clusterCommitArchId;
+    private ChunkAccessor<PersistentStore> _clusterCommitMapAccessor;
+    private ChunkAccessor<PersistentStore> _clusterCommitContentAccessor;
+    private ChunkAccessor<PersistentStore> _clusterCommitClusterAccessor;
+    private bool _hasClusterCommitAccessors;
+
     /// <summary>The UoW that owns this transaction (null for legacy <c>CreateTransaction()</c> path, UoW ID effectively 0).</summary>
     internal UnitOfWork OwningUnitOfWork { get; private set; }
 
@@ -70,10 +77,6 @@ public unsafe partial class Transaction : EntityAccessor
             }
             return _committedOperationCount.Value;
         }
-    }
-
-    public Transaction()
-    {
     }
 
     public void Init(DatabaseEngine dbe, long tsn, UnitOfWork uow = null, bool readOnly = false)
@@ -118,6 +121,13 @@ public unsafe partial class Transaction : EntityAccessor
         _deferredEnqueueBatch?.Clear();
     }
 
+    /// <summary>Prepare for mutation via ArchetypeAccessor. Sets state to InProgress so Commit processes writes.</summary>
+    internal override void PrepareForMutation()
+    {
+        EnsureMutable();
+        State = TransactionState.InProgress;
+    }
+
     /// <summary>Throws if the transaction cannot accept new operations (read-only or already finalized).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureMutable()
@@ -157,6 +167,10 @@ public unsafe partial class Transaction : EntityAccessor
         // Dispose transient batch accessors first — safe even on double-dispose or if never created
         // (ChunkAccessor<PersistentStore>.Dispose() is idempotent: no-op when _segment==null).
         _batchTailAccessor.Dispose();
+        _clusterCommitMapAccessor.Dispose();
+        _clusterCommitContentAccessor.Dispose();
+        _clusterCommitClusterAccessor.Dispose();
+        _hasClusterCommitAccessors = false;
 
         if (_isDisposed)
         {
@@ -727,7 +741,6 @@ public unsafe partial class Transaction : EntityAccessor
             _hasEntityMapCache = true;
         }
 
-        byte* buf = stackalloc byte[EntityRecordAccessor.HeaderSize];
         // TryGet copies full record, but we only need the header (first 14 bytes).
         // Use full record size to satisfy TryGet's contract, but stackalloc min header.
         int recordSize = meta._entityRecordSize;
@@ -1017,44 +1030,60 @@ public unsafe partial class Transaction : EntityAccessor
             DetectAndResolveConflict(ref context, pk, info, ref compRevInfo, compRev,
                 ref elementHandle, lastCommitRevisionIndex, readCompChunkId, lockHeld, TSN, UowId, _dbe);
 
-            // Commit the revision: update indices, clear IsolationFlag, update LastCommitRevisionIndex
-            if (compRevInfo.CurCompContentChunkId != 0)
-            {
-                if (_batchIndexActive)
-                {
-                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors, ref _batchTailAccessor);
-                }
-                else
-                {
-                    IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN);
-                }
-            }
-            else if (readCompChunkId != 0)
-            {
-                if (_batchIndexActive)
-                {
-                    IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN,
-                        _batchIndexAccessors, ref _batchTailAccessor);
-                }
-                else
-                {
-                    IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
-                }
-            }
+            // Commit the revision: update indices, clear IsolationFlag, update LastCommitRevisionIndex.
+            // Cluster entities use per-archetype B+Trees/R-Trees, NOT per-ComponentTable shared indexes.
+            // Detect cluster entity to suppress per-table index ops and use per-archetype ops instead.
+            var archId = EntityId.FromRaw(pk).ArchetypeId;
+            var commitMeta = ArchetypeRegistry.GetMetadata(archId);
+            bool isClusterEntity = commitMeta.IsClusterEligible && commitMeta.VersionedSlotMask != 0 && _dbe._archetypeStates[archId]?.ClusterState != null;
 
-            // Versioned spatial index maintenance — after B+Tree indices are updated
-            if (info.ComponentTable.SpatialIndex != null)
+            if (!isClusterEntity)
             {
+                // Legacy path: per-ComponentTable index/spatial maintenance (unchanged)
                 if (compRevInfo.CurCompContentChunkId != 0)
                 {
-                    // Update or insert spatial entry using current component data
-                    SpatialMaintainer.UpdateSpatial(pk, compRevInfo.CurCompContentChunkId, info.ComponentTable, ref info.CompContentAccessor, _changeSet);
+                    if (_batchIndexActive)
+                    {
+                        IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN, _batchIndexAccessors, ref _batchTailAccessor);
+                    }
+                    else
+                    {
+                        IndexMaintainer.UpdateIndices(pk, info, compRevInfo, readCompChunkId, _changeSet, TSN);
+                    }
                 }
                 else if (readCompChunkId != 0)
                 {
-                    // Entity deleted — remove from spatial index
-                    SpatialMaintainer.RemoveFromSpatial(pk, readCompChunkId, info.ComponentTable, _changeSet);
+                    if (_batchIndexActive)
+                    {
+                        IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN,
+                            _batchIndexAccessors, ref _batchTailAccessor);
+                    }
+                    else
+                    {
+                        IndexMaintainer.RemoveSecondaryIndices(pk, info, readCompChunkId, compRevInfo.CompRevTableFirstChunkId, _changeSet, TSN);
+                    }
                 }
+
+                // Versioned spatial index maintenance — after B+Tree indices are updated
+                if (info.ComponentTable.SpatialIndex != null)
+                {
+                    if (compRevInfo.CurCompContentChunkId != 0)
+                    {
+                        SpatialMaintainer.UpdateSpatial(pk, compRevInfo.CurCompContentChunkId, info.ComponentTable, ref info.CompContentAccessor, _changeSet);
+                    }
+                    else if (readCompChunkId != 0)
+                    {
+                        SpatialMaintainer.RemoveFromSpatial(pk, readCompChunkId, info.ComponentTable, _changeSet);
+                    }
+                }
+            }
+            else
+            {
+                // Cluster path — update per-archetype B+Tree indexes, copy HEAD to cluster slot,
+                // and notify views. Per-ComponentTable shared indexes are SUPPRESSED for cluster entities.
+                // copyToCluster is false for spawns (FinalizeSpawns handles cluster copy for those).
+                bool copyToCluster = (compRevInfo.Operations & ComponentInfo.OperationType.Created) == 0;
+                CommitClusterVersionedSlot(pk, commitMeta, compRevInfo, readCompChunkId, info.ComponentTable, info.ComponentTypeId, copyToCluster);
             }
 
             // Periodic flush: bound dirty counter inflation for large transactions
@@ -1103,6 +1132,179 @@ public unsafe partial class Transaction : EntityAccessor
 
         compRevInfo.PrevCompContentChunkId = -1;
         compRevInfo.PrevRevisionIndex = 0;
+    }
+
+    /// <summary>
+    /// Combined cluster commit: update per-archetype B+Tree indexes, notify views, and optionally copy the
+    /// committed Versioned component value to the cluster slot (HEAD cache for bulk iteration).
+    /// Single EntityMap lookup and compSlot scan instead of the two separate passes that UpdateClusterIndexesAtCommit
+    /// and CopyVersionedHeadToCluster used to perform independently.
+    /// <paramref name="copyToCluster"/> is false for spawns (FinalizeSpawns handles cluster copy for those).
+    /// </summary>
+    private void CommitClusterVersionedSlot(long pk, ArchetypeMetadata meta, ComponentInfo.CompRevInfo compRevInfo, int readCompChunkId, 
+        ComponentTable table, int componentTypeId, bool copyToCluster)
+    {
+        var archId = meta.ArchetypeId;
+        var es = _dbe._archetypeStates[archId];
+        var clusterState = es.ClusterState;
+        bool hasIndexes = clusterState.IndexSlots != null;
+        bool hasSpatial = clusterState.SpatialSlot.Tree != null;
+
+        if (!hasIndexes && !hasSpatial && !copyToCluster)
+        {
+            return; // Nothing to do
+        }
+
+        // O(1) component slot lookup via archetype's typeId→slot table
+        if (!meta.TryGetSlot(componentTypeId, out byte compSlotByte))
+        {
+            return;
+        }
+        int compSlot = compSlotByte;
+
+        // Lazy-cache accessors by archetype — reused across all entities in the same commit batch
+        if (!_hasClusterCommitAccessors || _clusterCommitArchId != archId)
+        {
+            DisposeClusterCommitAccessors();
+            _clusterCommitMapAccessor = es.EntityMap.Segment.CreateChunkAccessor();
+            _clusterCommitContentAccessor = table.ComponentSegment.CreateChunkAccessor();
+            _clusterCommitClusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+            _clusterCommitArchId = archId;
+            _hasClusterCommitAccessors = true;
+        }
+
+        // Read entity's cluster location from EntityMap (once)
+        int recordSize = meta._entityRecordSize;
+        byte* recordBuf = stackalloc byte[recordSize];
+
+        long entityKey = EntityId.FromRaw(pk).EntityKey;
+        if (!es.EntityMap.TryGet(entityKey, recordBuf, ref _clusterCommitMapAccessor))
+        {
+            return;
+        }
+
+        int clusterChunkId = ClusterEntityRecordAccessor.GetClusterChunkId(recordBuf);
+        byte slotIndex = ClusterEntityRecordAccessor.GetSlotIndex(recordBuf);
+        int clusterLocation = clusterChunkId * 64 + slotIndex;
+
+        // Phase A: Update per-archetype B+Tree indexes for this component's indexed fields
+        if (hasIndexes)
+        {
+            // Read new and old field values from CONTENT CHUNKS (not cluster slot — cluster hasn't been updated yet).
+            byte* newComp = compRevInfo.CurCompContentChunkId != 0 ? 
+                _clusterCommitContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId) + table.ComponentOverhead : null;
+            byte* oldComp = readCompChunkId != 0 ? 
+                _clusterCommitContentAccessor.GetChunkAddress(readCompChunkId) + table.ComponentOverhead : null;
+
+            // Find the index slot for this component
+            for (int ixs = 0; ixs < clusterState.IndexSlots.Length; ixs++)
+            {
+                ref var ixSlot = ref clusterState.IndexSlots[ixs];
+                if (ixSlot.Slot != compSlot)
+                {
+                    continue;
+                }
+
+                for (int fi = 0; fi < ixSlot.Fields.Length; fi++)
+                {
+                    ref var field = ref ixSlot.Fields[fi];
+                    var idxAccessor = field.Index.Segment.CreateChunkAccessor(_changeSet);
+                    try
+                    {
+                        if (newComp != null && oldComp != null)
+                        {
+                            // Update: move from old key to new key
+                            field.Index.Move(oldComp + field.FieldOffset, newComp + field.FieldOffset, clusterLocation, ref idxAccessor);
+                        }
+                        else if (newComp != null)
+                        {
+                            // Insert (first commit after spawn)
+                            field.Index.Add(newComp + field.FieldOffset, clusterLocation, ref idxAccessor);
+                        }
+                        else if (oldComp != null)
+                        {
+                            // Delete
+                            field.Index.Remove(oldComp + field.FieldOffset, out _, ref idxAccessor);
+                        }
+
+                        // Widen zone map with new value
+                        if (newComp != null)
+                        {
+                            field.ZoneMap?.Widen(clusterChunkId, newComp + field.FieldOffset);
+                        }
+
+                        // Notify views of index change (delta buffer for incremental views)
+                        var viewTable = es.SlotToComponentTable[ixSlot.Slot];
+                        var views = viewTable.ViewRegistry.GetViewsForField(fi);
+                        for (int v = 0; v < views.Length; v++)
+                        {
+                            var reg = views[v];
+                            if (reg.View.IsDisposed)
+                            {
+                                continue;
+                            }
+
+                            if (newComp != null && oldComp != null)
+                            {
+                                // Move: emit old and new keys
+                                var oldKey = KeyBytes8.FromPointer(oldComp + field.FieldOffset, field.FieldSize);
+                                var newKey = KeyBytes8.FromPointer(newComp + field.FieldOffset, field.FieldSize);
+                                byte flags = (byte)(fi & 0x3F);
+                                reg.View.DeltaBuffer.TryAppend(entityKey, oldKey, newKey, TSN, flags, reg.ComponentTag);
+                            }
+                            else if (newComp != null)
+                            {
+                                // Add: isCreation flag
+                                var newKey = KeyBytes8.FromPointer(newComp + field.FieldOffset, field.FieldSize);
+                                byte flags = (byte)((fi & 0x3F) | 0x40); // isCreation
+                                reg.View.DeltaBuffer.TryAppend(entityKey, default, newKey, TSN, flags, reg.ComponentTag);
+                            }
+                            else if (oldComp != null)
+                            {
+                                // Remove: isDeletion flag
+                                var oldKey = KeyBytes8.FromPointer(oldComp + field.FieldOffset, field.FieldSize);
+                                byte flags = (byte)((fi & 0x3F) | 0x80); // isDeletion
+                                reg.View.DeltaBuffer.TryAppend(entityKey, oldKey, default, TSN, flags, reg.ComponentTag);
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        idxAccessor.Dispose();
+                    }
+                }
+                break; // Found the matching index slot
+            }
+        }
+
+        // Phase B: Copy committed value to cluster slot (HEAD cache for bulk iteration).
+        // Skipped for spawns — FinalizeSpawns handles initial cluster copy.
+        if (copyToCluster && compRevInfo.CurCompContentChunkId != 0)
+        {
+            var layout = clusterState.Layout;
+            byte* srcAddr = _clusterCommitContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId);
+            byte* clusterBase = _clusterCommitClusterAccessor.GetChunkAddress(clusterChunkId, true);
+
+            int compSize = layout.ComponentSize(compSlot);
+            byte* dstSlot = clusterBase + layout.ComponentOffset(compSlot) + slotIndex * compSize;
+            Unsafe.CopyBlockUnaligned(dstSlot, srcAddr + table.ComponentOverhead, (uint)compSize);
+
+            clusterState.SetDirty(clusterChunkId, slotIndex);
+        }
+
+        // Spatial R-Tree: handled at tick fence via ProcessClusterSpatialEntries (dirty bit already set by
+        // cluster copy above). Same deferred-update pattern as SV cluster spatial.
+    }
+
+    private void DisposeClusterCommitAccessors()
+    {
+        if (_hasClusterCommitAccessors)
+        {
+            _clusterCommitMapAccessor.Dispose();
+            _clusterCommitContentAccessor.Dispose();
+            _clusterCommitClusterAccessor.Dispose();
+            _hasClusterCommitAccessors = false;
+        }
     }
 
     public bool Rollback(ref UnitOfWorkContext ctx)
@@ -1379,6 +1581,9 @@ public unsafe partial class Transaction : EntityAccessor
                     _batchTailAccessor.Dispose();
                 }
                 _batchIndexAccessors = null;
+
+                // Dispose cluster commit accessors between component types — the next type may target a different archetype
+                DisposeClusterCommitAccessors();
             }
 
             _dbe.LogCommitComponentDone(TSN, kvp.Key.Name);

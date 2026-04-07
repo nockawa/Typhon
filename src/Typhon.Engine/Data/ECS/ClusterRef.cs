@@ -1,0 +1,247 @@
+using System;
+using System.Diagnostics;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Per-cluster accessor providing typed, zero-copy access to component SoA arrays.
+/// Created by <see cref="ClusterEnumerator{TArch}"/>. Must not outlive the enumerator.
+/// </summary>
+/// <remarks>
+/// <para>Component data is laid out in Structure-of-Arrays format within the cluster:
+/// <c>Component₀[N], Component₁[N], ...</c> where N is the cluster size (8..64).</para>
+/// <para>Iteration pattern using OccupancyBits TZCNT loop:</para>
+/// <code>
+/// ulong bits = cluster.OccupancyBits;
+/// while (bits != 0)
+/// {
+///     int idx = BitOperations.TrailingZeroCount(bits);
+///     bits &amp;= bits - 1;
+///     ref var pos = ref cluster.Get(Ant.Position, idx);
+///     // ...
+/// }
+/// </code>
+/// </remarks>
+[PublicAPI]
+public unsafe ref struct ClusterRef<TArch> where TArch : class
+{
+    private readonly byte* _base;
+    private readonly byte* _transientBase;  // TransientStore cluster base; null for pure-SV/V or pure-Transient (where _base IS TS)
+    private readonly ArchetypeClusterInfo _layout;
+    private readonly ArchetypeMetadata _meta;
+
+    internal ClusterRef(byte* basePtr, byte* transientBasePtr, ArchetypeClusterInfo layout, ArchetypeMetadata meta)
+    {
+        _base = basePtr;
+        _transientBase = transientBasePtr;
+        _layout = layout;
+        _meta = meta;
+    }
+
+    /// <summary>Bitmask of occupied slots. Bit i = 1 means slot i contains a live entity.</summary>
+    public ulong OccupancyBits
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => *(ulong*)_base;
+    }
+
+    /// <summary>Bitmask of entities with component at <paramref name="slot"/> enabled.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ulong EnabledBits(int slot) => *(ulong*)(_base + _layout.EnabledBitsOffset(slot));
+
+    /// <summary>Combined mask: alive AND component at slot enabled.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ulong ActiveBits(int slot) => OccupancyBits & EnabledBits(slot);
+
+    /// <summary>Number of live entities in this cluster (PopCount of OccupancyBits).</summary>
+    public int LiveCount
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => BitOperations.PopCount(OccupancyBits);
+    }
+
+    /// <summary>True when all slots are occupied.</summary>
+    public bool IsFull
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => OccupancyBits == _layout.FullMask;
+    }
+
+    /// <summary>Cluster size N (number of slots, 8..64).</summary>
+    public int ClusterSize
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _layout.ClusterSize;
+    }
+
+    /// <summary>Full mask with lower N bits set.</summary>
+    public ulong FullMask
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _layout.FullMask;
+    }
+
+    /// <summary>Get a mutable span of component data for all N slots (SoA array).
+    /// For Versioned components, use <see cref="GetReadOnlySpan{T}"/> — writing directly to the cluster slot
+    /// bypasses the revision chain and breaks MVCC snapshot isolation.</summary>
+    /// <summary>Resolve the correct base pointer for a component slot (Transient → _transientBase, else → _base).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private byte* ResolveBase(byte slot) => (_transientBase != null && (_meta.TransientSlotMask & (1 << slot)) != 0) ? _transientBase : _base;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<T> GetSpan<T>(Comp<T> comp) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        Debug.Assert((_meta.VersionedSlotMask & (1 << slot)) == 0,
+            $"GetSpan on Versioned component bypasses revision chain. Use GetReadOnlySpan for reads, OpenMut+Write for writes.");
+        return new Span<T>(ResolveBase(slot) + _layout.ComponentOffset(slot), _layout.ClusterSize);
+    }
+
+    /// <summary>Get a read-only span of component data for all N slots.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> GetReadOnlySpan<T>(Comp<T> comp) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        return new ReadOnlySpan<T>(ResolveBase(slot) + _layout.ComponentOffset(slot), _layout.ClusterSize);
+    }
+
+    /// <summary>Get a mutable reference to a single component value at the given slot index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T Get<T>(Comp<T> comp, int slotIndex) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        Debug.Assert((_meta.VersionedSlotMask & (1 << slot)) == 0, "Get on Versioned component bypasses revision chain. Use OpenMut+Write for writes.");
+        return ref Unsafe.Add(ref Unsafe.AsRef<T>(ResolveBase(slot) + _layout.ComponentOffset(slot)), slotIndex);
+    }
+
+    /// <summary>Get a read-only reference to a single component value at the given slot index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref readonly T GetReadOnly<T>(Comp<T> comp, int slotIndex) where T : unmanaged
+    {
+        byte slot = _meta.GetSlot(comp._componentTypeId);
+        return ref Unsafe.Add(ref Unsafe.AsRef<T>(ResolveBase(slot) + _layout.ComponentOffset(slot)), slotIndex);
+    }
+
+    /// <summary>Entity keys for all N slots. Use with slot index to reconstruct EntityId.</summary>
+    public ReadOnlySpan<long> EntityIds
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => new(_base + _layout.EntityIdsOffset, _layout.ClusterSize);
+    }
+
+    /// <summary>Read EntityId for the entity at the given slot (stored as full packed EntityId).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public EntityId GetEntityId(int slotIndex) =>
+        EntityId.FromRaw(*(long*)(_base + _layout.EntityIdsOffset + slotIndex * 8));
+}
+
+/// <summary>
+/// Iterates active clusters for an archetype. Owns a <see cref="ChunkAccessor{TStore}"/> — must be disposed.
+/// </summary>
+/// <remarks>
+/// <para>Supports <c>foreach</c> via <see cref="GetEnumerator"/>.</para>
+/// <para>Usage:</para>
+/// <code>
+/// foreach (var cluster in ants.GetClusterEnumerator())
+/// {
+///     ulong bits = cluster.OccupancyBits;
+///     var positions = cluster.GetSpan&lt;Position&gt;(Ant.Position);
+///     while (bits != 0) { ... }
+/// }
+/// </code>
+/// </remarks>
+[PublicAPI]
+public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
+{
+    private ArchetypeClusterState _state;
+    private ArchetypeMetadata _meta;
+    private ChunkAccessor<PersistentStore> _accessor;
+    private ChunkAccessor<TransientStore> _transientAccessor;
+    private bool _hasTransientAccessor;
+    private bool _hasPersistentAccessor;
+    private int _index;
+    private int _endIndex;
+
+    [AllowCopy]
+    internal static ClusterEnumerator<TArch> Create(ArchetypeClusterState state, ArchetypeMetadata meta,
+        ChunkBasedSegment<PersistentStore> segment, ChunkBasedSegment<TransientStore> transientSegment = null)
+    {
+        var result = new ClusterEnumerator<TArch> { _state = state, _meta = meta };
+        if (segment != null)
+        {
+            result._accessor = segment.CreateChunkAccessor();
+            result._hasPersistentAccessor = true;
+        }
+        if (transientSegment != null)
+        {
+            result._transientAccessor = transientSegment.CreateChunkAccessor();
+            result._hasTransientAccessor = true;
+        }
+        result._index = -1;
+        result._endIndex = state.ActiveClusterCount;
+        return result;
+    }
+
+    /// <summary>
+    /// Create a scoped enumerator that only iterates a range of active clusters.
+    /// Used by parallel dispatch to partition cluster work across workers.
+    /// </summary>
+    [AllowCopy]
+    internal static ClusterEnumerator<TArch> CreateScoped(ArchetypeClusterState state, ArchetypeMetadata meta,
+        ChunkBasedSegment<PersistentStore> segment, ChunkBasedSegment<TransientStore> transientSegment,
+        int startIndex, int endIndex)
+    {
+        var result = new ClusterEnumerator<TArch> { _state = state, _meta = meta };
+        if (segment != null)
+        {
+            result._accessor = segment.CreateChunkAccessor();
+            result._hasPersistentAccessor = true;
+        }
+        if (transientSegment != null)
+        {
+            result._transientAccessor = transientSegment.CreateChunkAccessor();
+            result._hasTransientAccessor = true;
+        }
+        result._index = startIndex - 1;
+        result._endIndex = endIndex;
+        return result;
+    }
+
+    /// <summary>Advance to the next active cluster in the range.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool MoveNext() => ++_index < _endIndex;
+
+    /// <summary>Get the current cluster ref.</summary>
+    public ClusterRef<TArch> Current
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            int chunkId = _state.ActiveClusterIds[_index];
+            // Primary base: PersistentStore for mixed/SV, TransientStore for pure-Transient
+            byte* basePtr = _hasPersistentAccessor ? _accessor.GetChunkAddress(chunkId) : _transientAccessor.GetChunkAddress(chunkId);
+            // TransientStore base for mixed archetypes (null for pure-SV/V and pure-Transient)
+            byte* transientPtr = (_hasTransientAccessor && _hasPersistentAccessor) ? _transientAccessor.GetChunkAddress(chunkId) : null;
+            return new ClusterRef<TArch>(basePtr, transientPtr, _state.Layout, _meta);
+        }
+    }
+
+    /// <summary>Release the ChunkAccessors.</summary>
+    public void Dispose()
+    {
+        if (_hasPersistentAccessor)
+        {
+            _accessor.Dispose();
+        }
+        if (_hasTransientAccessor)
+        {
+            _transientAccessor.Dispose();
+        }
+    }
+
+    /// <summary>Enable foreach.</summary>
+    public ClusterEnumerator<TArch> GetEnumerator() => this;
+}

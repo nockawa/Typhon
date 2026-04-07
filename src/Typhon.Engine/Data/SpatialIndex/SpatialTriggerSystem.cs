@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -47,6 +48,9 @@ internal sealed class RegionOccupantState
 
     /// <summary>MutationVersion of the static tree when cache was built. -1 = invalidated.</summary>
     internal int StaticCacheVersion;
+
+    /// <summary>Previous cluster occupants tracked by EntityId (separate from bitmap to avoid namespace collision).</summary>
+    internal HashSet<long> PreviousClusterOccupants;
 }
 
 /// <summary>
@@ -217,6 +221,7 @@ internal sealed unsafe class SpatialTriggerSystem
 
         // Estimate max chunkId from component segment allocation count
         int maxChunkId = _table.ComponentSegment.AllocatedChunkCount;
+
         int wordCount = (maxChunkId + 63) >> 6;
         if (wordCount == 0)
         {
@@ -233,6 +238,7 @@ internal sealed unsafe class SpatialTriggerSystem
         BuildQueryCoords(in config, queryCoords, coordCount);
 
         // Query tree(s) and populate scratch bitmap + entity lookup
+        HashSet<long> clusterOccupants = null;
         var guard = EpochGuard.Enter(_table.DBE.EpochManager);
         try
         {
@@ -240,6 +246,24 @@ internal sealed unsafe class SpatialTriggerSystem
             if (config.TargetTree != TargetTreeMode.StaticOnly && _spatialState.DynamicTree != null)
             {
                 QueryAndPopulateBitmap(_spatialState.DynamicTree, queryCoords, config.CategoryMask, wordCount);
+            }
+
+            // Per-archetype cluster spatial R-Trees (fan-out)
+            // Cluster trees store ClusterLocation in leaf entries, NOT ComponentChunkId.
+            // These share the same integer space and would collide in the bitmap — use a HashSet keyed by EntityId instead.
+            if (_spatialState.ClusterArchetypes != null)
+            {
+                foreach (var cs in _spatialState.ClusterArchetypes)
+                {
+                    if (cs.SpatialSlot.Tree != null)
+                    {
+                        clusterOccupants ??= new HashSet<long>();
+                        foreach (var hit in cs.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
+                        {
+                            clusterOccupants.Add(hit.EntityId);
+                        }
+                    }
+                }
             }
 
             // Static tree
@@ -318,6 +342,39 @@ internal sealed unsafe class SpatialTriggerSystem
                 _resultLeft[leftCount++] = entityId;
                 left &= left - 1;
             }
+        }
+
+        // Cluster entity enter/leave via HashSet diff (avoids bitmap namespace collision with per-table ComponentChunkIds)
+        if (clusterOccupants != null || occ.PreviousClusterOccupants != null)
+        {
+            var prev = occ.PreviousClusterOccupants;
+            if (clusterOccupants != null)
+            {
+                foreach (long eid in clusterOccupants)
+                {
+                    if (prev == null || !prev.Contains(eid))
+                    {
+                        EnsureResultCapacity(ref _resultEntered, enteredCount);
+                        _resultEntered[enteredCount++] = eid;
+                    }
+                    else
+                    {
+                        stayCount++;
+                    }
+                }
+            }
+            if (prev != null)
+            {
+                foreach (long eid in prev)
+                {
+                    if (clusterOccupants == null || !clusterOccupants.Contains(eid))
+                    {
+                        EnsureResultCapacity(ref _resultLeft, leftCount);
+                        _resultLeft[leftCount++] = eid;
+                    }
+                }
+            }
+            occ.PreviousClusterOccupants = clusterOccupants;
         }
 
         // Swap entity lookup arrays for next evaluation's "left" resolution

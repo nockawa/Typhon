@@ -123,13 +123,13 @@ internal static class ExpressionParser
             throw new NotSupportedException("Field-to-field comparisons across parameters are not supported.");
         }
 
-        if (leftField != null && rightField == null)
+        if (leftField != null)
         {
             var value = EvaluateConstant(binary.Right);
             predicates.Add(new FieldPredicate(leftField, op.Value, value));
             paramIndices?.Add(leftParamIndex);
         }
-        else if (rightField != null && leftField == null)
+        else if (rightField != null)
         {
             var value = EvaluateConstant(binary.Left);
             predicates.Add(new FieldPredicate(rightField, FlipOp(op.Value), value));
@@ -165,12 +165,40 @@ internal static class ExpressionParser
 
     private static object EvaluateConstant(Expression expr)
     {
+        // Fast path: literal constant (e.g., d.Score >= 5)
         if (expr is ConstantExpression constant)
         {
             return constant.Value;
         }
 
-        // Handle closures, type conversions, nested expressions
+        // Fast path for closure-captured variables: field access on a display class instance.
+        // Pattern: MemberAccess(ConstantExpression) — e.g., closure.threshold where threshold is a local variable.
+        // This avoids Expression.Lambda().Compile().DynamicInvoke() which costs ~100+ µs per call.
+        var target = expr;
+        // Strip Convert wrappers (e.g., int promoted to long in expression tree)
+        while (target is UnaryExpression { NodeType: ExpressionType.Convert } conv)
+        {
+            target = conv.Operand;
+        }
+        if (target is MemberExpression memberExpr && memberExpr.Expression is ConstantExpression closureConst)
+        {
+            var member = memberExpr.Member;
+            object value = null;
+            if (member is System.Reflection.FieldInfo fieldInfo)
+            {
+                value = fieldInfo.GetValue(closureConst.Value);
+            }
+            else if (member is System.Reflection.PropertyInfo propInfo)
+            {
+                value = propInfo.GetValue(closureConst.Value);
+            }
+            if (value != null)
+            {
+                return value;
+            }
+        }
+
+        // Fallback: compile and invoke (handles complex nested expressions)
         return Expression.Lambda(expr).Compile().DynamicInvoke();
     }
 

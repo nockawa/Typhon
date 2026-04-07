@@ -71,4 +71,18 @@ public struct TickContext
     /// Null when running without a DatabaseEngine.
     /// </remarks>
     public Func<DurabilityMode, Transaction> CreateSideTransaction { get; init; }
+
+    /// <summary>
+    /// Inclusive start index into <see cref="ArchetypeClusterState.ActiveClusterIds"/> for this worker's assigned cluster range.
+    /// Used by cluster-native systems that iterate via <c>ClusterEnumerator.CreateScoped</c> for 2-3 ns/entity performance.
+    /// -1 when not applicable (non-parallel, non-cluster, or entity-level dispatch).
+    /// </summary>
+    /// <remarks>Default 0 (not -1) due to struct constraint. Check <c>EndClusterIndex > StartClusterIndex</c> for validity.</remarks>
+    public int StartClusterIndex { get; init; }
+
+    /// <summary>
+    /// Exclusive end index into <see cref="ArchetypeClusterState.ActiveClusterIds"/> for this worker's assigned cluster range.
+    /// </summary>
+    /// <remarks>Default 0. Check <c>EndClusterIndex > StartClusterIndex</c> for validity — a zero range means not applicable.</remarks>
+    public int EndClusterIndex { get; init; }
 }

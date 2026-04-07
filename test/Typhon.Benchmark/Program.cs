@@ -153,6 +153,90 @@ class Program
                 return;
             }
 
+            if (args.Contains("--aa-bench"))
+            {
+                ArchetypeAccessorBenchmark.Run();
+                return;
+            }
+
+            if (args.Contains("--profile-aa-standard"))
+            {
+                ArchetypeAccessorBenchmark.ProfileStandard();
+                return;
+            }
+
+            if (args.Contains("--profile-aa-accessor"))
+            {
+                ArchetypeAccessorBenchmark.ProfileAccessor();
+                return;
+            }
+
+            if (args.Contains("--aa-scale"))
+            {
+                ArchetypeAccessorBenchmark.ScaleTest();
+                return;
+            }
+
+            if (args.Contains("--cluster-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunCluster();
+                return;
+            }
+
+            if (args.Contains("--tickfence-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunTickFenceBench();
+                return;
+            }
+
+            if (args.Contains("--indexed-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunIndexedBench();
+                return;
+            }
+
+            if (args.Contains("--spatial-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunSpatialBench();
+                return;
+            }
+
+            if (args.Contains("--versioned-cluster-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunVersionedCluster();
+                return;
+            }
+
+            if (args.Contains("--simd-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunSimdQuery();
+                return;
+            }
+
+            if (args.Contains("--ordered-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunOrderedQuery();
+                return;
+            }
+
+            if (args.Contains("--zonemap-bench"))
+            {
+                ArchetypeAccessorBenchmark.RunZoneMapPruning();
+                return;
+            }
+
+            if (args.Contains("--profile-runtime-standard"))
+            {
+                ArchetypeAccessorBenchmark.ProfileRuntimeStandard();
+                return;
+            }
+
+            if (args.Contains("--profile-runtime-accessor"))
+            {
+                ArchetypeAccessorBenchmark.ProfileRuntimeAccessor();
+                return;
+            }
+
 
 
             // BTree profile shortcuts: --btree-fast, --btree-medium, --btree-full
@@ -214,6 +298,10 @@ class Program
         table.AddRow("[cyan]--btree-medium[/]", "BTree medium profile: all key types + concurrent scaling (~15 min)");
         table.AddRow("[cyan]--btree-full[/]", "BTree full profile: everything including tree sizes + enumeration (~50 min)");
         table.AddRow("[cyan]--parallel-dispatch[/]", "Parallel dispatch: prepare O(1), PTA vs Transaction, scaling");
+        table.AddRow("[cyan]--versioned-cluster-bench[/]", "Mixed SV+Versioned cluster: bulk, random access, write+commit");
+        table.AddRow("[cyan]--simd-bench[/]", "SIMD query scan at 1%/10%/50% selectivity (100K entities)");
+        table.AddRow("[cyan]--ordered-bench[/]", "Ordered query: Take(100), Skip+Take, full sort (50K entities)");
+        table.AddRow("[cyan]--zonemap-bench[/]", "Zone map pruning at 0.1%/1%/10%/50% selectivity (100K entities)");
         table.AddRow("[cyan]--help, -h, -?[/]", "Show this help message");
         table.AddRow("[cyan]--exporters <list>[/]", "Export formats: json,markdown,html,rplot");
 

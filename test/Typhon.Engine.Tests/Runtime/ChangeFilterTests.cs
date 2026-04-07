@@ -233,7 +233,15 @@ class ChangeFilterTests : TestBase<ChangeFilterTests>
             tx2.Commit();
         }
 
-        Assert.That(posTable.DirtyBitmap.HasDirty, Is.True, "DirtyBitmap should be dirty after Write<T>");
+        var clusterState = dbe._archetypeStates[Archetype<EcsUnit>.Metadata.ArchetypeId]?.ClusterState;
+        if (clusterState != null)
+        {
+            Assert.That(clusterState.ClusterDirtyBitmap.HasDirty, Is.True, "ClusterDirtyBitmap should be dirty after Write<T>");
+        }
+        else
+        {
+            Assert.That(posTable.DirtyBitmap.HasDirty, Is.True, "DirtyBitmap should be dirty after Write<T>");
+        }
 
         // WriteTickFence should snapshot the bitmap and set the dirty flag
         dbe.WriteTickFence(0);

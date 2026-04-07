@@ -22,5 +22,7 @@
         <Project Path="test/Typhon.Client.Tests/Typhon.Client.Tests.csproj" />
         <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
         <Project Path="test/Typhon.MonitoringDemo/Typhon.MonitoringDemo.csproj" />
+        <Project Path="test/AntHill/AntHill.csproj" />
+        <Project Path="test/AntHill/profiling/AntHill.ProfileRunner.csproj" />
     </Folder>
 </Solution>

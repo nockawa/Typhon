@@ -17,6 +17,9 @@ public enum WalChunkType : ushort
 
     /// <summary>Tick fence: snapshot of dirty SingleVersion component data at tick boundary.</summary>
     TickFence = 3,
+
+    /// <summary>Cluster tick fence: snapshot of dirty cluster-backed entity data at tick boundary. Per-archetype, all components per entry.</summary>
+    ClusterTickFence = 4,
 }
 
 /// <summary>
@@ -97,6 +100,43 @@ public struct TickFenceHeader
 
     /// <summary>Reserved for future use.</summary>
     public ushort Reserved;
+
+    /// <summary>Expected size of this struct in bytes.</summary>
+    public const int SizeInBytes = 24;
+}
+
+/// <summary>
+/// 24-byte header for a ClusterTickFence WAL chunk. One chunk per cluster-eligible archetype per tick.
+/// Followed by <see cref="EntryCount"/> entries of (EntityIndex:4B + AllComponentData:PerEntityPayload bytes).
+/// </summary>
+/// <remarks>
+/// <para>EntityIndex = clusterChunkId * 64 + slotIndex. Recovery unpacks to (chunkId &gt;&gt; 6, index &amp; 0x3F) and writes each component
+/// to the correct SoA offset in the cluster.</para>
+/// </remarks>
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+[PublicAPI]
+public struct ClusterTickFenceHeader
+{
+    /// <summary>Monotonic tick number identifying this tick boundary.</summary>
+    public long TickNumber;
+
+    /// <summary>WAL log sequence number assigned to this chunk.</summary>
+    public long LSN;
+
+    /// <summary>Identifies the archetype via <see cref="ArchetypeMetadata.ArchetypeId"/>.</summary>
+    public ushort ArchetypeId;
+
+    /// <summary>Number of dirty entity entries in this chunk.</summary>
+    public ushort EntryCount;
+
+    /// <summary>Sum of all component sizes per entity (fixed per archetype).</summary>
+    public ushort PerEntityPayload;
+
+    /// <summary>Number of components per entity.</summary>
+    public byte ComponentCount;
+
+    /// <summary>Reserved for future use.</summary>
+    public byte Reserved;
 
     /// <summary>Expected size of this struct in bytes.</summary>
     public const int SizeInBytes = 24;

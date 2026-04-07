@@ -300,15 +300,25 @@ class SpatialInterestTests : TestBase<SpatialInterestTests>
     {
         using var dbe = SetupEngine();
         var ims = GetInterestSystem(dbe);
-        var ring = ims.DirtyRing;
 
         SpawnAndDirtyShipAt(dbe, 10, 10, 10);
         dbe.WriteTickFence(1);
 
+        // SpatialShipArchetype is now cluster-eligible — dirty bits go to per-archetype ring,
+        // not per-table ring. Check the correct ring based on cluster eligibility.
+        var meta = Archetype<SpatialShipArchetype>.Metadata;
+        DirtyBitmapRing ring;
+        if (meta.HasClusterSpatial)
+        {
+            ring = dbe._archetypeStates[meta.ArchetypeId].ClusterState.SpatialSlot.DirtyRing;
+        }
+        else
+        {
+            ring = ims.DirtyRing;
+        }
+
         Assert.That(ring.HeadTick, Is.EqualTo(1));
         Assert.That(ring.IsTickAvailable(1), Is.True);
-        // tick 0 is technically within the 64-tick window, but was never archived
-        // IsTickAvailable checks range, not whether data is meaningful — that's by design
     }
 
     // ── Edge Cases ──────────────────────────────────────────────────────

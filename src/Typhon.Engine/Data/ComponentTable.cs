@@ -864,7 +864,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         return index;
     }
 
-    private static BTreeBase<PersistentStore> CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment<PersistentStore> s, ChangeSet changeSet = null)
+    internal static BTreeBase<PersistentStore> CreateIndexForFieldCore(DBComponentDefinition.Field field, short stableId, bool load, ChunkBasedSegment<PersistentStore> s, ChangeSet changeSet = null)
     {
         BTreeBase<PersistentStore> index = field.Type switch
         {

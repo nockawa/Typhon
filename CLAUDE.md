@@ -52,6 +52,7 @@ The `claude/overview/` directory is the **authoritative architectural reference*
 | 09 | [Observability](claude/overview/09-observability.md) | Telemetry, metrics, diagnostics |
 | 10 | [Errors](claude/overview/10-errors.md) | Error model, exception hierarchy |
 | 11 | [Utilities](claude/overview/11-utilities.md) | Allocators, disk management, shared utilities |
+| 13 | [Runtime](claude/overview/13-runtime.md) | DagScheduler, system types, parallel dispatch, subscriptions, overload |
 
 ### Correctness Rules
 
