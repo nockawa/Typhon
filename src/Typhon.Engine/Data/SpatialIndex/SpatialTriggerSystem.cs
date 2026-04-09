@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -248,16 +249,61 @@ internal sealed unsafe class SpatialTriggerSystem
                 QueryAndPopulateBitmap(_spatialState.DynamicTree, queryCoords, config.CategoryMask, wordCount);
             }
 
-            // Per-archetype cluster spatial R-Trees (fan-out)
-            // Cluster trees store ClusterLocation in leaf entries, NOT ComponentChunkId.
-            // These share the same integer space and would collide in the bitmap — use a HashSet keyed by EntityId instead.
+            // Per-archetype cluster spatial index fan-out (issue #230 Phase 3 migration).
+            // Cluster entities are tracked by EntityId in a HashSet, NOT by bitmap, because the per-table bitmap's chunkId namespace is not meaningful for
+            // cluster-archetype results (cluster storage has its own clusterChunkId namespace that would collide with the per-table ComponentChunkId namespace).
+            // Hybrid dispatch: Dynamic cluster archetypes WITH a configured spatial grid use the new per-cell index path (issue #230 Phase 3). Static cluster
+            // archetypes (per-cell StaticIndex is deferred to a future sub-issue of #228) AND any archetype without a configured grid fall back to the legacy
+            // per-archetype cluster tree. Both paths produce the same enter/leave event stream (standard AABB overlap + category mask filtering).
             if (_spatialState.ClusterArchetypes != null)
             {
+                var grid = _table.DBE.SpatialGrid;
+                float qMinX = 0, qMinY = 0, qMinZ = 0, qMaxX = 0, qMaxY = 0, qMaxZ = 0;
+                if (grid != null)
+                {
+                    if (coordCount == 4)
+                    {
+                        // 2D region — [minX, minY, maxX, maxY]. Use infinite Z bounds so 2D cluster archetypes (which have empty-sentinel Z) and 3D cluster
+                        // archetypes (which have meaningful Z) both pass the Z overlap test trivially.
+                        qMinX = (float)queryCoords[0];
+                        qMinY = (float)queryCoords[1];
+                        qMinZ = float.NegativeInfinity;
+                        qMaxX = (float)queryCoords[2];
+                        qMaxY = (float)queryCoords[3];
+                        qMaxZ = float.PositiveInfinity;
+                    }
+                    else
+                    {
+                        // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
+                        qMinX = (float)queryCoords[0];
+                        qMinY = (float)queryCoords[1];
+                        qMinZ = (float)queryCoords[2];
+                        qMaxX = (float)queryCoords[3];
+                        qMaxY = (float)queryCoords[4];
+                        qMaxZ = (float)queryCoords[5];
+                    }
+                }
+
                 foreach (var cs in _spatialState.ClusterArchetypes)
                 {
-                    if (cs.SpatialSlot.Tree != null)
+                    if (!cs.SpatialSlot.HasSpatialIndex)
                     {
-                        clusterOccupants ??= new HashSet<long>();
+                        continue;
+                    }
+                    clusterOccupants ??= new HashSet<long>();
+                    if (grid != null && cs.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
+                    {
+                        // Dynamic cluster archetype with a configured grid: use the new per-cell index path (issue #230 Phase 3).
+                        foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
+                        {
+                            clusterOccupants.Add(hit.EntityId);
+                        }
+                    }
+                    else
+                    {
+                        // Legacy fallback for (a) Static cluster archetypes — PerCellSpatialSlot.StaticIndex population is deferred to a future sub-issue
+                        // of #228, or (b) any archetype when no spatial grid is configured — the per-cell index is only populated when ConfigureSpatialGrid
+                        // was called. Commit 5 of Phase 3 keeps the legacy per-archetype cluster tree alive for these paths.
                         foreach (var hit in cs.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
                         {
                             clusterOccupants.Add(hit.EntityId);

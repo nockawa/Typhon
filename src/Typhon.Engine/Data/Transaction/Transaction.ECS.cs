@@ -1230,7 +1230,8 @@ public unsafe partial class Transaction
         // Phase 1). Hoisted out of the per-entity loop to avoid CA2014 stack-pressure accumulation when
         // spawning many entities in one transaction — the per-iteration allocation would not release
         // until FinalizeSpawns returns.
-        Span<double> spawnSpatialCoords = stackalloc double[4];
+        // Sized for 3D ([minX, minY, minZ, maxX, maxY, maxZ]); 2D reads only populate the first 4 slots. Issue #230 Phase 3 unified 2D/3D per-cell index paths.
+        Span<double> spawnSpatialCoords = stackalloc double[6];
 
         try
         {
@@ -1443,7 +1444,7 @@ public unsafe partial class Transaction
                     }
 
                     // Insert per-archetype spatial R-Tree entry for cluster entity
-                    if (ctx.ClusterState.SpatialSlot.Tree != null)
+                    if (ctx.ClusterState.SpatialSlot.HasSpatialIndex)
                     {
                         int clusterLocation = clusterChunkId * 64 + slotIdx;
                         ref var ss = ref ctx.ClusterState.SpatialSlot;
@@ -1475,9 +1476,24 @@ public unsafe partial class Transaction
                                     // stale AABB left over from a prior life of this chunk id.
                                     clusterAabb = ClusterSpatialAabb.Empty;
                                 }
-                                clusterAabb.Union(
-                                    (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1], (float)spawnSpatialCoords[2], (float)spawnSpatialCoords[3],
-                                    uint.MaxValue);
+                                // Tier-dispatched union: 2D fields wrote [minX, minY, maxX, maxY] into the first 4 slots; 3D fields wrote the full
+                                // [minX, minY, minZ, maxX, maxY, maxZ] layout. Prior to issue #230 Phase 3 this site was hardcoded to the 2D layout
+                                // regardless of tier — a latent bug that was masked because 3D archetypes only reach this hook when ConfigureSpatialGrid
+                                // was called, and the trigger/interest tests (the only 3D cluster callers) didn't call it.
+                                if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
+                                {
+                                    clusterAabb.Union3F(
+                                        (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1], (float)spawnSpatialCoords[2],
+                                        (float)spawnSpatialCoords[3], (float)spawnSpatialCoords[4], (float)spawnSpatialCoords[5],
+                                        uint.MaxValue);
+                                }
+                                else
+                                {
+                                    clusterAabb.Union2F(
+                                        (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1],
+                                        (float)spawnSpatialCoords[2], (float)spawnSpatialCoords[3],
+                                        uint.MaxValue);
+                                }
 
                                 int cellKey = ctx.ClusterState.ClusterCellMap[clusterChunkId];
                                 if (cellKey >= 0)
@@ -1836,8 +1852,8 @@ public unsafe partial class Transaction
                 ctx.HasClusterIdxAccessor = true;
             }
 
-            // Per-archetype spatial accessors for cluster R-Tree insertion
-            if (ctx.ClusterState.SpatialSlot.Tree != null)
+            // Per-archetype spatial accessors for cluster R-Tree insertion (legacy tree — survives issue #230 Phase 3 under the hybrid fallback invariant).
+            if (ctx.ClusterState.SpatialSlot.HasSpatialIndex)
             {
                 ctx.ClusterSpatialTreeAccessor = ctx.ClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
                 ctx.ClusterSpatialBpAccessor = ctx.ClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
@@ -1847,7 +1863,7 @@ public unsafe partial class Transaction
             // Issue #229 Phase 1+2: cache spatial-cell routing info once per archetype. The hot spawn path reads SpatialSlotIndexCached once per entity to
             // decide between ClaimSlot and ClaimSlotInCell — no per-entity pointer chasing through EngineState → table → overhead.
             ctx.SpatialGridCached = _dbe.SpatialGrid;
-            if (ctx.SpatialGridCached != null && ctx.ClusterState.SpatialSlot.Tree != null)
+            if (ctx.SpatialGridCached != null && ctx.ClusterState.SpatialSlot.HasSpatialIndex)
             {
                 ref readonly var ss = ref ctx.ClusterState.SpatialSlot;
                 ctx.SpatialSlotIndexCached = ss.Slot;
@@ -2046,8 +2062,8 @@ public unsafe partial class Transaction
                 state.BackPointerSegment.EnsureCapacity(compCapNeeded, _changeSet);
             }
 
-            // Pre-grow per-archetype cluster spatial segments
-            if (es.ClusterState?.SpatialSlot.Tree != null)
+            // Pre-grow per-archetype cluster spatial segments (legacy tree — hybrid fallback path, still populated on spawn).
+            if (es.ClusterState != null && es.ClusterState.SpatialSlot.HasSpatialIndex)
             {
                 var cs = es.ClusterState;
                 {
@@ -2168,7 +2184,7 @@ public unsafe partial class Transaction
                             destroyClusterIdxAccessor = destroyClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
                             hasDestroyClusterIdxAccessor = true;
                         }
-                        if (destroyClusterState.SpatialSlot.Tree != null)
+                        if (destroyClusterState.SpatialSlot.HasSpatialIndex)
                         {
                             destroyClusterSpatialTreeAccessor = destroyClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
                             destroyClusterSpatialBpAccessor = destroyClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
@@ -2246,8 +2262,9 @@ public unsafe partial class Transaction
                         }
 
                         // Remove per-archetype spatial R-Tree entry before releasing the slot.
-                        // Spatial doesn't need shadow logic — back-pointer provides O(1) leaf lookup.
-                        if (destroyClusterState.SpatialSlot.Tree != null)
+                        // Spatial doesn't need shadow logic — back-pointer provides O(1) leaf lookup. Legacy tree survives under the hybrid fallback
+                        // invariant — see commits 2-4 of issue #230 Phase 3 for the migration architecture.
+                        if (destroyClusterState.SpatialSlot.HasSpatialIndex)
                         {
                             int clusterLocation = clusterChunkId * 64 + slotIndex;
                             SpatialMaintainer.RemoveFromSpatialCluster(

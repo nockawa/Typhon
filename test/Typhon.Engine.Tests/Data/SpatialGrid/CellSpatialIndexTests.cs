@@ -178,7 +178,7 @@ class CellSpatialIndexTests
     public void ClusterSpatialAabb_Union_WithOneEntity_ExactlyMatchesEntityBounds()
     {
         var aabb = ClusterSpatialAabb.Empty;
-        aabb.Union(entityMinX: 5f, entityMinY: 10f, entityMaxX: 15f, entityMaxY: 20f, entityCategoryMask: 0x3u);
+        aabb.Union2F(entityMinX: 5f, entityMinY: 10f, entityMaxX: 15f, entityMaxY: 20f, entityCategoryMask: 0x3u);
 
         Assert.That(aabb.MinX, Is.EqualTo(5f));
         Assert.That(aabb.MinY, Is.EqualTo(10f));
@@ -191,9 +191,9 @@ class CellSpatialIndexTests
     public void ClusterSpatialAabb_Union_MultipleEntities_EnclosesAllAndCombinesMasks()
     {
         var aabb = ClusterSpatialAabb.Empty;
-        aabb.Union(0f, 0f, 10f, 10f, 0x1u);
-        aabb.Union(-5f, 20f, 5f, 30f, 0x2u);
-        aabb.Union(15f, -3f, 25f, 7f, 0x8u);
+        aabb.Union2F(0f, 0f, 10f, 10f, 0x1u);
+        aabb.Union2F(-5f, 20f, 5f, 30f, 0x2u);
+        aabb.Union2F(15f, -3f, 25f, 7f, 0x8u);
 
         Assert.That(aabb.MinX, Is.EqualTo(-5f));
         Assert.That(aabb.MinY, Is.EqualTo(-3f));

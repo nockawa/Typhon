@@ -1148,7 +1148,7 @@ public unsafe partial class Transaction : EntityAccessor
         var es = _dbe._archetypeStates[archId];
         var clusterState = es.ClusterState;
         bool hasIndexes = clusterState.IndexSlots != null;
-        bool hasSpatial = clusterState.SpatialSlot.Tree != null;
+        bool hasSpatial = clusterState.SpatialSlot.HasSpatialIndex;
 
         if (!hasIndexes && !hasSpatial && !copyToCluster)
         {

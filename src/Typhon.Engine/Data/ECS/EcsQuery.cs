@@ -1739,14 +1739,57 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             QuerySingleTree(state.DynamicTree, state, result);
         }
 
-        // Fan out to per-archetype cluster spatial R-Trees.
-        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype trees.
-        // QuerySingleTree internally uses MaskTest(archetypeId) on each result, so we don't need to pre-filter here.
+        // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 migration — hybrid dispatch).
+        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype indexes. AABB queries on Dynamic cluster archetypes with a
+        // configured spatial grid use the new per-cell index via ArchetypeClusterState.QueryAabb. Other combinations (Static mode, non-AABB query shapes,
+        // or no configured grid) fall back to the legacy per-archetype cluster tree. Commit 5 of Phase 3 keeps the legacy tree alive for these paths —
+        // Radius / Ray / Frustum / Nearest cluster queries and StaticIndex support are deferred to follow-up sub-issues of #228.
         if (state.ClusterArchetypes != null)
         {
+            SpatialGrid grid = _tx.DBE.SpatialGrid;
             foreach (var cs in state.ClusterArchetypes)
             {
-                if (cs.SpatialSlot.Tree != null)
+                if (!cs.SpatialSlot.HasSpatialIndex)
+                {
+                    continue;
+                }
+                if (grid != null && _spatialQueryType == SpatialQueryType.AABB && cs.SpatialSlot.FieldInfo.Mode == Typhon.Schema.Definition.SpatialMode.Dynamic)
+                {
+                    // New path: per-cell cluster index AABB query. Extract the 2D/3D query bounds from _spatialParams (same layout as in QuerySingleTree's
+                    // AABB case: 6 doubles stored as [minX, minY, minZ, maxX, maxY, maxZ], with the 3D slots ignored for 2D archetypes).
+                    float qMinX = (float)_spatialParams[0];
+                    float qMinY = (float)_spatialParams[1];
+                    float qMinZ;
+                    float qMaxX;
+                    float qMaxY;
+                    float qMaxZ;
+                    if (state.Descriptor.CoordCount == 4)
+                    {
+                        // 2D query — positions 2 and 3 are maxX/maxY; no Z component in the input.
+                        qMinZ = float.NegativeInfinity;
+                        qMaxX = (float)_spatialParams[2];
+                        qMaxY = (float)_spatialParams[3];
+                        qMaxZ = float.PositiveInfinity;
+                    }
+                    else
+                    {
+                        qMinZ = (float)_spatialParams[2];
+                        qMaxX = (float)_spatialParams[3];
+                        qMaxY = (float)_spatialParams[4];
+                        qMaxZ = (float)_spatialParams[5];
+                    }
+
+                    using var guard = EpochGuard.Enter(_tx.DBE.EpochManager);
+                    foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ))
+                    {
+                        var entityId = EntityId.FromRaw(hit.EntityId);
+                        if (MaskTest(entityId.ArchetypeId))
+                        {
+                            result.Add(entityId);
+                        }
+                    }
+                }
+                else
                 {
                     QuerySingleTree(cs.SpatialSlot.Tree, state, result);
                 }

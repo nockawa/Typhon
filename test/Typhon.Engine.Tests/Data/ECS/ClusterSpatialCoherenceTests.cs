@@ -283,23 +283,28 @@ class ClusterSpatialCoherenceTests : TestBase<ClusterSpatialCoherenceTests>
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
-    public void ValidateSupportedFieldType_AABB2F_Accepted()
+    public void ValidateSupportedFieldType_F32Variants_Accepted()
     {
-        // Positive control — ClCohUnit uses AABB2F and the engine initialised fine in earlier tests.
-        // This explicit check documents the supported set.
+        // Issue #230 Phase 3 extended support from 2D-only to all f32 tiers (2D and 3D). Cells are still 2D (XY) — 3D archetypes bucket into cells by their
+        // XY center and get Z filtering at the query narrowphase.
         SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB2F, "MyArch");
         SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere2F, "MyArch");
+        SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB3F, "MyArch");
+        SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere3F, "MyArch");
     }
 
     [Test]
-    public void ValidateSupportedFieldType_3DVariants_Throw()
+    public void ValidateSupportedFieldType_F64Variants_Throw()
     {
+        // f64 spatial tiers are still deferred to a follow-up sub-issue of #228.
         Assert.Throws<System.NotSupportedException>(
-            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB3F, "MyArch"));
+            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB2D, "MyArch"));
         Assert.Throws<System.NotSupportedException>(
             () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB3D, "MyArch"));
         Assert.Throws<System.NotSupportedException>(
-            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere3F, "MyArch"));
+            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere2D, "MyArch"));
+        Assert.Throws<System.NotSupportedException>(
+            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere3D, "MyArch"));
     }
 
     // ═══════════════════════════════════════════════════════════════════════

@@ -928,7 +928,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
                 // Process per-archetype spatial entries for cluster archetypes with spatial fields.
                 // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup. Only Dynamic mode is updated.
-                if (clusterState.SpatialSlot.Tree != null && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
+                if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
                 {
                     ProcessClusterSpatialEntries(clusterState, engineState, dirtyBits, ref accessor);
 
@@ -1441,7 +1441,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // migration loop to avoid CA2014 stack-pressure accumulation — a batch of thousands of migrations
         // would otherwise allocate 32 bytes per iteration that can't be released until ExecuteMigrations
         // returns.
-        Span<double> migrantCoords = stackalloc double[4];
+        // Sized for 3D ([minX, minY, minZ, maxX, maxY, maxZ]); 2D reads only populate the first 4 slots. Issue #230 Phase 3 unified 2D/3D per-cell paths.
+        Span<double> migrantCoords = stackalloc double[6];
 
         try
         {
@@ -1595,7 +1596,21 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         {
                             dstClusterAabb = ClusterSpatialAabb.Empty;
                         }
-                        dstClusterAabb.Union((float)migrantCoords[0], (float)migrantCoords[1], (float)migrantCoords[2], (float)migrantCoords[3], uint.MaxValue);
+                        // Tier-dispatched union: 2D fields wrote [minX, minY, maxX, maxY] into the first 4 slots; 3D fields wrote the full 6-double layout.
+                        if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
+                        {
+                            dstClusterAabb.Union3F(
+                                (float)migrantCoords[0], (float)migrantCoords[1], (float)migrantCoords[2],
+                                (float)migrantCoords[3], (float)migrantCoords[4], (float)migrantCoords[5],
+                                uint.MaxValue);
+                        }
+                        else
+                        {
+                            dstClusterAabb.Union2F(
+                                (float)migrantCoords[0], (float)migrantCoords[1],
+                                (float)migrantCoords[2], (float)migrantCoords[3],
+                                uint.MaxValue);
+                        }
 
                         int dstCellKey = clusterState.ClusterCellMap[dstChunkId];
                         if (dstCellKey >= 0)
@@ -2633,7 +2648,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // mode, margin — is reconstructed at load time from the compile-time [SpatialIndex] attribute on the component field via table.SpatialIndex.FieldInfo
             // The attribute is the single source of truth; round-tripping the same values through
             // bootstrap would be redundant and invite drift.
-            if (state.ClusterState?.SpatialSlot.Tree != null)
+            if (state.ClusterState != null && state.ClusterState.SpatialSlot.HasSpatialIndex)
             {
                 ref var ss = ref state.ClusterState.SpatialSlot;
                 MMF.Bootstrap.Set($"clusterspatial.{meta.ArchetypeId}", BootstrapDictionary.Value.FromInt3(

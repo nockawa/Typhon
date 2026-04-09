@@ -52,7 +52,7 @@ internal sealed unsafe class ArchetypeClusterState
 
     // ═══════════════════════════════════════════════════════════════════════
     // Migration queue (issue #229 Phase 3). Lazily allocated; only used when
-    // SpatialSlot.Tree != null AND a SpatialGrid is configured AND cell crossings
+    // SpatialSlot.HasSpatialIndex AND a SpatialGrid is configured AND cell crossings
     // actually occur. Population is sequential (detection loop runs single-threaded
     // inside WriteClusterTickFence), drained by ExecuteMigrations in the same loop.
     // ═══════════════════════════════════════════════════════════════════════
@@ -134,8 +134,16 @@ internal sealed unsafe class ArchetypeClusterState
     // Per-archetype Spatial R-Tree. Null if archetype has no spatial fields.
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Per-archetype spatial R-Tree state. Check <c>SpatialSlot.Tree != null</c> for presence.</summary>
+    /// <summary>Per-archetype spatial R-Tree state. Check <c>SpatialSlot.HasSpatialIndex</c> for presence.</summary>
     public ClusterSpatialSlot SpatialSlot;
+
+    /// <summary>
+    /// Per-archetype <see cref="DirtyBitmapRing"/> consumed by <c>SpatialInterestSystem</c> for delta queries and the 64-tick staleness fallback
+    /// (issue #230 Phase 3). Populated at <see cref="InitializeSpatial"/>; archived at the tick fence. Relocated from <see cref="ClusterSpatialSlot.DirtyRing"/>
+    /// to decouple the ring from the legacy per-entity tree that's being removed in Phase 3 — the ring's lifecycle belongs to the archetype's cluster state,
+    /// not to any particular spatial index implementation.
+    /// </summary>
+    public DirtyBitmapRing ClusterDirtyRing;
 
     private ArchetypeClusterState() { }
 
@@ -149,6 +157,32 @@ internal sealed unsafe class ArchetypeClusterState
         int entityIndex = clusterChunkId * 64 + slotIndex;
         ClusterDirtyBitmap.Set(entityIndex);
     }
+
+    /// <summary>
+    /// Engine-internal non-generic entry point for f32 AABB queries against the per-cell cluster spatial index (issue #230 Phase 3). Mirrors the game-facing
+    /// generic entry point <see cref="ClusterSpatialQuery{TArch}.AABB{TBox}"/> but without the <c>TArch</c> compile-time type — consumers that iterate cluster
+    /// archetypes at runtime (<c>SpatialTriggerSystem</c>, <c>SpatialInterestSystem</c>, <c>EcsQuery</c>) use this overload directly. Both entry points return
+    /// the same <see cref="AabbClusterEnumerator"/> and therefore share a single state machine. Handles both 2D and 3D cluster archetype storage tiers — 2D
+    /// callers pass <see cref="float.NegativeInfinity"/> / <see cref="float.PositiveInfinity"/> for the Z bounds to trivially satisfy the Z overlap test
+    /// against 2D cluster storage.
+    /// </summary>
+    /// <param name="grid">The engine's spatial grid. Passed explicitly rather than stored on the state because the grid is a <see cref="DatabaseEngine"/>-owned
+    /// singleton and the state has no other reason to hold a reference to it.</param>
+    /// <param name="minX">Query bounds min-X.</param>
+    /// <param name="minY">Query bounds min-Y.</param>
+    /// <param name="minZ">Query bounds min-Z. For 2D queries against a 2D cluster archetype, pass <see cref="float.NegativeInfinity"/>.</param>
+    /// <param name="maxX">Query bounds max-X.</param>
+    /// <param name="maxY">Query bounds max-Y.</param>
+    /// <param name="maxZ">Query bounds max-Z. For 2D queries against a 2D cluster archetype, pass <see cref="float.PositiveInfinity"/>.</param>
+    /// <param name="categoryMask">Category bitmask; a cluster is skipped if its union mask does not intersect. Pass <see cref="uint.MaxValue"/> to accept all.</param>
+    /// <remarks>
+    /// This method does not validate <see cref="ClusterSpatialSlot.HasSpatialIndex"/> — the enumerator returns an empty result set naturally when the per-cell
+    /// index is null or empty. Callers that want to skip the work entirely (to avoid constructing a dead enumerator) should check <c>HasSpatialIndex</c>
+    /// themselves first. This matches the ergonomics the existing cluster-archetype iteration loops in <c>SpatialTriggerSystem</c> and <c>SpatialInterestSystem</c>
+    /// expect.
+    /// </remarks>
+    public AabbClusterEnumerator QueryAabb(SpatialGrid grid, float minX, float minY, float minZ, float maxX, float maxY, float maxZ, 
+        uint categoryMask = uint.MaxValue) => new(this, grid, minX, minY, minZ, maxX, maxY, maxZ, categoryMask);
 
     /// <summary>
     /// Create a new ArchetypeClusterState for a cluster-eligible archetype (fresh database).
@@ -563,7 +597,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// </remarks>
     public void RebuildCellState(SpatialGrid grid)
     {
-        if (grid == null || SpatialSlot.Tree == null || ClusterSegment == null)
+        if (grid == null || !SpatialSlot.HasSpatialIndex || ClusterSegment == null)
         {
             return;
         }
@@ -742,7 +776,10 @@ internal sealed unsafe class ArchetypeClusterState
         int componentStride = Layout.ComponentSize(ss.Slot);
 
         var aabb = ClusterSpatialAabb.Empty;
-        Span<double> coords = stackalloc double[4]; // Phase 1 is 2D only → 4 doubles
+        // 6 doubles covers both 2D ([minX, minY, maxX, maxY]) and 3D ([minX, minY, minZ, maxX, maxY, maxZ]) layouts produced by
+        // SpatialMaintainer.ReadAndValidateBoundsFromPtr. The tail slots cost nothing for 2D reads.
+        Span<double> coords = stackalloc double[6];
+        bool is3D = ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
 
         ulong bits = occupancy;
         while (bits != 0)
@@ -756,7 +793,14 @@ internal sealed unsafe class ArchetypeClusterState
                 continue; // skip degenerate slot
             }
 
-            aabb.Union(entityMinX: (float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], uint.MaxValue);
+            if (is3D)
+            {
+                aabb.Union3F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], (float)coords[4], (float)coords[5], uint.MaxValue);
+            }
+            else
+            {
+                aabb.Union2F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], uint.MaxValue);
+            }
         }
 
         return aabb;
@@ -778,7 +822,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// </remarks>
     public void RebuildClusterAabbs()
     {
-        if (SpatialSlot.Tree == null || ClusterSegment == null)
+        if (!SpatialSlot.HasSpatialIndex || ClusterSegment == null)
         {
             return;
         }
@@ -861,7 +905,7 @@ internal sealed unsafe class ArchetypeClusterState
     internal void RecomputeDirtyClusterAabbs(long[] dirtyBits, ref ChunkAccessor<PersistentStore> accessor)
     {
         // Same gating as the Phase 1 spawn/destroy/migration hooks.
-        if (SpatialSlot.Tree == null)
+        if (!SpatialSlot.HasSpatialIndex)
         {
             return;
         }
@@ -923,7 +967,8 @@ internal sealed unsafe class ArchetypeClusterState
             }
 
             ref var stored = ref ClusterAabbs[chunkId];
-            if (stored.MinX == fresh.MinX && stored.MinY == fresh.MinY && stored.MaxX == fresh.MaxX && stored.MaxY == fresh.MaxY)
+            if (stored.MinX == fresh.MinX && stored.MinY == fresh.MinY && stored.MinZ == fresh.MinZ
+                && stored.MaxX == fresh.MaxX && stored.MaxY == fresh.MaxY && stored.MaxZ == fresh.MaxZ)
             {
                 continue; // bit-exact AABB unchanged — skip the UpdateAt call
             }
@@ -1380,15 +1425,22 @@ internal sealed unsafe class ArchetypeClusterState
             // Create a modified SpatialFieldInfo with cluster-relative offset
             var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode);
 
+            // Construct the dirty ring once and alias it from both ArchetypeClusterState.ClusterDirtyRing (the new home, read by SpatialInterestSystem after
+            // commit 3) and ClusterSpatialSlot.DirtyRing (the old home, still read by existing consumers during the Phase 3 commit sequence). Both fields
+            // reference the SAME instance — the ring's state is shared. Commit 4 deletes the ClusterSpatialSlot.DirtyRing field entirely.
+            var dirtyRing = new DirtyBitmapRing(Math.Max(4, ClusterSegment.ChunkCapacity));
+            ClusterDirtyRing = dirtyRing;
+
             SpatialSlot = new ClusterSpatialSlot
             {
+                HasSpatialIndex = true,
                 Slot = slot,
                 FieldOffset = clusterFieldOffset,
                 FieldInfo = fi,
                 Descriptor = descriptor,
                 Tree = tree,
                 BackPointerSegment = bpSeg,
-                DirtyRing = new DirtyBitmapRing(Math.Max(4, ClusterSegment.ChunkCapacity)),
+                DirtyRing = dirtyRing,
             };
             break; // Only one spatial field per archetype
         }
@@ -1400,7 +1452,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     public void RebuildSpatialFromData(ChangeSet changeSet)
     {
-        if (SpatialSlot.Tree == null)
+        if (!SpatialSlot.HasSpatialIndex)
         {
             return;
         }
@@ -1574,10 +1626,19 @@ internal struct ClusterIndexSlot
 }
 
 /// <summary>
-/// Per-archetype spatial R-Tree state for a cluster-eligible archetype with a <c>[SpatialIndex]</c> field.
+/// Per-archetype spatial index metadata for a cluster-eligible archetype with a <c>[SpatialIndex]</c> field. Holds the narrowphase-facing metadata
+/// (<see cref="Slot"/>, <see cref="FieldOffset"/>, <see cref="FieldInfo"/>, <see cref="Descriptor"/>) that both the legacy per-entity tree (being removed
+/// in issue #230 Phase 3) and the new per-cell cluster index path (<see cref="ArchetypeClusterState.PerCellIndex"/>) read during spatial bound dispatch.
 /// </summary>
 internal struct ClusterSpatialSlot
 {
+    /// <summary>
+    /// <c>true</c> when <see cref="ArchetypeClusterState.InitializeSpatial"/> has populated this slot with a configured spatial field. Consumers that want
+    /// to know "does this archetype have a cluster spatial index at all?" MUST read this flag instead of the deprecated <c>SpatialSlot.Tree != null</c>
+    /// idiom — the tree field is being removed in issue #230 Phase 3 and the per-cell index path has no equivalent existence sentinel of its own.
+    /// </summary>
+    public bool HasSpatialIndex;
+
     /// <summary>Component slot index that has the spatial field.</summary>
     public int Slot;
 
@@ -1596,7 +1657,12 @@ internal struct ClusterSpatialSlot
     /// <summary>Per-archetype back-pointer CBS keyed by ClusterLocation (clusterChunkId * 64 + slotIndex).</summary>
     public ChunkBasedSegment<PersistentStore> BackPointerSegment;
 
-    /// <summary>Per-archetype DirtyBitmapRing for interest management delta queries.</summary>
+    /// <summary>
+    /// Per-archetype <see cref="DirtyBitmapRing"/> for interest management delta queries.
+    /// <b>Deprecated in issue #230 Phase 3:</b> during the phase commit sequence this field is an alias for <see cref="ArchetypeClusterState.ClusterDirtyRing"/>
+    /// — both point to the same instance. Commit 3 migrates <c>SpatialInterestSystem</c> to read via <see cref="ArchetypeClusterState.ClusterDirtyRing"/>,
+    /// and commit 4 removes this field. New code must NOT read this field.
+    /// </summary>
     public DirtyBitmapRing DirtyRing;
 }
 

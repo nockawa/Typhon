@@ -17,6 +17,12 @@ namespace Typhon.Engine;
 /// back-pointer stored in <c>ArchetypeClusterState.ClusterSpatialIndexSlot</c>.
 /// </para>
 /// <para>
+/// <b>Tier support.</b> Stores 6 f32 axis-aligned bounds (XYZ min/max) per cluster. 2D archetypes leave
+/// <see cref="MinZ"/>/<see cref="MaxZ"/> at +inf/-inf sentinels and are queried with an infinite Z range;
+/// 3D archetypes populate all six. Issue #230 Phase 3 unified the 2D and 3D paths into a single cluster-index
+/// layout rather than maintaining two parallel index types. f64 variants are deferred to a follow-up.
+/// </para>
+/// <para>
 /// <b>Phase 1 deviation from the design doc.</b> Design doc <c>02-cluster-rtree.md</c> proposes a fixed
 /// inline capacity (~24 clusters via <c>fixed float[]</c> struct fields) with overflow to a real
 /// <c>SpatialRTree&lt;PersistentStore&gt;</c>. Phase 1 uses plain managed arrays for simplicity and
@@ -44,11 +50,17 @@ internal sealed class CellSpatialIndex
     /// <summary>SoA AABB min-Y components.</summary>
     public float[] MinY;
 
+    /// <summary>SoA AABB min-Z components. Set to <see cref="float.PositiveInfinity"/> for 2D archetype clusters — see <see cref="ClusterSpatialAabb"/>.</summary>
+    public float[] MinZ;
+
     /// <summary>SoA AABB max-X components.</summary>
     public float[] MaxX;
 
     /// <summary>SoA AABB max-Y components.</summary>
     public float[] MaxY;
+
+    /// <summary>SoA AABB max-Z components. Set to <see cref="float.NegativeInfinity"/> for 2D archetype clusters — see <see cref="ClusterSpatialAabb"/>.</summary>
+    public float[] MaxZ;
 
     /// <summary>Per-cluster category mask (OR of entity masks in that cluster).</summary>
     public uint[] CategoryMasks;
@@ -66,8 +78,10 @@ internal sealed class CellSpatialIndex
         ClusterIds = new int[initialCapacity];
         MinX = new float[initialCapacity];
         MinY = new float[initialCapacity];
+        MinZ = new float[initialCapacity];
         MaxX = new float[initialCapacity];
         MaxY = new float[initialCapacity];
+        MaxZ = new float[initialCapacity];
         CategoryMasks = new uint[initialCapacity];
     }
 
@@ -87,8 +101,10 @@ internal sealed class CellSpatialIndex
         ClusterIds[slot] = clusterChunkId;
         MinX[slot] = aabb.MinX;
         MinY[slot] = aabb.MinY;
+        MinZ[slot] = aabb.MinZ;
         MaxX[slot] = aabb.MaxX;
         MaxY[slot] = aabb.MaxY;
+        MaxZ[slot] = aabb.MaxZ;
         CategoryMasks[slot] = aabb.CategoryMask;
         ClusterCount++;
         return slot;
@@ -101,8 +117,10 @@ internal sealed class CellSpatialIndex
     {
         MinX[slot] = aabb.MinX;
         MinY[slot] = aabb.MinY;
+        MinZ[slot] = aabb.MinZ;
         MaxX[slot] = aabb.MaxX;
         MaxY[slot] = aabb.MaxY;
+        MaxZ[slot] = aabb.MaxZ;
         CategoryMasks[slot] = aabb.CategoryMask;
     }
 
@@ -120,8 +138,10 @@ internal sealed class CellSpatialIndex
             ClusterIds[slot] = ClusterIds[last];
             MinX[slot] = MinX[last];
             MinY[slot] = MinY[last];
+            MinZ[slot] = MinZ[last];
             MaxX[slot] = MaxX[last];
             MaxY[slot] = MaxY[last];
+            MaxZ[slot] = MaxZ[last];
             CategoryMasks[slot] = CategoryMasks[last];
             swappedClusterId = ClusterIds[slot];
         }
@@ -129,8 +149,10 @@ internal sealed class CellSpatialIndex
         ClusterIds[last] = 0;
         MinX[last] = 0f;
         MinY[last] = 0f;
+        MinZ[last] = 0f;
         MaxX[last] = 0f;
         MaxY[last] = 0f;
+        MaxZ[last] = 0f;
         CategoryMasks[last] = 0u;
         ClusterCount--;
         return swappedClusterId;
@@ -145,8 +167,10 @@ internal sealed class CellSpatialIndex
         Array.Resize(ref ClusterIds, newCapacity);
         Array.Resize(ref MinX, newCapacity);
         Array.Resize(ref MinY, newCapacity);
+        Array.Resize(ref MinZ, newCapacity);
         Array.Resize(ref MaxX, newCapacity);
         Array.Resize(ref MaxY, newCapacity);
+        Array.Resize(ref MaxZ, newCapacity);
         Array.Resize(ref CategoryMasks, newCapacity);
     }
 }

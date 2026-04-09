@@ -157,19 +157,23 @@ class SpatialGridTests
     }
 
     [Test]
-    public void ValidateSupportedFieldType_Throws_On3D()
+    public void ValidateSupportedFieldType_Throws_OnF64Tiers()
     {
-        Assert.Throws<System.NotSupportedException>(
-            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB3F, "MyArch"));
+        // Issue #230 Phase 3 extended the grid to support 3D f32; f64 tiers remain deferred to a follow-up sub-issue of #228.
         Assert.Throws<System.NotSupportedException>(
             () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB2D, "MyArch"));
+        Assert.Throws<System.NotSupportedException>(
+            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB3D, "MyArch"));
     }
 
     [Test]
-    public void ValidateSupportedFieldType_Passes_On2DFloat()
+    public void ValidateSupportedFieldType_Passes_OnF32Tiers()
     {
+        // Issue #230 Phase 3 extended the supported set from 2D-only to all f32 tiers (2D and 3D).
         SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB2F, "MyArch");
         SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere2F, "MyArch");
+        SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB3F, "MyArch");
+        SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere3F, "MyArch");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

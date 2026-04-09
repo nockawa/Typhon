@@ -22,7 +22,34 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
         Archetype<SpatialTerrainArchetype>.Touch();
     }
 
+    /// <summary>
+    /// Default setup for Ship-based trigger tests. Registers <c>SpatialShip</c> + <c>SpatialName</c> and calls <c>ConfigureSpatialGrid</c> so the cluster archetype
+    /// populates the per-cell spatial index (issue #230 Phase 3 migration target).
+    /// </summary>
+    /// <remarks>
+    /// Does NOT register <c>SpatialTerrain</c>: issue #229 Phase 1+2 restricts the grid to a single spatial archetype per configured grid (stale gate —
+    /// the per-cell index is per-archetype via <c>PerCellIndex</c>, but the grid's shared cell cluster list is not yet split). Terrain-based tests use
+    /// <see cref="SetupEngineWithTerrainNoGrid"/> instead.
+    /// </remarks>
     private DatabaseEngine SetupEngine()
+    {
+        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        dbe.RegisterComponentFromAccessor<SpatialShip>();
+        dbe.RegisterComponentFromAccessor<SpatialName>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new System.Numerics.Vector2(-1000f, -1000f),
+            worldMax: new System.Numerics.Vector2(1000f, 1000f),
+            cellSize: 100f));
+        dbe.InitializeArchetypes();
+        return dbe;
+    }
+
+    /// <summary>
+    /// Setup for the static-cache tests that use <c>SpatialTerrain</c>. Registers both Ship and Terrain but does NOT call <c>ConfigureSpatialGrid</c> — the
+    /// one-spatial-archetype restriction in issue #229 Phase 1+2 means the grid can't accommodate both. These tests exercise the per-entity <c>StaticTree</c>
+    /// path, not the cluster path, so they don't need the per-cell index.
+    /// </summary>
+    private DatabaseEngine SetupEngineWithTerrainNoGrid()
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<SpatialShip>();
@@ -391,7 +418,7 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
     [CancelAfter(5000)]
     public void StaticCache_CachedAfterFirstEval()
     {
-        using var dbe = SetupEngine();
+        using var dbe = SetupEngineWithTerrainNoGrid();
         var terrainTable = dbe.GetComponentTable<SpatialTerrain>();
         var ts = terrainTable.SpatialIndex.GetOrCreateTriggerSystem(terrainTable);
 
@@ -425,7 +452,7 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
     [CancelAfter(5000)]
     public void StaticCache_InvalidatedOnTreeMutation()
     {
-        using var dbe = SetupEngine();
+        using var dbe = SetupEngineWithTerrainNoGrid();
         var terrainTable = dbe.GetComponentTable<SpatialTerrain>();
         var ts = terrainTable.SpatialIndex.GetOrCreateTriggerSystem(terrainTable);
 

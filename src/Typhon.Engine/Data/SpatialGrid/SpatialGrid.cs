@@ -139,20 +139,50 @@ internal sealed unsafe class SpatialGrid
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void ReadSpatialCenter2D(byte* fieldPtr, SpatialFieldType fieldType, out float posX, out float posY)
     {
-        if (fieldType == SpatialFieldType.AABB2F)
+        switch (fieldType)
         {
-            float minX = *(float*)fieldPtr;
-            float minY = *(float*)(fieldPtr + sizeof(float));
-            float maxX = *(float*)(fieldPtr + 2 * sizeof(float));
-            float maxY = *(float*)(fieldPtr + 3 * sizeof(float));
-            posX = (minX + maxX) * 0.5f;
-            posY = (minY + maxY) * 0.5f;
-            return;
+            case SpatialFieldType.AABB2F:
+            {
+                float minX = *(float*)fieldPtr;
+                float minY = *(float*)(fieldPtr + sizeof(float));
+                float maxX = *(float*)(fieldPtr + 2 * sizeof(float));
+                float maxY = *(float*)(fieldPtr + 3 * sizeof(float));
+                posX = (minX + maxX) * 0.5f;
+                posY = (minY + maxY) * 0.5f;
+                return;
+            }
+            case SpatialFieldType.AABB3F:
+            {
+                // 3D AABB layout is [minX, minY, minZ, maxX, maxY, maxZ]. For 2D cell bucketing we use only the XY center — Z is used at narrowphase.
+                // Issue #230 Phase 3.
+                float minX = *(float*)fieldPtr;
+                float minY = *(float*)(fieldPtr + sizeof(float));
+                float maxX = *(float*)(fieldPtr + 3 * sizeof(float));
+                float maxY = *(float*)(fieldPtr + 4 * sizeof(float));
+                posX = (minX + maxX) * 0.5f;
+                posY = (minY + maxY) * 0.5f;
+                return;
+            }
+            case SpatialFieldType.BSphere2F:
+            {
+                // BSphere2F — CenterX, CenterY, Radius
+                posX = *(float*)fieldPtr;
+                posY = *(float*)(fieldPtr + sizeof(float));
+                return;
+            }
+            case SpatialFieldType.BSphere3F:
+            {
+                // BSphere3F — CenterX, CenterY, CenterZ, Radius. Same 2D bucketing approach as AABB3F.
+                posX = *(float*)fieldPtr;
+                posY = *(float*)(fieldPtr + sizeof(float));
+                return;
+            }
+            default:
+                // ValidateSupportedFieldType rejects f64 tiers at ConfigureSpatialGrid time, so this path should not be reachable. Defensive fallback
+                // to help diagnose any future field-type addition that forgot to update this dispatch.
+                throw new System.NotSupportedException(
+                    $"ReadSpatialCenter2D: field type '{fieldType}' is not supported. f32 tiers (2D and 3D) only.");
         }
-
-        // BSphere2F — CenterX, CenterY, Radius
-        posX = *(float*)fieldPtr;
-        posY = *(float*)(fieldPtr + sizeof(float));
     }
 
     /// <summary>
@@ -168,18 +198,20 @@ internal sealed unsafe class SpatialGrid
     }
 
     /// <summary>
-    /// Throws if <paramref name="fieldType"/> is not supported by Phase 1+2 of the spatial grid (only 2D float types are supported).
+    /// Throws if <paramref name="fieldType"/> is not supported by the spatial grid. Issue #230 Phase 3 extended support from 2D-only to both 2D and 3D f32
+    /// tiers — cells are always 2D (XY) and 3D archetypes bucket entities by their XY center, ignoring Z. Z-axis filtering happens at the query narrowphase.
+    /// f64 tiers remain deferred to a follow-up sub-issue of #228.
     /// </summary>
     public static void ValidateSupportedFieldType(SpatialFieldType fieldType, string archetypeName)
     {
-        if (fieldType is SpatialFieldType.AABB2F or SpatialFieldType.BSphere2F)
+        if (fieldType is SpatialFieldType.AABB2F or SpatialFieldType.BSphere2F or SpatialFieldType.AABB3F or SpatialFieldType.BSphere3F)
         {
             return;
         }
         throw new NotSupportedException(
             $"Spatial archetype '{archetypeName}' uses field type '{fieldType}'. " +
-            $"The spatial grid currently supports only 2D float spatial fields (AABB2F, BSphere2F). " +
-            $"3D/double variants are a planned follow-up.");
+            $"The spatial grid currently supports f32 spatial fields only (AABB2F, BSphere2F, AABB3F, BSphere3F). " +
+            $"f64 variants are a planned follow-up.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
