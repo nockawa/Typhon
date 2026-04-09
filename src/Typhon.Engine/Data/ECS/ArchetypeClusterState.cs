@@ -40,6 +40,44 @@ internal sealed unsafe class ArchetypeClusterState
     /// <summary>Chunk ID of first cluster with at least one free slot. -1 = none (allocate new).</summary>
     public int FreeClusterHead;
 
+    /// <summary>
+    /// Per-cluster cell membership for spatial archetypes (issue #229 Phase 1+2). Flat array indexed by <c>clusterChunkId</c>, value is the spatial
+    /// grid <c>cellKey</c> the cluster is attached to, or <c>-1</c> if unmapped (cluster not yet allocated, or archetype is not opted into the grid).
+    /// </summary>
+    /// <remarks>
+    /// Lazily allocated by <see cref="ClaimSlotInCell"/> or <see cref="RebuildCellState"/>. Non-spatial archetypes and spatial archetypes running without a
+    /// configured <see cref="SpatialGrid"/> leave this field <c>null</c> — the existing <see cref="ClaimSlot"/> path is unchanged for them.
+    /// </remarks>
+    public int[] ClusterCellMap;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Migration queue (issue #229 Phase 3). Lazily allocated; only used when
+    // SpatialSlot.Tree != null AND a SpatialGrid is configured AND cell crossings
+    // actually occur. Population is sequential (detection loop runs single-threaded
+    // inside WriteClusterTickFence), drained by ExecuteMigrations in the same loop.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Per-archetype pending migration queue. Populated by cell-crossing detection in
+    /// <c>ProcessClusterSpatialEntries</c>, drained by <see cref="ExecuteMigrations"/> at the tick fence.
+    /// Null until the first cell-crossing is detected.</summary>
+    internal MigrationRequest[] PendingMigrations;
+
+    /// <summary>Number of valid entries in <see cref="PendingMigrations"/>. Reset to zero at the start
+    /// of every <see cref="ExecuteMigrations"/> call.</summary>
+    internal int PendingMigrationCount;
+
+    /// <summary>Telemetry counter: number of migrations executed in the most recently completed tick.</summary>
+    public int LastTickMigrationCount;
+
+    /// <summary>Telemetry counter: number of position changes that crossed the raw cell boundary but were
+    /// absorbed by the hysteresis margin (no migration queued). Useful for tuning
+    /// <see cref="SpatialGridConfig.MigrationHysteresisRatio"/>.</summary>
+    public int LastTickHysteresisAbsorbedCount;
+
+    /// <summary>Telemetry counter: wall-clock duration of <see cref="ExecuteMigrations"/> in milliseconds,
+    /// for the most recently completed tick.</summary>
+    public double LastTickMigrationExecuteMs;
+
     /// <summary>Per-entity dirty tracking for tick fence WAL serialization. Index = clusterChunkId * 64 + slotIndex.</summary>
     public DirtyBitmap ClusterDirtyBitmap;
 
@@ -91,7 +129,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// <param name="transientSegment">TransientStore backing segment for Transient components. Default (null) if no Transient.</param>
     /// <param name="transientStore">TransientStore instance to keep alive. Null if no Transient.</param>
     public static ArchetypeClusterState Create(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment,
-        ChunkBasedSegment<TransientStore> transientSegment = default, TransientStore? transientStore = null)
+        ChunkBasedSegment<TransientStore> transientSegment = null, TransientStore? transientStore = null)
     {
         Debug.Assert(segment != null || transientSegment != null, "At least one cluster segment must be provided");
         int capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
@@ -115,7 +153,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// Scans cluster occupancy bitmaps to rebuild <see cref="ActiveClusterIds"/> and <see cref="FreeClusterHead"/>.
     /// </summary>
     public static ArchetypeClusterState CreateFromExisting(ArchetypeClusterInfo layout, ChunkBasedSegment<PersistentStore> segment,
-        ChunkBasedSegment<TransientStore> transientSegment = default, TransientStore? transientStore = null)
+        ChunkBasedSegment<TransientStore> transientSegment = null, TransientStore? transientStore = null)
     {
         Debug.Assert(segment != null || transientSegment != null, "At least one cluster segment must be provided");
         int capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
@@ -349,6 +387,252 @@ internal sealed unsafe class ArchetypeClusterState
         return (newClusterId, 0);
     }
 
+    // ══════════════════════════════════════════════════════════════════════════════
+    // Phase 1+2 of issue #229 — spatially coherent slot claiming. Only used when the
+    // engine has a configured SpatialGrid AND this archetype has a spatial field.
+    // All entities in a given cluster will share the same grid cell.
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Claim a free slot in a cluster belonging to the given spatial <paramref name="cellKey"/>, allocating a new cluster attached to the cell if none of
+    /// its existing clusters has a free slot.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the spatial-aware counterpart of <see cref="ClaimSlot"/>. Unlike <c>ClaimSlot</c> it ignores <see cref="FreeClusterHead"/> — that hint
+    /// is a global free-slot cache that cannot distinguish cells, so it's useless once spatial coherence is required. Instead, we scan the cell's cluster
+    /// list (typically ≤80 entries for AntHill-scale density, ≤15-30 ns scan cost).</para>
+    /// <para>Every successful claim bumps <see cref="CellDescriptor.EntityCount"/>. Allocation of a new cluster additionally bumps
+    /// <see cref="CellDescriptor.ClusterCount"/>, attaches the cluster to the cell's pool segment, and records the mapping in <see cref="ClusterCellMap"/>.</para>
+    /// </remarks>
+    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, ref ChunkAccessor<PersistentStore> accessor, ChangeSet changeSet, SpatialGrid grid)
+    {
+        ref var cell = ref grid.GetCell(cellKey);
+        var clusters = grid.CellClusterPool.GetClusters(in cell);
+
+        // Scan existing clusters attached to this cell for a free slot.
+        for (int i = 0; i < clusters.Length; i++)
+        {
+            int clusterId = clusters[i];
+            byte* clusterBase = accessor.GetChunkAddress(clusterId, true);
+            ref ulong occupancy = ref *(ulong*)clusterBase;
+
+            ulong current = occupancy;
+            ulong available = ~current & Layout.FullMask;
+            if (available == 0)
+            {
+                continue;
+            }
+
+            int slot = BitOperations.TrailingZeroCount(available);
+            ulong desired = current | (1UL << slot);
+
+            // CAS for future-proof concurrent commit (matches ClaimSlot semantics). Single-writer today.
+            if (Interlocked.CompareExchange(ref occupancy, desired, current) == current)
+            {
+                cell.EntityCount++;
+                return (clusterId, slot);
+            }
+
+            // CAS failed — another writer took the slot. Retry with a direct read+write.
+            current = occupancy;
+            available = ~current & Layout.FullMask;
+            if (available != 0)
+            {
+                slot = BitOperations.TrailingZeroCount(available);
+                occupancy = current | (1UL << slot);
+                cell.EntityCount++;
+                return (clusterId, slot);
+            }
+
+            // Cluster became full between reads — fall through to the next candidate.
+        }
+
+        // No free slot in any cluster of this cell — allocate a new cluster and attach it to the cell.
+        // CellClusterPool.AddCluster bumps cell.ClusterCount for us; we only bump cell.EntityCount here.
+        int newChunkId = AllocateNewCluster(changeSet);
+        EnsureClusterCellMapCapacity(newChunkId + 1);
+        ClusterCellMap[newChunkId] = cellKey;
+        grid.CellClusterPool.AddCluster(ref cell, cellKey, newChunkId);
+        cell.EntityCount++;
+
+        byte* newBase = accessor.GetChunkAddress(newChunkId, true);
+        *(ulong*)newBase = 1UL; // occupancy bit 0
+        return (newChunkId, 0);
+    }
+
+    /// <summary>
+    /// Pure-Transient overload of <see cref="ClaimSlotInCell"/>. Identical logic, different accessor type.
+    /// </summary>
+    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, ref ChunkAccessor<TransientStore> accessor, SpatialGrid grid)
+    {
+        ref var cell = ref grid.GetCell(cellKey);
+        var clusters = grid.CellClusterPool.GetClusters(in cell);
+
+        for (int i = 0; i < clusters.Length; i++)
+        {
+            int clusterId = clusters[i];
+            byte* clusterBase = accessor.GetChunkAddress(clusterId, true);
+            ref ulong occupancy = ref *(ulong*)clusterBase;
+
+            ulong current = occupancy;
+            ulong available = ~current & Layout.FullMask;
+            if (available == 0)
+            {
+                continue;
+            }
+
+            int slot = BitOperations.TrailingZeroCount(available);
+            ulong desired = current | (1UL << slot);
+
+            if (Interlocked.CompareExchange(ref occupancy, desired, current) == current)
+            {
+                cell.EntityCount++;
+                return (clusterId, slot);
+            }
+
+            current = occupancy;
+            available = ~current & Layout.FullMask;
+            if (available != 0)
+            {
+                slot = BitOperations.TrailingZeroCount(available);
+                occupancy = current | (1UL << slot);
+                cell.EntityCount++;
+                return (clusterId, slot);
+            }
+        }
+
+        // CellClusterPool.AddCluster bumps cell.ClusterCount for us; we only bump cell.EntityCount here.
+        int newChunkId = AllocateNewCluster(null);
+        EnsureClusterCellMapCapacity(newChunkId + 1);
+        ClusterCellMap[newChunkId] = cellKey;
+        grid.CellClusterPool.AddCluster(ref cell, cellKey, newChunkId);
+        cell.EntityCount++;
+
+        byte* newBase = accessor.GetChunkAddress(newChunkId, true);
+        *(ulong*)newBase = 1UL;
+        return (newChunkId, 0);
+    }
+
+    /// <summary>
+    /// Reconstruct <see cref="ClusterCellMap"/> and the grid's per-cell state from the current active clusters' entity positions. Called at startup for
+    /// spatial archetypes after the <see cref="SpatialGrid"/> is configured — on a fresh database this is a no-op (no active clusters); on a reopened
+    /// database it re-derives the cluster→cell mapping from persisted data.
+    /// </summary>
+    /// <remarks>
+    /// <para>Reads the first occupied entity's spatial field from each active cluster and uses
+    /// <see cref="SpatialGrid.WorldToCellKeyFromSpatialField"/> to compute its cell. This relies on the spatial coherence invariant (all entities in a
+    /// cluster belong to the same cell) — reading only the first entity is sufficient.</para>
+    /// <para>Non-spatial archetypes and archetypes without a configured grid are no-ops. Pure-Transient archetypes are also skipped since their data doesn't
+    /// survive restart.</para>
+    /// <para><b>Precondition — NOT idempotent on a dirty grid.</b> This method ADDS to
+    /// <see cref="CellDescriptor.EntityCount"/> and appends cluster IDs to each cell's pool segment.
+    /// Callers MUST pass either a fresh <see cref="SpatialGrid"/> or one that has been reset via
+    /// <see cref="SpatialGrid.ResetCellState"/> — calling twice without a reset double-counts entities
+    /// and duplicates cluster IDs in the pool. The single caller today
+    /// (<c>DatabaseEngine.InitializeArchetypes</c>) constructs a fresh grid immediately before this
+    /// loop, satisfying the precondition.</para>
+    /// </remarks>
+    public void RebuildCellState(SpatialGrid grid)
+    {
+        if (grid == null || SpatialSlot.Tree == null || ClusterSegment == null)
+        {
+            return;
+        }
+        if (ActiveClusterCount == 0)
+        {
+            return;
+        }
+
+        EnsureClusterCellMapCapacity(PrimarySegmentCapacity);
+        Array.Fill(ClusterCellMap, -1);
+
+        var ss = SpatialSlot;
+        int componentOffset = Layout.ComponentOffset(ss.Slot);
+        int compStride = Layout.ComponentSize(ss.Slot);
+        var fieldType = ss.FieldInfo.FieldType;
+
+        var clusterAccessor = ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            for (int i = 0; i < ActiveClusterCount; i++)
+            {
+                int chunkId = ActiveClusterIds[i];
+                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId);
+                ulong occupancy = *(ulong*)clusterBase;
+                if (occupancy == 0)
+                {
+                    continue;
+                }
+
+                int firstSlot = BitOperations.TrailingZeroCount(occupancy);
+                byte* fieldPtr = clusterBase + componentOffset + firstSlot * compStride + ss.FieldOffset;
+                int cellKey = grid.WorldToCellKeyFromSpatialField(fieldPtr, fieldType);
+
+                ClusterCellMap[chunkId] = cellKey;
+                ref var cell = ref grid.GetCell(cellKey);
+                grid.CellClusterPool.AddCluster(ref cell, cellKey, chunkId);
+                cell.EntityCount += BitOperations.PopCount(occupancy);
+            }
+        }
+        finally
+        {
+            clusterAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Grow <see cref="ClusterCellMap"/> to hold at least <paramref name="requiredLength"/> entries, initializing new slots to <c>-1</c> (unmapped).
+    /// Called lazily by <see cref="ClaimSlotInCell"/> when a new cluster chunk ID lands beyond the current bounds.
+    /// </summary>
+    internal void EnsureClusterCellMapCapacity(int requiredLength)
+    {
+        if (ClusterCellMap == null)
+        {
+            int initial = Math.Max(16, requiredLength);
+            ClusterCellMap = new int[initial];
+            Array.Fill(ClusterCellMap, -1);
+            return;
+        }
+        if (ClusterCellMap.Length >= requiredLength)
+        {
+            return;
+        }
+        // Defensive: if ClusterCellMap.Length is ever 0 (shouldn't happen through normal
+        // construction — we always allocate >= 16 — but a future constructor path could regress)
+        // start the doubling from 1 instead of 0 to avoid an infinite loop.
+        int newLen = Math.Max(ClusterCellMap.Length, 1);
+        while (newLen < requiredLength)
+        {
+            newLen *= 2;
+        }
+        int oldLen = ClusterCellMap.Length;
+        Array.Resize(ref ClusterCellMap, newLen);
+        Array.Fill(ClusterCellMap, -1, oldLen, newLen - oldLen);
+    }
+
+    /// <summary>
+    /// Append a migration request to the per-archetype queue. Lazily allocates the backing array on first use
+    /// and doubles its capacity on overflow. Issue #229 Phase 3.
+    /// </summary>
+    /// <remarks>
+    /// Called only from the cell-crossing detection loop in <c>ProcessClusterSpatialEntries</c> — single-threaded,
+    /// no synchronization needed. The typical hot path writes a handful of entries per tick; even on a busy tick
+    /// with thousands of migrations the array doubles ~10-12 times total (initial 16 -> 32K).
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EnqueueMigration(int sourceClusterChunkId, int sourceSlotIndex, int destCellKey)
+    {
+        if (PendingMigrations == null)
+        {
+            PendingMigrations = new MigrationRequest[16];
+        }
+        else if (PendingMigrationCount == PendingMigrations.Length)
+        {
+            Array.Resize(ref PendingMigrations, PendingMigrations.Length * 2);
+        }
+        PendingMigrations[PendingMigrationCount++] = new MigrationRequest(sourceClusterChunkId, sourceSlotIndex, destCellKey);
+    }
+
     /// <summary>
     /// Allocate a new cluster from both segments (lockstep). Initializes to zero and adds to active list.
     /// </summary>
@@ -411,14 +695,31 @@ internal sealed unsafe class ArchetypeClusterState
     /// Release a slot in a cluster: clear OccupancyBit, EnabledBits, EntityKey on the primary segment.
     /// If the cluster becomes empty, free it from both segments.
     /// </summary>
-    public void ReleaseSlot(ref ChunkAccessor<PersistentStore> accessor, int clusterChunkId, int slotIndex, ChangeSet changeSet)
+    /// <param name="grid">
+    /// Optional spatial grid. When non-null <em>and</em> <see cref="ClusterCellMap"/> is populated for the released cluster, this method maintains the cell
+    /// descriptor: <c>EntityCount</c> always decrements, and a going-empty cluster is removed from its cell's pool segment.
+    /// </param>
+    public void ReleaseSlot(ref ChunkAccessor<PersistentStore> accessor, int clusterChunkId, int slotIndex, ChangeSet changeSet, SpatialGrid grid = null)
     {
         byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
+
+        // Read occupancy BEFORE clearing the slot. This keeps cell.EntityCount correct on double-release (the slot's bit is already zero, so no decrement
+        // should happen).
+        // Phase 1+2 never releases the same slot twice, but the Phase 3 migration fence will batch-release slots and correctness here is worth 3 lines of insurance.
+        ulong slotMask = 1UL << slotIndex;
+        bool wasOccupied = (*(ulong*)clusterBase & slotMask) != 0;
+
         ClearSlotMetadata(clusterBase, clusterChunkId, slotIndex);
+
+        if (wasOccupied)
+        {
+            DecrementCellEntityCountOnRelease(grid, clusterChunkId);
+        }
 
         ref ulong occupancy = ref *(ulong*)clusterBase;
         if (BitOperations.PopCount(occupancy) == 0)
         {
+            FinaliseEmptyClusterCellState(grid, clusterChunkId);
             RemoveFromActiveList(clusterChunkId);
             ClusterSegment.FreeChunk(clusterChunkId);
             TransientSegment?.FreeChunk(clusterChunkId);
@@ -432,14 +733,25 @@ internal sealed unsafe class ArchetypeClusterState
     /// <summary>
     /// Release a slot for pure-Transient archetypes (no PersistentStore segment).
     /// </summary>
-    public void ReleaseSlot(ref ChunkAccessor<TransientStore> accessor, int clusterChunkId, int slotIndex)
+    public void ReleaseSlot(ref ChunkAccessor<TransientStore> accessor, int clusterChunkId, int slotIndex, SpatialGrid grid = null)
     {
         byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
+
+        // See comment in the PersistentStore overload — read occupancy before clearing.
+        ulong slotMask = 1UL << slotIndex;
+        bool wasOccupied = (*(ulong*)clusterBase & slotMask) != 0;
+
         ClearSlotMetadata(clusterBase, clusterChunkId, slotIndex);
+
+        if (wasOccupied)
+        {
+            DecrementCellEntityCountOnRelease(grid, clusterChunkId);
+        }
 
         ref ulong occupancy = ref *(ulong*)clusterBase;
         if (BitOperations.PopCount(occupancy) == 0)
         {
+            FinaliseEmptyClusterCellState(grid, clusterChunkId);
             RemoveFromActiveList(clusterChunkId);
             TransientSegment.FreeChunk(clusterChunkId);
         }
@@ -447,6 +759,39 @@ internal sealed unsafe class ArchetypeClusterState
         {
             FreeClusterHead = clusterChunkId;
         }
+    }
+
+    /// <summary>Decrement the cell's entity count when a slot is released. No-op if cluster is unmapped.</summary>
+    private void DecrementCellEntityCountOnRelease(SpatialGrid grid, int clusterChunkId)
+    {
+        if (grid == null || ClusterCellMap == null || clusterChunkId >= ClusterCellMap.Length)
+        {
+            return;
+        }
+        int cellKey = ClusterCellMap[clusterChunkId];
+        if (cellKey < 0)
+        {
+            return;
+        }
+        grid.GetCell(cellKey).EntityCount--;
+    }
+
+    /// <summary>Detach an empty cluster from its cell's pool and clear its cell mapping.</summary>
+    private void FinaliseEmptyClusterCellState(SpatialGrid grid, int clusterChunkId)
+    {
+        if (grid == null || ClusterCellMap == null || clusterChunkId >= ClusterCellMap.Length)
+        {
+            return;
+        }
+        int cellKey = ClusterCellMap[clusterChunkId];
+        if (cellKey < 0)
+        {
+            return;
+        }
+        // CellClusterPool.RemoveCluster decrements cell.ClusterCount for us.
+        ref var cell = ref grid.GetCell(cellKey);
+        grid.CellClusterPool.RemoveCluster(ref cell, clusterChunkId);
+        ClusterCellMap[clusterChunkId] = -1;
     }
 
     /// <summary>Clear EnabledBits, OccupancyBit, and EntityId for a slot (store-agnostic pointer math).</summary>
@@ -491,6 +836,10 @@ internal sealed unsafe class ArchetypeClusterState
 
         IndexSlots = new ClusterIndexSlot[slotCount];
         int idx = 0;
+        // Sequential counter for AllowMultiple indexed fields across ALL component slots in this archetype.
+        // Drives each field's MultiFieldIndex, which selects the corresponding section in the cluster layout's elementId tail
+        // (see ArchetypeClusterInfo.IndexElementIdOffset). Must match the flat count passed to ArchetypeClusterInfo.Compute at archetype registration time.
+        int multiFieldCounter = 0;
         for (int slot = 0; slot < slotToTable.Length; slot++)
         {
             var table = slotToTable[slot];
@@ -522,6 +871,9 @@ internal sealed unsafe class ArchetypeClusterState
                 // FieldOffset in cluster = field offset within pure component data (no ComponentOverhead in clusters)
                 int clusterFieldOffset = ifi.OffsetToField - table.ComponentOverhead;
                 var btree = ComponentTable.CreateIndexForFieldCore(fieldDef, (short)fieldDef.FieldId, load, indexSegment, changeSet);
+                // AllowMultiple fields claim the next sequential slot in the cluster's elementId tail.
+                // Single-value fields don't allocate tail space and use MultiFieldIndex = -1.
+                int multiFieldIndex = ifi.AllowMultiple ? multiFieldCounter++ : -1;
                 fields[fi] = new ClusterIndexField
                 {
                     FieldOffset = clusterFieldOffset,
@@ -531,6 +883,7 @@ internal sealed unsafe class ArchetypeClusterState
                     ZoneMap = new ZoneMapArray(PrimarySegmentCapacity, ifi.Size,
                         isFloat: fieldDef.Type == FieldType.Float, isDouble: fieldDef.Type == FieldType.Double,
                         isUnsigned: (fieldDef.Type & FieldType.Unsigned) != 0),
+                    MultiFieldIndex = multiFieldIndex,
                 };
                 shadowBuffers[fi] = new FieldShadowBuffer();
                 fi++;
@@ -543,6 +896,11 @@ internal sealed unsafe class ArchetypeClusterState
                 ShadowBuffers = shadowBuffers,
             };
         }
+
+        // Sanity: the MultiFieldIndex counter must match the count supplied to ArchetypeClusterInfo.Compute.
+        // A mismatch means the cluster layout tail is mis-sized or fields will read the wrong slots.
+        Debug.Assert(multiFieldCounter == Layout.MultipleIndexedFieldCount,
+            $"Cluster elementId tail: InitializeIndexes counted {multiFieldCounter} AllowMultiple fields but Layout reserves {Layout.MultipleIndexedFieldCount}");
 
         ClusterShadowBitmap = new DirtyBitmap(Math.Max(64, PrimarySegmentCapacity * 64));
     }
@@ -584,7 +942,13 @@ internal sealed unsafe class ArchetypeClusterState
                         {
                             ref var field = ref ixSlot.Fields[f];
                             byte* fieldPtr = compBase + slotIndex * compSize + field.FieldOffset;
-                            field.Index.Add(fieldPtr, clusterLocation, ref idxAccessor);
+                            int elementId = field.Index.Add(fieldPtr, clusterLocation, ref idxAccessor);
+                            // Rebuild writes a fresh elementId into the cluster tail, overwriting any stale
+                            // value from the previous (torn-down) BTree state. Issue #229 Phase 3.
+                            if (field.AllowMultiple)
+                            {
+                                *(int*)(clusterBase + Layout.IndexElementIdOffset(field.MultiFieldIndex, slotIndex)) = elementId;
+                            }
                         }
                     }
                 }
@@ -858,4 +1222,14 @@ internal struct ClusterIndexField
 
     /// <summary>Zone map for cluster-level query pruning. Non-null for numeric field types.</summary>
     public ZoneMapArray ZoneMap;
+
+    /// <summary>
+    /// Sequential index into the cluster's elementId tail section (0..<see cref="ArchetypeClusterInfo.MultipleIndexedFieldCount"/>-1),
+    /// or <c>-1</c> when <see cref="AllowMultiple"/> is false (no tail section allocated for this field).
+    /// Used by the cluster destroy/migrate path to locate the per-entity elementId via
+    /// <see cref="ArchetypeClusterInfo.IndexElementIdOffset"/> and pass it to
+    /// <see cref="BTreeBase{TStore}.RemoveValue"/>, so that only this entity's specific
+    /// <c>(key, clusterLocation)</c> entry is removed — not the entire buffer at the key.
+    /// </summary>
+    public int MultiFieldIndex;
 }

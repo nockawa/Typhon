@@ -1051,7 +1051,21 @@ public sealed class TyphonRuntime : IDisposable
     private void OnTickEndInternal(DagScheduler scheduler)
     {
         // All system transactions have been committed individually.
-        // Flush the UoW to make all Deferred writes durable, then dispose.
+        //
+        // Issue #229 Phase 3 ordering — WriteTickFence runs BEFORE UoW.Flush.
+        // Reason: the cluster tick fence publishes WAL records (ClusterTickFence chunks) describing the tick's dirty cluster-content changes.
+        // It is ALSO the point where the Phase 3 migration fence runs (ProcessClusterSpatialEntries + ExecuteMigrations), mutating cluster pages directly.
+        // By running WriteTickFence first, the subsequent UoW.Flush waits for a currentLsn that includes those publishes, so all migration writes become
+        // per-tick durable via the/ same fsync that covers normal system commits. Moving WriteTickFence after Flush (the pre-Phase-3 ordering) would make
+        // migration writes durable only at the NEXT tick's flush — a one-tick lag that's acceptable for the original R-Tree maintenance use case but unsafe
+        // for persistent cluster content mutation.
+        //
+        // See debate decision Q1 in the Phase 3 design notes, and claude/design/spatial-tiers/01-spatial-clusters.md §"Migration fence WAL atomicity".
+        Engine.WriteTickFence(scheduler.CurrentTickNumber);
+
+        // Flush the UoW to make all Deferred writes (including the tick fence publishes above) durable, then dispose. UoW.Flush in WAL mode calls
+        // WalManager.RequestFlush + WaitForDurable(currentLsn), where currentLsn is captured at the moment of the call — so it includes every publish made
+        // in WriteTickFence.
         try
         {
             _currentUow?.Flush();
@@ -1061,12 +1075,6 @@ public sealed class TyphonRuntime : IDisposable
             _currentUow?.Dispose();
             _currentUow = null;
         }
-
-        // #197: Tick fence — snapshot SV DirtyBitmaps, process shadow entries, update spatial indexes.
-        // This captures which entities were written this tick for next tick's change-filtered system inputs.
-        // Also fires NotifyViews for indexed field changes via ProcessShadowEntries, populating
-        // published View ring buffers with the complete set of change entries.
-        Engine.WriteTickFence(scheduler.CurrentTickNumber);
 
         // #199: Output phase — subscription deltas.
         // Runs AFTER WriteTickFence so that:

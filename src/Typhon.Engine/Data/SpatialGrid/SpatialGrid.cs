@@ -1,0 +1,187 @@
+using System;
+using System.Runtime.CompilerServices;
+using JetBrains.Annotations;
+
+namespace Typhon.Engine;
+
+/// <summary>
+/// Engine-wide coarse spatial grid. Owns the per-cell descriptor array and the pool holding each cell's cluster list.
+/// One instance per <see cref="DatabaseEngine"/>, configured once at startup via <see cref="DatabaseEngine.ConfigureSpatialGrid"/>.
+/// </summary>
+/// <remarks>
+/// <para>Phase 1+2 scope of issue #229: this grid exists, is wired into the spawn path for spatial archetypes, and is rebuilt at startup.
+/// It does <em>not</em> yet participate in migration (Phase 3) or per-cell R-Tree queries (#230).</para>
+/// <para>The grid stores only transient state. Nothing in <see cref="CellDescriptor"/> is persisted;
+/// <c>RebuildCellState</c> reconstructs everything from entity positions after a reopen.</para>
+/// </remarks>
+[PublicAPI]
+internal sealed unsafe class SpatialGrid
+{
+    private readonly SpatialGridConfig _config;
+    private readonly CellDescriptor[] _cells;
+    private readonly CellClusterPool _clusterPool;
+
+    public SpatialGrid(SpatialGridConfig config)
+    {
+        _config = config;
+        _cells = new CellDescriptor[config.CellCount];
+        // Mark all cells' head as "no segment yet". Zero would be a valid head, so we use -1.
+        for (int i = 0; i < _cells.Length; i++)
+        {
+            _cells[i].ClusterListHead = -1;
+        }
+        _clusterPool = new CellClusterPool(config.CellCount);
+    }
+
+    public ref readonly SpatialGridConfig Config => ref _config;
+
+    public int CellCount => _cells.Length;
+
+    internal CellClusterPool CellClusterPool => _clusterPool;
+
+    /// <summary>
+    /// Access a cell descriptor by cell key for read + write (callers bump <see cref="CellDescriptor.EntityCount"/>
+    /// and <see cref="CellDescriptor.ClusterCount"/> directly).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref CellDescriptor GetCell(int cellKey) => ref _cells[cellKey];
+
+    /// <summary>
+    /// Convert a world-space 2D point to a grid cell key. Points outside the configured bounds are clamped to the nearest valid cell — callers that care
+    /// about "out of bounds" should test bounds themselves before calling.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int WorldToCellKey(float worldX, float worldY)
+    {
+        // Guard against NaN / ±Infinity: relational comparisons with NaN return false on both sides,
+        // so the clamp below wouldn't catch a NaN — it would slip through as cellX=0 (or whatever the
+        // implementation-defined (int)NaN returns on the current runtime). Rather than produce a
+        // silently wrong cell key, throw so the caller fixes the upstream bug.
+        if (!float.IsFinite(worldX) || !float.IsFinite(worldY))
+        {
+            throw new ArgumentException(
+                $"WorldToCellKey received a non-finite coordinate: ({worldX}, {worldY}). " +
+                $"Position data is corrupted upstream — spatial grid cannot place a NaN/Infinity entity.");
+        }
+
+        // Convert to cell coordinates
+        int cellX = (int)MathF.Floor((worldX - _config.WorldMin.X) * _config.InverseCellSize);
+        int cellY = (int)MathF.Floor((worldY - _config.WorldMin.Y) * _config.InverseCellSize);
+
+        // Clamp to valid grid range
+        if (cellX < 0)
+        {
+            cellX = 0;
+        }
+        else if (cellX >= _config.GridWidth)
+        {
+            cellX = _config.GridWidth - 1;
+        }
+
+        if (cellY < 0)
+        {
+            cellY = 0;
+        }
+        else if (cellY >= _config.GridHeight)
+        {
+            cellY = _config.GridHeight - 1;
+        }
+
+        return ComputeCellKey(cellX, cellY);
+    }
+
+    /// <summary>
+    /// Extract a 2D centre point from a spatial field pointer. Supports <see cref="SpatialFieldType.AABB2F"/>
+    /// (centre of the AABB) and <see cref="SpatialFieldType.BSphere2F"/> (sphere centre). Other field types
+    /// are unsupported in Phase 1+2 and will throw at config time, so this method does not re-validate.
+    /// </summary>
+    /// <remarks>
+    /// Shared by <see cref="WorldToCellKeyFromSpatialField"/> and the cell-crossing detection loop in
+    /// <c>DatabaseEngine.ProcessClusterSpatialEntries</c> (issue #229 Phase 3). The detection path reuses the
+    /// extracted center for both the hysteresis bounds check and the fallback <see cref="WorldToCellKey"/> call,
+    /// avoiding a double read of the field memory.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void ReadSpatialCenter2D(byte* fieldPtr, SpatialFieldType fieldType, out float posX, out float posY)
+    {
+        if (fieldType == SpatialFieldType.AABB2F)
+        {
+            float minX = *(float*)fieldPtr;
+            float minY = *(float*)(fieldPtr + sizeof(float));
+            float maxX = *(float*)(fieldPtr + 2 * sizeof(float));
+            float maxY = *(float*)(fieldPtr + 3 * sizeof(float));
+            posX = (minX + maxX) * 0.5f;
+            posY = (minY + maxY) * 0.5f;
+            return;
+        }
+
+        // BSphere2F — CenterX, CenterY, Radius
+        posX = *(float*)fieldPtr;
+        posY = *(float*)(fieldPtr + sizeof(float));
+    }
+
+    /// <summary>
+    /// Extract a 2D centre point from a spatial field pointer and convert it to a cell key. Supports <see cref="SpatialFieldType.AABB2F"/> (centre of the AABB)
+    /// and <see cref="SpatialFieldType.BSphere2F"/> (sphere centre). Other field types are unsupported in Phase 1+2 and will throw at config time, so this
+    /// method does not re-validate.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int WorldToCellKeyFromSpatialField(byte* fieldPtr, SpatialFieldType fieldType)
+    {
+        ReadSpatialCenter2D(fieldPtr, fieldType, out float posX, out float posY);
+        return WorldToCellKey(posX, posY);
+    }
+
+    /// <summary>
+    /// Throws if <paramref name="fieldType"/> is not supported by Phase 1+2 of the spatial grid (only 2D float types are supported).
+    /// </summary>
+    public static void ValidateSupportedFieldType(SpatialFieldType fieldType, string archetypeName)
+    {
+        if (fieldType is SpatialFieldType.AABB2F or SpatialFieldType.BSphere2F)
+        {
+            return;
+        }
+        throw new NotSupportedException(
+            $"Spatial archetype '{archetypeName}' uses field type '{fieldType}'. " +
+            $"The spatial grid currently supports only 2D float spatial fields (AABB2F, BSphere2F). " +
+            $"3D/double variants are a planned follow-up.");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int ComputeCellKey(int cellX, int cellY)
+    {
+        if (SpatialConfig.UseMortonCellKeys)
+        {
+            return MortonKeys.Encode2D(cellX, cellY);
+        }
+#pragma warning disable CS0162 // Unreachable code — deliberate const-bool feature flag
+        return cellY * _config.GridWidth + cellX;
+#pragma warning restore CS0162
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public (int x, int y) CellKeyToCoords(int cellKey)
+    {
+        if (SpatialConfig.UseMortonCellKeys)
+        {
+            return MortonKeys.Decode2D(cellKey);
+        }
+#pragma warning disable CS0162 // Unreachable code — deliberate const-bool feature flag
+        return (cellKey % _config.GridWidth, cellKey / _config.GridWidth);
+#pragma warning restore CS0162
+    }
+
+    /// <summary>
+    /// Drop all cell state and reset the pool. Called by <c>RebuildCellState</c> before reconstructing
+    /// the mapping from entity positions.
+    /// </summary>
+    public void ResetCellState()
+    {
+        for (int i = 0; i < _cells.Length; i++)
+        {
+            _cells[i] = default;
+            _cells[i].ClusterListHead = -1;
+        }
+        _clusterPool.Reset();
+    }
+}

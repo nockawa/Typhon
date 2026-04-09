@@ -19,6 +19,9 @@ internal static unsafe partial class SpatialMaintainer
     [LoggerMessage(Level = LogLevel.Warning, Message = "Spatial escape rate {EscapeRate:P1} ({EscapeCount}/{DirtyCount}) for {ComponentName} exceeds 10% — consider increasing margin")]
     internal static partial void LogHighEscapeRate(ILogger logger, string componentName, double escapeRate, int escapeCount, int dirtyCount);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Cluster migration storm: {MigrationCount} migrations in a single tick for archetype id {ArchetypeId} ({DurationMs:F3} ms) — possible viewport warp, teleport event, or unphysical speed")]
+    internal static partial void LogHighMigrationRate(ILogger logger, int migrationCount, ushort archetypeId, double durationMs);
+
     // ── Public API ───────────────────────────────────────────────────────────
 
     /// <summary>

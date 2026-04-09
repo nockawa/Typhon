@@ -1,0 +1,214 @@
+using System.Numerics;
+using NUnit.Framework;
+using Typhon.Schema.Definition;
+
+namespace Typhon.Engine.Tests;
+
+[TestFixture]
+class SpatialGridTests
+{
+    private static SpatialGridConfig Config100 =>
+        new(new Vector2(0, 0), new Vector2(1000, 1000), cellSize: 100f);
+
+    [Test]
+    public void Config_Derived_Width_Height_Correct()
+    {
+        var cfg = Config100;
+        // 1000 / 100 = 10 cells per axis (world dims).
+        // Morton pads the key space to the next pow2 = 16, so descriptor array holds 256 slots.
+        Assert.That(cfg.GridWidth, Is.EqualTo(10));
+        Assert.That(cfg.GridHeight, Is.EqualTo(10));
+        Assert.That(cfg.KeySpaceDim, Is.EqualTo(16));
+        Assert.That(cfg.CellCount, Is.EqualTo(256));
+        Assert.That(cfg.InverseCellSize, Is.EqualTo(0.01f).Within(1e-6f));
+    }
+
+    [Test]
+    public void WorldToCellKey_Origin_IsCell0()
+    {
+        var grid = new SpatialGrid(Config100);
+        int key = grid.WorldToCellKey(0f, 0f);
+        var (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(0));
+        Assert.That(y, Is.EqualTo(0));
+    }
+
+    [Test]
+    public void WorldToCellKey_KnownCellCenters_MapCorrectly()
+    {
+        var grid = new SpatialGrid(Config100);
+
+        // Cell (5, 3) center is at (550, 350) in world space
+        int key = grid.WorldToCellKey(550f, 350f);
+        var (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(5));
+        Assert.That(y, Is.EqualTo(3));
+
+        // Cell (0, 0) — small offset
+        key = grid.WorldToCellKey(1f, 1f);
+        (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(0));
+        Assert.That(y, Is.EqualTo(0));
+
+        // Cell (0, 1) — just past Y boundary
+        key = grid.WorldToCellKey(50f, 100.001f);
+        (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(0));
+        Assert.That(y, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void WorldToCellKey_OutOfBounds_ClampsToValidCell()
+    {
+        var grid = new SpatialGrid(Config100);
+
+        // Negative world position clamps to cell (0,0)
+        int key = grid.WorldToCellKey(-500f, -500f);
+        var (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(0));
+        Assert.That(y, Is.EqualTo(0));
+
+        // Well past the max clamps to the last used cell on both axes. Morton pads to 16×16 but the
+        // world only uses 10×10, so the clamp targets cell (9, 9).
+        key = grid.WorldToCellKey(99999f, 99999f);
+        (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(9));
+        Assert.That(y, Is.EqualTo(9));
+    }
+
+    [Test]
+    public void CellKeyToCoords_RoundTrip_CoversFullGrid()
+    {
+        var grid = new SpatialGrid(Config100);
+        for (int y = 0; y < 10; y++)
+        {
+            for (int x = 0; x < 10; x++)
+            {
+                int key = grid.ComputeCellKey(x, y);
+                var (rx, ry) = grid.CellKeyToCoords(key);
+                Assert.That(rx, Is.EqualTo(x));
+                Assert.That(ry, Is.EqualTo(y));
+            }
+        }
+    }
+
+    [Test]
+    public void GetCell_ReturnsMutableReference()
+    {
+        var grid = new SpatialGrid(Config100);
+        int key = grid.WorldToCellKey(150f, 250f);
+        ref var cell = ref grid.GetCell(key);
+        Assert.That(cell.ClusterListHead, Is.EqualTo(-1));
+        Assert.That(cell.ClusterCount, Is.EqualTo(0));
+        Assert.That(cell.EntityCount, Is.EqualTo(0));
+
+        cell.EntityCount = 42;
+        Assert.That(grid.GetCell(key).EntityCount, Is.EqualTo(42));
+    }
+
+    [Test]
+    public void ResetCellState_RestoresInitialState()
+    {
+        var grid = new SpatialGrid(Config100);
+        int key = grid.WorldToCellKey(150f, 250f);
+        ref var cell = ref grid.GetCell(key);
+        cell.EntityCount = 7;
+        grid.CellClusterPool.AddCluster(ref cell, key, clusterChunkId: 1);
+
+        grid.ResetCellState();
+
+        ref var after = ref grid.GetCell(key);
+        Assert.That(after.EntityCount, Is.EqualTo(0));
+        Assert.That(after.ClusterCount, Is.EqualTo(0));
+        Assert.That(after.ClusterListHead, Is.EqualTo(-1));
+    }
+
+    [Test]
+    public unsafe void WorldToCellKeyFromSpatialField_AABB2F_UsesCenter()
+    {
+        var grid = new SpatialGrid(Config100);
+        // AABB2F layout: MinX, MinY, MaxX, MaxY (4 floats, 16 bytes)
+        float* fieldData = stackalloc float[4];
+        fieldData[0] = 100f;  // MinX
+        fieldData[1] = 200f;  // MinY
+        fieldData[2] = 200f;  // MaxX (center = 150)
+        fieldData[3] = 400f;  // MaxY (center = 300)
+
+        int key = grid.WorldToCellKeyFromSpatialField((byte*)fieldData, SpatialFieldType.AABB2F);
+        var (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(1));  // 150 / 100 = 1
+        Assert.That(y, Is.EqualTo(3));  // 300 / 100 = 3
+    }
+
+    [Test]
+    public unsafe void WorldToCellKeyFromSpatialField_BSphere2F_UsesCenter()
+    {
+        var grid = new SpatialGrid(Config100);
+        // BSphere2F layout: CenterX, CenterY, Radius
+        float* fieldData = stackalloc float[3];
+        fieldData[0] = 550f;  // CenterX
+        fieldData[1] = 750f;  // CenterY
+        fieldData[2] = 25f;   // Radius (irrelevant)
+
+        int key = grid.WorldToCellKeyFromSpatialField((byte*)fieldData, SpatialFieldType.BSphere2F);
+        var (x, y) = grid.CellKeyToCoords(key);
+        Assert.That(x, Is.EqualTo(5));
+        Assert.That(y, Is.EqualTo(7));
+    }
+
+    [Test]
+    public void ValidateSupportedFieldType_Throws_On3D()
+    {
+        Assert.Throws<System.NotSupportedException>(
+            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB3F, "MyArch"));
+        Assert.Throws<System.NotSupportedException>(
+            () => SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB2D, "MyArch"));
+    }
+
+    [Test]
+    public void ValidateSupportedFieldType_Passes_On2DFloat()
+    {
+        SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.AABB2F, "MyArch");
+        SpatialGrid.ValidateSupportedFieldType(SpatialFieldType.BSphere2F, "MyArch");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Guards added as code-review fixes
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void WorldToCellKey_NaN_Throws()
+    {
+        var grid = new SpatialGrid(Config100);
+        Assert.Throws<System.ArgumentException>(() => grid.WorldToCellKey(float.NaN, 0f));
+        Assert.Throws<System.ArgumentException>(() => grid.WorldToCellKey(0f, float.NaN));
+        Assert.Throws<System.ArgumentException>(() => grid.WorldToCellKey(float.NaN, float.NaN));
+    }
+
+    [Test]
+    public void WorldToCellKey_Infinity_Throws()
+    {
+        var grid = new SpatialGrid(Config100);
+        Assert.Throws<System.ArgumentException>(() => grid.WorldToCellKey(float.PositiveInfinity, 0f));
+        Assert.Throws<System.ArgumentException>(() => grid.WorldToCellKey(0f, float.PositiveInfinity));
+        Assert.Throws<System.ArgumentException>(() => grid.WorldToCellKey(float.NegativeInfinity, 0f));
+        Assert.Throws<System.ArgumentException>(() => grid.WorldToCellKey(0f, float.NegativeInfinity));
+    }
+
+    [Test]
+    public void SpatialGridConfig_KeySpaceDim_OverflowsInt32Morton_Throws()
+    {
+        // 4M cells per axis × 1-unit cell → KeySpaceDim would be NextPow2(4M) = 4 194 304 > 32 768.
+        Assert.Throws<System.ArgumentOutOfRangeException>(() =>
+            new SpatialGridConfig(new Vector2(0, 0), new Vector2(4_000_000, 4_000_000), cellSize: 1f));
+    }
+
+    [Test]
+    public void SpatialGridConfig_KeySpaceDim_AtLimit_Succeeds()
+    {
+        // 32 768 × 32 768 grid (exact limit). NextPow2(32768) == 32768.
+        // 32 768 cells × 1-unit cell = 32 768-unit world.
+        var cfg = new SpatialGridConfig(new Vector2(0, 0), new Vector2(32_768, 32_768), cellSize: 1f);
+        Assert.That(cfg.KeySpaceDim, Is.EqualTo(32_768));
+    }
+}

@@ -18,7 +18,15 @@ namespace Typhon.Engine;
 /// 8+8C    8 × N             EntityKeys[N] (long per slot)
 /// ...     sizeof(Comp₀)×N   Component₀[N] (SoA array)
 /// ...     sizeof(Compᵢ)×N   Componentᵢ[N] (SoA array)
+/// ...     4 × N             IndexElementIds[0][N] (one section per AllowMultiple indexed field)
+/// ...     4 × N             IndexElementIds[1][N]
+/// ...     4 × N             IndexElementIds[M-1][N]
 /// </code>
+/// <para>The IndexElementIds tail section stores, per entity, the <c>elementId</c> returned by <see cref="BTreeBase{TStore}.Add"/> when a field value was
+/// inserted into the cluster's per-archetype B+Tree. It is used by the destroy and migration paths to call <see cref="BTreeBase{TStore}.RemoveValue"/>
+/// with the correct elementId, so removal only wipes the specific <c>(key, clusterLocation)</c> entry rather than the entire buffer at the key (which would
+/// corrupt siblings sharing the same key value on a non-unique index). Only fields marked <c>AllowMultiple = true</c> consume a section — archetypes
+/// without any multi-value indexed fields have a zero-byte tail.</para>
 /// </remarks>
 internal sealed class ArchetypeClusterInfo
 {
@@ -56,8 +64,21 @@ internal sealed class ArchetypeClusterInfo
     /// <summary>Bitmask of Transient component slots. Stored here for WAL recovery access (which has layout but not ArchetypeMetadata).</summary>
     internal readonly ushort TransientSlotMask;
 
-    private ArchetypeClusterInfo(int clusterSize, int componentCount, int[] componentOffsets, int[] componentSizes,
-        sbyte[] slotToVersionedIndex, ushort transientSlotMask)
+    /// <summary>
+    /// Base byte offset (from cluster base) of the tail section holding elementId arrays for AllowMultiple indexed fields.
+    /// Each of <see cref="MultipleIndexedFieldCount"/> sections occupies <c>ClusterSize × sizeof(int)</c> bytes and is laid out sequentially starting at this
+    /// offset. Use <see cref="IndexElementIdOffset"/> to compute the per-entity slot address.
+    /// </summary>
+    public readonly int IndexElementIdsBaseOffset;
+
+    /// <summary>
+    /// Number of AllowMultiple indexed fields in this archetype (flat across all component slots) — determines the total size of the elementId tail section.
+    /// Zero when the archetype has no multi-value indexed fields (no tail).
+    /// </summary>
+    public readonly int MultipleIndexedFieldCount;
+
+    private ArchetypeClusterInfo(int clusterSize, int componentCount, int[] componentOffsets, int[] componentSizes, sbyte[] slotToVersionedIndex, 
+        ushort transientSlotMask, int indexElementIdsBaseOffset, int multipleIndexedFieldCount)
     {
         ClusterSize = clusterSize;
         ComponentCount = componentCount;
@@ -65,14 +86,15 @@ internal sealed class ArchetypeClusterInfo
         _componentSizes = componentSizes;
         SlotToVersionedIndex = slotToVersionedIndex;
         TransientSlotMask = transientSlotMask;
+        IndexElementIdsBaseOffset = indexElementIdsBaseOffset;
+        MultipleIndexedFieldCount = multipleIndexedFieldCount;
 
         HeaderSize = 8 + 8 * componentCount;
         EntityIdsOffset = HeaderSize;
         FullMask = clusterSize == 64 ? ulong.MaxValue : (1UL << clusterSize) - 1;
 
-        // Stride = offset past the last component array
-        int lastSlot = componentCount - 1;
-        ClusterStride = componentCount > 0 ? componentOffsets[lastSlot] + componentSizes[lastSlot] * clusterSize : HeaderSize + 8 * clusterSize;
+        // Stride = offset past the elementId tail (or past the last component array when M=0)
+        ClusterStride = indexElementIdsBaseOffset + multipleIndexedFieldCount * clusterSize * sizeof(int);
     }
 
     /// <summary>Byte offset of component data for the given slot from the cluster base.</summary>
@@ -88,14 +110,30 @@ internal sealed class ArchetypeClusterInfo
     public int EnabledBitsOffset(int slot) => 8 + slot * 8;
 
     /// <summary>
+    /// Byte offset (from the cluster base) of the elementId slot for a given (multi-index field, cluster slot) pair.
+    /// Valid only when the entity at <paramref name="slotIndex"/> is occupied and the field is <c>AllowMultiple</c>.
+    /// </summary>
+    /// <param name="multiFieldIndex">Sequential index of the AllowMultiple field (0..<see cref="MultipleIndexedFieldCount"/>-1).</param>
+    /// <param name="slotIndex">Slot within the cluster (0..<see cref="ClusterSize"/>-1).</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public int IndexElementIdOffset(int multiFieldIndex, int slotIndex) => IndexElementIdsBaseOffset + multiFieldIndex * ClusterSize * sizeof(int) + slotIndex * sizeof(int);
+
+    /// <summary>
     /// Compute the optimal cluster layout for an archetype with the given component sizes.
     /// </summary>
     /// <param name="componentCount">Number of component slots (1..16).</param>
     /// <param name="componentSizes">Per-slot component data sizes in bytes (pure struct size, no overhead).</param>
+    /// <param name="multipleIndexedFieldCount">
+    /// Flat count of <c>AllowMultiple == true</c> indexed fields across all component slots in this archetype.
+    /// Each field reserves <c>ClusterSize × sizeof(int)</c> bytes in the cluster tail for per-entity elementId storage, used by the destroy/migration path to
+    /// call <see cref="BTreeBase{TStore}.RemoveValue"/>.
+    /// Pass 0 when the archetype has no multi-value indexed fields (no tail reserved).
+    /// </param>
     /// <param name="versionedSlotMask">Bitmask of Versioned component slots (0 for pure-SV archetypes).</param>
     /// <returns>A fully initialized <see cref="ArchetypeClusterInfo"/>.</returns>
     /// <exception cref="InvalidOperationException">Thrown if components are too large to fit even N=8 in one page.</exception>
-    public static ArchetypeClusterInfo Compute(int componentCount, ReadOnlySpan<int> componentSizes, ushort versionedSlotMask = 0, ushort transientSlotMask = 0)
+    public static ArchetypeClusterInfo Compute(int componentCount, ReadOnlySpan<int> componentSizes, int multipleIndexedFieldCount = 0, 
+        ushort versionedSlotMask = 0, ushort transientSlotMask = 0)
     {
         int fixedHeader = 8 + 8 * componentCount; // OccupancyBits + EnabledBits[C]
         int perEntitySize = 8; // EntityKey (long)
@@ -103,6 +141,8 @@ internal sealed class ArchetypeClusterInfo
         {
             perEntitySize += componentSizes[i];
         }
+        // Each AllowMultiple indexed field reserves sizeof(int) bytes per entity in the tail.
+        perEntitySize += multipleIndexedFieldCount * sizeof(int);
 
         int bestN = SelectClusterSize(fixedHeader, perEntitySize);
 
@@ -116,6 +156,9 @@ internal sealed class ArchetypeClusterInfo
             sizes[i] = componentSizes[i];
             offset += componentSizes[i] * bestN;
         }
+
+        // Elementid tail begins past the last component SoA block (or past EntityKeys when componentCount == 0).
+        int indexElementIdsBaseOffset = offset;
 
         // Build slot-to-versioned-index mapping
         sbyte[] slotToVersionedIndex = null;
@@ -136,7 +179,8 @@ internal sealed class ArchetypeClusterInfo
             }
         }
 
-        return new ArchetypeClusterInfo(bestN, componentCount, offsets, sizes, slotToVersionedIndex, transientSlotMask);
+        return new ArchetypeClusterInfo(bestN, componentCount, offsets, sizes, slotToVersionedIndex, transientSlotMask, indexElementIdsBaseOffset, 
+            multipleIndexedFieldCount);
     }
 
     /// <summary>

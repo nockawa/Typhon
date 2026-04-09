@@ -1163,6 +1163,14 @@ public unsafe partial class Transaction
         public int TrIdxAccessorTotal;
         public ChunkAccessor<TransientStore>[] TrCompAccessors;
         public ChunkAccessor<TransientStore>[] TrIdxAccessors;
+
+        // Issue #229 Phase 1+2: cached spatial-slot fields used by the spawn hot path to route through ClaimSlotInCell without chasing pointers per entity.
+        // Populated once per archetype switch in SetupSpawnAccessors. SpatialSlotIndexCached == -1 means either not spatial or no grid configured.
+        public SpatialGrid SpatialGridCached;
+        public int SpatialSlotIndexCached;
+        public int SpatialComponentOverheadCached;
+        public int SpatialFieldOffsetCached;
+        public SpatialFieldType SpatialFieldTypeCached;
     }
 
     /// <summary>
@@ -1260,10 +1268,37 @@ public unsafe partial class Transaction
                     byte* clusterBase; // Primary segment base (has metadata: OccupancyBits, EnabledBits, EntityIds)
                     byte* clusterTransientBase = null; // TransientStore base (only for mixed archetypes)
 
+                    // Issue #229 Phase 1+2: when the engine has a configured SpatialGrid AND this archetype has a spatial field, route the claim through
+                    // ClaimSlotInCell so the new entity lands in a cluster belonging to its spatial cell. SpawnContext caches the spatial-slot routing info
+                    // once per archetype switch (see SetupSpawnAccessors) so this hot branch is a single field read.
+                    int spatialSlotIdx = ctx.SpatialSlotIndexCached;
+                    bool useCellClaim = spatialSlotIdx >= 0;
+                    int computedCellKey = -1;
+                    if (useCellClaim)
+                    {
+                        int spatialSrcChunkId = entry.Loc[spatialSlotIdx];
+                        if (spatialSrcChunkId == 0)
+                        {
+                            throw new InvalidOperationException(
+                                $"Spatial archetype must provide its spatial component at spawn time (slot {spatialSlotIdx} is missing).");
+                        }
+                        ref var spatialSrcAccessor = ref ctx.ClusterSrcAccessors[spatialSlotIdx];
+                        byte* spatialSrcAddr = spatialSrcAccessor.GetChunkAddress(spatialSrcChunkId);
+                        byte* spatialFieldPtr = spatialSrcAddr + ctx.SpatialComponentOverheadCached + ctx.SpatialFieldOffsetCached;
+                        computedCellKey = ctx.SpatialGridCached.WorldToCellKeyFromSpatialField(spatialFieldPtr, ctx.SpatialFieldTypeCached);
+                    }
+
                     if (ctx.ClusterState.ClusterSegment != null)
                     {
                         // Mixed or pure-SV/V: PersistentStore is primary
-                        (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterAccessor, _changeSet);
+                        if (useCellClaim)
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlotInCell(computedCellKey, ref ctx.ClusterAccessor, _changeSet, ctx.SpatialGridCached);
+                        }
+                        else
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterAccessor, _changeSet);
+                        }
                         clusterBase = ctx.ClusterAccessor.GetChunkAddress(clusterChunkId, true);
                         if (ctx.HasClusterTransientAccessor)
                         {
@@ -1273,7 +1308,14 @@ public unsafe partial class Transaction
                     else
                     {
                         // Pure-Transient: TransientStore is primary
-                        (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterTransientAccessor);
+                        if (useCellClaim)
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlotInCell(computedCellKey, ref ctx.ClusterTransientAccessor, ctx.SpatialGridCached);
+                        }
+                        else
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterTransientAccessor);
+                        }
                         clusterBase = ctx.ClusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
                     }
 
@@ -1365,7 +1407,15 @@ public unsafe partial class Transaction
                             {
                                 ref var field = ref ixSlot.Fields[fi];
                                 byte* fieldPtr = compBase + field.FieldOffset;
-                                field.Index.Add(fieldPtr, clusterLocation, ref ctx.ClusterIdxAccessor);
+                                int elementId = field.Index.Add(fieldPtr, clusterLocation, ref ctx.ClusterIdxAccessor);
+                                // For AllowMultiple fields, record elementId in the cluster tail so destroy/migration can call RemoveValue(key,
+                                // elementId, value) — removes only this entity's entry, not the entire buffer at the key (which would wipe all siblings on
+                                // a non-unique index).
+                                // Issue #229 Phase 3.
+                                if (field.AllowMultiple)
+                                {
+                                    *(int*)(clusterBase + layout.IndexElementIdOffset(field.MultiFieldIndex, slotIdx)) = elementId;
+                                }
                                 field.ZoneMap?.Widen(clusterChunkId, fieldPtr);
 
                                 // Notify views of creation (isCreation flag so incremental views detect the new entity)
@@ -1750,6 +1800,27 @@ public unsafe partial class Transaction
                 ctx.ClusterSpatialBpAccessor = ctx.ClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
                 ctx.HasClusterSpatialAccessors = true;
             }
+
+            // Issue #229 Phase 1+2: cache spatial-cell routing info once per archetype. The hot spawn path reads SpatialSlotIndexCached once per entity to
+            // decide between ClaimSlot and ClaimSlotInCell — no per-entity pointer chasing through EngineState → table → overhead.
+            ctx.SpatialGridCached = _dbe.SpatialGrid;
+            if (ctx.SpatialGridCached != null && ctx.ClusterState.SpatialSlot.Tree != null)
+            {
+                ref readonly var ss = ref ctx.ClusterState.SpatialSlot;
+                ctx.SpatialSlotIndexCached = ss.Slot;
+                ctx.SpatialComponentOverheadCached = ctx.EngineState.SlotToComponentTable[ss.Slot].ComponentOverhead;
+                ctx.SpatialFieldOffsetCached = ss.FieldOffset;
+                ctx.SpatialFieldTypeCached = ss.FieldInfo.FieldType;
+            }
+            else
+            {
+                ctx.SpatialSlotIndexCached = -1;
+            }
+        }
+        else
+        {
+            ctx.SpatialSlotIndexCached = -1;
+            ctx.SpatialGridCached = null;
         }
 
         // Build SV indexed slot accessors for this archetype (Transient handled separately below).
@@ -2091,12 +2162,25 @@ public unsafe partial class Transaction
                                     ref var ixSlot = ref ixSlots[s];
                                     int compSize = layout.ComponentSize(ixSlot.Slot);
                                     byte* compBase = clusterBase + layout.ComponentOffset(ixSlot.Slot) + slotIndex * compSize;
+                                    int destroyClusterLocation = clusterChunkId * 64 + slotIndex;
                                     for (int fi = 0; fi < ixSlot.Fields.Length; fi++)
                                     {
                                         ref var field = ref ixSlot.Fields[fi];
                                         byte* fieldPtr = compBase + field.FieldOffset;
                                         var key = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
-                                        field.Index.Remove(&key, out _, ref destroyClusterIdxAccessor);
+                                        // Non-unique index: read the per-entity elementId from the cluster tail and call RemoveValue so only this entity's
+                                        // specific (key, clusterLocation) entry is removed — Remove(key) would wipe the entire buffer at the key and corrupt
+                                        // sibling entities sharing the same field value. Issue #229 Phase 3.
+                                        // Regression test: ClusterIndex_NonUniqueField_DestroyOneEntity_PreservesSiblingsInIndex.
+                                        if (field.AllowMultiple)
+                                        {
+                                            int elementId = *(int*)(clusterBase + layout.IndexElementIdOffset(field.MultiFieldIndex, slotIndex));
+                                            field.Index.RemoveValue(&key, elementId, destroyClusterLocation, ref destroyClusterIdxAccessor);
+                                        }
+                                        else
+                                        {
+                                            field.Index.Remove(&key, out _, ref destroyClusterIdxAccessor);
+                                        }
 
                                         // Notify views of deletion
                                         var destroyTable = engineState.SlotToComponentTable[ixSlot.Slot];
@@ -2131,11 +2215,11 @@ public unsafe partial class Transaction
 
                         if (hasClusterAccessor)
                         {
-                            destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet);
+                            destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet, _dbe.SpatialGrid);
                         }
                         else if (hasDestroyTransientClusterAccessor)
                         {
-                            destroyClusterState.ReleaseSlot(ref destroyTransientClusterAccessor, clusterChunkId, slotIndex);
+                            destroyClusterState.ReleaseSlot(ref destroyTransientClusterAccessor, clusterChunkId, slotIndex, _dbe.SpatialGrid);
                         }
                     }
 
