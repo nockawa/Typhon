@@ -1,9 +1,3 @@
-# Godot build artifacts
+# Godot 4+ specific ignores
 .godot/
-
-# Godot engine binaries (local installation)
-godot/
-
-# IDE
-.vs/
-*.user
+/android/

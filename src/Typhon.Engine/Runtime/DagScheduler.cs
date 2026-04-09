@@ -50,7 +50,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly CacheLinePaddedInt[] _nextChunk;
     private readonly CacheLinePaddedInt[] _remainingChunks;
     private readonly CacheLinePaddedInt[] _remainingDeps;
-    private readonly int[] _isReady;
+    private readonly CacheLinePaddedInt[] _isReady;
     private readonly bool[] _systemFailed;
 
     // Reset templates (immutable after construction)
@@ -237,7 +237,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         _nextChunk = new CacheLinePaddedInt[_systemCount];
         _remainingChunks = new CacheLinePaddedInt[_systemCount];
         _remainingDeps = new CacheLinePaddedInt[_systemCount];
-        _isReady = new int[_systemCount];
+        _isReady = new CacheLinePaddedInt[_systemCount];
         _systemFailed = new bool[_systemCount];
 
         // Build reset templates
@@ -717,7 +717,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     {
         for (var i = 0; i < _systemCount; i++)
         {
-            if (_isReady[i] != 1)
+            if (_isReady[i].Value != 1)
             {
                 continue;
             }
@@ -761,7 +761,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private void ProcessCallbackOrQuery(int sysIdx, int workerId, bool trackUtilization)
     {
         // Atomic claim: only one worker wins
-        if (Interlocked.CompareExchange(ref _isReady[sysIdx], 0, 1) != 1)
+        if (Interlocked.CompareExchange(ref _isReady[sysIdx].Value, 0, 1) != 1)
         {
             return;
         }
@@ -1102,7 +1102,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void MarkSystemReady(int sysIdx) => _isReady[sysIdx] = 1;
+    private void MarkSystemReady(int sysIdx) => _isReady[sysIdx].Value = 1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void RecordFirstChunkGrab(int sysIdx, long timestamp) =>
@@ -1119,7 +1119,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             _nextChunk[i].Value = 0;
             _remainingChunks[i].Value = _templateChunks[i];
             _remainingDeps[i].Value = _templateDeps[i];
-            _isReady[i] = 0;
+            _isReady[i].Value = 0;
             _currentTickSystemMetrics[i] = default;
         }
 

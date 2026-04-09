@@ -923,27 +923,19 @@ public sealed class TyphonRuntime : IDisposable
         // Get this worker's EntityAccessor — direct array lookup, zero dictionary overhead
         var workerAccessor = pta.GetWorkerAccessor(workerId);
 
-        try
+        var ctx = new TickContext
         {
-            var ctx = new TickContext
-            {
-                TickNumber = Scheduler.CurrentTickNumber,
-                DeltaTime = _currentDeltaTime,
-                Accessor = workerAccessor,
-                CreateSideTransaction = _createSideTxDelegate,
-                Entities = entities,
-                ConsumedQueues = null,
-                StartClusterIndex = clusterStart,
-                EndClusterIndex = clusterEnd
-            };
+            TickNumber = Scheduler.CurrentTickNumber,
+            DeltaTime = _currentDeltaTime,
+            Accessor = workerAccessor,
+            CreateSideTransaction = _createSideTxDelegate,
+            Entities = entities,
+            ConsumedQueues = null,
+            StartClusterIndex = clusterStart,
+            EndClusterIndex = clusterEnd
+        };
 
-            Scheduler.Systems[sysIdx].CallbackAction(ctx);
-        }
-        finally
-        {
-            // Epoch cleanup: flush dirty state and advance epoch on this worker thread
-            pta.FlushWorker(workerId);
-        }
+        Scheduler.Systems[sysIdx].CallbackAction(ctx);
     }
 
     /// <summary>Paths 3 & 4: Versioned fallback — per-chunk Transaction (original path).</summary>
@@ -1002,6 +994,17 @@ public sealed class TyphonRuntime : IDisposable
     /// </summary>
     private void OnParallelQueryCleanup(int sysIdx)
     {
+        // Batch epoch flush: flush all workers that participated (once per system, not per chunk).
+        // This avoids N×chunks epoch refreshes and reduces global EpochManager contention.
+        var pta = _parallelAccessors[sysIdx];
+        if (pta != null)
+        {
+            for (int w = 0; w < Scheduler.WorkerCount; w++)
+            {
+                pta.FlushWorker(w);
+            }
+        }
+
         _parallelEntityLists[sysIdx].Return();
         _parallelEntityLists[sysIdx] = default;
     }

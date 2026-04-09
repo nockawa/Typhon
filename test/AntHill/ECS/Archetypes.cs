@@ -1,7 +1,7 @@
 using Typhon.Engine;
 using Typhon.Schema.Definition;
 
-namespace AntHill.ECS;
+namespace AntHill;
 
 [Archetype(100)]
 partial class Ant : Archetype<Ant>

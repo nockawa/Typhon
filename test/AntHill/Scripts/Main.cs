@@ -1,7 +1,6 @@
-using AntHill.Engine;
 using Godot;
 
-namespace AntHill.Scripts;
+namespace AntHill;
 
 public partial class Main : Node2D
 {
@@ -15,7 +14,7 @@ public partial class Main : Node2D
         _bridge = new TyphonBridge();
         _bridge.Initialize();
 
-        GD.Print($"AntHill: Spawned {TyphonBridge.AntCount:N0} ants. Starting runtime...");
+        GD.Print($"AntHill: Spawned {TyphonBridge.AntCount:N0} ants, WorldSize={TyphonBridge.WorldSize}. Starting runtime...");
 
         _antRenderer = GetNode<AntRenderer>("AntRenderer");
         _antRenderer.SetBridge(_bridge.RenderBridge);

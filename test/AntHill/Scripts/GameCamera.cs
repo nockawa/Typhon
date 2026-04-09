@@ -1,6 +1,6 @@
 using Godot;
 
-namespace AntHill.Scripts;
+namespace AntHill;
 
 public partial class GameCamera : Camera2D
 {

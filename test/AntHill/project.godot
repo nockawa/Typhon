@@ -11,18 +11,18 @@ config_version=5
 [application]
 
 config/name="AntHill"
-run/main_scene="res://Scenes/Main.tscn"
-config/features=PackedStringArray("4.6", "C#")
-
-[display]
-
-window/size/viewport_width=1280
-window/size/viewport_height=720
-
-[rendering]
-
-environment/defaults/default_clear_color=Color(0.1, 0.1, 0.15, 1)
+run/main_scene="uid://c6165nwv08y0v"
+config/features=PackedStringArray("4.6", "C#", "Forward Plus")
+config/icon="res://icon.svg"
 
 [dotnet]
 
 project/assembly_name="AntHill"
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+rendering_device/driver.windows="d3d12"
