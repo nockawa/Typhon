@@ -43,7 +43,8 @@ class PerCellRTreeTests : TestBase<PerCellRTreeTests>
         var results = new List<long>();
         using var epoch = EpochGuard.Enter(dbe.EpochManager);
         var query = dbe.ClusterSpatialQuery<ClCohUnit>();
-        var enumerator = query.AABB(minX, minY, maxX, maxY, categoryMask);
+        var box = new AABB2F { MinX = minX, MinY = minY, MaxX = maxX, MaxY = maxY };
+        var enumerator = query.AABB<AABB2F>(in box, categoryMask);
         try
         {
             while (enumerator.MoveNext())
@@ -291,4 +292,109 @@ class PerCellRTreeTests : TestBase<PerCellRTreeTests>
     // RebuildClusterAabbs directly) and ClusterSpatialCoherenceTests (which tests the full
     // persist-then-reopen flow for the spatial grid). Duplicating that here would only add
     // fixture wiring without new coverage.
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Phase 2.5: Generic ClusterSpatialQuery<TArch>.AABB<TBox> signature
+    //
+    // These tests exercise the new generic entry point directly (not via the CollectQueryResults
+    // helper) to ensure the ISpatialBox + tier-match design is wired correctly at the public API
+    // layer. The helper-based tests above provide coverage of the enumeration semantics; these
+    // tests focus on the generic dispatch and error semantics.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Happy path: the new generic signature <c>AABB&lt;AABB2F&gt;(in box, mask)</c> returns the same
+    /// results as the old scalar signature did in Phase 1/2. This test calls the generic method
+    /// directly (bypassing the <see cref="CollectQueryResults"/> helper) so the new-style call shape
+    /// is explicit in the test source.
+    /// </summary>
+    [Test]
+    public void AABB_GenericAABB2F_MatchesArchetype_ReturnsEntitiesInBox()
+    {
+        using var dbe = SetupEngineWithGrid();
+
+        EntityId idInside, idOutside;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            idInside = tx.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(25f, 25f)));
+            idOutside = tx.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(500f, 500f)));
+            tx.Commit();
+        }
+
+        // Direct generic call — the point of the test is the explicit AABB2F parameter.
+        var results = new List<long>();
+        using (var epoch = EpochGuard.Enter(dbe.EpochManager))
+        {
+            var query = dbe.ClusterSpatialQuery<ClCohUnit>();
+            var box = new AABB2F { MinX = 0f, MinY = 0f, MaxX = 100f, MaxY = 100f };
+            var enumerator = query.AABB<AABB2F>(in box);
+            try
+            {
+                while (enumerator.MoveNext())
+                {
+                    results.Add(enumerator.Current.EntityId);
+                }
+            }
+            finally
+            {
+                enumerator.Dispose();
+            }
+        }
+
+        Assert.That(results, Is.EquivalentTo(new[] { (long)idInside.RawValue }),
+            "new generic signature must return only the in-box entity");
+        Assert.That(results, Does.Not.Contain((long)idOutside.RawValue),
+            "new generic signature must exclude the out-of-box entity");
+    }
+
+    /// <summary>
+    /// Cross-tier rejection: passing an <c>AABB3F</c> (Tier3F) query against a 2D f32 archetype
+    /// (Tier2F) must throw <see cref="InvalidOperationException"/> with a message that identifies both
+    /// tiers. Proves the <c>queryTier != storageTier</c> check fires before any dispatch branch
+    /// is reached, and surfaces a diagnosable error to the caller.
+    /// </summary>
+    /// <remarks>
+    /// Note: the 3D NotSupportedException branches in the dispatch switch are unreachable from a test
+    /// today because <c>SpatialGrid.ValidateSupportedFieldType</c> rejects 3D field types at
+    /// <c>ConfigureSpatialGrid</c> time — there is no way to set up a 3D archetype with the grid
+    /// enabled. Phase 3 will extend the grid to 3D and unblock that test path; for now, the tier-mismatch
+    /// check is the only reachable error surface.
+    /// </remarks>
+    [Test]
+    public void AABB_GenericAABB3F_Against2DArchetype_ThrowsTierMismatch()
+    {
+        using var dbe = SetupEngineWithGrid();
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(50f, 50f)));
+            tx.Commit();
+        }
+
+        InvalidOperationException caught = null;
+        using (var epoch = EpochGuard.Enter(dbe.EpochManager))
+        {
+            var query = dbe.ClusterSpatialQuery<ClCohUnit>();
+            var box3F = new AABB3F { MinX = 0f, MinY = 0f, MinZ = 0f, MaxX = 100f, MaxY = 100f, MaxZ = 100f };
+            try
+            {
+                _ = query.AABB<AABB3F>(in box3F);
+                Assert.Fail("expected InvalidOperationException from tier mismatch, but no exception was thrown");
+            }
+            catch (InvalidOperationException ex)
+            {
+                caught = ex;
+            }
+        }
+
+        Assert.That(caught, Is.Not.Null);
+        Assert.That(caught.Message, Does.Contain("Tier2F"),
+            "error message should name the archetype's storage tier");
+        Assert.That(caught.Message, Does.Contain("Tier3F"),
+            "error message should name the query's tier");
+        Assert.That(caught.Message, Does.Contain("AABB3F"),
+            "error message should name the concrete TBox that caused the mismatch");
+        Assert.That(caught.Message, Does.Contain("ClCohUnit"),
+            "error message should name the archetype for quick diagnosis");
+    }
 }

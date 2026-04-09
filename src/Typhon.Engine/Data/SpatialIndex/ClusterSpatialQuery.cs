@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -36,19 +37,29 @@ public readonly ref struct ClusterSpatialQuery<TArch> where TArch : Archetype<TA
     }
 
     /// <summary>
-    /// Query all entities in this archetype whose spatial bounds intersect the axis-aligned box
-    /// <c>[minX..maxX] × [minY..maxY]</c>.
+    /// Query all entities in this archetype whose spatial bounds intersect the axis-aligned box carried by <paramref name="box"/>. The generic type parameter
+    /// <typeparamref name="TBox"/> determines the dimensionality and precision of the query region; it must match the archetype's cluster storage tier or
+    /// an <see cref="InvalidOperationException"/> is thrown (issue #230 Phase 2.5).
     /// </summary>
-    /// <param name="minX">Query AABB minimum X in world units.</param>
-    /// <param name="minY">Query AABB minimum Y in world units.</param>
-    /// <param name="maxX">Query AABB maximum X in world units.</param>
-    /// <param name="maxY">Query AABB maximum Y in world units.</param>
+    /// <typeparam name="TBox">
+    /// One of <see cref="AABB2F"/>, <see cref="AABB3F"/>, <see cref="AABB2D"/>, <see cref="AABB3D"/>. The generic constraint narrows
+    /// to <see cref="ISpatialBox"/>, and the JIT specializes this method per concrete <typeparamref name="TBox"/> so each monomorphized version contains only
+    /// the code path for its concrete type (all other dispatch branches are dead-code-eliminated at specialization time).
+    /// </typeparam>
+    /// <param name="box">Query region, passed by <c>in</c> to avoid a defensive copy.</param>
     /// <param name="categoryMask">
     /// Category bitmask; a cluster is skipped if its union mask does not intersect. Pass
     /// <see cref="uint.MaxValue"/> (default) to accept every cluster.
     /// </param>
     /// <returns>A zero-allocation enumerator suitable for <c>foreach</c>.</returns>
-    public AABBEnumerator AABB(float minX, float minY, float maxX, float maxY, uint categoryMask = uint.MaxValue)
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the archetype has no spatial index, or when <typeparamref name="TBox"/>'s tier does not match the archetype's cluster storage tier.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// Thrown for 3D and f64 <typeparamref name="TBox"/> variants until Phase 3 of issue #230 implements the internal storage fanout. The Phase 2.5 refactor
+    /// locks in the generic signature while the 2D f32 code path is the only one that actually executes — Phase 3 will fill in the currently-throwing branches.
+    /// </exception>
+    public AABBEnumerator AABB<TBox>(in TBox box, uint categoryMask = uint.MaxValue) where TBox : struct, ISpatialBox
     {
         if (_state?.SpatialSlot.Tree == null)
         {
@@ -57,10 +68,57 @@ public readonly ref struct ClusterSpatialQuery<TArch> where TArch : Archetype<TA
                 "Ensure the archetype has a SpatialIndex field and that ConfigureSpatialGrid was called " +
                 "on the engine before InitializeArchetypes.");
         }
-        
-        // PerCellIndex may be null when the archetype exists but no spatial entities have been spawned yet. That's a legitimate "empty query result"
-        // state — the enumerator handles it gracefully by returning false on the first MoveNext() call.
-        return new AABBEnumerator(_state, _grid, minX, minY, maxX, maxY, categoryMask);
+
+        // Tier match: the generic TBox must live in the same (dimensionality × precision) tier as the archetype's storage. This is enforced before we even
+        // look at the box contents so error messages are uniform regardless of which concrete TBox was used. Both ToTier and TBoxToTier<TBox> are JIT-folded
+        // to constants at specialization time, so this check is effectively a single byte compare.
+        var storageTier = _state.SpatialSlot.FieldInfo.FieldType.ToTier();
+        var queryTier = SpatialTierExtensions.TBoxToTier<TBox>();
+        if (queryTier != storageTier)
+        {
+            throw new InvalidOperationException(
+                $"ClusterSpatialQuery<{typeof(TArch).Name}>.AABB<{typeof(TBox).Name}>: " +
+                $"query tier {queryTier} does not match archetype storage tier {storageTier}. " +
+                $"Use the AABB variant matching your archetype's dimensionality and precision " +
+                $"(AABB2F / AABB3F / AABB2D / AABB3D).");
+        }
+
+        // Dispatch to the concrete read path. Each branch uses Unsafe.As to get a native-precision reference to the underlying struct and reads fields directly.
+        // JIT folds all but one branch at specialization time, so each monomorphized version of this method only contains the code for its concrete TBox.
+        // PerCellIndex may be null when the archetype exists but no spatial entities have been spawned yet. That's a legitimate "empty query result" state — the
+        // enumerator handles it gracefully by returning false on the first MoveNext() call.
+        if (typeof(TBox) == typeof(AABB2F))
+        {
+            ref var b = ref Unsafe.As<TBox, AABB2F>(ref Unsafe.AsRef(in box));
+            return new AABBEnumerator(_state, _grid, b.MinX, b.MinY, b.MaxX, b.MaxY, categoryMask);
+        }
+        if (typeof(TBox) == typeof(AABB3F))
+        {
+            // Phase 3 will implement: a sibling enumerator carrying (cellMinZ, cellMaxZ, queryMinZ, queryMaxZ) state and reading AABB3F entity fields at
+            // narrowphase via an extended ReadAndValidateBoundsFromPtr.
+            throw new NotSupportedException(
+                $"ClusterSpatialQuery<{typeof(TArch).Name}>.AABB<AABB3F>: 3D f32 cluster queries are not yet " +
+                "implemented. Scheduled for Phase 3 of issue #230, which will extend the internal storage " +
+                "(ClusterSpatialAabb, CellSpatialIndex) to the full dim × precision matrix.");
+        }
+        if (typeof(TBox) == typeof(AABB2D))
+        {
+            throw new NotSupportedException(
+                $"ClusterSpatialQuery<{typeof(TArch).Name}>.AABB<AABB2D>: 2D f64 cluster queries are not yet " +
+                "implemented. Scheduled for Phase 3 of issue #230.");
+        }
+        if (typeof(TBox) == typeof(AABB3D))
+        {
+            throw new NotSupportedException(
+                $"ClusterSpatialQuery<{typeof(TArch).Name}>.AABB<AABB3D>: 3D f64 cluster queries are not yet " +
+                "implemented. Scheduled for Phase 3 of issue #230.");
+        }
+
+        // Unreachable under the ISpatialBox constraint + the 4 concrete implementers that exist today. Kept as a safety net: if a future box variant is added
+        // to Schema.Definition without updating the dispatch here, the caller gets a targeted error identifying the missing branch.
+        throw new NotSupportedException(
+            $"ClusterSpatialQuery<{typeof(TArch).Name}>.AABB<{typeof(TBox).Name}>: unknown ISpatialBox type. " +
+            "Add a dispatch branch here and update SpatialTierExtensions.TBoxToTier<TBox>().");
     }
 
     /// <summary>
