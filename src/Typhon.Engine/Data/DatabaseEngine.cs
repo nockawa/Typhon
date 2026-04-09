@@ -950,11 +950,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     // AABB replaced with the true tight bounds in the same pass. Source clusters that emptied out
                     // during migration are already removed from the per-cell index (FinaliseEmptyClusterCellState)
                     // so their dirty bits either get masked by occupancy or fall through the indexSlot<0 guard.
-                    clusterState.RecomputeDirtyClusterAabbs(dirtyBits, ref accessor);
+                    // Passing _spatialGrid activates the Phase 3 "Max Cluster AABB Extent" outlier guard for clusters
+                    // whose hysteresis-absorbed drift has inflated their AABB beyond cellSize × 1.2.
+                    clusterState.RecomputeDirtyClusterAabbs(dirtyBits, ref accessor, _spatialGrid);
                 }
 
-                // Archive dirty bitmap into per-archetype DirtyBitmapRing for spatial interest management
-                clusterState.SpatialSlot.DirtyRing?.Archive(tickNumber, dirtyBits, dirtyBits.Length);
+                // Archive dirty bitmap into per-archetype DirtyBitmapRing for spatial interest management.
+                // Issue #230 Phase 3: the ring was relocated from ClusterSpatialSlot.DirtyRing to ArchetypeClusterState.ClusterDirtyRing.
+                clusterState.ClusterDirtyRing?.Archive(tickNumber, dirtyBits, dirtyBits.Length);
 
                 if (entryCount == 0)
                 {
@@ -1597,19 +1600,21 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                             dstClusterAabb = ClusterSpatialAabb.Empty;
                         }
                         // Tier-dispatched union: 2D fields wrote [minX, minY, maxX, maxY] into the first 4 slots; 3D fields wrote the full 6-double layout.
+                        // Category mask comes from the archetype-level [SpatialIndex(Category=)] attribute (issue #230 Phase 3).
+                        uint archetypeCategory = ss.FieldInfo.Category;
                         if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
                         {
                             dstClusterAabb.Union3F(
                                 (float)migrantCoords[0], (float)migrantCoords[1], (float)migrantCoords[2],
                                 (float)migrantCoords[3], (float)migrantCoords[4], (float)migrantCoords[5],
-                                uint.MaxValue);
+                                archetypeCategory);
                         }
                         else
                         {
                             dstClusterAabb.Union2F(
                                 (float)migrantCoords[0], (float)migrantCoords[1],
                                 (float)migrantCoords[2], (float)migrantCoords[3],
-                                uint.MaxValue);
+                                archetypeCategory);
                         }
 
                         int dstCellKey = clusterState.ClusterCellMap[dstChunkId];
@@ -2131,13 +2136,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         tree.BackPointerSegment = backPtrSegment;
 
         var sf = table.Definition.SpatialField;
-        var fieldInfo = new SpatialFieldInfo(
-            table.ComponentOverhead + sf.OffsetInComponentStorage,
-            sf.SizeInComponentStorage,
-            sf.SpatialFieldType,
-            sf.SpatialMargin,
-            sf.SpatialCellSize,
-            mode);
+        var fieldInfo = new SpatialFieldInfo(table.ComponentOverhead + sf.OffsetInComponentStorage, sf.SizeInComponentStorage, sf.SpatialFieldType,
+            sf.SpatialMargin, sf.SpatialCellSize, mode, sf.SpatialCategory);
 
         SpatialRTree<PersistentStore> staticTree = null, dynamicTree = null;
         if (mode == SpatialMode.Static)

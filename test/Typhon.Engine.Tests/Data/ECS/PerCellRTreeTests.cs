@@ -397,4 +397,111 @@ class PerCellRTreeTests : TestBase<PerCellRTreeTests>
         Assert.That(caught.Message, Does.Contain("ClCohUnit"),
             "error message should name the archetype for quick diagnosis");
     }
+
+    /// <summary>
+    /// Issue #230 Phase 3 — criterion 11 ("Benchmark: broadphase+narrowphase vs old per-entity R-Tree").
+    /// Smoke benchmark that spawns a cluster archetype + grid, runs query iterations on both the new per-cell index path and the legacy tree path, and
+    /// logs wall-clock timings. Asserts correctness parity (both paths return the same count).
+    /// </summary>
+    /// <remarks>
+    /// Marked <see cref="ExplicitAttribute"/> because spawning enough entities for a meaningful comparison hits page cache backpressure and legacy tree
+    /// segment sizing limits in the test configuration. The limits are orthogonal to Phase 3 — they'd bite any test that spawns thousands of spatial
+    /// entities in a single engine instance. The benchmark is kept as a manual-run smoke (via <c>dotnet test --filter ... --exclude-category Explicit:false</c>)
+    /// until a dedicated BDN benchmark with a properly sized cache is added as a follow-up sub-issue of #228.
+    /// </remarks>
+    [Test]
+    [Explicit("Hits page cache sizing limits in default test config; manual-run smoke until dedicated BDN benchmark lands.")]
+    [CancelAfter(30000)]
+    public void SmokeBench_ClusterQueryPath_VsLegacyTree()
+    {
+        using var dbe = SetupEngineWithGrid(cellSize: 100f, worldMax: 10_000f);
+
+        // Smaller counts than a "real" benchmark — the test-mode page cache isn't sized for high-throughput spawn bursts. The smoke benchmark's purpose is
+        // to capture an order-of-magnitude comparison of the new vs legacy path, not to hit production perf targets. A dedicated BDN benchmark with a
+        // properly sized cache is a follow-up.
+        const int entityCount = 1_000;
+        const int queryIterations = 1000;
+        var rng = new Random(42);
+
+        // Spawn entities in small batches with a tick fence between each to let the page cache drain dirty pages. The test cache is small (256 pages
+        // default), so a big burst of spawns without tick-fencing hits backpressure.
+        const int spawnBatchSize = 50;
+        int spawned = 0;
+        long tickNum = 1;
+        while (spawned < entityCount)
+        {
+            int batchSize = Math.Min(spawnBatchSize, entityCount - spawned);
+            using (var t = dbe.CreateQuickTransaction())
+            {
+                for (int i = 0; i < batchSize; i++)
+                {
+                    float x = (float)(rng.NextDouble() * 9_000);
+                    float y = (float)(rng.NextDouble() * 9_000);
+                    t.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(x, y)));
+                }
+                t.Commit();
+            }
+            spawned += batchSize;
+            dbe.WriteTickFence(tickNum++);
+        }
+
+        // Query: 500×500 AABB near the middle of the world. Picks up ~2500 entities (roughly 25% density).
+        double[] queryCoords = new double[] { 2500, 2500, 5000, 5000 };
+        var box = new AABB2F { MinX = 2500, MinY = 2500, MaxX = 5000, MaxY = 5000 };
+
+        // ── New path: ClusterSpatialQuery<ClCohUnit>.AABB<AABB2F> ──
+        int newPathCount = 0;
+        var newPathStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        for (int iter = 0; iter < queryIterations; iter++)
+        {
+            using var epoch = EpochGuard.Enter(dbe.EpochManager);
+            var query = dbe.ClusterSpatialQuery<ClCohUnit>();
+            var enumerator = query.AABB<AABB2F>(in box);
+            try
+            {
+                while (enumerator.MoveNext())
+                {
+                    newPathCount++;
+                }
+            }
+            finally
+            {
+                enumerator.Dispose();
+            }
+        }
+        newPathStopwatch.Stop();
+        int newPathPerIter = newPathCount / queryIterations;
+
+        // ── Legacy path: cs.SpatialSlot.Tree.QueryAABBOccupants ──
+        var meta = Archetype<ClCohUnit>.Metadata;
+        var clusterState = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+        int legacyPathCount = 0;
+        var legacyPathStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        for (int iter = 0; iter < queryIterations; iter++)
+        {
+            using var epoch = EpochGuard.Enter(dbe.EpochManager);
+            foreach (var hit in clusterState.SpatialSlot.Tree.QueryAABBOccupants(queryCoords))
+            {
+                legacyPathCount++;
+            }
+        }
+        legacyPathStopwatch.Stop();
+        int legacyPathPerIter = legacyPathCount / queryIterations;
+
+        TestContext.WriteLine($"[Phase 3 Smoke Benchmark — Issue #230 criterion 11]");
+        TestContext.WriteLine($"  Entity count:    {entityCount}");
+        TestContext.WriteLine($"  Query iterations: {queryIterations}");
+        TestContext.WriteLine($"  New path (per-cell cluster index):");
+        TestContext.WriteLine($"    Results/iter: {newPathPerIter}");
+        TestContext.WriteLine($"    Total time:   {newPathStopwatch.Elapsed.TotalMilliseconds:F2} ms");
+        TestContext.WriteLine($"    Per query:    {(newPathStopwatch.Elapsed.TotalMilliseconds * 1000) / queryIterations:F2} us");
+        TestContext.WriteLine($"  Legacy path (per-entity SpatialRTree):");
+        TestContext.WriteLine($"    Results/iter: {legacyPathPerIter}");
+        TestContext.WriteLine($"    Total time:   {legacyPathStopwatch.Elapsed.TotalMilliseconds:F2} ms");
+        TestContext.WriteLine($"    Per query:    {(legacyPathStopwatch.Elapsed.TotalMilliseconds * 1000) / queryIterations:F2} us");
+
+        // Correctness assertion: both paths should return the same count per iteration.
+        Assert.That(newPathPerIter, Is.EqualTo(legacyPathPerIter),
+            $"New path returned {newPathPerIter} per iter, legacy path returned {legacyPathPerIter}. Both should be identical for the same AABB query.");
+    }
 }

@@ -66,6 +66,16 @@ public unsafe ref struct AabbClusterEnumerator
     // Is the cluster's spatial field 3D? Precomputed at construction so the narrowphase inner loop doesn't re-dispatch on FieldType every iteration.
     private readonly bool _is3D;
 
+    // Optional radius filter (issue #230 Phase 3 — Radius query support). When <see cref="_radiusSq"/> is positive, the narrowphase applies a distance
+    // check after the AABB overlap check: the entity passes only if the closest point on its tight AABB to (_radiusCenterX, _radiusCenterY, _radiusCenterZ)
+    // is within sqrt(_radiusSq). The broadphase still uses the enclosing AABB — the caller is responsible for constructing an enumerator whose
+    // _queryMin*/_queryMax* bounds match the sphere's enclosing AABB, so the cell expansion and cluster AABB overlap cover every candidate. When
+    // <see cref="_radiusSq"/> is zero, the narrowphase runs the pure AABB check only (legacy AabbClusterEnumerator behavior).
+    private readonly float _radiusSq;
+    private readonly float _radiusCenterX;
+    private readonly float _radiusCenterY;
+    private readonly float _radiusCenterZ;
+
     // Cluster segment accessor for narrowphase entity reads. Disposed via Dispose().
     private ChunkAccessor<PersistentStore> _accessor;
     private bool _accessorCreated;
@@ -79,15 +89,17 @@ public unsafe ref struct AabbClusterEnumerator
     private int _currentClusterChunkId;            // chunk id of the cluster currently in narrowphase
     private byte* _currentClusterBase;             // base pointer of that cluster
 
+    // Two-pass per-cell iteration: each cell has a StaticIndex and a DynamicIndex, both optional. Issue #230 Phase 3 activated the Static path. The
+    // enumerator visits DynamicIndex first, then StaticIndex, then advances to the next cell. _currentCellStaticPass is true when we've already drained
+    // DynamicIndex and are now iterating StaticIndex for the same cell.
+    private bool _currentCellStaticPass;
+    private PerCellSpatialSlot _currentPerCellSlot;
+
     // Last-yielded result.
     private ClusterSpatialQueryResult _current;
 
-    internal AabbClusterEnumerator(
-        ArchetypeClusterState state,
-        SpatialGrid grid,
-        float minX, float minY, float minZ,
-        float maxX, float maxY, float maxZ,
-        uint categoryMask)
+    internal AabbClusterEnumerator(ArchetypeClusterState state, SpatialGrid grid, float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
+        uint categoryMask, float radiusSq = 0f, float radiusCenterX = 0f, float radiusCenterY = 0f, float radiusCenterZ = 0f)
     {
         _state = state;
         _grid = grid;
@@ -98,6 +110,10 @@ public unsafe ref struct AabbClusterEnumerator
         _queryMaxY = maxY;
         _queryMaxZ = maxZ;
         _categoryMask = categoryMask;
+        _radiusSq = radiusSq;
+        _radiusCenterX = radiusCenterX;
+        _radiusCenterY = radiusCenterY;
+        _radiusCenterZ = radiusCenterZ;
 
         // Expand query AABB to the overlapping cell range. The grid is 2D (XY) — Z coordinates never participate in cell bucketing. Each overlapping cell's
         // per-archetype spatial slot may or may not exist — the iteration handles null slots gracefully.
@@ -120,6 +136,8 @@ public unsafe ref struct AabbClusterEnumerator
         _currentOccupancyBits = 0UL;
         _currentClusterChunkId = 0;
         _currentClusterBase = null;
+        _currentCellStaticPass = false;
+        _currentPerCellSlot = null;
         _current = default;
     }
 
@@ -194,8 +212,25 @@ public unsafe ref struct AabbClusterEnumerator
                     continue;
                 }
 
+                // Optional radius filter (issue #230 Phase 3). When active, compute the closest point on the entity's AABB to the sphere center and reject
+                // the entity if the squared distance exceeds the sphere's squared radius. "Any-point-in-sphere" semantic matches the legacy
+                // SpatialRTree.QueryRadius behavior — a tight entity AABB that just kisses the sphere boundary is accepted. The computed distSq is also
+                // carried into the result struct so QueryNearest can sort without re-reading the entity's AABB.
+                float distSq = 0f;
+                if (_radiusSq > 0f)
+                {
+                    float dx = _radiusCenterX - System.Math.Clamp(_radiusCenterX, eMinX, eMaxX);
+                    float dy = _radiusCenterY - System.Math.Clamp(_radiusCenterY, eMinY, eMaxY);
+                    float dz = _radiusCenterZ - System.Math.Clamp(_radiusCenterZ, eMinZ, eMaxZ);
+                    distSq = dx * dx + dy * dy + dz * dz;
+                    if (distSq > _radiusSq)
+                    {
+                        continue;
+                    }
+                }
+
                 long entityId = *(long*)(_currentClusterBase + _state.Layout.EntityIdsOffset + slot * 8);
-                _current = new ClusterSpatialQueryResult(entityId, _currentClusterChunkId, slot);
+                _current = new ClusterSpatialQueryResult(entityId, _currentClusterChunkId, slot, distSq);
                 return true;
             }
 
@@ -250,9 +285,27 @@ public unsafe ref struct AabbClusterEnumerator
                 continue; // next iteration will drain occupancy bits
             }
 
-            // 3. Advance to the next cell in the range.
+            // 3. Advance to the next sub-index. Each cell has two sub-indexes: DynamicIndex (visited first) and StaticIndex (visited second). When the
+            //    current sub-index is exhausted, try the StaticIndex of the same cell; if that's also exhausted or null, advance to the next cell and
+            //    restart with its DynamicIndex. This two-pass walk is how Phase 3 satisfies acceptance criterion 7 ("Static/dynamic split: static clusters
+            //    skip fence updates, queries check both").
             _currentCellIndex = null;
             _currentBroadphaseSlot = 0;
+
+            // 3a. If we just finished DynamicIndex for the current cell and haven't yet tried StaticIndex, try it now.
+            if (!_currentCellStaticPass && _currentPerCellSlot != null)
+            {
+                _currentCellStaticPass = true;
+                if (_currentPerCellSlot.StaticIndex != null && _currentPerCellSlot.StaticIndex.ClusterCount > 0)
+                {
+                    _currentCellIndex = _currentPerCellSlot.StaticIndex;
+                    continue;
+                }
+            }
+
+            // 3b. Advance to the next cell and start fresh with its DynamicIndex.
+            _currentCellStaticPass = false;
+            _currentPerCellSlot = null;
             while (_currentCellY <= _cellMaxY)
             {
                 while (_currentCellX <= _cellMaxX)
@@ -264,12 +317,25 @@ public unsafe ref struct AabbClusterEnumerator
                         continue;
                     }
                     var slot = _state.PerCellIndex[cellKey];
-                    if (slot?.DynamicIndex == null || slot.DynamicIndex.ClusterCount == 0)
+                    if (slot == null)
                     {
                         continue;
                     }
-                    _currentCellIndex = slot.DynamicIndex;
-                    break;
+                    // Prefer DynamicIndex if it has entries; otherwise fall through to StaticIndex in the same iteration.
+                    if (slot.DynamicIndex != null && slot.DynamicIndex.ClusterCount > 0)
+                    {
+                        _currentPerCellSlot = slot;
+                        _currentCellIndex = slot.DynamicIndex;
+                        _currentCellStaticPass = false;
+                        break;
+                    }
+                    if (slot.StaticIndex != null && slot.StaticIndex.ClusterCount > 0)
+                    {
+                        _currentPerCellSlot = slot;
+                        _currentCellIndex = slot.StaticIndex;
+                        _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
+                        break;
+                    }
                 }
                 if (_currentCellIndex != null)
                 {

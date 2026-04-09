@@ -181,8 +181,94 @@ internal sealed unsafe class ArchetypeClusterState
     /// themselves first. This matches the ergonomics the existing cluster-archetype iteration loops in <c>SpatialTriggerSystem</c> and <c>SpatialInterestSystem</c>
     /// expect.
     /// </remarks>
-    public AabbClusterEnumerator QueryAabb(SpatialGrid grid, float minX, float minY, float minZ, float maxX, float maxY, float maxZ, 
+    public AabbClusterEnumerator QueryAabb(SpatialGrid grid, float minX, float minY, float minZ, float maxX, float maxY, float maxZ,
         uint categoryMask = uint.MaxValue) => new(this, grid, minX, minY, minZ, maxX, maxY, maxZ, categoryMask);
+
+    /// <summary>
+    /// Radius (sphere) query against the per-cell cluster spatial index (issue #230 Phase 3). Returns an enumerator over every entity whose tight AABB is
+    /// within <paramref name="radius"/> of the query center, using the closest-point-on-AABB semantic that matches the legacy
+    /// <see cref="SpatialRTree{T}.QueryRadius"/>. The enumerator drives the broadphase with the sphere's enclosing AABB and applies the sphere distance
+    /// check at narrowphase. <see cref="ClusterSpatialQueryResult.DistanceSq"/> is populated on each hit.
+    /// </summary>
+    /// <param name="grid">The engine's spatial grid.</param>
+    /// <param name="centerX">Sphere center X.</param>
+    /// <param name="centerY">Sphere center Y.</param>
+    /// <param name="centerZ">Sphere center Z. For 2D archetypes, this parameter is ignored — the Z bounds of the query AABB are set to infinity so the
+    /// Z overlap test trivially passes against 2D entities.</param>
+    /// <param name="radius">Sphere radius in world units.</param>
+    /// <param name="categoryMask">Category bitmask; <c>0</c> means "no filter".</param>
+    public AabbClusterEnumerator QueryRadius(SpatialGrid grid, float centerX, float centerY, float centerZ, float radius, uint categoryMask = uint.MaxValue)
+    {
+        float minX = centerX - radius;
+        float minY = centerY - radius;
+        float maxX = centerX + radius;
+        float maxY = centerY + radius;
+        bool is3D = SpatialSlot.FieldInfo.FieldType == SpatialFieldType.AABB3F || SpatialSlot.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
+        float minZ = is3D ? centerZ - radius : float.NegativeInfinity;
+        float maxZ = is3D ? centerZ + radius : float.PositiveInfinity;
+        float effectiveCenterZ = is3D ? centerZ : 0f;
+        return new AabbClusterEnumerator(this, grid, minX, minY, minZ, maxX, maxY, maxZ, categoryMask, radius * radius, centerX, centerY, effectiveCenterZ);
+    }
+
+    /// <summary>
+    /// k-nearest-neighbor query against the per-cell cluster spatial index (issue #230 Phase 3). Collects up to <paramref name="k"/> entities whose tight
+    /// AABBs are closest to the query center, sorted by distance ascending. Returns the number of valid entries written to <paramref name="results"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Simple implementation.</b> Runs a <see cref="QueryRadius"/> query with a grid-spanning radius, collects every candidate (entityId, distSq) into
+    /// a managed list, runs a partial selection sort to find the top k by distance, and writes them to the caller buffer. Correct for any k; performance
+    /// degrades when the grid is large and the query center is not near a cluster. Iterative radius expansion is an optimization follow-up tracked under
+    /// sub-issues of #228.
+    /// </para>
+    /// <para>
+    /// Allocates one <see cref="System.Collections.Generic.List{T}"/> per call for the candidate buffer. Not intended for per-tick hot loops.
+    /// </para>
+    /// </remarks>
+    public int QueryNearest(SpatialGrid grid, float centerX, float centerY, float centerZ, int k, Span<(long entityId, float distSq)> results, 
+        uint categoryMask = uint.MaxValue)
+    {
+        if (k <= 0 || results.Length == 0)
+        {
+            return 0;
+        }
+
+        int targetCount = System.Math.Min(k, results.Length);
+
+        // Generous radius: grid diagonal. Covers the entire grid so no entity is excluded by the broadphase.
+        float worldWidth = grid.Config.WorldMax.X - grid.Config.WorldMin.X;
+        float worldHeight = grid.Config.WorldMax.Y - grid.Config.WorldMin.Y;
+        float maxRadius = System.MathF.Sqrt(worldWidth * worldWidth + worldHeight * worldHeight);
+
+        var scratch = new System.Collections.Generic.List<(long entityId, float distSq)>(64);
+        foreach (var hit in QueryRadius(grid, centerX, centerY, centerZ, maxRadius, categoryMask))
+        {
+            scratch.Add((hit.EntityId, hit.DistanceSq));
+        }
+
+        // Partial selection sort for top k by distance ascending. O(k × n) — fine for small k.
+        int n = scratch.Count;
+        int resultCount = System.Math.Min(targetCount, n);
+        for (int i = 0; i < resultCount; i++)
+        {
+            int minIdx = i;
+            float minDist = scratch[i].distSq;
+            for (int j = i + 1; j < n; j++)
+            {
+                if (scratch[j].distSq < minDist)
+                {
+                    minIdx = j;
+                    minDist = scratch[j].distSq;
+                }
+            }
+            if (minIdx != i)
+            {
+                (scratch[i], scratch[minIdx]) = (scratch[minIdx], scratch[i]);
+            }
+            results[i] = scratch[i];
+        }
+        return resultCount;
+    }
 
     /// <summary>
     /// Create a new ArchetypeClusterState for a cluster-eligible archetype (fresh database).
@@ -795,11 +881,11 @@ internal sealed unsafe class ArchetypeClusterState
 
             if (is3D)
             {
-                aabb.Union3F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], (float)coords[4], (float)coords[5], uint.MaxValue);
+                aabb.Union3F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], (float)coords[4], (float)coords[5], ss.FieldInfo.Category);
             }
             else
             {
-                aabb.Union2F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], uint.MaxValue);
+                aabb.Union2F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], ss.FieldInfo.Category);
             }
         }
 
@@ -902,7 +988,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// is ~5 ms/tick at 50K dirty clusters — the minimum cost of per-tick AABB freshness.
     /// </para>
     /// </remarks>
-    internal void RecomputeDirtyClusterAabbs(long[] dirtyBits, ref ChunkAccessor<PersistentStore> accessor)
+    internal void RecomputeDirtyClusterAabbs(long[] dirtyBits, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid = null)
     {
         // Same gating as the Phase 1 spawn/destroy/migration hooks.
         if (!SpatialSlot.HasSpatialIndex)
@@ -920,6 +1006,19 @@ internal sealed unsafe class ArchetypeClusterState
         if (PerCellIndex == null || ClusterCellMap == null)
         {
             return;
+        }
+
+        // Max cluster AABB extent guard — issue #230 Phase 3 closing the Phase 1 gap. When the tick-tightened AABB exceeds cellSize × 1.2 on any horizontal
+        // axis, accumulated drift from hysteresis-absorbed entities has inflated the cluster beyond the spatial coherence target. Scan the cluster's entities
+        // and enqueue migration for any that have drifted outside the raw cell boundary (ignoring the hysteresis dead zone). See design doc
+        // claude/design/spatial-tiers/01-spatial-clusters.md §"Max Cluster AABB Extent". The guard is a no-op when no grid is configured (no cell to
+        // reference) or when grid.Config.CellSize is zero.
+        float maxExtent = 0f;
+        float cellSize = 0f;
+        bool outlierGuardActive = grid != null && (cellSize = grid.Config.CellSize) > 0f;
+        if (outlierGuardActive)
+        {
+            maxExtent = cellSize * 1.2f;
         }
 
         for (int chunkId = 0; chunkId < dirtyBits.Length; chunkId++)
@@ -980,12 +1079,73 @@ internal sealed unsafe class ArchetypeClusterState
             fresh.CategoryMask = slot.DynamicIndex.CategoryMasks[indexSlot];
             stored = fresh;
             slot.DynamicIndex.UpdateAt(indexSlot, in fresh);
+
+            // Outlier extent check — only fires in the rare "accumulated drift" case. The AABB just-recomputed fits all live entities exactly, so the
+            // extent comparison is trivially correct.
+            if (outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent || (fresh.MaxY - fresh.MinY) > maxExtent))
+            {
+                FlagOutliersForMigration(chunkId, cellKey, grid, ref accessor);
+            }
         }
     }
 
     /// <summary>
-    /// Add a cluster to its cell's <see cref="PerCellSpatialSlot.DynamicIndex"/>, lazily allocating the <see cref="PerCellSpatialSlot"/> and
-    /// <see cref="CellSpatialIndex"/> as needed. Records the back-pointer in <see cref="ClusterSpatialIndexSlot"/> for O(1) subsequent updates. Issue #230.
+    /// Safety valve for the "Max Cluster AABB Extent" invariant from design doc 01-spatial-clusters.md (issue #230 Phase 3 closure of Phase 1 gap). Scans a
+    /// cluster whose recomputed AABB has grown beyond <c>cellSize × 1.2</c> and enqueues migration for any entity that has drifted outside the current cell's
+    /// raw bounds. This bypasses the hysteresis dead zone that <see cref="DatabaseEngine.ProcessClusterSpatialEntries"/> normally honours — the point is
+    /// exactly to force-migrate entities that the hysteresis had absorbed individually but whose accumulated drift is degrading the cluster's spatial
+    /// coherence.
+    /// </summary>
+    /// <remarks>
+    /// Rare path. Runs inside <see cref="RecomputeDirtyClusterAabbs"/> only when the extent check fires — well-behaved workloads never hit it. The enqueued
+    /// migrations are drained on the next tick (not this one), because this runs AFTER <see cref="DatabaseEngine.ExecuteMigrations"/> in the tick fence
+    /// order. That one-tick lag is the "safety valve, not a common case" note from the design doc.
+    /// </remarks>
+    private void FlagOutliersForMigration(int clusterChunkId, int cellKey, SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor)
+    {
+        var ss = SpatialSlot;
+        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
+        ulong occupancy = *(ulong*)clusterBase;
+        int compOffset = Layout.ComponentOffset(ss.Slot);
+        int compStride = Layout.ComponentSize(ss.Slot);
+
+        var (cellX, cellY) = grid.CellKeyToCoords(cellKey);
+        ref readonly var cfg = ref grid.Config;
+        float cellMinX = cfg.WorldMin.X + cellX * cfg.CellSize;
+        float cellMinY = cfg.WorldMin.Y + cellY * cfg.CellSize;
+        float cellMaxX = cellMinX + cfg.CellSize;
+        float cellMaxY = cellMinY + cfg.CellSize;
+
+        ulong bits = occupancy;
+        while (bits != 0)
+        {
+            int slotIndex = BitOperations.TrailingZeroCount(bits);
+            bits &= bits - 1;
+
+            byte* fieldPtr = clusterBase + compOffset + slotIndex * compStride + ss.FieldOffset;
+            SpatialGrid.ReadSpatialCenter2D(fieldPtr, ss.FieldInfo.FieldType, out float posX, out float posY);
+
+            if (!float.IsFinite(posX) || !float.IsFinite(posY))
+            {
+                continue; // defensive — non-finite positions should have been rejected upstream
+            }
+
+            // Raw cell boundary (no hysteresis) — force migrate anything outside.
+            if (posX < cellMinX || posX > cellMaxX || posY < cellMinY || posY > cellMaxY)
+            {
+                int newCellKey = grid.WorldToCellKey(posX, posY);
+                if (newCellKey != cellKey)
+                {
+                    EnqueueMigration(clusterChunkId, slotIndex, newCellKey);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Add a cluster to its cell's <see cref="PerCellSpatialSlot"/> — routed to <see cref="PerCellSpatialSlot.DynamicIndex"/> for Dynamic archetypes and
+    /// <see cref="PerCellSpatialSlot.StaticIndex"/> for Static archetypes. Lazily allocates the slot and index as needed. Records the back-pointer in
+    /// <see cref="ClusterSpatialIndexSlot"/> for O(1) subsequent updates. Issue #230.
     /// </summary>
     internal void AddClusterToPerCellIndex(int clusterChunkId, int cellKey, in ClusterSpatialAabb aabb)
     {
@@ -998,17 +1158,32 @@ internal sealed unsafe class ArchetypeClusterState
             slot = new PerCellSpatialSlot();
             PerCellIndex[cellKey] = slot;
         }
-        if (slot.DynamicIndex == null)
+
+        bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        if (isStatic)
         {
-            slot.DynamicIndex = new CellSpatialIndex();
+            if (slot.StaticIndex == null)
+            {
+                slot.StaticIndex = new CellSpatialIndex();
+            }
+            int indexSlot = slot.StaticIndex.Add(clusterChunkId, aabb);
+            ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
         }
-        int indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
-        ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
+        else
+        {
+            if (slot.DynamicIndex == null)
+            {
+                slot.DynamicIndex = new CellSpatialIndex();
+            }
+            int indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
+            ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
+        }
     }
 
     /// <summary>
-    /// Remove a cluster from its cell's <see cref="PerCellSpatialSlot.DynamicIndex"/>. Fixes up the back-pointer of any cluster that was swapped into the
-    /// removed slot by the SoA swap-with-last. Clears <see cref="ClusterSpatialIndexSlot"/> for the removed cluster. Issue #230.
+    /// Remove a cluster from its cell's <see cref="PerCellSpatialSlot"/>. Routes to Static or Dynamic based on the archetype's
+    /// <see cref="SpatialFieldInfo.Mode"/>. Fixes up the back-pointer of any cluster that was swapped into the removed slot by the SoA swap-with-last.
+    /// Clears <see cref="ClusterSpatialIndexSlot"/> for the removed cluster. Issue #230.
     /// </summary>
     internal void RemoveClusterFromPerCellIndex(int clusterChunkId, int cellKey)
     {
@@ -1017,7 +1192,7 @@ internal sealed unsafe class ArchetypeClusterState
             return;
         }
         var slot = PerCellIndex[cellKey];
-        if (slot == null || slot.DynamicIndex == null)
+        if (slot == null)
         {
             return;
         }
@@ -1031,7 +1206,14 @@ internal sealed unsafe class ArchetypeClusterState
             return; // not in the index
         }
 
-        int swappedClusterId = slot.DynamicIndex.RemoveAt(indexSlot);
+        bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        CellSpatialIndex targetIndex = isStatic ? slot.StaticIndex : slot.DynamicIndex;
+        if (targetIndex == null)
+        {
+            return;
+        }
+
+        int swappedClusterId = targetIndex.RemoveAt(indexSlot);
         if (swappedClusterId >= 0 && swappedClusterId < ClusterSpatialIndexSlot.Length)
         {
             // The swapped cluster now lives at indexSlot; fix its back-pointer.
@@ -1423,13 +1605,12 @@ internal sealed unsafe class ArchetypeClusterState
             tree.BackPointerSegment = bpSeg;
 
             // Create a modified SpatialFieldInfo with cluster-relative offset
-            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode);
+            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode, 
+                tableFi.Category);
 
-            // Construct the dirty ring once and alias it from both ArchetypeClusterState.ClusterDirtyRing (the new home, read by SpatialInterestSystem after
-            // commit 3) and ClusterSpatialSlot.DirtyRing (the old home, still read by existing consumers during the Phase 3 commit sequence). Both fields
-            // reference the SAME instance — the ring's state is shared. Commit 4 deletes the ClusterSpatialSlot.DirtyRing field entirely.
-            var dirtyRing = new DirtyBitmapRing(Math.Max(4, ClusterSegment.ChunkCapacity));
-            ClusterDirtyRing = dirtyRing;
+            // Dirty ring lives exclusively on ArchetypeClusterState after issue #230 Phase 3 legacy purge. The previous alias on ClusterSpatialSlot.DirtyRing
+            // is gone — all consumers (SpatialInterestSystem, DatabaseEngine.WriteClusterTickFence) now read ClusterDirtyRing directly.
+            ClusterDirtyRing = new DirtyBitmapRing(Math.Max(4, ClusterSegment.ChunkCapacity));
 
             SpatialSlot = new ClusterSpatialSlot
             {
@@ -1440,7 +1621,6 @@ internal sealed unsafe class ArchetypeClusterState
                 Descriptor = descriptor,
                 Tree = tree,
                 BackPointerSegment = bpSeg,
-                DirtyRing = dirtyRing,
             };
             break; // Only one spatial field per archetype
         }
@@ -1656,14 +1836,6 @@ internal struct ClusterSpatialSlot
 
     /// <summary>Per-archetype back-pointer CBS keyed by ClusterLocation (clusterChunkId * 64 + slotIndex).</summary>
     public ChunkBasedSegment<PersistentStore> BackPointerSegment;
-
-    /// <summary>
-    /// Per-archetype <see cref="DirtyBitmapRing"/> for interest management delta queries.
-    /// <b>Deprecated in issue #230 Phase 3:</b> during the phase commit sequence this field is an alias for <see cref="ArchetypeClusterState.ClusterDirtyRing"/>
-    /// — both point to the same instance. Commit 3 migrates <c>SpatialInterestSystem</c> to read via <see cref="ArchetypeClusterState.ClusterDirtyRing"/>,
-    /// and commit 4 removes this field. New code must NOT read this field.
-    /// </summary>
-    public DirtyBitmapRing DirtyRing;
 }
 
 /// <summary>

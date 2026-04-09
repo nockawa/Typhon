@@ -1753,7 +1753,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 {
                     continue;
                 }
-                if (grid != null && _spatialQueryType == SpatialQueryType.AABB && cs.SpatialSlot.FieldInfo.Mode == Typhon.Schema.Definition.SpatialMode.Dynamic)
+                if (grid != null && _spatialQueryType == SpatialQueryType.AABB)
                 {
                     // New path: per-cell cluster index AABB query. Extract the 2D/3D query bounds from _spatialParams (same layout as in QuerySingleTree's
                     // AABB case: 6 doubles stored as [minX, minY, minZ, maxX, maxY, maxZ], with the 3D slots ignored for 2D archetypes).
@@ -1765,7 +1765,6 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                     float qMaxZ;
                     if (state.Descriptor.CoordCount == 4)
                     {
-                        // 2D query — positions 2 and 3 are maxX/maxY; no Z component in the input.
                         qMinZ = float.NegativeInfinity;
                         qMaxX = (float)_spatialParams[2];
                         qMaxY = (float)_spatialParams[3];
@@ -1789,8 +1788,31 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                         }
                     }
                 }
+                else if (grid != null && _spatialQueryType == SpatialQueryType.Radius)
+                {
+                    // New path: per-cell cluster index Radius query (issue #230 Phase 3). Parameter layout matches QuerySingleTree's Radius case:
+                    // _spatialParams[0..halfCoord] is the center, _spatialParams[3] is the radius (regardless of dimension — a quirk of the existing
+                    // parameter packing for the per-entity tree).
+                    float cX = (float)_spatialParams[0];
+                    float cY = (float)_spatialParams[1];
+                    float cZ = state.Descriptor.CoordCount == 6 ? (float)_spatialParams[2] : 0f;
+                    float radius = (float)_spatialParams[3];
+
+                    using var guard = EpochGuard.Enter(_tx.DBE.EpochManager);
+                    foreach (var hit in cs.QueryRadius(grid, cX, cY, cZ, radius))
+                    {
+                        var entityId = EntityId.FromRaw(hit.EntityId);
+                        if (MaskTest(entityId.ArchetypeId))
+                        {
+                            result.Add(entityId);
+                        }
+                    }
+                }
                 else
                 {
+                    // Legacy fallback for non-AABB/Radius query shapes (Ray, etc.) and any archetype without a configured grid. Ray cluster queries are
+                    // deferred — the issue #230 Phase 2 integration item only names AABB, Radius, Nearest. Nearest is exposed via the per-cell index via
+                    // ArchetypeClusterState.QueryNearest but is not routed through EcsQuery (EcsQuery has no Nearest query type).
                     QuerySingleTree(cs.SpatialSlot.Tree, state, result);
                 }
             }

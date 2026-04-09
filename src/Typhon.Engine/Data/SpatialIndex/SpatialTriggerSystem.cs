@@ -291,9 +291,10 @@ internal sealed unsafe class SpatialTriggerSystem
                         continue;
                     }
                     clusterOccupants ??= new HashSet<long>();
-                    if (grid != null && cs.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
+                    if (grid != null)
                     {
-                        // Dynamic cluster archetype with a configured grid: use the new per-cell index path (issue #230 Phase 3).
+                        // Issue #230 Phase 3: both Dynamic and Static cluster archetypes now use the new per-cell index path when a grid is configured.
+                        // The enumerator's two-pass cell walk visits DynamicIndex and StaticIndex for each cell, so the caller doesn't need to branch on mode.
                         foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
                         {
                             clusterOccupants.Add(hit.EntityId);
@@ -301,9 +302,7 @@ internal sealed unsafe class SpatialTriggerSystem
                     }
                     else
                     {
-                        // Legacy fallback for (a) Static cluster archetypes — PerCellSpatialSlot.StaticIndex population is deferred to a future sub-issue
-                        // of #228, or (b) any archetype when no spatial grid is configured — the per-cell index is only populated when ConfigureSpatialGrid
-                        // was called. Commit 5 of Phase 3 keeps the legacy per-archetype cluster tree alive for these paths.
+                        // Legacy fallback: no spatial grid configured. Per-cell index was never populated; fall back to the legacy per-archetype cluster tree.
                         foreach (var hit in cs.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
                         {
                             clusterOccupants.Add(hit.EntityId);

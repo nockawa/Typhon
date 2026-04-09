@@ -677,13 +677,8 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         ChunkBasedSegment<PersistentStore> existingBackPtrSegment = null, PagedHashMap<long, int, PersistentStore> existingOccupancyMap = null)
     {
         var sf = Definition.SpatialField;
-        var fieldInfo = new SpatialFieldInfo(
-            ComponentOverhead + sf.OffsetInComponentStorage,
-            sf.SizeInComponentStorage,
-            sf.SpatialFieldType,
-            sf.SpatialMargin,
-            sf.SpatialCellSize,
-            sf.SpatialMode);
+        var fieldInfo = new SpatialFieldInfo(ComponentOverhead + sf.OffsetInComponentStorage, sf.SizeInComponentStorage, sf.SpatialFieldType,
+            sf.SpatialMargin, sf.SpatialCellSize, sf.SpatialMode, sf.SpatialCategory);
 
         var variant = fieldInfo.ToVariant();
         var descriptor = SpatialNodeDescriptor.ForVariant(variant);

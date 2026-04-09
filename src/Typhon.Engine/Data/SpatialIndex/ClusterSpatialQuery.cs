@@ -123,8 +123,9 @@ public readonly ref struct ClusterSpatialQuery<TArch> where TArch : Archetype<TA
 }
 
 /// <summary>
-/// Result of a <see cref="ClusterSpatialQuery{TArch}"/> or <see cref="ArchetypeClusterState.QueryAabb2F"/> match. Holds the entity id plus its location
-/// inside the cluster storage (chunk id and slot index).
+/// Result of a cluster spatial query match. Holds the entity id, its location inside the cluster storage (chunk id and slot index), and — for Radius
+/// queries — the squared distance from the query center to the closest point on the entity's AABB. For AABB queries, <see cref="DistanceSq"/> is
+/// <c>0</c> and should be ignored.
 /// </summary>
 public readonly struct ClusterSpatialQueryResult
 {
@@ -132,11 +133,16 @@ public readonly struct ClusterSpatialQueryResult
     public readonly int ClusterChunkId;
     public readonly int SlotIndex;
 
-    internal ClusterSpatialQueryResult(long entityId, int clusterChunkId, int slotIndex)
+    /// <summary>Squared distance from the query center to the closest point on the entity's AABB. Populated by Radius queries; always <c>0</c> for AABB
+    /// queries. Used by <see cref="ArchetypeClusterState.QueryNearest"/> for top-k sorting. Issue #230 Phase 3.</summary>
+    public readonly float DistanceSq;
+
+    internal ClusterSpatialQueryResult(long entityId, int clusterChunkId, int slotIndex, float distanceSq = 0f)
     {
         EntityId = entityId;
         ClusterChunkId = clusterChunkId;
         SlotIndex = slotIndex;
+        DistanceSq = distanceSq;
     }
 }
 

@@ -119,7 +119,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         Assert.That(es.ClusterState, Is.Not.Null);
         Assert.That(es.ClusterState.SpatialSlot.Tree, Is.Not.Null, "Per-archetype R-Tree should exist");
         Assert.That(es.ClusterState.SpatialSlot.BackPointerSegment, Is.Not.Null, "Per-archetype BP segment should exist");
-        Assert.That(es.ClusterState.SpatialSlot.DirtyRing, Is.Not.Null, "Per-archetype DirtyBitmapRing should exist");
+        Assert.That(es.ClusterState.ClusterDirtyRing, Is.Not.Null, "Per-archetype DirtyBitmapRing should exist");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

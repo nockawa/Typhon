@@ -36,7 +36,14 @@ public readonly struct SpatialFieldInfo
     public readonly float InverseCellSize;
     public readonly SpatialMode Mode;
 
-    public SpatialFieldInfo(int fieldOffset, int fieldSize, SpatialFieldType fieldType, float margin, float cellSize, SpatialMode mode = SpatialMode.Dynamic)
+    /// <summary>
+    /// Archetype-level category bitmask from <see cref="SpatialIndexAttribute.Category"/>. Used by the per-cell cluster spatial broadphase to skip clusters
+    /// whose category does not intersect the query's category mask. Defaults to <see cref="uint.MaxValue"/> so archetypes without an explicit category
+    /// remain queryable with any mask. Issue #230 Phase 3.
+    /// </summary>
+    public readonly uint Category;
+
+    public SpatialFieldInfo(int fieldOffset, int fieldSize, SpatialFieldType fieldType, float margin, float cellSize, SpatialMode mode = SpatialMode.Dynamic, uint category = uint.MaxValue)
     {
         FieldOffset = fieldOffset;
         FieldSize = fieldSize;
@@ -45,6 +52,7 @@ public readonly struct SpatialFieldInfo
         CellSize = cellSize;
         InverseCellSize = cellSize > 0 ? 1.0f / cellSize : 0;
         Mode = mode;
+        Category = category;
     }
 
     /// <summary>

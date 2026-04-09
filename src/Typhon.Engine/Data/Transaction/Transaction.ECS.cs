@@ -1461,7 +1461,9 @@ public unsafe partial class Transaction
                         // Issue #230 Phase 1: maintain the per-cell cluster AABB index alongside the
                         // per-archetype R-Tree. Gated on the spatial grid opt-in (ClusterCellMap != null)
                         // and Dynamic-mode archetypes — static mode defers to the legacy per-entity path.
-                        if (ctx.ClusterState.ClusterCellMap != null && ss.FieldInfo.Mode == SpatialMode.Dynamic)
+                        // Issue #230 Phase 3: populate the per-cell index for both Dynamic AND Static cluster archetypes. The Static path routes to
+                        // PerCellSpatialSlot.StaticIndex; Dynamic routes to DynamicIndex. See AddClusterToPerCellIndex for the split.
+                        if (ctx.ClusterState.ClusterCellMap != null)
                         {
                             if (SpatialMaintainer.ReadAndValidateBoundsFromPtr(spatialFieldPtr, ss.FieldInfo, spawnSpatialCoords, ss.Descriptor))
                             {
@@ -1480,19 +1482,23 @@ public unsafe partial class Transaction
                                 // [minX, minY, minZ, maxX, maxY, maxZ] layout. Prior to issue #230 Phase 3 this site was hardcoded to the 2D layout
                                 // regardless of tier — a latent bug that was masked because 3D archetypes only reach this hook when ConfigureSpatialGrid
                                 // was called, and the trigger/interest tests (the only 3D cluster callers) didn't call it.
+                                // Category mask comes from the archetype-level [SpatialIndex(Category=)] attribute (issue #230 Phase 3). It's the same value
+                                // for every entity in the archetype, so the cluster-level OR trivially converges to the archetype value. Defaults to
+                                // uint.MaxValue when the attribute doesn't set Category, matching pre-Phase-3 behavior.
+                                uint archetypeCategory = ss.FieldInfo.Category;
                                 if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
                                 {
                                     clusterAabb.Union3F(
                                         (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1], (float)spawnSpatialCoords[2],
                                         (float)spawnSpatialCoords[3], (float)spawnSpatialCoords[4], (float)spawnSpatialCoords[5],
-                                        uint.MaxValue);
+                                        archetypeCategory);
                                 }
                                 else
                                 {
                                     clusterAabb.Union2F(
                                         (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1],
                                         (float)spawnSpatialCoords[2], (float)spawnSpatialCoords[3],
-                                        uint.MaxValue);
+                                        archetypeCategory);
                                 }
 
                                 int cellKey = ctx.ClusterState.ClusterCellMap[clusterChunkId];
@@ -1505,7 +1511,11 @@ public unsafe partial class Transaction
                                     else
                                     {
                                         int indexSlot = ctx.ClusterState.ClusterSpatialIndexSlot[clusterChunkId];
-                                        ctx.ClusterState.PerCellIndex[cellKey].DynamicIndex.UpdateAt(indexSlot, in clusterAabb);
+                                        // Issue #230 Phase 3: route the UpdateAt to the correct sub-index based on archetype mode (Static → StaticIndex,
+                                        // Dynamic → DynamicIndex). Same split used by AddClusterToPerCellIndex.
+                                        var perCellSlot = ctx.ClusterState.PerCellIndex[cellKey];
+                                        var targetIndex = ss.FieldInfo.Mode == SpatialMode.Static ? perCellSlot.StaticIndex : perCellSlot.DynamicIndex;
+                                        targetIndex.UpdateAt(indexSlot, in clusterAabb);
                                     }
                                 }
                             }

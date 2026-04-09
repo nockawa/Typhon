@@ -310,7 +310,7 @@ class SpatialInterestTests : TestBase<SpatialInterestTests>
         DirtyBitmapRing ring;
         if (meta.HasClusterSpatial)
         {
-            ring = dbe._archetypeStates[meta.ArchetypeId].ClusterState.SpatialSlot.DirtyRing;
+            ring = dbe._archetypeStates[meta.ArchetypeId].ClusterState.ClusterDirtyRing;
         }
         else
         {
