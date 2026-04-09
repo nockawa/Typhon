@@ -837,6 +837,108 @@ internal sealed unsafe class ArchetypeClusterState
     }
 
     /// <summary>
+    /// Tick-fence pass (issue #230 Phase 2): re-tighten cluster AABBs for clusters that had entity writes this tick. Scans the dirty bitmap,
+    /// recomputes the tight AABB from live entities via <see cref="RecomputeClusterAabb"/>, and updates the per-cell index entry in-place when
+    /// the AABB actually changed. Closes the "loose AABB drift" trade-off from Phase 1 (see design doc deliberate deviation #4).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Dirty bitmap shape.</b> <see cref="ClusterDirtyBitmap"/> stores bits at <c>entityIndex = clusterChunkId * 64 + slotIndex</c>, so each
+    /// <c>long</c> word at index <c>i</c> in the snapshot corresponds to cluster chunk id <c>i</c> (its 64 bits are its 64 slots). Any non-zero
+    /// word means the cluster had at least one slot write this tick — we don't need a per-bit inner loop, a per-word non-zero test is enough.
+    /// </para>
+    /// <para>
+    /// <b>Category mask preservation.</b> <see cref="RecomputeClusterAabb"/> currently hardcodes <c>uint.MaxValue</c> as the returned mask
+    /// (Phase 1 has no per-entity category plumbing). We explicitly preserve whatever mask already lives on the per-cell index entry instead of
+    /// writing the fresh-but-collapsed value back. This is a no-op today but becomes load-bearing in Phase 3 once
+    /// <c>[SpatialIndex(Category=...)]</c> lands — without this preservation, the tick-fence pass would clobber the attribute-driven mask every tick.
+    /// </para>
+    /// <para>
+    /// <b>Cost.</b> ~100 ns per dirty cluster (SoA scan of &le;64 occupied slots via TZCNT loop, four float min/max ops). Worst case in AntHill
+    /// is ~5 ms/tick at 50K dirty clusters — the minimum cost of per-tick AABB freshness.
+    /// </para>
+    /// </remarks>
+    internal void RecomputeDirtyClusterAabbs(long[] dirtyBits, ref ChunkAccessor<PersistentStore> accessor)
+    {
+        // Same gating as the Phase 1 spawn/destroy/migration hooks.
+        if (SpatialSlot.Tree == null)
+        {
+            return;
+        }
+        if (SpatialSlot.FieldInfo.Mode != SpatialMode.Dynamic)
+        {
+            return; // Phase 1 is Dynamic-mode only; static index path lands in Phase 3.
+        }
+        if (ClusterSpatialIndexSlot == null || ClusterAabbs == null)
+        {
+            return; // no per-cell index entries exist yet — nothing to tighten
+        }
+        if (PerCellIndex == null || ClusterCellMap == null)
+        {
+            return;
+        }
+
+        for (int chunkId = 0; chunkId < dirtyBits.Length; chunkId++)
+        {
+            if (dirtyBits[chunkId] == 0)
+            {
+                continue; // no slot writes in this cluster this tick
+            }
+
+            // Cluster may exist in the dirty bitmap but not (yet) in the per-cell index — e.g. a fresh
+            // migration destination that's already handled by the caller path. Skip defensively.
+            if (chunkId >= ClusterSpatialIndexSlot.Length)
+            {
+                continue;
+            }
+            int indexSlot = ClusterSpatialIndexSlot[chunkId];
+            if (indexSlot < 0)
+            {
+                continue;
+            }
+            if (chunkId >= ClusterCellMap.Length)
+            {
+                continue;
+            }
+            int cellKey = ClusterCellMap[chunkId];
+            if (cellKey < 0)
+            {
+                continue;
+            }
+            var slot = PerCellIndex[cellKey];
+            if (slot == null || slot.DynamicIndex == null)
+            {
+                continue;
+            }
+
+            ClusterSpatialAabb fresh = RecomputeClusterAabb(chunkId, ref accessor);
+
+            // Empty-cluster guard: Empty has +inf / -inf extents. This shouldn't normally happen here
+            // because destroyed-slot dirty bits are masked by the caller (DatabaseEngine.WriteClusterTickFence
+            // AND's dirtyBits with live occupancy before calling us) — but handle it defensively in case a
+            // future caller forgets to do the masking.
+            if (float.IsPositiveInfinity(fresh.MinX))
+            {
+                continue;
+            }
+
+            ref var stored = ref ClusterAabbs[chunkId];
+            if (stored.MinX == fresh.MinX && stored.MinY == fresh.MinY && stored.MaxX == fresh.MaxX && stored.MaxY == fresh.MaxY)
+            {
+                continue; // bit-exact AABB unchanged — skip the UpdateAt call
+            }
+
+            // Tighten the stored AABB. Preserve the existing CategoryMask on both the stored state and
+            // the index entry (forward-safe for Phase 3 archetype-level category masks).
+            // We mutate `fresh` in place with the preserved mask, then write the single value to both
+            // the in-memory ClusterAabbs entry and the per-cell index SoA row — avoids a redundant copy.
+            fresh.CategoryMask = slot.DynamicIndex.CategoryMasks[indexSlot];
+            stored = fresh;
+            slot.DynamicIndex.UpdateAt(indexSlot, in fresh);
+        }
+    }
+
+    /// <summary>
     /// Add a cluster to its cell's <see cref="PerCellSpatialSlot.DynamicIndex"/>, lazily allocating the <see cref="PerCellSpatialSlot"/> and
     /// <see cref="CellSpatialIndex"/> as needed. Records the back-pointer in <see cref="ClusterSpatialIndexSlot"/> for O(1) subsequent updates. Issue #230.
     /// </summary>

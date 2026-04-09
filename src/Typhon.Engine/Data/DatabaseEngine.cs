@@ -944,6 +944,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         clusterState.LastTickMigrationCount = 0;
                         clusterState.LastTickMigrationExecuteMs = 0d;
                     }
+
+                    // Issue #230 Phase 2: tighten per-cluster AABBs for clusters that had entity writes this tick.
+                    // Must run AFTER ExecuteMigrations so post-migration destination clusters get their union-loose
+                    // AABB replaced with the true tight bounds in the same pass. Source clusters that emptied out
+                    // during migration are already removed from the per-cell index (FinaliseEmptyClusterCellState)
+                    // so their dirty bits either get masked by occupancy or fall through the indexSlot<0 guard.
+                    clusterState.RecomputeDirtyClusterAabbs(dirtyBits, ref accessor);
                 }
 
                 // Archive dirty bitmap into per-archetype DirtyBitmapRing for spatial interest management
