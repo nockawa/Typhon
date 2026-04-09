@@ -937,7 +937,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     // cleared via dirty-bit clear, destination slots serialized via dirty-bit set).
                     if (clusterState.PendingMigrationCount > 0)
                     {
-                        ExecuteMigrations(clusterState, engineState, meta.ArchetypeId, dirtyBits);
+                        ExecuteMigrations(clusterState, engineState, meta.ArchetypeId, ref dirtyBits);
                     }
                     else
                     {
@@ -1372,13 +1372,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// <c>OnTickEndInternal</c> ordering — <c>WriteTickFence</c> before <c>UoW.Flush</c> — ensures the migration is durable
     /// within the tick that triggered it.</para>
     ///
-    /// <para><b>New-cluster edge case.</b> If <c>ClaimSlotInCell</c> allocates a brand-new cluster whose chunk id
-    /// exceeds the current <paramref name="dirtyBits"/> length, the destination slot cannot be marked dirty in this tick's
-    /// WAL publish. The cluster page is still marked dirty via <c>GetChunkAddress(dirty:true)</c> and persists via
-    /// checkpoint, but a crash before checkpoint would lose the destination content. This is a Phase 3 limitation; a
-    /// follow-up can grow the dirty bitmap during migration.</para>
+    /// <para><b>Destination-cluster growth.</b> If <c>ClaimSlotInCell</c> allocates a brand-new cluster whose chunk id
+    /// exceeds the current <paramref name="dirtyBits"/> length, the snapshot array is grown in place via
+    /// <see cref="Array.Resize{T}(ref T[], int)"/> so the destination slot bit can be set and survive the subsequent
+    /// WAL publish. The caller's local reference receives the grown array via the <c>ref</c> parameter. The archived
+    /// <see cref="DirtyBitmapRing"/> and <see cref="ArchetypeClusterState.PreviousTickDirtySnapshot"/> both observe
+    /// the grown array, keeping interest management and next-tick change dispatch consistent.</para>
     /// </remarks>
-    private unsafe void ExecuteMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ushort archetypeId, long[] dirtyBits)
+    private unsafe void ExecuteMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ushort archetypeId, ref long[] dirtyBits)
     {
         int count = clusterState.PendingMigrationCount;
         if (count == 0)
@@ -1429,6 +1430,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         // Reusable buffer for reading/writing ClusterEntityRecord. Max versioned-slot count determines the size.
         byte* recordPtr = stackalloc byte[ClusterEntityRecordAccessor.BaseRecordSize + EntityRecordAccessor.MaxComponentCount * sizeof(int)];
+        // Narrowphase scratch for the #230 Phase 1 per-cell index migration hook. Hoisted out of the
+        // migration loop to avoid CA2014 stack-pressure accumulation — a batch of thousands of migrations
+        // would otherwise allocate 32 bytes per iteration that can't be released until ExecuteMigrations
+        // returns.
+        Span<double> migrantCoords = stackalloc double[4];
 
         try
         {
@@ -1564,6 +1570,42 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 byte* dstFieldPtr = dstBase + spatialCompOffset + dstSlot * spatialCompSize + ss.FieldOffset;
                 SpatialMaintainer.InsertSpatialCluster(entityPK, newClusterLocation, dstFieldPtr, ref ss, ref treeAccessor, ref bpAccessor, changeSet);
 
+                // Issue #230 Phase 1: maintain per-cell cluster AABB index at the destination. Union the migrant's bounds into the dst cluster's AABB.
+                // If dst is a brand-new cluster (first entity since allocation), reset the AABB to Empty first so any stale state from a prior life of
+                // the chunk id is discarded. Gated on Dynamic mode (static mode uses the legacy path).
+                // The src cluster's AABB stays conservative (not shrunk) — Phase 1 trade-off.
+                // If src becomes empty, ReleaseSlot below → FinaliseEmptyClusterCellState removes it from the per-cell index.
+                if (ss.FieldInfo.Mode == SpatialMode.Dynamic && clusterState.ClusterCellMap != null)
+                {
+                    if (SpatialMaintainer.ReadAndValidateBoundsFromPtr(dstFieldPtr, ss.FieldInfo, migrantCoords, ss.Descriptor))
+                    {
+                        clusterState.EnsureClusterAabbsCapacity(dstChunkId + 1);
+                        clusterState.EnsureClusterSpatialIndexSlotCapacity(dstChunkId + 1);
+
+                        bool wasInIndex = clusterState.ClusterSpatialIndexSlot[dstChunkId] >= 0;
+                        ref var dstClusterAabb = ref clusterState.ClusterAabbs[dstChunkId];
+                        if (!wasInIndex)
+                        {
+                            dstClusterAabb = ClusterSpatialAabb.Empty;
+                        }
+                        dstClusterAabb.Union((float)migrantCoords[0], (float)migrantCoords[1], (float)migrantCoords[2], (float)migrantCoords[3], uint.MaxValue);
+
+                        int dstCellKey = clusterState.ClusterCellMap[dstChunkId];
+                        if (dstCellKey >= 0)
+                        {
+                            if (!wasInIndex)
+                            {
+                                clusterState.AddClusterToPerCellIndex(dstChunkId, dstCellKey, dstClusterAabb);
+                            }
+                            else
+                            {
+                                int indexSlot = clusterState.ClusterSpatialIndexSlot[dstChunkId];
+                                clusterState.PerCellIndex[dstCellKey].DynamicIndex.UpdateAt(indexSlot, in dstClusterAabb);
+                            }
+                        }
+                    }
+                }
+
                 // 9. Update EntityMap ClusterEntityRecord with the new (clusterChunkId, slotIndex).
                 //    CRITICAL: EntityMap is keyed by EntityKey (the 52-bit top half of RawValue), NOT by the full RawValue stored in cluster slots.
                 //    Passing RawValue here would silently miss every lookup — the map would never get updated, and the entity would remain resolvable via
@@ -1596,16 +1638,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 // 11. Maintain dirtyBits so the subsequent ClusterTickFence WAL publish serializes the right slots.
                 //     Clear the source bit (we just cleared the slot's data; serializing it would write stale bytes).
                 //     Set the destination bit (the new content must be in the WAL for replay).
+                //     If the destination is a brand-new cluster whose chunk id exceeds the snapshot length, grow the snapshot in place (doubling, at least
+                //     dstChunkId+1). The caller's local reference is updated via the ref parameter so subsequent readers (DirtyRing archive, WAL publish loop,
+                //     PreviousTickDirtySnapshot) see the grown array.
                 if (srcChunkId < dirtyBits.Length)
                 {
                     dirtyBits[srcChunkId] &= ~(1L << srcSlot);
                 }
-                if (dstChunkId < dirtyBits.Length)
+                if (dstChunkId >= dirtyBits.Length)
                 {
-                    dirtyBits[dstChunkId] |= 1L << dstSlot;
+                    int newLength = Math.Max(dirtyBits.Length * 2, dstChunkId + 1);
+                    Array.Resize(ref dirtyBits, newLength);
                 }
-                // else: see XML doc "New-cluster edge case" — the destination is beyond the snapshot range.
-                // Checkpoint still persists the page; only WAL replay coverage for a same-tick crash is missed.
+                dirtyBits[dstChunkId] |= 1L << dstSlot;
             }
         }
         finally
@@ -1638,6 +1683,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         double durationMs = (endTimestamp - startTimestamp) * 1000.0 / Stopwatch.Frequency;
         clusterState.LastTickMigrationCount = count;
         clusterState.LastTickMigrationExecuteMs = durationMs;
+        // Test observation hook: record the final dirtyBits length so regression tests can verify the snapshot was grown when migration allocated a new
+        // destination cluster beyond the pre-migration length.
+        clusterState.LastMigrationDirtyBitsWordCount = dirtyBits.Length;
 
         // High-migration-rate warning. Analogous to LogHighEscapeRate — surfaces potential viewport warps, teleport events, or unphysical entity speeds that
         // blow past cell boundaries en masse. 1K per tick is an arbitrary absolute threshold; revisit once AntHill provides realistic rates.
@@ -2572,16 +2620,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 MMF.Bootstrap.SetInt($"clusterindex.{meta.ArchetypeId}", state.ClusterState.IndexSegment.RootPageIndex);
             }
 
-            // Persist per-archetype cluster spatial segment SPIs via bootstrap dictionary
+            // Persist per-archetype cluster spatial segment SPIs via bootstrap dictionary.
+            // Only three values are needed: the two segment root page indices (to locate the persisted R-Tree and its back-pointer segment on reopen) and
+            // the tree node stride (used as a consistency check when calling TryLoadChunkBasedSegment). Every other piece of spatial configuration — variant,
+            // mode, margin — is reconstructed at load time from the compile-time [SpatialIndex] attribute on the component field via table.SpatialIndex.FieldInfo
+            // The attribute is the single source of truth; round-tripping the same values through
+            // bootstrap would be redundant and invite drift.
             if (state.ClusterState?.SpatialSlot.Tree != null)
             {
                 ref var ss = ref state.ClusterState.SpatialSlot;
-                MMF.Bootstrap.Set($"clusterspatial.{meta.ArchetypeId}", BootstrapDictionary.Value.FromInt5(
+                MMF.Bootstrap.Set($"clusterspatial.{meta.ArchetypeId}", BootstrapDictionary.Value.FromInt3(
                     ss.Tree.Segment.RootPageIndex,
                     ss.BackPointerSegment.RootPageIndex,
-                    (int)ss.Tree.Variant | ((int)ss.FieldInfo.Mode << 4) | (ss.Descriptor.Stride << 8),
-                    BitConverter.SingleToInt32Bits(ss.FieldInfo.Margin),
-                    ss.OccupancyMap?.Segment.RootPageIndex ?? 0));
+                    ss.Descriptor.Stride));
             }
 
             SystemCrud.Update(archetypesTable, persisted.ChunkId, ref arch, EpochManager, cs);
@@ -3343,8 +3394,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         {
                             int treeSPI = spatialVal.GetInt();
                             int bpSPI = spatialVal.GetInt(1);
-                            int variantStride = spatialVal.GetInt(2);
-                            int spatialTreeStride = variantStride >> 8;
+                            int spatialTreeStride = spatialVal.GetInt(2);
 
                             if (treeSPI > 0 && bpSPI > 0
                                 && MMF.TryLoadChunkBasedSegment(treeSPI, spatialTreeStride, out var loadedTree)
@@ -3394,6 +3444,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         {
                             using var cellEpoch = EpochGuard.Enter(EpochManager);
                             clusterState.RebuildCellState(_spatialGrid);
+
+                            // Issue #230 Phase 1: rebuild per-cluster AABBs and the per-cell dynamic index from the same entity positions.
+                            // Runs AFTER RebuildCellState so ClusterCellMap is populated. Transient state — not persisted, always reconstructed at startup.
+                            // No-op for static-mode archetypes (Phase 1 supports dynamic mode only).
+                            clusterState.RebuildClusterAabbs();
                         }
                     }
                     finally

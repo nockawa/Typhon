@@ -1226,6 +1226,11 @@ public unsafe partial class Transaction
         Span<int> svIdxAccessorBase = stackalloc int[16]; // offset into svIdxAccessors for each slot
         Span<int> trSlots = stackalloc int[16];
         Span<int> trIdxAccessorBase = stackalloc int[16];
+        // Narrowphase scratch for ReadAndValidateBoundsFromPtr in the cluster spatial spawn hook (#230
+        // Phase 1). Hoisted out of the per-entity loop to avoid CA2014 stack-pressure accumulation when
+        // spawning many entities in one transaction — the per-iteration allocation would not release
+        // until FinalizeSpawns returns.
+        Span<double> spawnSpatialCoords = stackalloc double[4];
 
         try
         {
@@ -1451,6 +1456,44 @@ public unsafe partial class Transaction
                         SpatialMaintainer.InsertSpatialCluster(
                             (long)entry.Id.RawValue, clusterLocation, spatialFieldPtr,
                             ref ss, ref ctx.ClusterSpatialTreeAccessor, ref ctx.ClusterSpatialBpAccessor, _changeSet);
+
+                        // Issue #230 Phase 1: maintain the per-cell cluster AABB index alongside the
+                        // per-archetype R-Tree. Gated on the spatial grid opt-in (ClusterCellMap != null)
+                        // and Dynamic-mode archetypes — static mode defers to the legacy per-entity path.
+                        if (ctx.ClusterState.ClusterCellMap != null && ss.FieldInfo.Mode == SpatialMode.Dynamic)
+                        {
+                            if (SpatialMaintainer.ReadAndValidateBoundsFromPtr(spatialFieldPtr, ss.FieldInfo, spawnSpatialCoords, ss.Descriptor))
+                            {
+                                ctx.ClusterState.EnsureClusterAabbsCapacity(clusterChunkId + 1);
+                                ctx.ClusterState.EnsureClusterSpatialIndexSlotCapacity(clusterChunkId + 1);
+
+                                bool wasInIndex = ctx.ClusterState.ClusterSpatialIndexSlot[clusterChunkId] >= 0;
+                                ref var clusterAabb = ref ctx.ClusterState.ClusterAabbs[clusterChunkId];
+                                if (!wasInIndex)
+                                {
+                                    // First entity of (possibly reused) cluster — reset to Empty to drop any
+                                    // stale AABB left over from a prior life of this chunk id.
+                                    clusterAabb = ClusterSpatialAabb.Empty;
+                                }
+                                clusterAabb.Union(
+                                    (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1], (float)spawnSpatialCoords[2], (float)spawnSpatialCoords[3],
+                                    uint.MaxValue);
+
+                                int cellKey = ctx.ClusterState.ClusterCellMap[clusterChunkId];
+                                if (cellKey >= 0)
+                                {
+                                    if (!wasInIndex)
+                                    {
+                                        ctx.ClusterState.AddClusterToPerCellIndex(clusterChunkId, cellKey, clusterAabb);
+                                    }
+                                    else
+                                    {
+                                        int indexSlot = ctx.ClusterState.ClusterSpatialIndexSlot[clusterChunkId];
+                                        ctx.ClusterState.PerCellIndex[cellKey].DynamicIndex.UpdateAt(indexSlot, in clusterAabb);
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Insert Transient indexed fields into per-ComponentTable TransientIndex.

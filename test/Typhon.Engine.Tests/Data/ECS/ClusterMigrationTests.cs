@@ -564,6 +564,91 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Regression — closes the Phase 3 "new-cluster WAL edge case" loose end
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void Migration_IntoBrandNewCluster_GrowsDirtyBitsSnapshot()
+    {
+        // Pre-fix behavior: when a migration allocated a brand-new destination cluster whose chunk id
+        // exceeded the pre-migration dirtyBits snapshot length, the guard `if (dstChunkId < dirtyBits.Length)`
+        // silently dropped the destination's dirty bit. The destination cluster was still persisted via
+        // checkpoint, but a crash before the next checkpoint would lose the destination content because
+        // its slot was never serialized into the tick's WAL record.
+        //
+        // Post-fix behavior: the snapshot is grown in place via Array.Resize, propagated back via `ref`,
+        // and the destination bit is always set. Observed via LastMigrationDirtyBitsWordCount AND the
+        // dst bit being present in PreviousTickDirtySnapshot after the tick fence.
+        //
+        // Test setup: spawn 1 entity in cell A (creates one cluster). The ClusterDirtyBitmap is initially
+        // sized for the segment's ChunkCapacity (typically many words), so in the "natural" case the
+        // snapshot is already large enough. To exercise the edge case deterministically, we artificially
+        // shrink the bitmap to 1 word via DirtyBitmap.ShrinkForTesting, then trigger a migration whose
+        // destination chunk id (1 or more) exceeds the truncated snapshot length.
+        using var dbe = SetupEngineWithGrid();
+
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            id = tx.Spawn<ClMigUnit>(
+                ClMigUnit.Pos.Set(PointAt(50f, 50f)),
+                ClMigUnit.Scratch.Set(ScratchOf(0, 0f)));
+            tx.Commit();
+        }
+
+        var (srcChunk, _) = ReadLocation(dbe, id);
+        Assert.That(srcChunk, Is.GreaterThanOrEqualTo(0), "sanity: source cluster should be allocated");
+
+        var meta = Archetype<ClMigUnit>.Metadata;
+        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+
+        // Queue a position update that crosses into a distant cell (past hysteresis).
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var eref = tx.OpenMut(id);
+            ref var pos = ref eref.Write(ClMigUnit.Pos);
+            pos.Bounds = new AABB2F { MinX = 850f, MinY = 850f, MaxX = 850f, MaxY = 850f };
+            tx.Commit();
+        }
+
+        // Shrink the dirty bitmap AFTER the update commits but BEFORE the tick fence takes its snapshot.
+        // This simulates the natural worst case: segment grew past the bitmap's size and a subsequent
+        // migration targets a chunk id beyond the snapshot. We shrink to srcChunk+1 words to preserve
+        // the source cluster's dirty bit (required for ProcessClusterSpatialEntries to see the update
+        // and detect the cell crossing) while truncating any word beyond the source. The migration
+        // will then allocate a destination cluster whose id is > srcChunk, which triggers the edge case.
+        cs.ClusterDirtyBitmap.ShrinkForTesting(wordCount: srcChunk + 1);
+
+        dbe.WriteTickFence(1);
+
+        // Post-migration: entity lives in a new cluster (different chunk id from source).
+        var (dstChunk, dstSlot) = ReadLocation(dbe, id);
+        Assert.That(dstChunk, Is.Not.EqualTo(srcChunk),
+            "migration must have allocated a brand-new destination cluster (different chunkId)");
+
+        // Assertion 1: the snapshot word count at the end of migration must cover the dst chunk id.
+        // Pre-fix: LastMigrationDirtyBitsWordCount == 1 (the shrunk snapshot never grew; guard silently
+        //          dropped the dst write because dstChunk >= 1).
+        // Post-fix: LastMigrationDirtyBitsWordCount >= dstChunk+1 (Array.Resize grew the snapshot in place
+        //           and the caller's reference was updated via the ref parameter).
+        Assert.That(cs.LastMigrationDirtyBitsWordCount, Is.GreaterThan(dstChunk),
+            $"dirtyBits snapshot must be grown to cover the new destination cluster " +
+            $"(dstChunkId={dstChunk}, snapshot word count={cs.LastMigrationDirtyBitsWordCount})");
+
+        // Assertion 2: the published tick-fence snapshot (stored as PreviousTickDirtySnapshot) must
+        // contain the destination slot's bit. This proves the fix actually landed the bit, not just
+        // that the array was grown.
+        Assert.That(cs.PreviousTickDirtySnapshot, Is.Not.Null,
+            "PreviousTickDirtySnapshot should be set after a tick fence with dirty content");
+        Assert.That(cs.PreviousTickDirtySnapshot.Length, Is.GreaterThan(dstChunk),
+            "PreviousTickDirtySnapshot must cover the dst chunk id");
+        long dstBitMask = 1L << dstSlot;
+        Assert.That(cs.PreviousTickDirtySnapshot[dstChunk] & dstBitMask, Is.EqualTo(dstBitMask),
+            $"destination slot's dirty bit must be set in PreviousTickDirtySnapshot " +
+            $"(dstChunk={dstChunk}, dstSlot={dstSlot}) — pre-fix dropped it when snapshot was too small");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Regression — Bug #1: EntityMap must use EntityKey, not RawValue
     // ═══════════════════════════════════════════════════════════════════════
 

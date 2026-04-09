@@ -79,6 +79,24 @@ internal sealed class DirtyBitmap
     internal void Clear() => Array.Clear(_bits);
 
     /// <summary>
+    /// TEST-ONLY: forcibly shrink the internal bits array to <paramref name="wordCount"/> words.
+    /// Used by regression tests that need to simulate a snapshot length smaller than a subsequent destination chunk id, to exercise the <c>ExecuteMigrations</c>
+    /// dirtyBits growth path. Not thread-safe; all bits beyond the truncation point are discarded.
+    /// </summary>
+    internal void ShrinkForTesting(int wordCount)
+    {
+        if (wordCount < 1)
+        {
+            wordCount = 1;
+        }
+        var shrunk = new long[wordCount];
+        var bits = _bits;
+        var copyLen = Math.Min(bits.Length, wordCount);
+        Array.Copy(bits, shrunk, copyLen);
+        _bits = shrunk;
+    }
+
+    /// <summary>
     /// Atomically swap the current bitmap with a fresh empty one.
     /// Returns the old bitmap containing all dirty bits since the last snapshot.
     /// Called by tick fence serialization (3.4) — outside hot write path.

@@ -78,8 +78,37 @@ internal sealed unsafe class ArchetypeClusterState
     /// for the most recently completed tick.</summary>
     public double LastTickMigrationExecuteMs;
 
+    /// <summary>
+    /// Test observation hook: length (in long words) of the <c>dirtyBits</c> snapshot at the end of <c>ExecuteMigrations</c>. Used by regression tests to
+    /// verify the snapshot was grown when migration allocated a brand-new destination cluster whose chunk id exceeded the pre-migration length.
+    /// Zero when no migrations ran.
+    /// </summary>
+    public int LastMigrationDirtyBitsWordCount;
+
     /// <summary>Per-entity dirty tracking for tick fence WAL serialization. Index = clusterChunkId * 64 + slotIndex.</summary>
     public DirtyBitmap ClusterDirtyBitmap;
+
+    /// <summary>
+    /// Per-cluster tight 2D AABB plus category mask for spatially-active clusters (issue #230).
+    /// Indexed by clusterChunkId. Populated by spawn/destroy/migration hooks and the tick-fence recompute pass. Null for non-spatial archetypes or before the
+    /// first spatial write. In-memory only — rebuilt at startup via <see cref="RebuildClusterAabbs"/> from entity positions (Q2/Q6 transient-state decision).
+    /// Phase 1 is 2D f32 only.
+    /// </summary>
+    internal ClusterSpatialAabb[] ClusterAabbs;
+
+    /// <summary>
+    /// Per-cluster back-pointer into its cell's <see cref="CellSpatialIndex.ClusterIds"/> SoA array.
+    /// <c>-1</c> for clusters not currently in the per-cell index (non-spatial archetypes, Static-mode archetypes in Phase 1, or before the first insertion).
+    /// Indexed by clusterChunkId.
+    /// </summary>
+    internal int[] ClusterSpatialIndexSlot;
+
+    /// <summary>
+    /// Per-archetype per-cell spatial slot, indexed by cellKey. Null entries for cells where this archetype has no clusters. Lazy-allocated:
+    /// the <see cref="PerCellSpatialSlot"/> is created on first cluster insertion into that cell. The DynamicIndex inside is also lazy (created on first
+    /// <see cref="CellSpatialIndex.Add"/>). Null entirely for non-spatial archetypes or before grid opt-in.
+    /// </summary>
+    internal PerCellSpatialSlot[] PerCellIndex;
 
     /// <summary>
     /// Snapshot of the previous tick's dirty bitmap (occupancy-masked). Set during <c>WriteClusterTickFence</c>, consumed
@@ -611,6 +640,260 @@ internal sealed unsafe class ArchetypeClusterState
     }
 
     /// <summary>
+    /// Grow <see cref="ClusterAabbs"/> to hold at least <paramref name="requiredLength"/> entries. Issue #230.
+    /// New slots are left at <see cref="ClusterSpatialAabb.Empty"/> (neutral seed for subsequent unions).
+    /// </summary>
+    internal void EnsureClusterAabbsCapacity(int requiredLength)
+    {
+        if (ClusterAabbs == null)
+        {
+            int initial = Math.Max(16, requiredLength);
+            ClusterAabbs = new ClusterSpatialAabb[initial];
+            for (int i = 0; i < initial; i++)
+            {
+                ClusterAabbs[i] = ClusterSpatialAabb.Empty;
+            }
+            return;
+        }
+        if (ClusterAabbs.Length >= requiredLength)
+        {
+            return;
+        }
+        int newLen = Math.Max(ClusterAabbs.Length, 1);
+        while (newLen < requiredLength)
+        {
+            newLen *= 2;
+        }
+        int oldLen = ClusterAabbs.Length;
+        Array.Resize(ref ClusterAabbs, newLen);
+        for (int i = oldLen; i < newLen; i++)
+        {
+            ClusterAabbs[i] = ClusterSpatialAabb.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Grow <see cref="ClusterSpatialIndexSlot"/> to hold at least <paramref name="requiredLength"/> entries, initializing new slots to <c>-1</c> (not in
+    /// the per-cell index). Issue #230.
+    /// </summary>
+    internal void EnsureClusterSpatialIndexSlotCapacity(int requiredLength)
+    {
+        if (ClusterSpatialIndexSlot == null)
+        {
+            int initial = Math.Max(16, requiredLength);
+            ClusterSpatialIndexSlot = new int[initial];
+            Array.Fill(ClusterSpatialIndexSlot, -1);
+            return;
+        }
+        if (ClusterSpatialIndexSlot.Length >= requiredLength)
+        {
+            return;
+        }
+        int newLen = Math.Max(ClusterSpatialIndexSlot.Length, 1);
+        while (newLen < requiredLength)
+        {
+            newLen *= 2;
+        }
+        int oldLen = ClusterSpatialIndexSlot.Length;
+        Array.Resize(ref ClusterSpatialIndexSlot, newLen);
+        Array.Fill(ClusterSpatialIndexSlot, -1, oldLen, newLen - oldLen);
+    }
+
+    /// <summary>
+    /// Grow <see cref="PerCellIndex"/> to hold at least <paramref name="requiredLength"/> entries. New slots are left <c>null</c> —
+    /// each <see cref="PerCellSpatialSlot"/> is lazily allocated on first cluster insertion into that cell via <see cref="AddClusterToPerCellIndex"/>.
+    /// Issue #230.
+    /// </summary>
+    internal void EnsurePerCellIndexCapacity(int requiredLength)
+    {
+        if (PerCellIndex == null)
+        {
+            int initial = Math.Max(16, requiredLength);
+            PerCellIndex = new PerCellSpatialSlot[initial];
+            return;
+        }
+        if (PerCellIndex.Length >= requiredLength)
+        {
+            return;
+        }
+        int newLen = Math.Max(PerCellIndex.Length, 1);
+        while (newLen < requiredLength)
+        {
+            newLen *= 2;
+        }
+        Array.Resize(ref PerCellIndex, newLen);
+    }
+
+    /// <summary>
+    /// Recompute the tight 2D AABB and category-mask union of a cluster by scanning its occupied slots. The spatial field is read
+    /// via <see cref="SpatialMaintainer.ReadAndValidateBoundsFromPtr"/> which dispatches on the archetype's <see cref="SpatialFieldInfo.FieldType"/>.
+    /// Degenerate entities (NaN/Inf bounds) are skipped. Issue #230.
+    /// </summary>
+    /// <remarks>
+    /// Cost: one pass over <see cref="ArchetypeClusterInfo.ClusterSize"/> occupancy bits, ~50-100 ns per occupied entity on the L1-hot common path.
+    /// Category mask is the OR of per-entity masks; in Phase 1 all entities use the default <c>uint.MaxValue</c> mask, so this collapses to <c>uint.MaxValue</c>.
+    /// </remarks>
+    internal ClusterSpatialAabb RecomputeClusterAabb(int clusterChunkId, ref ChunkAccessor<PersistentStore> accessor)
+    {
+        var ss = SpatialSlot;
+        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
+        ulong occupancy = *(ulong*)clusterBase;
+        int componentOffset = Layout.ComponentOffset(ss.Slot);
+        int componentStride = Layout.ComponentSize(ss.Slot);
+
+        var aabb = ClusterSpatialAabb.Empty;
+        Span<double> coords = stackalloc double[4]; // Phase 1 is 2D only → 4 doubles
+
+        ulong bits = occupancy;
+        while (bits != 0)
+        {
+            int slot = BitOperations.TrailingZeroCount(bits);
+            bits &= bits - 1;
+
+            byte* fieldPtr = clusterBase + componentOffset + slot * componentStride + ss.FieldOffset;
+            if (!SpatialMaintainer.ReadAndValidateBoundsFromPtr(fieldPtr, ss.FieldInfo, coords, ss.Descriptor))
+            {
+                continue; // skip degenerate slot
+            }
+
+            aabb.Union(entityMinX: (float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], uint.MaxValue);
+        }
+
+        return aabb;
+    }
+
+    /// <summary>
+    /// Startup rebuild of per-cluster AABBs from entity positions. Mirrors <see cref="RebuildCellState"/>:
+    /// both derive transient state from persistent cluster data on database reopen. Iterates all active clusters, recomputes each AABB, stores it
+    /// in <see cref="ClusterAabbs"/>, and adds the cluster to its cell's <see cref="PerCellSpatialSlot.DynamicIndex"/> (lazy-allocated).
+    /// Back-pointer recorded in <see cref="ClusterSpatialIndexSlot"/> so subsequent updates are O(1). Issue #230.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Phase 1 supports Dynamic mode only. Static-mode archetypes are skipped — they keep using the existing per-archetype R-Tree path.
+    /// </para>
+    /// <para>
+    /// Precondition: <see cref="RebuildCellState"/> has already run, so <see cref="ClusterCellMap"/> is populated and every active cluster's cell is known.
+    /// </para>
+    /// </remarks>
+    public void RebuildClusterAabbs()
+    {
+        if (SpatialSlot.Tree == null || ClusterSegment == null)
+        {
+            return;
+        }
+        if (SpatialSlot.FieldInfo.Mode != SpatialMode.Dynamic)
+        {
+            return; // Phase 1: dynamic mode only
+        }
+        if (ActiveClusterCount == 0)
+        {
+            return;
+        }
+
+        EnsureClusterAabbsCapacity(PrimarySegmentCapacity);
+        EnsureClusterSpatialIndexSlotCapacity(PrimarySegmentCapacity);
+
+        // Reset the per-cell index before rebuilding so repeated calls to RebuildClusterAabbs (e.g. a startup reopen of a database that was reopened in the
+        // same process) do not double-count clusters that already have entries in the index from a prior spawn/migration path.
+        if (PerCellIndex != null)
+        {
+            Array.Clear(PerCellIndex);
+        }
+        Array.Fill(ClusterSpatialIndexSlot, -1);
+
+        var clusterAccessor = ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            for (int i = 0; i < ActiveClusterCount; i++)
+            {
+                int chunkId = ActiveClusterIds[i];
+                ClusterSpatialAabb aabb = RecomputeClusterAabb(chunkId, ref clusterAccessor);
+                ClusterAabbs[chunkId] = aabb;
+
+                // Add to the per-cell index. The cell key was already written into ClusterCellMap by RebuildCellState. Skip clusters whose cell is unknown
+                // (ClusterCellMap[chunkId] == -1) or whose AABB is degenerate (all entities were skipped).
+                if (ClusterCellMap == null || chunkId >= ClusterCellMap.Length)
+                {
+                    continue;
+                }
+                int cellKey = ClusterCellMap[chunkId];
+                if (cellKey < 0)
+                {
+                    continue;
+                }
+                if (float.IsPositiveInfinity(aabb.MinX))
+                {
+                    continue; // empty — no valid entities
+                }
+
+                AddClusterToPerCellIndex(chunkId, cellKey, aabb);
+            }
+        }
+        finally
+        {
+            clusterAccessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Add a cluster to its cell's <see cref="PerCellSpatialSlot.DynamicIndex"/>, lazily allocating the <see cref="PerCellSpatialSlot"/> and
+    /// <see cref="CellSpatialIndex"/> as needed. Records the back-pointer in <see cref="ClusterSpatialIndexSlot"/> for O(1) subsequent updates. Issue #230.
+    /// </summary>
+    internal void AddClusterToPerCellIndex(int clusterChunkId, int cellKey, in ClusterSpatialAabb aabb)
+    {
+        EnsurePerCellIndexCapacity(cellKey + 1);
+        EnsureClusterSpatialIndexSlotCapacity(clusterChunkId + 1);
+
+        var slot = PerCellIndex[cellKey];
+        if (slot == null)
+        {
+            slot = new PerCellSpatialSlot();
+            PerCellIndex[cellKey] = slot;
+        }
+        if (slot.DynamicIndex == null)
+        {
+            slot.DynamicIndex = new CellSpatialIndex();
+        }
+        int indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
+        ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
+    }
+
+    /// <summary>
+    /// Remove a cluster from its cell's <see cref="PerCellSpatialSlot.DynamicIndex"/>. Fixes up the back-pointer of any cluster that was swapped into the
+    /// removed slot by the SoA swap-with-last. Clears <see cref="ClusterSpatialIndexSlot"/> for the removed cluster. Issue #230.
+    /// </summary>
+    internal void RemoveClusterFromPerCellIndex(int clusterChunkId, int cellKey)
+    {
+        if (PerCellIndex == null || cellKey < 0 || cellKey >= PerCellIndex.Length)
+        {
+            return;
+        }
+        var slot = PerCellIndex[cellKey];
+        if (slot == null || slot.DynamicIndex == null)
+        {
+            return;
+        }
+        if (ClusterSpatialIndexSlot == null || clusterChunkId >= ClusterSpatialIndexSlot.Length)
+        {
+            return;
+        }
+        int indexSlot = ClusterSpatialIndexSlot[clusterChunkId];
+        if (indexSlot < 0)
+        {
+            return; // not in the index
+        }
+
+        int swappedClusterId = slot.DynamicIndex.RemoveAt(indexSlot);
+        if (swappedClusterId >= 0 && swappedClusterId < ClusterSpatialIndexSlot.Length)
+        {
+            // The swapped cluster now lives at indexSlot; fix its back-pointer.
+            ClusterSpatialIndexSlot[swappedClusterId] = indexSlot;
+        }
+        ClusterSpatialIndexSlot[clusterChunkId] = -1;
+    }
+
+    /// <summary>
     /// Append a migration request to the per-archetype queue. Lazily allocates the backing array on first use
     /// and doubles its capacity on overflow. Issue #229 Phase 3.
     /// </summary>
@@ -709,7 +992,7 @@ internal sealed unsafe class ArchetypeClusterState
         ulong slotMask = 1UL << slotIndex;
         bool wasOccupied = (*(ulong*)clusterBase & slotMask) != 0;
 
-        ClearSlotMetadata(clusterBase, clusterChunkId, slotIndex);
+        ClearSlotMetadata(clusterBase, slotIndex);
 
         if (wasOccupied)
         {
@@ -741,7 +1024,7 @@ internal sealed unsafe class ArchetypeClusterState
         ulong slotMask = 1UL << slotIndex;
         bool wasOccupied = (*(ulong*)clusterBase & slotMask) != 0;
 
-        ClearSlotMetadata(clusterBase, clusterChunkId, slotIndex);
+        ClearSlotMetadata(clusterBase, slotIndex);
 
         if (wasOccupied)
         {
@@ -791,11 +1074,20 @@ internal sealed unsafe class ArchetypeClusterState
         // CellClusterPool.RemoveCluster decrements cell.ClusterCount for us.
         ref var cell = ref grid.GetCell(cellKey);
         grid.CellClusterPool.RemoveCluster(ref cell, clusterChunkId);
+
+        // Issue #230 Phase 1: also remove from the per-cell cluster AABB index and reset the cluster's stored AABB. Runs before we clear ClusterCellMap so
+        // RemoveClusterFromPerCellIndex can look up the cell key internally.
+        RemoveClusterFromPerCellIndex(clusterChunkId, cellKey);
+        if (ClusterAabbs != null && clusterChunkId < ClusterAabbs.Length)
+        {
+            ClusterAabbs[clusterChunkId] = ClusterSpatialAabb.Empty;
+        }
+
         ClusterCellMap[clusterChunkId] = -1;
     }
 
     /// <summary>Clear EnabledBits, OccupancyBit, and EntityId for a slot (store-agnostic pointer math).</summary>
-    private void ClearSlotMetadata(byte* clusterBase, int clusterChunkId, int slotIndex)
+    private void ClearSlotMetadata(byte* clusterBase, int slotIndex)
     {
         ulong slotMask = 1UL << slotIndex;
 
@@ -986,10 +1278,6 @@ internal sealed unsafe class ArchetypeClusterState
             // Create a modified SpatialFieldInfo with cluster-relative offset
             var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode);
 
-            // Occupancy map (Layer 1) if CellSize > 0
-            PagedHashMap<long, int, PersistentStore> occupancyMap = null;
-            // For now skip occupancy map for cluster spatial — the R-Tree is the primary query path
-
             SpatialSlot = new ClusterSpatialSlot
             {
                 Slot = slot,
@@ -998,7 +1286,6 @@ internal sealed unsafe class ArchetypeClusterState
                 Descriptor = descriptor,
                 Tree = tree,
                 BackPointerSegment = bpSeg,
-                OccupancyMap = occupancyMap,
                 DirtyRing = new DirtyBitmapRing(Math.Max(4, ClusterSegment.ChunkCapacity)),
             };
             break; // Only one spatial field per archetype
@@ -1065,6 +1352,17 @@ internal sealed unsafe class ArchetypeClusterState
             return;
         }
 
+        // Invariant: VersionedSlotMask != 0 implies ArchetypeClusterInfo.Compute allocated a non-null
+        // SlotToVersionedIndex array (see ArchetypeClusterInfo.cs — the array is only allocated when
+        // versionedSlotMask != 0). Cache the reference in a local so the null check is expressed once
+        // at the top of the method instead of at every indexing site, and the compiler's nullability
+        // analysis sees a non-null local for the rest of the body.
+        var slotToVi = Layout.SlotToVersionedIndex;
+        if (slotToVi == null)
+        {
+            return;
+        }
+
         var clusterAccessor = ClusterSegment.CreateChunkAccessor();
         var mapAccessor = engineState.EntityMap.Segment.CreateChunkAccessor();
         int recordSize = meta._entityRecordSize;
@@ -1075,7 +1373,7 @@ internal sealed unsafe class ArchetypeClusterState
         var contentAccessors = new ChunkAccessor<PersistentStore>[meta.ComponentCount];
         for (int slot = 0; slot < meta.ComponentCount; slot++)
         {
-            if (Layout.SlotToVersionedIndex != null && Layout.SlotToVersionedIndex[slot] >= 0)
+            if (slotToVi[slot] >= 0)
             {
                 var table = engineState.SlotToComponentTable[slot];
                 compRevAccessors[slot] = table.CompRevTableSegment.CreateChunkAccessor();
@@ -1109,7 +1407,7 @@ internal sealed unsafe class ArchetypeClusterState
                     // For each Versioned slot: walk chain → find HEAD → copy to cluster slot
                     for (int slot = 0; slot < meta.ComponentCount; slot++)
                     {
-                        int vi = Layout.SlotToVersionedIndex[slot];
+                        int vi = slotToVi[slot];
                         if (vi < 0)
                         {
                             continue;
@@ -1145,7 +1443,7 @@ internal sealed unsafe class ArchetypeClusterState
             // Dispose all hoisted accessors
             for (int slot = 0; slot < meta.ComponentCount; slot++)
             {
-                if (Layout.SlotToVersionedIndex != null && Layout.SlotToVersionedIndex[slot] >= 0)
+                if (slotToVi[slot] >= 0)
                 {
                     compRevAccessors[slot].Dispose();
                     contentAccessors[slot].Dispose();
@@ -1195,9 +1493,6 @@ internal struct ClusterSpatialSlot
 
     /// <summary>Per-archetype back-pointer CBS keyed by ClusterLocation (clusterChunkId * 64 + slotIndex).</summary>
     public ChunkBasedSegment<PersistentStore> BackPointerSegment;
-
-    /// <summary>Per-archetype occupancy map (null if CellSize == 0).</summary>
-    public PagedHashMap<long, int, PersistentStore> OccupancyMap;
 
     /// <summary>Per-archetype DirtyBitmapRing for interest management delta queries.</summary>
     public DirtyBitmapRing DirtyRing;

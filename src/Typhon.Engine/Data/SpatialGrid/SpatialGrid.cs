@@ -91,6 +91,41 @@ internal sealed unsafe class SpatialGrid
     }
 
     /// <summary>
+    /// Convert a world-space 2D AABB to the inclusive cell-coordinate range it overlaps. Used by query
+    /// paths that iterate all cells touched by a query rectangle (issue #230). Out-of-bounds inputs are
+    /// clamped to the grid extent; <see cref="float.NaN"/> / <see cref="float.PositiveInfinity"/> inputs
+    /// throw because they would produce meaningless cell indices.
+    /// </summary>
+    /// <param name="minX">Query AABB minimum X in world units.</param>
+    /// <param name="minY">Query AABB minimum Y in world units.</param>
+    /// <param name="maxX">Query AABB maximum X in world units.</param>
+    /// <param name="maxY">Query AABB maximum Y in world units.</param>
+    /// <param name="cellMinX">Inclusive minimum cell X coordinate.</param>
+    /// <param name="cellMinY">Inclusive minimum cell Y coordinate.</param>
+    /// <param name="cellMaxX">Inclusive maximum cell X coordinate.</param>
+    /// <param name="cellMaxY">Inclusive maximum cell Y coordinate.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void WorldToCellRange(float minX, float minY, float maxX, float maxY, out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY)
+    {
+        if (!float.IsFinite(minX) || !float.IsFinite(minY) || !float.IsFinite(maxX) || !float.IsFinite(maxY))
+        {
+            throw new ArgumentException(
+                $"WorldToCellRange received non-finite coordinates: ({minX}, {minY}, {maxX}, {maxY}). " +
+                $"Query data is corrupted upstream — spatial grid cannot compute a cell range for a NaN/Infinity AABB.");
+        }
+
+        int rawMinX = (int)MathF.Floor((minX - _config.WorldMin.X) * _config.InverseCellSize);
+        int rawMinY = (int)MathF.Floor((minY - _config.WorldMin.Y) * _config.InverseCellSize);
+        int rawMaxX = (int)MathF.Floor((maxX - _config.WorldMin.X) * _config.InverseCellSize);
+        int rawMaxY = (int)MathF.Floor((maxY - _config.WorldMin.Y) * _config.InverseCellSize);
+
+        cellMinX = Math.Clamp(rawMinX, 0, _config.GridWidth - 1);
+        cellMinY = Math.Clamp(rawMinY, 0, _config.GridHeight - 1);
+        cellMaxX = Math.Clamp(rawMaxX, 0, _config.GridWidth - 1);
+        cellMaxY = Math.Clamp(rawMaxY, 0, _config.GridHeight - 1);
+    }
+
+    /// <summary>
     /// Extract a 2D centre point from a spatial field pointer. Supports <see cref="SpatialFieldType.AABB2F"/>
     /// (centre of the AABB) and <see cref="SpatialFieldType.BSphere2F"/> (sphere centre). Other field types
     /// are unsupported in Phase 1+2 and will throw at config time, so this method does not re-validate.
@@ -155,6 +190,7 @@ internal sealed unsafe class SpatialGrid
             return MortonKeys.Encode2D(cellX, cellY);
         }
 #pragma warning disable CS0162 // Unreachable code — deliberate const-bool feature flag
+        // ReSharper disable once HeuristicUnreachableCode
         return cellY * _config.GridWidth + cellX;
 #pragma warning restore CS0162
     }
@@ -167,6 +203,7 @@ internal sealed unsafe class SpatialGrid
             return MortonKeys.Decode2D(cellKey);
         }
 #pragma warning disable CS0162 // Unreachable code — deliberate const-bool feature flag
+        // ReSharper disable once HeuristicUnreachableCode
         return (cellKey % _config.GridWidth, cellKey / _config.GridWidth);
 #pragma warning restore CS0162
     }
