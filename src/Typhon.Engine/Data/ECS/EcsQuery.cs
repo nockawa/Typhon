@@ -1739,11 +1739,11 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             QuerySingleTree(state.DynamicTree, state, result);
         }
 
-        // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 migration — hybrid dispatch).
-        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype indexes. AABB queries on Dynamic cluster archetypes with a
-        // configured spatial grid use the new per-cell index via ArchetypeClusterState.QueryAabb. Other combinations (Static mode, non-AABB query shapes,
-        // or no configured grid) fall back to the legacy per-archetype cluster tree. Commit 5 of Phase 3 keeps the legacy tree alive for these paths —
-        // Radius / Ray / Frustum / Nearest cluster queries and StaticIndex support are deferred to follow-up sub-issues of #228.
+        // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 Option B).
+        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype indexes. AABB and Radius queries route to the per-cell cluster
+        // index via ArchetypeClusterState.QueryAabb / QueryRadius. Under Option B, the SpatialGrid is guaranteed non-null for cluster spatial archetypes
+        // (enforced at DatabaseEngine.InitializeArchetypes). Any other query shape on the cluster tier (e.g. Ray, Frustum) throws NotSupportedException —
+        // adding Ray/Frustum on cluster archetypes is tracked as a follow-up sub-issue of #228.
         if (state.ClusterArchetypes != null)
         {
             SpatialGrid grid = _tx.DBE.SpatialGrid;
@@ -1753,7 +1753,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 {
                     continue;
                 }
-                if (grid != null && _spatialQueryType == SpatialQueryType.AABB)
+                if (_spatialQueryType == SpatialQueryType.AABB)
                 {
                     // New path: per-cell cluster index AABB query. Extract the 2D/3D query bounds from _spatialParams (same layout as in QuerySingleTree's
                     // AABB case: 6 doubles stored as [minX, minY, minZ, maxX, maxY, maxZ], with the 3D slots ignored for 2D archetypes).
@@ -1788,9 +1788,9 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                         }
                     }
                 }
-                else if (grid != null && _spatialQueryType == SpatialQueryType.Radius)
+                else if (_spatialQueryType == SpatialQueryType.Radius)
                 {
-                    // New path: per-cell cluster index Radius query (issue #230 Phase 3). Parameter layout matches QuerySingleTree's Radius case:
+                    // Per-cell cluster index Radius query (issue #230 Phase 3). Parameter layout matches QuerySingleTree's Radius case:
                     // _spatialParams[0..halfCoord] is the center, _spatialParams[3] is the radius (regardless of dimension — a quirk of the existing
                     // parameter packing for the per-entity tree).
                     float cX = (float)_spatialParams[0];
@@ -1810,10 +1810,10 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 }
                 else
                 {
-                    // Legacy fallback for non-AABB/Radius query shapes (Ray, etc.) and any archetype without a configured grid. Ray cluster queries are
-                    // deferred — the issue #230 Phase 2 integration item only names AABB, Radius, Nearest. Nearest is exposed via the per-cell index via
-                    // ArchetypeClusterState.QueryNearest but is not routed through EcsQuery (EcsQuery has no Nearest query type).
-                    QuerySingleTree(cs.SpatialSlot.Tree, state, result);
+                    // Option B: any query shape beyond AABB / Radius is unsupported on the cluster tier. No silent fallback — surface the limitation.
+                    throw new NotSupportedException(
+                        $"Cluster spatial queries for shape '{_spatialQueryType}' are not implemented in issue #230 Phase 3 Option B. " +
+                        $"Supported shapes on the cluster tier are AABB and Radius. See follow-up sub-issues of #228 for Ray/Frustum support.");
                 }
             }
         }

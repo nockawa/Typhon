@@ -19,25 +19,16 @@ internal sealed unsafe class SpatialGrid
 {
     private readonly SpatialGridConfig _config;
     private readonly CellDescriptor[] _cells;
-    private readonly CellClusterPool _clusterPool;
 
     public SpatialGrid(SpatialGridConfig config)
     {
         _config = config;
         _cells = new CellDescriptor[config.CellCount];
-        // Mark all cells' head as "no segment yet". Zero would be a valid head, so we use -1.
-        for (int i = 0; i < _cells.Length; i++)
-        {
-            _cells[i].ClusterListHead = -1;
-        }
-        _clusterPool = new CellClusterPool(config.CellCount);
     }
 
     public ref readonly SpatialGridConfig Config => ref _config;
 
     public int CellCount => _cells.Length;
-
-    internal CellClusterPool CellClusterPool => _clusterPool;
 
     /// <summary>
     /// Access a cell descriptor by cell key for read + write (callers bump <see cref="CellDescriptor.EntityCount"/>
@@ -132,7 +123,7 @@ internal sealed unsafe class SpatialGrid
     /// </summary>
     /// <remarks>
     /// Shared by <see cref="WorldToCellKeyFromSpatialField"/> and the cell-crossing detection loop in
-    /// <c>DatabaseEngine.ProcessClusterSpatialEntries</c> (issue #229 Phase 3). The detection path reuses the
+    /// <c>DatabaseEngine.DetectClusterMigrations</c> (issue #229 Phase 3). The detection path reuses the
     /// extracted center for both the hysteresis bounds check and the fallback <see cref="WorldToCellKey"/> call,
     /// avoiding a double read of the field memory.
     /// </remarks>
@@ -180,7 +171,7 @@ internal sealed unsafe class SpatialGrid
             default:
                 // ValidateSupportedFieldType rejects f64 tiers at ConfigureSpatialGrid time, so this path should not be reachable. Defensive fallback
                 // to help diagnose any future field-type addition that forgot to update this dispatch.
-                throw new System.NotSupportedException(
+                throw new NotSupportedException(
                     $"ReadSpatialCenter2D: field type '{fieldType}' is not supported. f32 tiers (2D and 3D) only.");
         }
     }
@@ -241,16 +232,8 @@ internal sealed unsafe class SpatialGrid
     }
 
     /// <summary>
-    /// Drop all cell state and reset the pool. Called by <c>RebuildCellState</c> before reconstructing
-    /// the mapping from entity positions.
+    /// Drop all cell state. Called by <c>RebuildCellState</c> before reconstructing the mapping from entity positions. Each archetype's own
+    /// <c>CellClusterPool</c> is reset separately by the archetype itself — this method only clears per-cell global counters (Q10).
     /// </summary>
-    public void ResetCellState()
-    {
-        for (int i = 0; i < _cells.Length; i++)
-        {
-            _cells[i] = default;
-            _cells[i].ClusterListHead = -1;
-        }
-        _clusterPool.Reset();
-    }
+    public void ResetCellState() => Array.Clear(_cells);
 }

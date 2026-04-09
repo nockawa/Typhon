@@ -930,7 +930,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup. Only Dynamic mode is updated.
                 if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
                 {
-                    ProcessClusterSpatialEntries(clusterState, engineState, dirtyBits, ref accessor);
+                    DetectClusterMigrations(clusterState, engineState, dirtyBits, ref accessor);
 
                     // Issue #229 Phase 3: drain the per-archetype migration queue populated by detection above.
                     // ExecuteMigrations runs BEFORE the cluster tick fence WAL publish so the WAL chunks reflect post-migration cluster state (source slots
@@ -1190,175 +1190,123 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// spatial index. The contract is: upstream systems MUST write finite positions. Consistent with Phase 1+2's
     /// spawn-time <see cref="SpatialGrid.WorldToCellKey"/> guard.</para>
     /// </remarks>
-    private unsafe void ProcessClusterSpatialEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, long[] dirtyBits, 
+    private unsafe void DetectClusterMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, long[] dirtyBits,
         ref ChunkAccessor<PersistentStore> clusterAccessor)
     {
         ref var ss = ref clusterState.SpatialSlot;
         var layout = clusterState.Layout;
-        int compSlot = ss.Slot;
-        int compSize = layout.ComponentSize(compSlot);
-        int compOffset = layout.ComponentOffset(compSlot);
+        var compSlot = ss.Slot;
+        var compSize = layout.ComponentSize(compSlot);
+        var compOffset = layout.ComponentOffset(compSlot);
 
         // Migration detection preconditions (issue #229 Phase 3).
-        // The grid is only active when the game code explicitly opted in via ConfigureSpatialGrid AND this archetype had its ClusterCellMap populated at
-        // spawn time. Both must hold.
+        // Under issue #230 Phase 3 Option B the grid is ALWAYS configured for cluster spatial archetypes (enforced at InitializeArchetypes). The
+        // clusterCellMap is populated during InitializeSpatial for every cluster-spatial archetype. Both are therefore non-null on entry; the old
+        // `detectMigrations` guard collapses away.
         var grid = _spatialGrid;
-        // Hoisted array reference — avoids a field load per cluster in the inner loop.
-        int[] clusterCellMap = clusterState.ClusterCellMap;
-        bool detectMigrations = grid != null && clusterCellMap != null;
+        var clusterCellMap = clusterState.ClusterCellMap;
         var fieldType = ss.FieldInfo.FieldType;
 
-        // Cell-invariant values reused inside the hot path. Set only when detectMigrations is true.
-        float cellSize = 0f;
-        float worldMinX = 0f;
-        float worldMinY = 0f;
-        float hysteresisMargin = 0f;
-        if (detectMigrations)
-        {
-            ref readonly var cfg = ref grid.Config;
-            cellSize = cfg.CellSize;
-            worldMinX = cfg.WorldMin.X;
-            worldMinY = cfg.WorldMin.Y;
-            hysteresisMargin = cellSize * cfg.MigrationHysteresisRatio;
+        // Cell-invariant values reused inside the hot path.
+        ref readonly var cfg = ref grid.Config;
+        var cellSize = cfg.CellSize;
+        var worldMinX = cfg.WorldMin.X;
+        var worldMinY = cfg.WorldMin.Y;
+        var hysteresisMargin = cellSize * cfg.MigrationHysteresisRatio;
 
-            // Pre-size the pending-migrations queue to avoid Array.Resize in the hot detection loop.
-            // Upper-bound estimate: last tick's migration count + 25% headroom, minimum 16. Steady-state
-            // workloads have roughly the same rate across consecutive ticks, so this eliminates resize
-            // churn on the first tick of a burst AND stays allocation-free afterward.
-            int expectedCapacity = Math.Max(16, clusterState.LastTickMigrationCount + (clusterState.LastTickMigrationCount >> 2));
-            if (clusterState.PendingMigrations == null || clusterState.PendingMigrations.Length < expectedCapacity)
-            {
-                clusterState.PendingMigrations = new MigrationRequest[expectedCapacity];
-            }
+        // Pre-size the pending-migrations queue to avoid Array.Resize in the hot detection loop.
+        // Upper-bound estimate: last tick's migration count + 25% headroom, minimum 16. Steady-state
+        // workloads have roughly the same rate across consecutive ticks, so this eliminates resize
+        // churn on the first tick of a burst AND stays allocation-free afterward.
+        var expectedCapacity = Math.Max(16, clusterState.LastTickMigrationCount + (clusterState.LastTickMigrationCount >> 2));
+        if (clusterState.PendingMigrations == null || clusterState.PendingMigrations.Length < expectedCapacity)
+        {
+            clusterState.PendingMigrations = new MigrationRequest[expectedCapacity];
         }
 
-        var changeSet = MMF.CreateChangeSet();
-        var treeAccessor = ss.Tree.Segment.CreateChunkAccessor(changeSet);
-        var bpAccessor = ss.BackPointerSegment.CreateChunkAccessor(changeSet);
-        int dirtyCount = 0;
-        int escapeCount = 0;
-        int hysteresisAbsorbedCount = 0;
+        var hysteresisAbsorbedCount = 0;
 
-        try
+        for (var wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
         {
-            for (int wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
+            var word = dirtyBits[wordIdx];
+            if (word == 0)
             {
-                long word = dirtyBits[wordIdx];
-                if (word == 0)
+                continue;
+            }
+
+            // wordIdx = clusterChunkId (cluster dirty bitmap is indexed by clusterChunkId)
+            var clusterChunkId = wordIdx;
+            var clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+
+            // ───────────────────────────────────────────────────────────────────────────
+            // Cluster-invariant hoist for migration detection.
+            // Phase 1+2 invariant: all entities in a cluster share a single cell. Compute the current cell's world bounds (and the hysteresis margin,
+            // already precomputed) once per cluster and reuse for every slot. The 99% "entity stayed inside" path then costs 4 comparisons + optional
+            // early-exit per entity.
+            // ───────────────────────────────────────────────────────────────────────────
+            var currentCellKey = clusterCellMap[clusterChunkId];
+            if (currentCellKey < 0)
+            {
+                // Cluster not yet in the per-cell index — skip migration detection for this iteration.
+                continue;
+            }
+            var (cx, cy) = grid.CellKeyToCoords(currentCellKey);
+            var curCellMinX = worldMinX + cx * cellSize;
+            var curCellMinY = worldMinY + cy * cellSize;
+            var curCellMaxX = curCellMinX + cellSize;
+            var curCellMaxY = curCellMinY + cellSize;
+
+            while (word != 0)
+            {
+                var slotIndex = BitOperations.TrailingZeroCount((ulong)word);
+                word &= word - 1;
+
+                // Occupancy already masked in WriteClusterTickFence (dead slots filtered out)
+                var entityPK = *(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8);
+                var fieldPtr = clusterBase + compOffset + slotIndex * compSize + ss.FieldOffset;
+
+                // ───────────────────────────────────────────────────────────────
+                // Cell-crossing detection (issue #229 Phase 3).
+                // ───────────────────────────────────────────────────────────────
+                SpatialGrid.ReadSpatialCenter2D(fieldPtr, fieldType, out var posX, out var posY);
+
+                // Non-finite guard. Consistent with Phase 1+2's spawn-time WorldToCellKey throw. Surface the upstream bug with full context.
+                if (!float.IsFinite(posX) || !float.IsFinite(posY))
                 {
-                    continue;
+                    throw new InvalidOperationException(
+                        $"Non-finite position on spatial entity: entityId=0x{entityPK:X16}, " +
+                        $"clusterChunkId={clusterChunkId}, slotIndex={slotIndex}, " +
+                        $"position=({posX}, {posY}). Upstream system wrote NaN or Infinity into the spatial field — fix the producing system.");
                 }
 
-                // wordIdx = clusterChunkId (cluster dirty bitmap is indexed by clusterChunkId)
-                int clusterChunkId = wordIdx;
-                byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
-
-                // ───────────────────────────────────────────────────────────────────────────
-                // Cluster-invariant hoist for migration detection.
-                // Phase 1+2 invariant: all entities in a cluster share a single cell. Compute the current cell's world bounds (and the hysteresis margin,
-                // already precomputed) once per cluster and reuse for every slot. The 99% "entity stayed inside" path then costs 4 comparisons + optional
-                // early-exit per entity.
-                // ───────────────────────────────────────────────────────────────────────────
-                int currentCellKey = -1;
-                float curCellMinX = 0f, curCellMinY = 0f, curCellMaxX = 0f, curCellMaxY = 0f;
-                bool clusterDetectable = false;
-                if (detectMigrations)
+                // Exit-by-margin check. Early-exit: the first crossing axis short-circuits.
+                // The 99% common case is "entity stayed well inside" → all 4 checks false → fall through.
+                var exited = posX < curCellMinX - hysteresisMargin
+                             || posX > curCellMaxX + hysteresisMargin
+                             || posY < curCellMinY - hysteresisMargin
+                             || posY > curCellMaxY + hysteresisMargin;
+                if (exited)
                 {
-                    currentCellKey = clusterCellMap[clusterChunkId];
-                    if (currentCellKey >= 0)
+                    var newCellKey = grid.WorldToCellKey(posX, posY);
+                    if (newCellKey != currentCellKey)
                     {
-                        var (cx, cy) = grid.CellKeyToCoords(currentCellKey);
-                        curCellMinX = worldMinX + cx * cellSize;
-                        curCellMinY = worldMinY + cy * cellSize;
-                        curCellMaxX = curCellMinX + cellSize;
-                        curCellMaxY = curCellMinY + cellSize;
-                        clusterDetectable = true;
+                        clusterState.EnqueueMigration(clusterChunkId, slotIndex, newCellKey);
                     }
                 }
-
-                while (word != 0)
+                else if (posX < curCellMinX || posX > curCellMaxX || posY < curCellMinY || posY > curCellMaxY)
                 {
-                    int slotIndex = BitOperations.TrailingZeroCount((ulong)word);
-                    word &= word - 1;
-
-                    // Occupancy already masked in WriteClusterTickFence (dead slots filtered out)
-                    int clusterLocation = clusterChunkId * 64 + slotIndex;
-                    long entityPK = *(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8);
-                    byte* fieldPtr = clusterBase + compOffset + slotIndex * compSize + ss.FieldOffset;
-
-                    // ───────────────────────────────────────────────────────────────
-                    // Cell-crossing detection (issue #229 Phase 3). Only runs when
-                    // this archetype opted into the grid and the cluster has a
-                    // valid cell mapping.
-                    // ───────────────────────────────────────────────────────────────
-                    if (clusterDetectable)
-                    {
-                        SpatialGrid.ReadSpatialCenter2D(fieldPtr, fieldType, out float posX, out float posY);
-
-                        // Non-finite guard. Consistent with Phase 1+2's spawn-time
-                        // WorldToCellKey throw. Surface the upstream bug with full context.
-                        if (!float.IsFinite(posX) || !float.IsFinite(posY))
-                        {
-                            throw new InvalidOperationException(
-                                $"Non-finite position on spatial entity: entityId=0x{entityPK:X16}, " +
-                                $"clusterChunkId={clusterChunkId}, slotIndex={slotIndex}, " +
-                                $"position=({posX}, {posY}). Upstream system wrote NaN or Infinity into the spatial field — fix the producing system.");
-                        }
-
-                        // Exit-by-margin check. Early-exit: the first crossing axis short-circuits.
-                        // The 99% common case is "entity stayed well inside" → all 4 checks false → fall through.
-                        bool exited = posX < curCellMinX - hysteresisMargin
-                                    || posX > curCellMaxX + hysteresisMargin
-                                    || posY < curCellMinY - hysteresisMargin
-                                    || posY > curCellMaxY + hysteresisMargin;
-                        if (exited)
-                        {
-                            int newCellKey = grid.WorldToCellKey(posX, posY);
-                            if (newCellKey != currentCellKey)
-                            {
-                                clusterState.EnqueueMigration(clusterChunkId, slotIndex, newCellKey);
-                            }
-                        }
-                        else if (posX < curCellMinX || posX > curCellMaxX || posY < curCellMinY || posY > curCellMaxY)
-                        {
-                            // Entity crossed the raw cell boundary but is still within the hysteresis
-                            // dead-zone. No migration. Count for tuning telemetry.
-                            hysteresisAbsorbedCount++;
-                        }
-                    }
-
-                    dirtyCount++;
-                    if (SpatialMaintainer.UpdateSpatialBatchCluster(entityPK, clusterLocation, fieldPtr,
-                            ref ss, ref treeAccessor, ref bpAccessor, changeSet))
-                    {
-                        escapeCount++;
-                    }
+                    // Entity crossed the raw cell boundary but is still within the hysteresis dead-zone. No migration. Count for tuning telemetry.
+                    hysteresisAbsorbedCount++;
                 }
             }
-        }
-        finally
-        {
-            bpAccessor.Dispose();
-            treeAccessor.Dispose();
-            changeSet.SaveChanges();
         }
 
         // Publish hysteresis telemetry for this tick (reset on next tick fence entry).
         clusterState.LastTickHysteresisAbsorbedCount = hysteresisAbsorbedCount;
-
-        // Escape rate telemetry (same pattern as ProcessSpatialEntries)
-        if (TelemetryConfig.SpatialActive && dirtyCount > 0)
-        {
-            double escapeRate = (double)escapeCount / dirtyCount;
-            if (escapeRate > 0.10)
-            {
-                SpatialMaintainer.LogHighEscapeRate(_log, $"cluster.{clusterState.Layout.ClusterSize}", escapeRate, escapeCount, dirtyCount);
-            }
-        }
     }
 
     /// <summary>
-    /// Execute all pending cell-crossing migrations queued by <see cref="ProcessClusterSpatialEntries"/>.
+    /// Execute all pending cell-crossing migrations queued by <see cref="DetectClusterMigrations"/>.
     /// Called at the cluster tick fence, AFTER detection, BEFORE the cluster tick fence WAL publish loop.
     /// Issue #229 Phase 3.
     /// </summary>
@@ -1429,9 +1377,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         bool hasTransientClusterAccessor = clusterState.TransientSegment != null;
         ChunkAccessor<TransientStore> transientClusterAccessor = hasTransientClusterAccessor ? clusterState.TransientSegment.CreateChunkAccessor() : default;
-
-        ChunkAccessor<PersistentStore> treeAccessor = ss.Tree.Segment.CreateChunkAccessor(changeSet);
-        ChunkAccessor<PersistentStore> bpAccessor = ss.BackPointerSegment.CreateChunkAccessor(changeSet);
 
         bool hasIdxAccessor = clusterState.IndexSegment != null;
         ChunkAccessor<PersistentStore> idxAccessor = hasIdxAccessor ? clusterState.IndexSegment.CreateChunkAccessor(changeSet) : default;
@@ -1576,14 +1521,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
                 }
 
-                // 8. Update per-archetype spatial R-Tree back-pointer: remove old clusterLocation, insert new.
-                SpatialMaintainer.RemoveFromSpatialCluster(entityPK, oldClusterLocation, ref ss, ref treeAccessor, ref bpAccessor, changeSet);
+                // 8. Maintain per-cell cluster AABB index at the destination (issue #230 Phase 3 Option B: the legacy R-Tree step 8 call has been removed;
+                // the per-cell index is the single source of truth).
                 byte* dstFieldPtr = dstBase + spatialCompOffset + dstSlot * spatialCompSize + ss.FieldOffset;
-                SpatialMaintainer.InsertSpatialCluster(entityPK, newClusterLocation, dstFieldPtr, ref ss, ref treeAccessor, ref bpAccessor, changeSet);
 
-                // Issue #230 Phase 1: maintain per-cell cluster AABB index at the destination. Union the migrant's bounds into the dst cluster's AABB.
+                // Union the migrant's bounds into the dst cluster's AABB.
                 // If dst is a brand-new cluster (first entity since allocation), reset the AABB to Empty first so any stale state from a prior life of
-                // the chunk id is discarded. Gated on Dynamic mode (static mode uses the legacy path).
+                // the chunk id is discarded. Gated on Dynamic mode (static mode is handled at spawn/destroy only — static clusters don't migrate).
                 // The src cluster's AABB stays conservative (not shrunk) — Phase 1 trade-off.
                 // If src becomes empty, ReleaseSlot below → FinaliseEmptyClusterCellState removes it from the per-cell index.
                 if (ss.FieldInfo.Mode == SpatialMode.Dynamic && clusterState.ClusterCellMap != null)
@@ -1687,8 +1631,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 idxAccessor.Dispose();
             }
-            bpAccessor.Dispose();
-            treeAccessor.Dispose();
             if (hasTransientClusterAccessor)
             {
                 transientClusterAccessor.Dispose();
@@ -2642,20 +2584,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 MMF.Bootstrap.SetInt($"clusterindex.{meta.ArchetypeId}", state.ClusterState.IndexSegment.RootPageIndex);
             }
 
-            // Persist per-archetype cluster spatial segment SPIs via bootstrap dictionary.
-            // Only three values are needed: the two segment root page indices (to locate the persisted R-Tree and its back-pointer segment on reopen) and
-            // the tree node stride (used as a consistency check when calling TryLoadChunkBasedSegment). Every other piece of spatial configuration — variant,
-            // mode, margin — is reconstructed at load time from the compile-time [SpatialIndex] attribute on the component field via table.SpatialIndex.FieldInfo
-            // The attribute is the single source of truth; round-tripping the same values through
-            // bootstrap would be redundant and invite drift.
-            if (state.ClusterState != null && state.ClusterState.SpatialSlot.HasSpatialIndex)
-            {
-                ref var ss = ref state.ClusterState.SpatialSlot;
-                MMF.Bootstrap.Set($"clusterspatial.{meta.ArchetypeId}", BootstrapDictionary.Value.FromInt3(
-                    ss.Tree.Segment.RootPageIndex,
-                    ss.BackPointerSegment.RootPageIndex,
-                    ss.Descriptor.Stride));
-            }
+            // Issue #230 Phase 3 Option B: nothing about the per-cell cluster index is persisted. All cell-level state is transient per Phase 1 Q2/Q6 and
+            // rebuilt from cluster data at startup by RebuildCellState + RebuildClusterAabbs.
 
             SystemCrud.Update(archetypesTable, persisted.ChunkId, ref arch, EpochManager, cs);
             anyUpdated = true;
@@ -3064,12 +2994,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // Allocate per-engine state array indexed by ArchetypeId
         _archetypeStates = new ArchetypeEngineState[ArchetypeRegistry.MaxArchetypeId + 1];
 
-        // Track the first spatial archetype that opts into the SpatialGrid. Phase 1+2 supports exactly one spatial archetype per grid because CellDescriptor
-        // holds a single cluster list per cell and cluster chunk IDs are per-segment (see issue #229 follow-up for per-archetype cluster lists). If a second
-        // spatial archetype with a grid is registered, we throw at init time rather than silently corrupting the cell-cluster mapping at the first spawn.
-        ushort firstGridSpatialArchetypeId = 0;
-        bool firstGridSpatialSeen = false;
-
         foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
         {
             // Connect slots to ComponentTables — skip archetypes with unregistered component types
@@ -3353,20 +3277,20 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
                 }
 
-                // Initialize per-archetype spatial R-Tree for cluster archetypes with spatial fields.
+                // Initialize per-archetype spatial state for cluster archetypes with spatial fields.
                 if (meta.HasClusterSpatial)
                 {
-                    // Issue #229 Phase 1+2: a configured SpatialGrid opts this archetype into spatially coherent cluster placement (entities in the same
-                    // cluster share a cell). Without a grid, spatial archetypes keep the legacy behaviour (per-archetype R-Tree only). When a grid IS present,
-                    // validate the field type AND enforce the single-spatial-archetype limitation up front so errors surface at engine startup rather than
-                    // at the first spawn.
+                    // Issue #230 Phase 3 Option B: ConfigureSpatialGrid() is REQUIRED for cluster spatial archetypes. The pre-Option-B fallback to the legacy
+                    // per-entity R-Tree is gone; the per-cell cluster index is the single source of truth. Surface misconfiguration at engine startup rather
+                    // than at the first spawn, when the user can still do something about it.
                     if (_spatialGrid == null)
                     {
-                        // Emit a debug log so misconfigured game code (spatial component registered without the grid call) is
-                        // discoverable at engine startup rather than via "why aren't my cell-filtered queries working?".
-                        LogSpatialArchetypeNoGridFallback(meta.ArchetypeType?.Name ?? meta.ArchetypeId.ToString());
+                        throw new InvalidOperationException(
+                            $"Archetype '{meta.ArchetypeType?.Name ?? meta.ArchetypeId.ToString()}' declares a [SpatialIndex] field and is cluster-eligible, " +
+                            $"but no SpatialGrid was configured. After issue #230 Phase 3 Option B, cluster spatial archetypes require ConfigureSpatialGrid() " +
+                            $"to be called during DatabaseEngine startup (before InitializeArchetypes). Call it during startup, or remove the [SpatialIndex] " +
+                            $"attribute from the archetype field.");
                     }
-                    if (_spatialGrid != null)
                     {
                         for (int slot = 0; slot < meta.ComponentCount; slot++)
                         {
@@ -3378,67 +3302,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                             }
                         }
 
-                        if (firstGridSpatialSeen)
-                        {
-                            throw new InvalidOperationException(
-                                $"Phase 1+2 of issue #229 supports at most one spatial archetype per configured SpatialGrid. " +
-                                $"Archetype '{meta.ArchetypeType?.Name ?? meta.ArchetypeId.ToString()}' is the second spatial archetype to opt in " +
-                                $"(first was ArchetypeId {firstGridSpatialArchetypeId}). The per-cell cluster list is not yet split per archetype — " +
-                                $"see design doc Decision Q10. Either remove the spatial field from one archetype or skip ConfigureSpatialGrid() to " +
-                                $"keep both on the legacy per-entity R-Tree path.");
-                        }
-                        firstGridSpatialSeen = true;
-                        firstGridSpatialArchetypeId = meta.ArchetypeId;
+                        // Issue #229 Q10: the pre-Q10 "at most one spatial archetype per configured grid" gate has been removed. Each cluster-spatial
+                        // archetype now owns its own per-cell CellClusterPool (allocated inside InitializeSpatial below), so N archetypes can share the
+                        // same grid without colliding on cluster chunk IDs.
                     }
 
                     var clusterState = _archetypeStates[meta.ArchetypeId].ClusterState;
                     var changeSet = MMF.CreateChangeSet();
                     try
                     {
-                        bool loadSpatial = false;
-                        ChunkBasedSegment<PersistentStore> treeSeg;
-                        ChunkBasedSegment<PersistentStore> bpSeg;
-                        string spatialKey = $"clusterspatial.{meta.ArchetypeId}";
-
-                        // Find the spatial descriptor to know the tree segment stride
-                        SpatialNodeDescriptor spatialDesc = default;
-                        for (int slot = 0; slot < meta.ComponentCount; slot++)
-                        {
-                            var table = slotToTable[slot];
-                            if (table.SpatialIndex != null)
-                            {
-                                spatialDesc = SpatialNodeDescriptor.ForVariant(table.SpatialIndex.FieldInfo.ToVariant());
-                                break;
-                            }
-                        }
-
-                        if (!isFreshAllocation && MMF.Bootstrap.TryGet(spatialKey, out var spatialVal))
-                        {
-                            int treeSPI = spatialVal.GetInt();
-                            int bpSPI = spatialVal.GetInt(1);
-                            int spatialTreeStride = spatialVal.GetInt(2);
-
-                            if (treeSPI > 0 && bpSPI > 0
-                                && MMF.TryLoadChunkBasedSegment(treeSPI, spatialTreeStride, out var loadedTree)
-                                && MMF.TryLoadChunkBasedSegment(bpSPI, 8, out var loadedBp))
-                            {
-                                treeSeg = loadedTree;
-                                bpSeg = loadedBp;
-                                loadSpatial = true;
-                            }
-                            else
-                            {
-                                treeSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, spatialDesc.Stride, changeSet);
-                                bpSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, 8, changeSet);
-                            }
-                        }
-                        else
-                        {
-                            treeSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, spatialDesc.Stride, changeSet);
-                            bpSeg = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, 8, changeSet);
-                        }
-
-                        clusterState.InitializeSpatial(slotToTable, treeSeg, bpSeg, loadSpatial);
+                        // Issue #230 Phase 3 Option B: no per-archetype R-Tree + back-pointer CBS segments to allocate or load. The per-cell cluster index
+                        // is transient and is rebuilt from cluster data at startup by RebuildCellState + RebuildClusterAabbs below.
+                        // Issue #229 Q10: InitializeSpatial now also allocates this archetype's own CellClusterPool sized to the grid's cell count.
+                        clusterState.InitializeSpatial(slotToTable, _spatialGrid);
 
                         // Register with per-table SpatialInterestSystem for fan-out
                         for (int slot = 0; slot < meta.ComponentCount; slot++)
@@ -3453,16 +3329,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                             }
                         }
 
-                        // If fresh spatial on a reopened database with existing cluster data, rebuild from scan
-                        if (!loadSpatial && !isFreshAllocation && clusterState.ActiveClusterCount > 0)
-                        {
-                            using var spatialEpoch = EpochGuard.Enter(EpochManager);
-                            clusterState.RebuildSpatialFromData(changeSet);
-                        }
-
                         // Issue #229 Phase 1+2: rebuild cluster→cell mapping from persisted entity positions. All cell state is transient — nothing about
                         // the grid is persisted, so every reopen reconstructs it from the data. No-op on a fresh database.
-                        if (_spatialGrid != null && clusterState.ActiveClusterCount > 0)
+                        // Issue #230 Phase 3 Option B: the legacy `RebuildSpatialFromData` call that used to re-insert every entity into the per-archetype
+                        // R-Tree has been removed. RebuildCellState + RebuildClusterAabbs below are the single source of truth for per-cell index
+                        // reconstruction on reopen. _spatialGrid is guaranteed non-null here (the grid-required gate runs before this block).
+                        if (clusterState.ActiveClusterCount > 0)
                         {
                             using var cellEpoch = EpochGuard.Enter(EpochManager);
                             clusterState.RebuildCellState(_spatialGrid);

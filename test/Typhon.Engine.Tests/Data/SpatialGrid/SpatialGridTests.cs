@@ -98,7 +98,6 @@ class SpatialGridTests
         var grid = new SpatialGrid(Config100);
         int key = grid.WorldToCellKey(150f, 250f);
         ref var cell = ref grid.GetCell(key);
-        Assert.That(cell.ClusterListHead, Is.EqualTo(-1));
         Assert.That(cell.ClusterCount, Is.EqualTo(0));
         Assert.That(cell.EntityCount, Is.EqualTo(0));
 
@@ -107,20 +106,19 @@ class SpatialGridTests
     }
 
     [Test]
-    public void ResetCellState_RestoresInitialState()
+    public void ResetCellState_ClearsGlobalCellCounters()
     {
         var grid = new SpatialGrid(Config100);
         int key = grid.WorldToCellKey(150f, 250f);
         ref var cell = ref grid.GetCell(key);
         cell.EntityCount = 7;
-        grid.CellClusterPool.AddCluster(ref cell, key, clusterChunkId: 1);
+        cell.ClusterCount = 2;
 
         grid.ResetCellState();
 
         ref var after = ref grid.GetCell(key);
         Assert.That(after.EntityCount, Is.EqualTo(0));
         Assert.That(after.ClusterCount, Is.EqualTo(0));
-        Assert.That(after.ClusterListHead, Is.EqualTo(-1));
     }
 
     [Test]

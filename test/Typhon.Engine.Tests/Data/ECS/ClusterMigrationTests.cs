@@ -614,7 +614,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         // Shrink the dirty bitmap AFTER the update commits but BEFORE the tick fence takes its snapshot.
         // This simulates the natural worst case: segment grew past the bitmap's size and a subsequent
         // migration targets a chunk id beyond the snapshot. We shrink to srcChunk+1 words to preserve
-        // the source cluster's dirty bit (required for ProcessClusterSpatialEntries to see the update
+        // the source cluster's dirty bit (required for DetectClusterMigrations to see the update
         // and detect the cell crossing) while truncating any word beyond the source. The migration
         // will then allocate a destination cluster whose id is > srcChunk, which triggers the edge case.
         cs.ClusterDirtyBitmap.ShrinkForTesting(wordCount: srcChunk + 1);

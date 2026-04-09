@@ -1149,9 +1149,6 @@ public unsafe partial class Transaction
         public bool HasClusterTransientAccessor;
         public ChunkAccessor<PersistentStore> ClusterIdxAccessor;
         public bool HasClusterIdxAccessor;
-        public ChunkAccessor<PersistentStore> ClusterSpatialTreeAccessor;
-        public ChunkAccessor<PersistentStore> ClusterSpatialBpAccessor;
-        public bool HasClusterSpatialAccessors;
         public ChunkAccessor<PersistentStore>[] ClusterSrcAccessors;
         public int ClusterSrcAccessorCount;
         public ChunkAccessor<TransientStore>[] ClusterTransientSrcAccessors;
@@ -1443,26 +1440,15 @@ public unsafe partial class Transaction
                         }
                     }
 
-                    // Insert per-archetype spatial R-Tree entry for cluster entity
+                    // Maintain the per-cell cluster AABB index for cluster spatial archetypes (issue #230 Phase 3 Option B).
+                    // The legacy per-archetype R-Tree + back-pointer insert is gone — the per-cell index is now the single source of truth. Populates
+                    // both DynamicIndex and StaticIndex depending on the archetype's SpatialMode (see AddClusterToPerCellIndex for the split).
                     if (ctx.ClusterState.SpatialSlot.HasSpatialIndex)
                     {
-                        int clusterLocation = clusterChunkId * 64 + slotIdx;
                         ref var ss = ref ctx.ClusterState.SpatialSlot;
                         int spatialCompSize = layout.ComponentSize(ss.Slot);
                         byte* spatialFieldPtr = clusterBase + layout.ComponentOffset(ss.Slot) + slotIdx * spatialCompSize + ss.FieldOffset;
 
-                        // Zero back-pointer before insert (same safety pattern as legacy path)
-                        SpatialBackPointerHelper.Clear(ref ctx.ClusterSpatialBpAccessor, clusterLocation);
-
-                        SpatialMaintainer.InsertSpatialCluster(
-                            (long)entry.Id.RawValue, clusterLocation, spatialFieldPtr,
-                            ref ss, ref ctx.ClusterSpatialTreeAccessor, ref ctx.ClusterSpatialBpAccessor, _changeSet);
-
-                        // Issue #230 Phase 1: maintain the per-cell cluster AABB index alongside the
-                        // per-archetype R-Tree. Gated on the spatial grid opt-in (ClusterCellMap != null)
-                        // and Dynamic-mode archetypes — static mode defers to the legacy per-entity path.
-                        // Issue #230 Phase 3: populate the per-cell index for both Dynamic AND Static cluster archetypes. The Static path routes to
-                        // PerCellSpatialSlot.StaticIndex; Dynamic routes to DynamicIndex. See AddClusterToPerCellIndex for the split.
                         if (ctx.ClusterState.ClusterCellMap != null)
                         {
                             if (SpatialMaintainer.ReadAndValidateBoundsFromPtr(spatialFieldPtr, ss.FieldInfo, spawnSpatialCoords, ss.Descriptor))
@@ -1759,12 +1745,6 @@ public unsafe partial class Transaction
             ctx.ClusterIdxAccessor.Dispose();
             ctx.HasClusterIdxAccessor = false;
         }
-        if (ctx.HasClusterSpatialAccessors)
-        {
-            ctx.ClusterSpatialTreeAccessor.Dispose();
-            ctx.ClusterSpatialBpAccessor.Dispose();
-            ctx.HasClusterSpatialAccessors = false;
-        }
         for (int si = 0; si < ctx.SvSlotCount; si++)
         {
             ctx.SvCompAccessors[si].Dispose();
@@ -1814,7 +1794,7 @@ public unsafe partial class Transaction
             ctx.ClusterState = ctx.EngineState.ClusterState;
 
             // PersistentStore cluster accessor (null for pure-Transient)
-            if (ctx.ClusterState.ClusterSegment != null)
+            if (ctx.ClusterState?.ClusterSegment != null)
             {
                 ctx.ClusterAccessor = ctx.ClusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
                 ctx.HasClusterAccessor = true;
@@ -1860,14 +1840,6 @@ public unsafe partial class Transaction
             {
                 ctx.ClusterIdxAccessor = ctx.ClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
                 ctx.HasClusterIdxAccessor = true;
-            }
-
-            // Per-archetype spatial accessors for cluster R-Tree insertion (legacy tree — survives issue #230 Phase 3 under the hybrid fallback invariant).
-            if (ctx.ClusterState.SpatialSlot.HasSpatialIndex)
-            {
-                ctx.ClusterSpatialTreeAccessor = ctx.ClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
-                ctx.ClusterSpatialBpAccessor = ctx.ClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
-                ctx.HasClusterSpatialAccessors = true;
             }
 
             // Issue #229 Phase 1+2: cache spatial-cell routing info once per archetype. The hot spawn path reads SpatialSlotIndexCached once per entity to
@@ -2072,27 +2044,8 @@ public unsafe partial class Transaction
                 state.BackPointerSegment.EnsureCapacity(compCapNeeded, _changeSet);
             }
 
-            // Pre-grow per-archetype cluster spatial segments (legacy tree — hybrid fallback path, still populated on spawn).
-            if (es.ClusterState != null && es.ClusterState.SpatialSlot.HasSpatialIndex)
-            {
-                var cs = es.ClusterState;
-                {
-                    ref var ss = ref cs.SpatialSlot;
-                    int leafCapacity = ss.Descriptor.LeafCapacity;
-                    int estimatedLeaves = (spawnCount + leafCapacity - 1) / leafCapacity;
-                    int estimatedTotal = ss.Tree.EntityCount > 0
-                        ? (int)((ss.Tree.EntityCount + spawnCount) / (leafCapacity * 0.7)) + 10
-                        : (int)(estimatedLeaves * 1.3) + 10;
-                    ss.Tree.Segment.EnsureCapacity(estimatedTotal, _changeSet);
-
-                    // BP segment keyed by ClusterLocation = clusterChunkId * 64 + slotIndex
-                    // Estimate max ClusterLocation after spawns
-                    int currentMaxClusterLoc = cs.ClusterSegment.ChunkCapacity * 64;
-                    int additionalClusters = (spawnCount + cs.Layout.ClusterSize - 1) / cs.Layout.ClusterSize;
-                    int estimatedMaxClusterLoc = currentMaxClusterLoc + additionalClusters * 64 + 64;
-                    ss.BackPointerSegment.EnsureCapacity(estimatedMaxClusterLoc, _changeSet);
-                }
-            }
+            // Issue #230 Phase 3 Option B: the per-archetype R-Tree + back-pointer segment pre-grow is gone (those segments no longer exist). The per-cell
+            // cluster index is grown lazily on first cluster insert into a cell (AddClusterToPerCellIndex), so there's nothing to pre-size here.
 
             break; // All entries in a single spawn batch share the same archetype — one pass suffices
         }
@@ -2124,9 +2077,6 @@ public unsafe partial class Transaction
         ArchetypeClusterState destroyClusterState = null;
         var destroyClusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
         bool hasDestroyClusterIdxAccessor = false;
-        var destroyClusterSpatialTreeAccessor = default(ChunkAccessor<PersistentStore>);
-        var destroyClusterSpatialBpAccessor = default(ChunkAccessor<PersistentStore>);
-        bool hasDestroyClusterSpatialAccessors = false;
 
         try
         {
@@ -2163,12 +2113,6 @@ public unsafe partial class Transaction
                             destroyClusterIdxAccessor.Dispose();
                             hasDestroyClusterIdxAccessor = false;
                         }
-                        if (hasDestroyClusterSpatialAccessors)
-                        {
-                            destroyClusterSpatialTreeAccessor.Dispose();
-                            destroyClusterSpatialBpAccessor.Dispose();
-                            hasDestroyClusterSpatialAccessors = false;
-                        }
                     }
                     accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
                     lastArchId = entityId.ArchetypeId;
@@ -2193,12 +2137,6 @@ public unsafe partial class Transaction
                         {
                             destroyClusterIdxAccessor = destroyClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
                             hasDestroyClusterIdxAccessor = true;
-                        }
-                        if (destroyClusterState.SpatialSlot.HasSpatialIndex)
-                        {
-                            destroyClusterSpatialTreeAccessor = destroyClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
-                            destroyClusterSpatialBpAccessor = destroyClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
-                            hasDestroyClusterSpatialAccessors = true;
                         }
                     }
                 }
@@ -2271,18 +2209,8 @@ public unsafe partial class Transaction
                             // else: shadow processing at tick fence will handle removal
                         }
 
-                        // Remove per-archetype spatial R-Tree entry before releasing the slot.
-                        // Spatial doesn't need shadow logic — back-pointer provides O(1) leaf lookup. Legacy tree survives under the hybrid fallback
-                        // invariant — see commits 2-4 of issue #230 Phase 3 for the migration architecture.
-                        if (destroyClusterState.SpatialSlot.HasSpatialIndex)
-                        {
-                            int clusterLocation = clusterChunkId * 64 + slotIndex;
-                            SpatialMaintainer.RemoveFromSpatialCluster(
-                                (long)entityId.RawValue, clusterLocation,
-                                ref destroyClusterState.SpatialSlot,
-                                ref destroyClusterSpatialTreeAccessor, ref destroyClusterSpatialBpAccessor, _changeSet);
-                        }
-
+                        // Issue #230 Phase 3 Option B: the per-archetype R-Tree remove call is gone; ReleaseSlot below handles per-cell index cleanup
+                        // via FinaliseEmptyClusterCellState when the source cluster becomes empty.
                         if (hasClusterAccessor)
                         {
                             destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet, _dbe.SpatialGrid);
@@ -2319,11 +2247,6 @@ public unsafe partial class Transaction
             if (hasDestroyClusterIdxAccessor)
             {
                 destroyClusterIdxAccessor.Dispose();
-            }
-            if (hasDestroyClusterSpatialAccessors)
-            {
-                destroyClusterSpatialTreeAccessor.Dispose();
-                destroyClusterSpatialBpAccessor.Dispose();
             }
         }
     }

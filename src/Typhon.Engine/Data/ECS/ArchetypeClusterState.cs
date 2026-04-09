@@ -58,7 +58,7 @@ internal sealed unsafe class ArchetypeClusterState
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>Per-archetype pending migration queue. Populated by cell-crossing detection in
-    /// <c>ProcessClusterSpatialEntries</c>, drained by <see cref="ExecuteMigrations"/> at the tick fence.
+    /// <c>DetectClusterMigrations</c>, drained by <see cref="ExecuteMigrations"/> at the tick fence.
     /// Null until the first cell-crossing is detected.</summary>
     internal MigrationRequest[] PendingMigrations;
 
@@ -144,6 +144,15 @@ internal sealed unsafe class ArchetypeClusterState
     /// not to any particular spatial index implementation.
     /// </summary>
     public DirtyBitmapRing ClusterDirtyRing;
+
+    /// <summary>
+    /// Per-archetype per-cell cluster claim list (issue #229 Q10 resolution). Holds the cluster chunk IDs of THIS archetype's clusters attached to each
+    /// grid cell. Before Q10 this pool was owned by <see cref="SpatialGrid"/> and shared across archetypes, which meant two spatial archetypes couldn't
+    /// coexist on the same grid (their cluster chunk IDs would collide at the cell level). Under Q10 each archetype owns its own pool — queries and
+    /// spawn-time "find a free slot in this cell" scans only see clusters of the current archetype. <c>null</c> when the archetype has no spatial field
+    /// or when no grid is configured. Allocated during <see cref="InitializeSpatial"/> when the grid is known.
+    /// </summary>
+    internal CellClusterPool CellClusterPool;
 
     private ArchetypeClusterState() { }
 
@@ -233,12 +242,12 @@ internal sealed unsafe class ArchetypeClusterState
             return 0;
         }
 
-        int targetCount = System.Math.Min(k, results.Length);
+        int targetCount = Math.Min(k, results.Length);
 
         // Generous radius: grid diagonal. Covers the entire grid so no entity is excluded by the broadphase.
         float worldWidth = grid.Config.WorldMax.X - grid.Config.WorldMin.X;
         float worldHeight = grid.Config.WorldMax.Y - grid.Config.WorldMin.Y;
-        float maxRadius = System.MathF.Sqrt(worldWidth * worldWidth + worldHeight * worldHeight);
+        float maxRadius = MathF.Sqrt(worldWidth * worldWidth + worldHeight * worldHeight);
 
         var scratch = new System.Collections.Generic.List<(long entityId, float distSq)>(64);
         foreach (var hit in QueryRadius(grid, centerX, centerY, centerZ, maxRadius, categoryMask))
@@ -248,7 +257,7 @@ internal sealed unsafe class ArchetypeClusterState
 
         // Partial selection sort for top k by distance ascending. O(k × n) — fine for small k.
         int n = scratch.Count;
-        int resultCount = System.Math.Min(targetCount, n);
+        int resultCount = Math.Min(targetCount, n);
         for (int i = 0; i < resultCount; i++)
         {
             int minIdx = i;
@@ -548,17 +557,20 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     /// <remarks>
     /// <para>This is the spatial-aware counterpart of <see cref="ClaimSlot"/>. Unlike <c>ClaimSlot</c> it ignores <see cref="FreeClusterHead"/> — that hint
-    /// is a global free-slot cache that cannot distinguish cells, so it's useless once spatial coherence is required. Instead, we scan the cell's cluster
-    /// list (typically ≤80 entries for AntHill-scale density, ≤15-30 ns scan cost).</para>
-    /// <para>Every successful claim bumps <see cref="CellDescriptor.EntityCount"/>. Allocation of a new cluster additionally bumps
-    /// <see cref="CellDescriptor.ClusterCount"/>, attaches the cluster to the cell's pool segment, and records the mapping in <see cref="ClusterCellMap"/>.</para>
+    /// is a global free-slot cache that cannot distinguish cells, so it's useless once spatial coherence is required. Instead, we scan this archetype's
+    /// own cluster list for the target cell (typically ≤80 entries for AntHill-scale density, ≤15-30 ns scan cost).</para>
+    /// <para>Under the Q10 resolution the scanned list is strictly this archetype's — other spatial archetypes sharing the grid have their own
+    /// <see cref="CellClusterPool"/> instances, so no cross-archetype cluster chunk IDs ever appear in this scan.</para>
+    /// <para>Every successful claim bumps the global <see cref="CellDescriptor.EntityCount"/>. Allocation of a new cluster additionally bumps the global
+    /// <see cref="CellDescriptor.ClusterCount"/>, appends the cluster to this archetype's per-cell claim list, and records the mapping in
+    /// <see cref="ClusterCellMap"/>.</para>
     /// </remarks>
     public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, ref ChunkAccessor<PersistentStore> accessor, ChangeSet changeSet, SpatialGrid grid)
     {
         ref var cell = ref grid.GetCell(cellKey);
-        var clusters = grid.CellClusterPool.GetClusters(in cell);
+        var clusters = CellClusterPool.GetClusters(cellKey);
 
-        // Scan existing clusters attached to this cell for a free slot.
+        // Scan this archetype's existing clusters attached to this cell for a free slot.
         for (int i = 0; i < clusters.Length; i++)
         {
             int clusterId = clusters[i];
@@ -596,12 +608,12 @@ internal sealed unsafe class ArchetypeClusterState
             // Cluster became full between reads — fall through to the next candidate.
         }
 
-        // No free slot in any cluster of this cell — allocate a new cluster and attach it to the cell.
-        // CellClusterPool.AddCluster bumps cell.ClusterCount for us; we only bump cell.EntityCount here.
+        // No free slot in any cluster of this cell — allocate a new cluster and attach it to this archetype's per-cell claim list.
         int newChunkId = AllocateNewCluster(changeSet);
         EnsureClusterCellMapCapacity(newChunkId + 1);
         ClusterCellMap[newChunkId] = cellKey;
-        grid.CellClusterPool.AddCluster(ref cell, cellKey, newChunkId);
+        CellClusterPool.AddCluster(cellKey, newChunkId);
+        cell.ClusterCount++;
         cell.EntityCount++;
 
         byte* newBase = accessor.GetChunkAddress(newChunkId, true);
@@ -615,7 +627,7 @@ internal sealed unsafe class ArchetypeClusterState
     public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, ref ChunkAccessor<TransientStore> accessor, SpatialGrid grid)
     {
         ref var cell = ref grid.GetCell(cellKey);
-        var clusters = grid.CellClusterPool.GetClusters(in cell);
+        var clusters = CellClusterPool.GetClusters(cellKey);
 
         for (int i = 0; i < clusters.Length; i++)
         {
@@ -650,11 +662,12 @@ internal sealed unsafe class ArchetypeClusterState
             }
         }
 
-        // CellClusterPool.AddCluster bumps cell.ClusterCount for us; we only bump cell.EntityCount here.
+        // No free slot — allocate a new cluster and attach it to this archetype's per-cell claim list.
         int newChunkId = AllocateNewCluster(null);
         EnsureClusterCellMapCapacity(newChunkId + 1);
         ClusterCellMap[newChunkId] = cellKey;
-        grid.CellClusterPool.AddCluster(ref cell, cellKey, newChunkId);
+        CellClusterPool.AddCluster(cellKey, newChunkId);
+        cell.ClusterCount++;
         cell.EntityCount++;
 
         byte* newBase = accessor.GetChunkAddress(newChunkId, true);
@@ -673,13 +686,12 @@ internal sealed unsafe class ArchetypeClusterState
     /// cluster belong to the same cell) — reading only the first entity is sufficient.</para>
     /// <para>Non-spatial archetypes and archetypes without a configured grid are no-ops. Pure-Transient archetypes are also skipped since their data doesn't
     /// survive restart.</para>
-    /// <para><b>Precondition — NOT idempotent on a dirty grid.</b> This method ADDS to
-    /// <see cref="CellDescriptor.EntityCount"/> and appends cluster IDs to each cell's pool segment.
-    /// Callers MUST pass either a fresh <see cref="SpatialGrid"/> or one that has been reset via
-    /// <see cref="SpatialGrid.ResetCellState"/> — calling twice without a reset double-counts entities
-    /// and duplicates cluster IDs in the pool. The single caller today
-    /// (<c>DatabaseEngine.InitializeArchetypes</c>) constructs a fresh grid immediately before this
-    /// loop, satisfying the precondition.</para>
+    /// <para><b>Precondition — NOT idempotent on a dirty grid.</b> This method ADDS to <see cref="CellDescriptor.EntityCount"/> /
+    /// <see cref="CellDescriptor.ClusterCount"/> and appends cluster IDs to this archetype's <see cref="CellClusterPool"/>. Callers MUST pass either a
+    /// fresh <see cref="SpatialGrid"/> or one that has been reset via <see cref="SpatialGrid.ResetCellState"/> (and the per-archetype pools must also be
+    /// reset) — calling twice without a reset double-counts entities and duplicates cluster IDs in the pool. The single caller today
+    /// (<c>DatabaseEngine.InitializeArchetypes</c>) constructs a fresh grid + allocates a fresh per-archetype pool inside <see cref="InitializeSpatial"/>
+    /// immediately before this loop, satisfying the precondition.</para>
     /// </remarks>
     public void RebuildCellState(SpatialGrid grid)
     {
@@ -718,8 +730,9 @@ internal sealed unsafe class ArchetypeClusterState
                 int cellKey = grid.WorldToCellKeyFromSpatialField(fieldPtr, fieldType);
 
                 ClusterCellMap[chunkId] = cellKey;
+                CellClusterPool.AddCluster(cellKey, chunkId);
                 ref var cell = ref grid.GetCell(cellKey);
-                grid.CellClusterPool.AddCluster(ref cell, cellKey, chunkId);
+                cell.ClusterCount++;
                 cell.EntityCount += BitOperations.PopCount(occupancy);
             }
         }
@@ -912,10 +925,8 @@ internal sealed unsafe class ArchetypeClusterState
         {
             return;
         }
-        if (SpatialSlot.FieldInfo.Mode != SpatialMode.Dynamic)
-        {
-            return; // Phase 1: dynamic mode only
-        }
+        // Issue #230 Phase 3 Option B: both Dynamic and Static cluster archetypes rebuild from data on reopen. AddClusterToPerCellIndex (called below) routes
+        // to PerCellSpatialSlot.DynamicIndex / StaticIndex based on the archetype's SpatialMode, so the rebuild is mode-agnostic at this level.
         if (ActiveClusterCount == 0)
         {
             return;
@@ -1092,7 +1103,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// <summary>
     /// Safety valve for the "Max Cluster AABB Extent" invariant from design doc 01-spatial-clusters.md (issue #230 Phase 3 closure of Phase 1 gap). Scans a
     /// cluster whose recomputed AABB has grown beyond <c>cellSize × 1.2</c> and enqueues migration for any entity that has drifted outside the current cell's
-    /// raw bounds. This bypasses the hysteresis dead zone that <see cref="DatabaseEngine.ProcessClusterSpatialEntries"/> normally honours — the point is
+    /// raw bounds. This bypasses the hysteresis dead zone that <c>DatabaseEngine.DetectClusterMigrations</c> normally honors — the point is
     /// exactly to force-migrate entities that the hysteresis had absorbed individually but whose accumulated drift is degrading the cluster's spatial
     /// coherence.
     /// </summary>
@@ -1227,7 +1238,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// and doubles its capacity on overflow. Issue #229 Phase 3.
     /// </summary>
     /// <remarks>
-    /// Called only from the cell-crossing detection loop in <c>ProcessClusterSpatialEntries</c> — single-threaded,
+    /// Called only from the cell-crossing detection loop in <c>DetectClusterMigrations</c> — single-threaded,
     /// no synchronization needed. The typical hot path writes a handful of entries per tick; even on a busy tick
     /// with thousands of migrations the array doubles ~10-12 times total (initial 16 -> 32K).
     /// </remarks>
@@ -1388,7 +1399,7 @@ internal sealed unsafe class ArchetypeClusterState
         grid.GetCell(cellKey).EntityCount--;
     }
 
-    /// <summary>Detach an empty cluster from its cell's pool and clear its cell mapping.</summary>
+    /// <summary>Detach an empty cluster from this archetype's per-cell claim list and clear its cell mapping.</summary>
     private void FinaliseEmptyClusterCellState(SpatialGrid grid, int clusterChunkId)
     {
         if (grid == null || ClusterCellMap == null || clusterChunkId >= ClusterCellMap.Length)
@@ -1400,9 +1411,11 @@ internal sealed unsafe class ArchetypeClusterState
         {
             return;
         }
-        // CellClusterPool.RemoveCluster decrements cell.ClusterCount for us.
-        ref var cell = ref grid.GetCell(cellKey);
-        grid.CellClusterPool.RemoveCluster(ref cell, clusterChunkId);
+        // Issue #229 Q10: per-archetype pool removal. Only decrements the global CellDescriptor.ClusterCount if the pool actually owned this cluster id.
+        if (CellClusterPool.RemoveCluster(cellKey, clusterChunkId))
+        {
+            grid.GetCell(cellKey).ClusterCount--;
+        }
 
         // Issue #230 Phase 1: also remove from the per-cell cluster AABB index and reset the cluster's stored AABB. Runs before we clear ClusterCellMap so
         // RemoveClusterFromPerCellIndex can look up the cell key internally.
@@ -1583,10 +1596,15 @@ internal sealed unsafe class ArchetypeClusterState
     }
 
     /// <summary>
-    /// Initialize per-archetype spatial R-Tree infrastructure from the component tables.
-    /// Called after cluster state creation for archetypes with <see cref="ArchetypeMetadata.HasClusterSpatial"/>.
+    /// Initialize per-archetype spatial state (issue #230 Phase 3 Option B, Q10 multi-archetype resolution). Sets up the <see cref="SpatialSlot"/>
+    /// metadata, the <see cref="ClusterDirtyRing"/>, and the per-archetype <see cref="CellClusterPool"/>. The per-cell index itself is lazily populated
+    /// by spawn/migration hooks (or rebuilt from cluster data by <see cref="RebuildCellState"/> + <see cref="RebuildClusterAabbs"/> on reopen).
     /// </summary>
-    public void InitializeSpatial(ComponentTable[] slotToTable, ChunkBasedSegment<PersistentStore> treeSeg, ChunkBasedSegment<PersistentStore> bpSeg, bool load)
+    /// <param name="slotToTable">Component tables indexed by slot (used to find the spatial field).</param>
+    /// <param name="grid">The engine's configured spatial grid. Used to size the per-archetype <see cref="CellClusterPool"/> so its per-cell arrays cover
+    /// every valid cell key. Under Q10 the pool is per-archetype — each cluster-spatial archetype sharing the grid gets its own instance sized to the
+    /// grid's cell count.</param>
+    public void InitializeSpatial(ComponentTable[] slotToTable, SpatialGrid grid)
     {
         for (int slot = 0; slot < slotToTable.Length; slot++)
         {
@@ -1600,17 +1618,19 @@ internal sealed unsafe class ArchetypeClusterState
             // FieldOffset in cluster = field offset within pure component data (no ComponentOverhead in clusters)
             int clusterFieldOffset = tableFi.FieldOffset - table.ComponentOverhead;
             var variant = tableFi.ToVariant();
-            var descriptor = load ? SpatialNodeDescriptor.FromVariant(variant, treeSeg.Stride) : SpatialNodeDescriptor.ForVariant(variant);
-            var tree = new SpatialRTree<PersistentStore>(treeSeg, variant, load);
-            tree.BackPointerSegment = bpSeg;
+            var descriptor = SpatialNodeDescriptor.ForVariant(variant);
 
             // Create a modified SpatialFieldInfo with cluster-relative offset
-            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode, 
+            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode,
                 tableFi.Category);
 
-            // Dirty ring lives exclusively on ArchetypeClusterState after issue #230 Phase 3 legacy purge. The previous alias on ClusterSpatialSlot.DirtyRing
-            // is gone — all consumers (SpatialInterestSystem, DatabaseEngine.WriteClusterTickFence) now read ClusterDirtyRing directly.
+            // Dirty ring lives exclusively on ArchetypeClusterState after issue #230 Phase 3 legacy purge. Consumers (SpatialInterestSystem,
+            // DatabaseEngine.WriteClusterTickFence) read ClusterDirtyRing directly.
             ClusterDirtyRing = new DirtyBitmapRing(Math.Max(4, ClusterSegment.ChunkCapacity));
+
+            // Issue #229 Q10: allocate this archetype's own CellClusterPool. Other cluster-spatial archetypes sharing the same grid each get their own
+            // instance, so claim-list scans at spawn time only walk clusters of the current archetype.
+            CellClusterPool = new CellClusterPool(grid.CellCount);
 
             SpatialSlot = new ClusterSpatialSlot
             {
@@ -1619,58 +1639,8 @@ internal sealed unsafe class ArchetypeClusterState
                 FieldOffset = clusterFieldOffset,
                 FieldInfo = fi,
                 Descriptor = descriptor,
-                Tree = tree,
-                BackPointerSegment = bpSeg,
             };
             break; // Only one spatial field per archetype
-        }
-    }
-
-    /// <summary>
-    /// Rebuild per-archetype spatial R-Tree from cluster data (scan all occupied entities).
-    /// Used on reopen when spatial segment is not persisted or is corrupted.
-    /// </summary>
-    public void RebuildSpatialFromData(ChangeSet changeSet)
-    {
-        if (!SpatialSlot.HasSpatialIndex)
-        {
-            return;
-        }
-
-        ref var ss = ref SpatialSlot;
-        var clusterAccessor = ClusterSegment.CreateChunkAccessor();
-        var treeAccessor = ss.Tree.Segment.CreateChunkAccessor(changeSet);
-        var bpAccessor = ss.BackPointerSegment.CreateChunkAccessor(changeSet);
-        try
-        {
-            int compSlot = ss.Slot;
-            int compSize = Layout.ComponentSize(compSlot);
-            int compOffset = Layout.ComponentOffset(compSlot);
-
-            for (int c = 0; c < ActiveClusterCount; c++)
-            {
-                int chunkId = ActiveClusterIds[c];
-                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId);
-                ulong occupancy = *(ulong*)clusterBase;
-
-                while (occupancy != 0)
-                {
-                    int slotIndex = BitOperations.TrailingZeroCount(occupancy);
-                    occupancy &= occupancy - 1;
-                    int clusterLocation = chunkId * 64 + slotIndex;
-                    long entityPK = *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8);
-
-                    byte* fieldPtr = clusterBase + compOffset + slotIndex * compSize + ss.FieldOffset;
-                    SpatialMaintainer.InsertSpatialCluster(entityPK, clusterLocation, fieldPtr,
-                        ref ss, ref treeAccessor, ref bpAccessor, changeSet);
-                }
-            }
-        }
-        finally
-        {
-            bpAccessor.Dispose();
-            treeAccessor.Dispose();
-            clusterAccessor.Dispose();
         }
     }
 
@@ -1813,9 +1783,9 @@ internal struct ClusterIndexSlot
 internal struct ClusterSpatialSlot
 {
     /// <summary>
-    /// <c>true</c> when <see cref="ArchetypeClusterState.InitializeSpatial"/> has populated this slot with a configured spatial field. Consumers that want
-    /// to know "does this archetype have a cluster spatial index at all?" MUST read this flag instead of the deprecated <c>SpatialSlot.Tree != null</c>
-    /// idiom — the tree field is being removed in issue #230 Phase 3 and the per-cell index path has no equivalent existence sentinel of its own.
+    /// <c>true</c> when <see cref="ArchetypeClusterState.InitializeSpatial"/> has populated this slot with a configured spatial field. This is the single
+    /// check for "does this archetype have a cluster spatial index?" — the per-cell index (<see cref="ArchetypeClusterState.PerCellIndex"/>) itself is
+    /// lazily allocated and provides no always-on existence sentinel of its own.
     /// </summary>
     public bool HasSpatialIndex;
 
@@ -1830,12 +1800,6 @@ internal struct ClusterSpatialSlot
 
     /// <summary>Node layout descriptor.</summary>
     public SpatialNodeDescriptor Descriptor;
-
-    /// <summary>Per-archetype R-Tree (Dynamic mode). Value stored in leaf = ClusterLocation.</summary>
-    public SpatialRTree<PersistentStore> Tree;
-
-    /// <summary>Per-archetype back-pointer CBS keyed by ClusterLocation (clusterChunkId * 64 + slotIndex).</summary>
-    public ChunkBasedSegment<PersistentStore> BackPointerSegment;
 }
 
 /// <summary>

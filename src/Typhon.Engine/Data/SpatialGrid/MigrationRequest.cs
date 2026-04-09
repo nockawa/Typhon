@@ -7,7 +7,7 @@ namespace Typhon.Engine;
 /// <c>(SourceClusterChunkId, SourceSlotIndex)</c> into a cluster attached to <see cref="DestCellKey"/>.
 /// </summary>
 /// <remarks>
-/// <para>Populated during cell-crossing detection inside <c>DatabaseEngine.ProcessClusterSpatialEntries</c>,
+/// <para>Populated during cell-crossing detection inside <c>DatabaseEngine.DetectClusterMigrations</c>,
 /// drained by <c>ArchetypeClusterState.ExecuteMigrations</c> at the tick fence.</para>
 /// <para>Packed to 12 bytes so the per-archetype queue stays cache-friendly — a 1K-entry queue fits in 12KB
 /// (under 3 L1 lines per 16 entries). Issue #229 Phase 3.</para>

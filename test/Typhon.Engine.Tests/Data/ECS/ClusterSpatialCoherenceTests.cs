@@ -73,15 +73,6 @@ class ClusterSpatialCoherenceTests : TestBase<ClusterSpatialCoherenceTests>
         return dbe;
     }
 
-    private DatabaseEngine SetupEngineWithoutGrid()
-    {
-        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        dbe.RegisterComponentFromAccessor<ClCohPos>();
-        // Deliberately no ConfigureSpatialGrid — spatial archetype falls back to legacy ClaimSlot path.
-        dbe.InitializeArchetypes();
-        return dbe;
-    }
-
     // ═══════════════════════════════════════════════════════════════════════
     // Grid configuration + opt-in behaviour
     // ═══════════════════════════════════════════════════════════════════════
@@ -95,20 +86,20 @@ class ClusterSpatialCoherenceTests : TestBase<ClusterSpatialCoherenceTests>
     }
 
     [Test]
-    public void SpatialArchetype_WithoutGridConfig_UsesLegacySpawnPath()
+    public void SpatialArchetype_WithoutGridConfig_Throws()
     {
-        using var dbe = SetupEngineWithoutGrid();
-        Assert.That(dbe.SpatialGrid, Is.Null);
-
-        using var tx = dbe.CreateQuickTransaction();
-        var id = tx.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(150f, 250f)));
-        tx.Commit();
-
-        // Legacy ClaimSlot path: ClusterCellMap stays null (opt-in feature)
-        var meta = Archetype<ClCohUnit>.Metadata;
-        var clusterState = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(clusterState.ClusterCellMap, Is.Null,
-            "Spatial archetype without configured grid must NOT allocate ClusterCellMap");
+        // Issue #230 Phase 3 Option B: ConfigureSpatialGrid() is required for cluster spatial archetypes. The pre-Option-B legacy fallback is gone —
+        // InitializeArchetypes throws an InvalidOperationException naming the archetype.
+        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        dbe.RegisterComponentFromAccessor<ClCohPos>();
+        try
+        {
+            Assert.Throws<System.InvalidOperationException>(() => dbe.InitializeArchetypes());
+        }
+        finally
+        {
+            dbe.Dispose();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -374,34 +365,72 @@ class ClusterSpatialCoherenceTests : TestBase<ClusterSpatialCoherenceTests>
     // ═══════════════════════════════════════════════════════════════════════
 
     [Test]
-    public void Multiple_Spatial_Archetypes_With_Grid_Throws()
+    public void TwoSpatialArchetypes_ShareGrid_SucceedsAndIsolatesQueries()
     {
-        // Registering two spatial archetypes with a SpatialGrid configured must fail fast because
-        // Phase 1+2's per-cell cluster list is shared across archetypes (design doc Decision Q10
-        // follow-up). Fix #1 from the code review.
-        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        // Issue #229 Q10 resolution: two cluster-spatial archetypes can share a single SpatialGrid because each archetype owns its own per-cell
+        // CellClusterPool. This test exercises the full stack — registration, spawn into the same cell from two different archetypes, query isolation,
+        // and the global CellDescriptor.EntityCount / ClusterCount aggregation that tests have always asserted on.
+        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClCohPos>();
         dbe.RegisterComponentFromAccessor<ClCohPos2>();
         dbe.ConfigureSpatialGrid(new SpatialGridConfig(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(1000, 1000),
             cellSize: 100f));
+        dbe.InitializeArchetypes(); // No throw — the Q10 gate has been removed.
 
-        var ex = Assert.Throws<InvalidOperationException>(() => dbe.InitializeArchetypes());
-        Assert.That(ex.Message, Does.Contain("at most one spatial archetype"));
-        dbe.Dispose();
-    }
+        // Spawn one entity of each archetype into the SAME cell (150, 250 → cell (1, 2)).
+        EntityId id1, id2;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            id1 = tx.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(150f, 250f)));
+            var pos2 = new ClCohPos2 { Bounds = new AABB2F { MinX = 155f, MinY = 255f, MaxX = 155f, MaxY = 255f } };
+            id2 = tx.Spawn<ClCohUnit2>(ClCohUnit2.Pos.Set(in pos2));
+            tx.Commit();
+        }
 
-    [Test]
-    public void Multiple_Spatial_Archetypes_Without_Grid_Succeeds()
-    {
-        // Without a configured grid, the single-archetype limitation doesn't apply — both
-        // archetypes run on the legacy per-entity R-Tree path.
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        dbe.RegisterComponentFromAccessor<ClCohPos>();
-        dbe.RegisterComponentFromAccessor<ClCohPos2>();
-        Assert.DoesNotThrow(() => dbe.InitializeArchetypes());
-        Assert.That(dbe.SpatialGrid, Is.Null);
+        int cellKey = dbe.SpatialGrid.WorldToCellKey(150f, 250f);
+        ref var cell = ref dbe.SpatialGrid.GetCell(cellKey);
+
+        // Global aggregation: both entities live in the same cell, cluster count is the sum across archetypes.
+        Assert.That(cell.EntityCount, Is.EqualTo(2), "CellDescriptor.EntityCount is the sum across archetypes");
+        Assert.That(cell.ClusterCount, Is.EqualTo(2), "Two cluster-spatial archetypes each allocated one cluster in this cell");
+
+        // Per-archetype pool isolation: each archetype sees only its own cluster id in the cell.
+        var meta1 = Archetype<ClCohUnit>.Metadata;
+        var meta2 = Archetype<ClCohUnit2>.Metadata;
+        var cs1 = dbe._archetypeStates[meta1.ArchetypeId].ClusterState;
+        var cs2 = dbe._archetypeStates[meta2.ArchetypeId].ClusterState;
+        Assert.That(cs1.CellClusterPool.GetClusterCount(cellKey), Is.EqualTo(1), "Archetype 1 pool sees its own cluster");
+        Assert.That(cs2.CellClusterPool.GetClusterCount(cellKey), Is.EqualTo(1), "Archetype 2 pool sees its own cluster");
+
+        // Query isolation: querying each archetype returns only its own entity. WhereInAABB's 6-arg signature packs 2D bounds as (minX, minY, maxX, maxY, _, _)
+        // per the existing EcsQuery cluster 2D dispatch (CoordCount==4 path reads maxX from _spatialParams[2] and maxY from _spatialParams[3]).
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var r1 = tx.Query<ClCohUnit>().WhereInAABB<ClCohPos>(0, 0, 300, 300, 0, 0).Execute();
+            Assert.That(r1, Does.Contain(id1));
+            Assert.That(r1, Does.Not.Contain(id2));
+        }
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var r2 = tx.Query<ClCohUnit2>().WhereInAABB<ClCohPos2>(0, 0, 300, 300, 0, 0).Execute();
+            Assert.That(r2, Does.Contain(id2));
+            Assert.That(r2, Does.Not.Contain(id1));
+        }
+
+        // Destroy one entity and verify per-archetype bookkeeping converges independently.
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.Destroy(id1);
+            tx.Commit();
+        }
+
+        ref var cellAfter = ref dbe.SpatialGrid.GetCell(cellKey);
+        Assert.That(cellAfter.EntityCount, Is.EqualTo(1), "Destroying one entity decrements the global count");
+        Assert.That(cellAfter.ClusterCount, Is.EqualTo(1), "Archetype 1's cluster emptied and detached; archetype 2's cluster remains");
+        Assert.That(cs1.CellClusterPool.GetClusterCount(cellKey), Is.EqualTo(0), "Archetype 1 pool is now empty for this cell");
+        Assert.That(cs2.CellClusterPool.GetClusterCount(cellKey), Is.EqualTo(1), "Archetype 2 pool is untouched by the unrelated destroy");
     }
 
     [Test]

@@ -428,37 +428,33 @@ internal sealed unsafe class SpatialInterestSystem
                 state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
             }
 
-            // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 migration — full-sync path).
-            // Hybrid dispatch: Dynamic cluster archetypes with a configured spatial grid use the new per-cell index path; Static cluster archetypes (per-cell
-            // StaticIndex is deferred) and any archetype without a configured grid fall back to the legacy per-archetype cluster tree. Both paths produce the
-            // same result set for an AABB query. The interest system's DELTA path is unchanged — it operates on the per-archetype DirtyBitmapRing + legacy
-            // tree back-pointers directly, and both of those survive Phase 3 under the hybrid.
+            // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 Option B — full-sync path).
+            // Under Option B, cluster spatial archetypes require a configured SpatialGrid (enforced at init time in DatabaseEngine.InitializeArchetypes).
+            // Both Dynamic and Static cluster archetypes use the per-cell index path; the two-pass cell walk visits DynamicIndex and StaticIndex for each cell,
+            // so the caller doesn't need to branch on mode. The interest system's DELTA path reads cluster SoA data directly via ClusterDirtyRing (unchanged).
             if (_spatialState.ClusterArchetypes != null)
             {
                 var grid = _table.DBE.SpatialGrid;
-                float qMinX = 0, qMinY = 0, qMinZ = 0, qMaxX = 0, qMaxY = 0, qMaxZ = 0;
-                if (grid != null)
+                float qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ;
+                if (coordCount == 4)
                 {
-                    if (coordCount == 4)
-                    {
-                        // 2D region — [minX, minY, maxX, maxY] with infinite Z bounds so the Z overlap test trivially passes.
-                        qMinX = (float)queryCoords[0];
-                        qMinY = (float)queryCoords[1];
-                        qMinZ = float.NegativeInfinity;
-                        qMaxX = (float)queryCoords[2];
-                        qMaxY = (float)queryCoords[3];
-                        qMaxZ = float.PositiveInfinity;
-                    }
-                    else
-                    {
-                        // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
-                        qMinX = (float)queryCoords[0];
-                        qMinY = (float)queryCoords[1];
-                        qMinZ = (float)queryCoords[2];
-                        qMaxX = (float)queryCoords[3];
-                        qMaxY = (float)queryCoords[4];
-                        qMaxZ = (float)queryCoords[5];
-                    }
+                    // 2D region — [minX, minY, maxX, maxY] with infinite Z bounds so the Z overlap test trivially passes.
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = float.NegativeInfinity;
+                    qMaxX = (float)queryCoords[2];
+                    qMaxY = (float)queryCoords[3];
+                    qMaxZ = float.PositiveInfinity;
+                }
+                else
+                {
+                    // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = (float)queryCoords[2];
+                    qMaxX = (float)queryCoords[3];
+                    qMaxY = (float)queryCoords[4];
+                    qMaxZ = (float)queryCoords[5];
                 }
 
                 foreach (var clusterState in _spatialState.ClusterArchetypes)
@@ -467,22 +463,10 @@ internal sealed unsafe class SpatialInterestSystem
                     {
                         continue;
                     }
-                    if (grid != null)
+                    foreach (var hit in clusterState.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
                     {
-                        // Issue #230 Phase 3: both Dynamic and Static cluster archetypes use the new per-cell index path when a grid is configured.
-                        foreach (var hit in clusterState.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
-                        {
-                            EnsureChangeBufferCapacity(state);
-                            state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
-                        }
-                    }
-                    else
-                    {
-                        foreach (var hit in clusterState.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
-                        {
-                            EnsureChangeBufferCapacity(state);
-                            state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
-                        }
+                        EnsureChangeBufferCapacity(state);
+                        state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
                     }
                 }
             }

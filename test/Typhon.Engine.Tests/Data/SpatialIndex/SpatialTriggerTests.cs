@@ -29,7 +29,7 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
     /// <remarks>
     /// Does NOT register <c>SpatialTerrain</c>: issue #229 Phase 1+2 restricts the grid to a single spatial archetype per configured grid (stale gate —
     /// the per-cell index is per-archetype via <c>PerCellIndex</c>, but the grid's shared cell cluster list is not yet split). Terrain-based tests use
-    /// <see cref="SetupEngineWithTerrainNoGrid"/> instead.
+    /// <see cref="SetupEngineWithTerrain"/> instead.
     /// </remarks>
     private DatabaseEngine SetupEngine()
     {
@@ -45,16 +45,18 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
     }
 
     /// <summary>
-    /// Setup for the static-cache tests that use <c>SpatialTerrain</c>. Registers both Ship and Terrain but does NOT call <c>ConfigureSpatialGrid</c> — the
-    /// one-spatial-archetype restriction in issue #229 Phase 1+2 means the grid can't accommodate both. These tests exercise the per-entity <c>StaticTree</c>
-    /// path, not the cluster path, so they don't need the per-cell index.
+    /// Setup for the static-cache tests that use <c>SpatialTerrain</c>. Registers only Terrain (+ grid) because Option B requires a SpatialGrid for cluster
+    /// spatial archetypes and #229 Q10 still allows only one spatial archetype per grid. These tests exercise the non-cluster per-table <c>StaticTree</c>
+    /// cache invalidation logic — the cluster path isn't under test here.
     /// </summary>
-    private DatabaseEngine SetupEngineWithTerrainNoGrid()
+    private DatabaseEngine SetupEngineWithTerrain()
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        dbe.RegisterComponentFromAccessor<SpatialShip>();
         dbe.RegisterComponentFromAccessor<SpatialTerrain>();
-        dbe.RegisterComponentFromAccessor<SpatialName>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new System.Numerics.Vector2(-1000f, -1000f),
+            worldMax: new System.Numerics.Vector2(1000f, 1000f),
+            cellSize: 100f));
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -418,7 +420,7 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
     [CancelAfter(5000)]
     public void StaticCache_CachedAfterFirstEval()
     {
-        using var dbe = SetupEngineWithTerrainNoGrid();
+        using var dbe = SetupEngineWithTerrain();
         var terrainTable = dbe.GetComponentTable<SpatialTerrain>();
         var ts = terrainTable.SpatialIndex.GetOrCreateTriggerSystem(terrainTable);
 
@@ -452,7 +454,7 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
     [CancelAfter(5000)]
     public void StaticCache_InvalidatedOnTreeMutation()
     {
-        using var dbe = SetupEngineWithTerrainNoGrid();
+        using var dbe = SetupEngineWithTerrain();
         var terrainTable = dbe.GetComponentTable<SpatialTerrain>();
         var ts = terrainTable.SpatialIndex.GetOrCreateTriggerSystem(terrainTable);
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using Typhon.Schema.Definition;
@@ -15,11 +16,16 @@ class SpatialInterestTests : TestBase<SpatialInterestTests>
         Archetype<SpatialShipArchetype>.Touch();
     }
 
+    // Issue #230 Phase 3 Option B: cluster spatial archetypes require a configured SpatialGrid.
     private DatabaseEngine SetupEngine()
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<SpatialShip>();
         dbe.RegisterComponentFromAccessor<SpatialName>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new Vector2(-10_000, -10_000),
+            worldMax: new Vector2(10_000, 10_000),
+            cellSize: 100f));
         dbe.InitializeArchetypes();
         return dbe;
     }

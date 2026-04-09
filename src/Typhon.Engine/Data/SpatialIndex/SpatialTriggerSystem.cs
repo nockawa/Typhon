@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
 
@@ -72,7 +71,6 @@ internal sealed unsafe class SpatialTriggerSystem
     private long[] _scratchBitmap;
     private long[] _entityLookup;     // dense: chunkId → entityId (current eval)
     private long[] _prevEntityLookup; // dense: chunkId → entityId (previous eval, swapped)
-    private int _scratchCapacity;     // current word capacity of scratch bitmap
 
     // Result buffers (pre-allocated, sliced for SpatialTriggerResult)
     private long[] _resultEntered;
@@ -249,39 +247,35 @@ internal sealed unsafe class SpatialTriggerSystem
                 QueryAndPopulateBitmap(_spatialState.DynamicTree, queryCoords, config.CategoryMask, wordCount);
             }
 
-            // Per-archetype cluster spatial index fan-out (issue #230 Phase 3 migration).
+            // Per-archetype cluster spatial index fan-out (issue #230 Phase 3 Option B).
             // Cluster entities are tracked by EntityId in a HashSet, NOT by bitmap, because the per-table bitmap's chunkId namespace is not meaningful for
             // cluster-archetype results (cluster storage has its own clusterChunkId namespace that would collide with the per-table ComponentChunkId namespace).
-            // Hybrid dispatch: Dynamic cluster archetypes WITH a configured spatial grid use the new per-cell index path (issue #230 Phase 3). Static cluster
-            // archetypes (per-cell StaticIndex is deferred to a future sub-issue of #228) AND any archetype without a configured grid fall back to the legacy
-            // per-archetype cluster tree. Both paths produce the same enter/leave event stream (standard AABB overlap + category mask filtering).
+            // Under Option B, cluster spatial archetypes require a configured SpatialGrid (enforced at init time in DatabaseEngine.InitializeArchetypes). The
+            // enumerator's two-pass cell walk visits DynamicIndex and StaticIndex for each cell, so the caller doesn't need to branch on mode.
             if (_spatialState.ClusterArchetypes != null)
             {
                 var grid = _table.DBE.SpatialGrid;
-                float qMinX = 0, qMinY = 0, qMinZ = 0, qMaxX = 0, qMaxY = 0, qMaxZ = 0;
-                if (grid != null)
+                float qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ;
+                if (coordCount == 4)
                 {
-                    if (coordCount == 4)
-                    {
-                        // 2D region — [minX, minY, maxX, maxY]. Use infinite Z bounds so 2D cluster archetypes (which have empty-sentinel Z) and 3D cluster
-                        // archetypes (which have meaningful Z) both pass the Z overlap test trivially.
-                        qMinX = (float)queryCoords[0];
-                        qMinY = (float)queryCoords[1];
-                        qMinZ = float.NegativeInfinity;
-                        qMaxX = (float)queryCoords[2];
-                        qMaxY = (float)queryCoords[3];
-                        qMaxZ = float.PositiveInfinity;
-                    }
-                    else
-                    {
-                        // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
-                        qMinX = (float)queryCoords[0];
-                        qMinY = (float)queryCoords[1];
-                        qMinZ = (float)queryCoords[2];
-                        qMaxX = (float)queryCoords[3];
-                        qMaxY = (float)queryCoords[4];
-                        qMaxZ = (float)queryCoords[5];
-                    }
+                    // 2D region — [minX, minY, maxX, maxY]. Use infinite Z bounds so 2D cluster archetypes (which have empty-sentinel Z) and 3D cluster
+                    // archetypes (which have meaningful Z) both pass the Z overlap test trivially.
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = float.NegativeInfinity;
+                    qMaxX = (float)queryCoords[2];
+                    qMaxY = (float)queryCoords[3];
+                    qMaxZ = float.PositiveInfinity;
+                }
+                else
+                {
+                    // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = (float)queryCoords[2];
+                    qMaxX = (float)queryCoords[3];
+                    qMaxY = (float)queryCoords[4];
+                    qMaxZ = (float)queryCoords[5];
                 }
 
                 foreach (var cs in _spatialState.ClusterArchetypes)
@@ -291,22 +285,9 @@ internal sealed unsafe class SpatialTriggerSystem
                         continue;
                     }
                     clusterOccupants ??= new HashSet<long>();
-                    if (grid != null)
+                    foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
                     {
-                        // Issue #230 Phase 3: both Dynamic and Static cluster archetypes now use the new per-cell index path when a grid is configured.
-                        // The enumerator's two-pass cell walk visits DynamicIndex and StaticIndex for each cell, so the caller doesn't need to branch on mode.
-                        foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
-                        {
-                            clusterOccupants.Add(hit.EntityId);
-                        }
-                    }
-                    else
-                    {
-                        // Legacy fallback: no spatial grid configured. Per-cell index was never populated; fall back to the legacy per-archetype cluster tree.
-                        foreach (var hit in cs.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
-                        {
-                            clusterOccupants.Add(hit.EntityId);
-                        }
+                        clusterOccupants.Add(hit.EntityId);
                     }
                 }
             }
@@ -468,7 +449,6 @@ internal sealed unsafe class SpatialTriggerSystem
             _entityLookup = ArrayPool<long>.Shared.Rent(lookupSize);
             _prevEntityLookup = ArrayPool<long>.Shared.Rent(lookupSize);
         }
-        _scratchCapacity = wordCount;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

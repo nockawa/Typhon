@@ -197,39 +197,9 @@ class ClusterSpatialAabbRecomputeTests : TestBase<ClusterSpatialAabbRecomputeTes
         }
     }
 
-    [Test]
-    public void RebuildClusterAabbs_WithoutGridOptIn_IsNoOp()
-    {
-        // Fresh engine, NO ConfigureSpatialGrid call.
-        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        dbe.RegisterComponentFromAccessor<ClCohPos>();
-        dbe.InitializeArchetypes();
-
-        try
-        {
-            using (var tx = dbe.CreateQuickTransaction())
-            {
-                tx.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(50f, 50f)));
-                tx.Commit();
-            }
-
-            var cs = GetClusterState(dbe);
-            using (var epoch = EpochGuard.Enter(dbe.EpochManager))
-        {
-            cs.RebuildClusterAabbs();
-        }
-
-            // Without grid opt-in, per-cell index should not be populated.
-            // (ClusterAabbs might get allocated because SpatialSlot.Tree is non-null, but PerCellIndex
-            // allocation is driven by AddClusterToPerCellIndex which we skip in the no-grid path.)
-            // The safer assertion: PerCellIndex remains null (we never called AddClusterToPerCellIndex).
-            Assert.That(cs.PerCellIndex, Is.Null);
-        }
-        finally
-        {
-            dbe.Dispose();
-        }
-    }
+    // Note: RebuildClusterAabbs_WithoutGridOptIn_IsNoOp was removed in issue #230 Phase 3 Option B. It asserted that without ConfigureSpatialGrid(), the
+    // per-cell index stays null — but Option B's grid-required gate in InitializeArchetypes now throws for any cluster spatial archetype without a grid,
+    // so the test's precondition is no longer reachable. The no-grid fallback is gone.
 
     // ═══════════════════════════════════════════════════════════════════════
     // Phase 2: Tick-fence AABB recompute pass (issue #230)
@@ -479,7 +449,7 @@ class ClusterSpatialAabbRecomputeTests : TestBase<ClusterSpatialAabbRecomputeTes
         }
 
         // Move migrant across the cell boundary in a separate transaction. This write sets a dirty bit in
-        // cluster A. At tick fence, ProcessClusterSpatialEntries detects the cross-boundary crossing and
+        // cluster A. At tick fence, DetectClusterMigrations detects the cross-boundary crossing and
         // ExecuteMigrations claims a slot in cluster B (likely reclaiming m2's freed slot).
         using (var tx = dbe.CreateQuickTransaction())
         {

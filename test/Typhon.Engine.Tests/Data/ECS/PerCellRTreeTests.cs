@@ -472,22 +472,6 @@ class PerCellRTreeTests : TestBase<PerCellRTreeTests>
         newPathStopwatch.Stop();
         int newPathPerIter = newPathCount / queryIterations;
 
-        // ── Legacy path: cs.SpatialSlot.Tree.QueryAABBOccupants ──
-        var meta = Archetype<ClCohUnit>.Metadata;
-        var clusterState = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        int legacyPathCount = 0;
-        var legacyPathStopwatch = System.Diagnostics.Stopwatch.StartNew();
-        for (int iter = 0; iter < queryIterations; iter++)
-        {
-            using var epoch = EpochGuard.Enter(dbe.EpochManager);
-            foreach (var hit in clusterState.SpatialSlot.Tree.QueryAABBOccupants(queryCoords))
-            {
-                legacyPathCount++;
-            }
-        }
-        legacyPathStopwatch.Stop();
-        int legacyPathPerIter = legacyPathCount / queryIterations;
-
         TestContext.WriteLine($"[Phase 3 Smoke Benchmark — Issue #230 criterion 11]");
         TestContext.WriteLine($"  Entity count:    {entityCount}");
         TestContext.WriteLine($"  Query iterations: {queryIterations}");
@@ -495,13 +479,9 @@ class PerCellRTreeTests : TestBase<PerCellRTreeTests>
         TestContext.WriteLine($"    Results/iter: {newPathPerIter}");
         TestContext.WriteLine($"    Total time:   {newPathStopwatch.Elapsed.TotalMilliseconds:F2} ms");
         TestContext.WriteLine($"    Per query:    {(newPathStopwatch.Elapsed.TotalMilliseconds * 1000) / queryIterations:F2} us");
-        TestContext.WriteLine($"  Legacy path (per-entity SpatialRTree):");
-        TestContext.WriteLine($"    Results/iter: {legacyPathPerIter}");
-        TestContext.WriteLine($"    Total time:   {legacyPathStopwatch.Elapsed.TotalMilliseconds:F2} ms");
-        TestContext.WriteLine($"    Per query:    {(legacyPathStopwatch.Elapsed.TotalMilliseconds * 1000) / queryIterations:F2} us");
 
-        // Correctness assertion: both paths should return the same count per iteration.
-        Assert.That(newPathPerIter, Is.EqualTo(legacyPathPerIter),
-            $"New path returned {newPathPerIter} per iter, legacy path returned {legacyPathPerIter}. Both should be identical for the same AABB query.");
+        // Correctness: any non-zero result count is acceptable for a smoke bench. The A/B comparison against the legacy per-entity SpatialRTree was removed
+        // in issue #230 Option B purge; the legacy tree is gone. A rigorous regression benchmark is tracked as a follow-up of #228.
+        Assert.That(newPathPerIter, Is.GreaterThan(0), "Smoke bench: new path should return at least one result for the 2500×2500 query box over a 9000-wide world.");
     }
 }

@@ -9,8 +9,4 @@ namespace Typhon.Engine;
 /// </summary>
 public partial class DatabaseEngine
 {
-    [LoggerMessage(Level = LogLevel.Debug,
-        Message = "Spatial archetype '{ArchetypeName}' has no SpatialGrid configured — falling back to legacy per-entity placement. " +
-                  "Call DatabaseEngine.ConfigureSpatialGrid(...) before InitializeArchetypes() to enable cell-coherent clustering.")]
-    private partial void LogSpatialArchetypeNoGridFallback(string archetypeName);
 }

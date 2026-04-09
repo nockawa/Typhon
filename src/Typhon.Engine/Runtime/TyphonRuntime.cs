@@ -1054,7 +1054,7 @@ public sealed class TyphonRuntime : IDisposable
         //
         // Issue #229 Phase 3 ordering — WriteTickFence runs BEFORE UoW.Flush.
         // Reason: the cluster tick fence publishes WAL records (ClusterTickFence chunks) describing the tick's dirty cluster-content changes.
-        // It is ALSO the point where the Phase 3 migration fence runs (ProcessClusterSpatialEntries + ExecuteMigrations), mutating cluster pages directly.
+        // It is ALSO the point where the Phase 3 migration fence runs (DetectClusterMigrations + ExecuteMigrations), mutating cluster pages directly.
         // By running WriteTickFence first, the subsequent UoW.Flush waits for a currentLsn that includes those publishes, so all migration writes become
         // per-tick durable via the/ same fsync that covers normal system commits. Moving WriteTickFence after Flush (the pre-Phase-3 ordering) would make
         // migration writes durable only at the NEXT tick's flush — a one-tick lag that's acceptable for the original R-Tree maintenance use case but unsafe
