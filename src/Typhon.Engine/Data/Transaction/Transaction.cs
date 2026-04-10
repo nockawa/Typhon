@@ -1148,7 +1148,7 @@ public unsafe partial class Transaction : EntityAccessor
         var es = _dbe._archetypeStates[archId];
         var clusterState = es.ClusterState;
         bool hasIndexes = clusterState.IndexSlots != null;
-        bool hasSpatial = clusterState.SpatialSlot.Tree != null;
+        bool hasSpatial = clusterState.SpatialSlot.HasSpatialIndex;
 
         if (!hasIndexes && !hasSpatial && !copyToCluster)
         {
@@ -1292,8 +1292,8 @@ public unsafe partial class Transaction : EntityAccessor
             clusterState.SetDirty(clusterChunkId, slotIndex);
         }
 
-        // Spatial R-Tree: handled at tick fence via ProcessClusterSpatialEntries (dirty bit already set by
-        // cluster copy above). Same deferred-update pattern as SV cluster spatial.
+        // Spatial per-cell cluster index: migration detection runs at tick fence via DetectClusterMigrations (dirty bit already set by cluster copy above).
+        // Same deferred-update pattern as SV cluster spatial. Issue #230 Phase 3 Option B.
     }
 
     private void DisposeClusterCommitAccessors()

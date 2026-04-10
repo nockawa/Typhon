@@ -51,6 +51,10 @@ internal sealed class RegionOccupantState
 
     /// <summary>Previous cluster occupants tracked by EntityId (separate from bitmap to avoid namespace collision).</summary>
     internal HashSet<long> PreviousClusterOccupants;
+
+    /// <summary>Scratch set for current-tick cluster occupants. Double-buffered with <see cref="PreviousClusterOccupants"/> to avoid
+    /// per-evaluation allocation. After the diff, the sets are swapped.</summary>
+    internal HashSet<long> ClusterOccupantsScratch;
 }
 
 /// <summary>
@@ -71,7 +75,6 @@ internal sealed unsafe class SpatialTriggerSystem
     private long[] _scratchBitmap;
     private long[] _entityLookup;     // dense: chunkId → entityId (current eval)
     private long[] _prevEntityLookup; // dense: chunkId → entityId (previous eval, swapped)
-    private int _scratchCapacity;     // current word capacity of scratch bitmap
 
     // Result buffers (pre-allocated, sliced for SpatialTriggerResult)
     private long[] _resultEntered;
@@ -248,20 +251,52 @@ internal sealed unsafe class SpatialTriggerSystem
                 QueryAndPopulateBitmap(_spatialState.DynamicTree, queryCoords, config.CategoryMask, wordCount);
             }
 
-            // Per-archetype cluster spatial R-Trees (fan-out)
-            // Cluster trees store ClusterLocation in leaf entries, NOT ComponentChunkId.
-            // These share the same integer space and would collide in the bitmap — use a HashSet keyed by EntityId instead.
+            // Per-archetype cluster spatial index fan-out (issue #230 Phase 3 Option B).
+            // Cluster entities are tracked by EntityId in a HashSet, NOT by bitmap, because the per-table bitmap's chunkId namespace is not meaningful for
+            // cluster-archetype results (cluster storage has its own clusterChunkId namespace that would collide with the per-table ComponentChunkId namespace).
+            // Under Option B, cluster spatial archetypes require a configured SpatialGrid (enforced at init time in DatabaseEngine.InitializeArchetypes). The
+            // enumerator's two-pass cell walk visits DynamicIndex and StaticIndex for each cell, so the caller doesn't need to branch on mode.
             if (_spatialState.ClusterArchetypes != null)
             {
+                var grid = _table.DBE.SpatialGrid;
+                float qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ;
+                if (coordCount == 4)
+                {
+                    // 2D region — [minX, minY, maxX, maxY]. Use infinite Z bounds so 2D cluster archetypes (which have empty-sentinel Z) and 3D cluster
+                    // archetypes (which have meaningful Z) both pass the Z overlap test trivially.
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = float.NegativeInfinity;
+                    qMaxX = (float)queryCoords[2];
+                    qMaxY = (float)queryCoords[3];
+                    qMaxZ = float.PositiveInfinity;
+                }
+                else
+                {
+                    // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = (float)queryCoords[2];
+                    qMaxX = (float)queryCoords[3];
+                    qMaxY = (float)queryCoords[4];
+                    qMaxZ = (float)queryCoords[5];
+                }
+
                 foreach (var cs in _spatialState.ClusterArchetypes)
                 {
-                    if (cs.SpatialSlot.Tree != null)
+                    if (!cs.SpatialSlot.HasSpatialIndex)
                     {
-                        clusterOccupants ??= new HashSet<long>();
-                        foreach (var hit in cs.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
-                        {
-                            clusterOccupants.Add(hit.EntityId);
-                        }
+                        continue;
+                    }
+                    if (clusterOccupants == null)
+                    {
+                        // Double-buffer: reuse the scratch set from the previous evaluation cycle to avoid per-call HashSet allocation.
+                        clusterOccupants = occ.ClusterOccupantsScratch ?? new HashSet<long>();
+                        clusterOccupants.Clear();
+                    }
+                    foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
+                    {
+                        clusterOccupants.Add(hit.EntityId);
                     }
                 }
             }
@@ -374,6 +409,8 @@ internal sealed unsafe class SpatialTriggerSystem
                     }
                 }
             }
+            // Double-buffer swap: current becomes previous, old previous becomes scratch for next cycle.
+            occ.ClusterOccupantsScratch = occ.PreviousClusterOccupants;
             occ.PreviousClusterOccupants = clusterOccupants;
         }
 
@@ -423,7 +460,6 @@ internal sealed unsafe class SpatialTriggerSystem
             _entityLookup = ArrayPool<long>.Shared.Rent(lookupSize);
             _prevEntityLookup = ArrayPool<long>.Shared.Rent(lookupSize);
         }
-        _scratchCapacity = wordCount;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

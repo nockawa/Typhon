@@ -50,7 +50,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly CacheLinePaddedInt[] _nextChunk;
     private readonly CacheLinePaddedInt[] _remainingChunks;
     private readonly CacheLinePaddedInt[] _remainingDeps;
-    private readonly int[] _isReady;
+    private readonly CacheLinePaddedInt[] _isReady;
     private readonly bool[] _systemFailed;
 
     // Reset templates (immutable after construction)
@@ -136,8 +136,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Called per chunk: creates Transaction on worker thread, slices entities, calls Execute, commits. Args: (sysIdx, chunkIndex, totalChunks, workerId).</summary>
     internal Action<int, int, int, int> ParallelQueryChunkCallback;
 
-    /// <summary>Called once after all chunks complete (or on skip). Returns pooled entity list.</summary>
-    internal Action<int> ParallelQueryCleanupCallback;
+    /// <summary>Called once after all chunks of a phase complete (or on skip). Returns <c>true</c> to re-dispatch the system for another phase
+    /// (checkerboard two-phase dispatch, issue #234); <c>false</c> to proceed to successor dispatch.</summary>
+    internal Func<int, bool> ParallelQueryCleanupCallback;
 
     // ═══════════════════════════════════════════════════════════════
     // Logging
@@ -237,7 +238,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         _nextChunk = new CacheLinePaddedInt[_systemCount];
         _remainingChunks = new CacheLinePaddedInt[_systemCount];
         _remainingDeps = new CacheLinePaddedInt[_systemCount];
-        _isReady = new int[_systemCount];
+        _isReady = new CacheLinePaddedInt[_systemCount];
         _systemFailed = new bool[_systemCount];
 
         // Build reset templates
@@ -528,13 +529,18 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
             if (sys.IsParallelQuery)
             {
-                var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
-                if (totalChunks <= 0)
+                // Issue #234: do/while loop supports checkerboard two-phase dispatch. For non-checkerboard systems, cleanup returns false on
+                // the first iteration → loop executes exactly once → zero overhead.
+                bool morePhases;
+                do
                 {
-                    ParallelQueryCleanupCallback?.Invoke(sysIdx);
-                }
-                else
-                {
+                    var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
+                    if (totalChunks <= 0)
+                    {
+                        morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+                        continue;
+                    }
+
                     Systems[sysIdx].TotalChunks = totalChunks;
                     var chunkFailed = false;
                     for (var chunk = 0; chunk < totalChunks; chunk++)
@@ -556,12 +562,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                         }
                     }
 
-                    ParallelQueryCleanupCallback?.Invoke(sysIdx);
+                    morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
                     if (chunkFailed)
                     {
-                        // Failure already propagated above
+                        morePhases = false; // Abort remaining phases on failure
                     }
-                }
+                } while (morePhases);
             }
             else if (sys.Type == SystemType.PipelineSystem)
             {
@@ -717,7 +723,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     {
         for (var i = 0; i < _systemCount; i++)
         {
-            if (_isReady[i] != 1)
+            if (_isReady[i].Value != 1)
             {
                 continue;
             }
@@ -761,7 +767,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private void ProcessCallbackOrQuery(int sysIdx, int workerId, bool trackUtilization)
     {
         // Atomic claim: only one worker wins
-        if (Interlocked.CompareExchange(ref _isReady[sysIdx], 0, 1) != 1)
+        if (Interlocked.CompareExchange(ref _isReady[sysIdx].Value, 0, 1) != 1)
         {
             return;
         }
@@ -911,8 +917,16 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             {
                 RecordSystemDone(sysIdx, workEnd);
                 _currentTickSystemMetrics[sysIdx].WorkersTouched = sys.TotalChunks;
-                ParallelQueryCleanupCallback?.Invoke(sysIdx);
-                OnSystemComplete(sysIdx, workerId, trackUtilization);
+                // Issue #234: cleanup may return true to re-dispatch for another phase (checkerboard Black after Red).
+                var reDispatch = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+                if (reDispatch)
+                {
+                    DispatchParallelQuery(sysIdx, workerId, trackUtilization);
+                }
+                else
+                {
+                    OnSystemComplete(sysIdx, workerId, trackUtilization);
+                }
                 break;
             }
         }
@@ -925,11 +939,19 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// </summary>
     private void DispatchParallelQuery(int sysIdx, int workerId, bool trackUtilization)
     {
+        // Issue #234: reset chunk counter for re-dispatch (checkerboard phase B). No-op for first dispatch (already 0 from ResetTickState).
+        _nextChunk[sysIdx].Value = 0;
+
         var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
         if (totalChunks <= 0)
         {
-            // Empty entity set — skip, dispatch successors
-            ParallelQueryCleanupCallback?.Invoke(sysIdx);
+            // Empty entity set — cleanup may trigger re-dispatch (checkerboard: zero Red clusters but non-zero Black).
+            var reDispatch = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+            if (reDispatch)
+            {
+                DispatchParallelQuery(sysIdx, workerId, trackUtilization);
+                return;
+            }
             OnSystemComplete(sysIdx, workerId, trackUtilization);
             return;
         }
@@ -1102,7 +1124,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void MarkSystemReady(int sysIdx) => _isReady[sysIdx] = 1;
+    private void MarkSystemReady(int sysIdx) => _isReady[sysIdx].Value = 1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void RecordFirstChunkGrab(int sysIdx, long timestamp) =>
@@ -1119,7 +1141,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             _nextChunk[i].Value = 0;
             _remainingChunks[i].Value = _templateChunks[i];
             _remainingDeps[i].Value = _templateDeps[i];
-            _isReady[i] = 0;
+            _isReady[i].Value = 0;
             _currentTickSystemMetrics[i] = default;
         }
 

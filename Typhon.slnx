@@ -16,13 +16,14 @@
         <Project Path="src/Typhon.Shell.Extensibility/Typhon.Shell.Extensibility.csproj" />
     </Folder>
     <Folder Name="/test/">
+        <Project Path="test/AntHill/AntHill.csproj">
+            <BuildType Project="Debug" />
+        </Project>
         <Project Path="test/Typhon.ARPG.Schema/Typhon.ARPG.Schema.csproj" />
         <Project Path="test/Typhon.ARPG.Shell/Typhon.ARPG.Shell.csproj" />
         <Project Path="test/Typhon.Benchmark/Typhon.Benchmark.csproj" />
         <Project Path="test/Typhon.Client.Tests/Typhon.Client.Tests.csproj" />
         <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
         <Project Path="test/Typhon.MonitoringDemo/Typhon.MonitoringDemo.csproj" />
-        <Project Path="test/AntHill/AntHill.csproj" />
-        <Project Path="test/AntHill/profiling/AntHill.ProfileRunner.csproj" />
     </Folder>
 </Solution>

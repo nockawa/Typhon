@@ -45,11 +45,35 @@ public sealed class TyphonRuntime : IDisposable
     private readonly PointInTimeAccessor[] _parallelAccessors;      // Per-system reusable PTAs — Attach()ed each tick (per-system to avoid race with DAG-concurrent systems)
     private readonly PartitionEntityView[][] _partitionViews;      // Per-system per-worker partition views [sysIdx][chunkIdx]
 
+    // Issue #231: per-system cluster-id partition source for tier-filtered dispatch. Non-null only when the system has a tier filter AND has a cluster state.
+    // For non-amortized systems this points DIRECTLY at the per-archetype TierClusterIndex's per-tier buffer (zero-copy). For amortized systems
+    // (cellAmortize > 0) it points at the per-system grow-on-demand buffer in _systemAmortizationBuffers, which contains only this tick's bucket.
+    // Refreshed each tick inside OnParallelQueryPrepare. Decoupling these into per-system slots avoids the BUG-2 race on shared state.
+    private readonly int[][] _systemTierClusterIds;
+    private readonly int[] _systemTierClusterCount;
+    // Issue #231 BUG-2 fix: per-system grow-on-demand buffer for amortized cluster ids. Owned exclusively by OnParallelQueryPrepare → ExecuteChunkWith*. Reused
+    // across ticks; doubles on overflow. Null until the first amortized dispatch.
+    private readonly int[][] _systemAmortizationBuffers;
+    // Issue #231: per-system cluster-range entity view, allocated lazily the first time a tier-filtered system runs Path 1 (full non-versioned). Reused across
+    // ticks. [sysIdx][workerIdx]. Null slot = not allocated yet.
+    private readonly ClusterRangeEntityView[][] _tierRangeViews;
+
+    // Issue #234: checkerboard two-phase dispatch. Phase tracking + Red/Black cluster buffers per system.
+    // _checkerboardPhase: 0 = not checkerboard or reset, 1 = Red (phase A active), 2 = Black (phase B active).
+    private readonly int[] _checkerboardPhase;
+    private readonly int[][] _checkerboardRedIds;
+    private readonly int[] _checkerboardRedCount;
+    private readonly int[][] _checkerboardBlackIds;
+    private readonly int[] _checkerboardBlackCount;
+
     // Cached delegate — avoids per-TickContext allocation from method group conversion
     private readonly Func<DurabilityMode, Transaction> _createSideTxDelegate;
 
     // First-tick flag
     private bool _firstTickExecuted;
+
+    // Issue #234: per-tier budget metrics. Computed at tick end, exposed as _previousTickMetrics on the next tick's TickContext.
+    private TierBudgetMetrics _previousTickMetrics;
 
     // DeltaTime tracking
     private long _previousTickTimestamp;
@@ -147,6 +171,15 @@ public sealed class TyphonRuntime : IDisposable
         _multiTableFilterSets = new HashMap<long>[scheduler.SystemCount];
         _parallelAccessors = new PointInTimeAccessor[scheduler.SystemCount];
         _partitionViews = new PartitionEntityView[scheduler.SystemCount][];
+        _systemTierClusterIds = new int[scheduler.SystemCount][];
+        _systemTierClusterCount = new int[scheduler.SystemCount];
+        _systemAmortizationBuffers = new int[scheduler.SystemCount][];
+        _tierRangeViews = new ClusterRangeEntityView[scheduler.SystemCount][];
+        _checkerboardPhase = new int[scheduler.SystemCount];
+        _checkerboardRedIds = new int[scheduler.SystemCount][];
+        _checkerboardRedCount = new int[scheduler.SystemCount];
+        _checkerboardBlackIds = new int[scheduler.SystemCount][];
+        _checkerboardBlackCount = new int[scheduler.SystemCount];
         _createSideTxDelegate = CreateSideTransactionInternal;
 
         ResolveChangeFilters(scheduler);
@@ -214,7 +247,9 @@ public sealed class TyphonRuntime : IDisposable
                 DeltaTime = 0f,
                 Transaction = tx,
                 CreateSideTransaction = _createSideTxDelegate,
-                Entities = PooledEntityList.Empty
+                Entities = PooledEntityList.Empty,
+                TierBudgetMetrics = _previousTickMetrics,
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
             };
             OnShutdown.Invoke(ctx);
             tx.Commit();
@@ -334,6 +369,13 @@ public sealed class TyphonRuntime : IDisposable
                             }
                         }
                     }
+                }
+
+                // Issue #231 BUG-3 fix: pre-create the per-archetype TierClusterIndex eagerly when ANY system on this archetype declares a tier filter.
+                // Removes the racy lazy-init from OnParallelQueryPrepare. Single-threaded constructor context, so plain assignment is safe.
+                if (sys.TierFilter != SimTier.All && _systemClusterStates[i] != null)
+                {
+                    _systemClusterStates[i].TierIndex ??= new TierClusterIndex();
                 }
             }
 
@@ -474,13 +516,6 @@ public sealed class TyphonRuntime : IDisposable
             return BuildFullViewEntitySet(sysIdx);
         }
 
-        // Estimate upper bound from non-cluster bitmap + cluster dirty snapshots
-        int bitmapPopCount = 0;
-        for (int i = 0; i < bitmap.Length; i++)
-        {
-            bitmapPopCount += BitOperations.PopCount((ulong)bitmap[i]);
-        }
-
         // Upper bound: view.Count (dirty ∩ view can't exceed view size). Avoids separate cluster estimate scan.
         var list = PooledEntityList.Rent(view.Count);
         var span = list.AsSpan();
@@ -520,8 +555,11 @@ public sealed class TyphonRuntime : IDisposable
             }
         }
 
-        // Cluster path (Phase 4a): scan cluster dirty bitmaps for archetypes referencing this table
-        count = ScanClusterDirtyEntities(table, view, span, count);
+        // Cluster path (Phase 4a): scan cluster dirty bitmaps for archetypes referencing this table.
+        // Issue #231: tier-filtered systems scope the scan to the tier's clusters (Q9) instead of walking the full snapshot bitmap.
+        var sys = Scheduler.Systems[sysIdx];
+        var effectiveTier = (SimTier)((byte)sys.TierFilter & (byte)view.TierFilter);
+        count = ScanClusterDirtyEntities(table, view, effectiveTier, span, count);
 
         if (count == 0)
         {
@@ -535,11 +573,14 @@ public sealed class TyphonRuntime : IDisposable
     /// <summary>
     /// Scan cluster dirty bitmaps for all archetypes referencing the given table, adding matching entities to the result span.
     /// Uses direct array loop over <see cref="ArchetypeRegistry"/> (no yield-return allocation).
-    /// Returns the updated count.
+    /// When <paramref name="effectiveTier"/> is non-<see cref="SimTier.All"/> and the archetype has a configured spatial grid, the scan walks only the
+    /// tier's clusters (issue #231 Q9). Returns the updated count.
     /// </summary>
-    private unsafe int ScanClusterDirtyEntities(ComponentTable table, ViewBase view, Span<EntityId> span, int count)
+    private unsafe int ScanClusterDirtyEntities(ComponentTable table, ViewBase view, SimTier effectiveTier, Span<EntityId> span, int count)
     {
         int maxArchId = Math.Min(ArchetypeRegistry.MaxArchetypeId, Engine._archetypeStates.Length - 1);
+        bool tierFiltered = effectiveTier != SimTier.All && Engine.SpatialGrid != null;
+
         for (int archId = 0; archId <= maxArchId; archId++)
         {
             var es = Engine._archetypeStates[archId];
@@ -558,19 +599,58 @@ public sealed class TyphonRuntime : IDisposable
             var clusterAccessor = cs.ClusterSegment.CreateChunkAccessor();
             try
             {
-                for (int wordIdx = 0; wordIdx < snapshot.Length; wordIdx++)
+                if (tierFiltered && cs.TierIndex != null)
                 {
-                    long word = snapshot[wordIdx];
-                    while (word != 0)
+                    // Tier-scoped path: the archetype has a TierIndex (pre-created in ResolveChangeFilters and rebuilt at TickStart).
+                    // Scan only the tier's clusters.
+                    var tierClusters = cs.TierIndex.GetClustersArray(effectiveTier, out int tierCount);
+                    var sleepStates = cs.SleepStates; // Issue #233: may be null for non-spatial secondary archetypes
+                    for (int i = 0; i < tierCount; i++)
                     {
-                        int bit = BitOperations.TrailingZeroCount((ulong)word);
-                        word &= word - 1;
-
-                        byte* clusterBase = clusterAccessor.GetChunkAddress(wordIdx);
-                        long entityPK = *(long*)(clusterBase + cs.Layout.EntityIdsOffset + bit * 8);
-                        if (view.Contains(entityPK))
+                        int chunkId = tierClusters[i];
+                        // Issue #233: skip sleeping clusters in the dirty scan
+                        if (sleepStates != null && chunkId < sleepStates.Length && sleepStates[chunkId] == ClusterSleepState.Sleeping)
                         {
-                            span[count++] = EntityId.FromRaw(entityPK);
+                            continue;
+                        }
+                        if (chunkId >= snapshot.Length)
+                        {
+                            continue;
+                        }
+                        long word = snapshot[chunkId];
+                        if (word == 0)
+                        {
+                            continue;
+                        }
+                        byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId);
+                        while (word != 0)
+                        {
+                            int bit = BitOperations.TrailingZeroCount((ulong)word);
+                            word &= word - 1;
+                            long entityPK = *(long*)(clusterBase + cs.Layout.EntityIdsOffset + bit * 8);
+                            if (view.Contains(entityPK))
+                            {
+                                span[count++] = EntityId.FromRaw(entityPK);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    for (int wordIdx = 0; wordIdx < snapshot.Length; wordIdx++)
+                    {
+                        long word = snapshot[wordIdx];
+                        while (word != 0)
+                        {
+                            int bit = BitOperations.TrailingZeroCount((ulong)word);
+                            word &= word - 1;
+
+                            byte* clusterBase = clusterAccessor.GetChunkAddress(wordIdx);
+                            long entityPK = *(long*)(clusterBase + cs.Layout.EntityIdsOffset + bit * 8);
+                            if (view.Contains(entityPK))
+                            {
+                                span[count++] = EntityId.FromRaw(entityPK);
+                            }
                         }
                     }
                 }
@@ -708,7 +788,9 @@ public sealed class TyphonRuntime : IDisposable
     }
 
     /// <summary>
-    /// Build entity set from full View (no change filter — all entities).
+    /// Build entity set from full View (no change filter — all entities). When the system has a tier filter or the view itself has one (issue #231),
+    /// the materialization is scoped to the tier's clusters instead of walking the view's full HashMap. The effective tier is the bit-AND of the system filter
+    /// and the view filter.
     /// </summary>
     private PooledEntityList BuildFullViewEntitySet(int sysIdx)
     {
@@ -716,6 +798,25 @@ public sealed class TyphonRuntime : IDisposable
         if (view.Count == 0)
         {
             return PooledEntityList.Empty;
+        }
+
+        var sys = Scheduler.Systems[sysIdx];
+        var effectiveTier = (SimTier)((byte)sys.TierFilter & (byte)view.TierFilter);
+        var cs = _systemClusterStates[sysIdx];
+
+        // Detect a system tier filter and a view tier filter that are mutually exclusive (e.g. system declares Tier0 and the view was created via
+        // WithTier(Tier1)). Their bit-AND is None, which would otherwise silently materialize an empty entity set.
+        if (effectiveTier == SimTier.None && sys.TierFilter != SimTier.None && view.TierFilter != SimTier.None)
+        {
+            throw new InvalidOperationException(
+                $"System '{sys.Name}': system tier filter '{sys.TierFilter}' and view tier filter '{view.TierFilter}' have no overlap. " +
+                "Their intersection is SimTier.None, which would dispatch zero entities. Make the filters compatible " +
+                "(e.g. system Tier0 + view Near, where view's tier set is a superset of the system's).");
+        }
+
+        if (effectiveTier != SimTier.All && cs != null && Engine != null && Engine.SpatialGrid != null)
+        {
+            return BuildTierScopedEntityList(cs, effectiveTier, view);
         }
 
         var list = PooledEntityList.Rent(view.Count);
@@ -727,6 +828,145 @@ public sealed class TyphonRuntime : IDisposable
         }
 
         return list;
+    }
+
+    /// <summary>
+    /// Materialize an entity list by walking only the tier's clusters (issue #231 Q9 pattern). Each cluster's occupancy bitmap is decoded via TZCNT to emit
+    /// entity ids in cluster order. Cost is proportional to the tier's actual entity count (popcount-summed), not an upper bound or the full view.
+    /// </summary>
+    private PooledEntityList BuildTierScopedEntityList(ArchetypeClusterState cs, SimTier tier, ViewBase view)
+    {
+        // TierIndex is pre-created in ResolveChangeFilters and rebuilt at TickStart. Here we only READ. The fallback path (TierIndex == null)
+        // covers archetypes that gained a tier-using system after construction — safe because BuildTierScopedEntityList runs from a single-threaded context
+        // (OnSystemStartInternal or PrepareVersionedFallback, both of which are serialized by the scheduler).
+        if (cs.TierIndex == null)
+        {
+            cs.TierIndex = new TierClusterIndex();
+        }
+        cs.TierIndex.RebuildIfStale(Engine.SpatialGrid, cs);
+        var tierClusters = cs.TierIndex.GetClustersArray(tier, out int tierCount);
+        if (tierCount == 0)
+        {
+            return PooledEntityList.Empty;
+        }
+
+        // Support pure-Transient archetypes (ClusterSegment == null) by falling back to TransientSegment.
+        // Layout.EntityIdsOffset is the same in both stores — chunk ids are synchronized via lockstep allocation.
+        if (cs.ClusterSegment != null)
+        {
+            return BuildTierScopedEntityListPersistent(cs, view, tierClusters, tierCount);
+        }
+        if (cs.TransientSegment != null)
+        {
+            return BuildTierScopedEntityListTransient(cs, view, tierClusters, tierCount);
+        }
+        return PooledEntityList.Empty;
+    }
+
+    private unsafe PooledEntityList BuildTierScopedEntityListPersistent(ArchetypeClusterState cs, ViewBase view, int[] tierClusters, int tierCount)
+    {
+        // ChunkAccessor construction asserts an epoch scope is active. The Versioned tier path (PrepareVersionedFallback → BuildFullViewEntitySet → here) runs
+        // from the scheduler thread without an outer scope, so we enter one explicitly. The non-Versioned change-filter path piggybacks on the outer EpochGuard
+        // set up by the existing scheduler infrastructure, but we keep our own to be safe. EpochGuard supports nesting (only the outermost scope advances the
+        // global epoch). Always enter to keep semantics simple — the cost is one atomic increment/decrement when already inside a scope.
+        using var guard = EpochGuard.Enter(Engine.EpochManager);
+        var accessor = cs.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            // Pre-count via popcount of OccupancyBits. Avoids (tierCount × ClusterSize) over-rent for sparse clusters.
+            // The first pass touches header words sequentially — L1/L2-hot for the second pass.
+            int exactCount = 0;
+            for (int i = 0; i < tierCount; i++)
+            {
+                byte* clusterBase = accessor.GetChunkAddress(tierClusters[i]);
+                exactCount += BitOperations.PopCount(*(ulong*)clusterBase);
+            }
+            if (exactCount == 0)
+            {
+                return PooledEntityList.Empty;
+            }
+
+            var list = PooledEntityList.Rent(exactCount);
+            var span = list.AsSpan();
+            int count = 0;
+            for (int i = 0; i < tierCount; i++)
+            {
+                byte* clusterBase = accessor.GetChunkAddress(tierClusters[i]);
+                ulong bits = *(ulong*)clusterBase;
+                while (bits != 0)
+                {
+                    int slot = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    long pk = *(long*)(clusterBase + cs.Layout.EntityIdsOffset + slot * 8);
+                    if (view.Contains(pk))
+                    {
+                        span[count++] = EntityId.FromRaw(pk);
+                    }
+                }
+            }
+
+            if (count == 0)
+            {
+                list.Return();
+                return PooledEntityList.Empty;
+            }
+            return new PooledEntityList(list.BackingArray, count);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    private unsafe PooledEntityList BuildTierScopedEntityListTransient(ArchetypeClusterState cs, ViewBase view, int[] tierClusters, int tierCount)
+    {
+        // EpochGuard supports nesting (only the outermost scope advances the global epoch). Always enter to keep semantics simple — the cost is one atomic
+        // increment/decrement when already inside a scope.
+        using var guard = EpochGuard.Enter(Engine.EpochManager);
+        var accessor = cs.TransientSegment.CreateChunkAccessor();
+        try
+        {
+            int exactCount = 0;
+            for (int i = 0; i < tierCount; i++)
+            {
+                byte* clusterBase = accessor.GetChunkAddress(tierClusters[i]);
+                exactCount += BitOperations.PopCount(*(ulong*)clusterBase);
+            }
+            if (exactCount == 0)
+            {
+                return PooledEntityList.Empty;
+            }
+
+            var list = PooledEntityList.Rent(exactCount);
+            var span = list.AsSpan();
+            int count = 0;
+            for (int i = 0; i < tierCount; i++)
+            {
+                byte* clusterBase = accessor.GetChunkAddress(tierClusters[i]);
+                ulong bits = *(ulong*)clusterBase;
+                while (bits != 0)
+                {
+                    int slot = BitOperations.TrailingZeroCount(bits);
+                    bits &= bits - 1;
+                    long pk = *(long*)(clusterBase + cs.Layout.EntityIdsOffset + slot * 8);
+                    if (view.Contains(pk))
+                    {
+                        span[count++] = EntityId.FromRaw(pk);
+                    }
+                }
+            }
+
+            if (count == 0)
+            {
+                list.Return();
+                return PooledEntityList.Empty;
+            }
+            return new PooledEntityList(list.BackingArray, count);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -749,6 +989,129 @@ public sealed class TyphonRuntime : IDisposable
         var sys = Scheduler.Systems[sysIdx];
         var hasView = _systemViews[sysIdx] != null;
         var hasChangeFilter = hasView && _systemChangeFilterTables[sysIdx] != null;
+
+        // Issue #231: read the per-archetype tier cluster list. The rebuild itself was hoisted to BuildTierIndexesAtTickStart (runs single-threaded at
+        // TickStart, before any parallel system dispatch). Here we only READ the prepared per-tier buffer and, if amortized, slice it into a per-system bucket.
+        _systemTierClusterIds[sysIdx] = null;
+        _systemTierClusterCount[sysIdx] = 0;
+        if (sys.TierFilter != SimTier.All)
+        {
+            var cs = _systemClusterStates[sysIdx];
+            if (cs != null && cs.TierIndex != null)
+            {
+                var tierArr = cs.TierIndex.GetClustersArray(sys.TierFilter, out int tierCnt);
+                if (sys.CellAmortize > 0)
+                {
+                    // Per-system amortization bucket: stride the tier list by `cellAmortize`, starting at `tickNumber % cellAmortize`.
+                    // Index-based modulo gives perfectly uniform distribution regardless of cell-key encoding (Morton vs row-major). The bucket lives
+                    // in this system's own buffer — no shared mutable state.
+                    long tick = Scheduler.CurrentTickNumber;
+                    int amortize = sys.CellAmortize;
+                    int startOffset = (int)((ulong)tick % (uint)amortize);
+                    int bucketCount = tierCnt > startOffset ? (tierCnt - startOffset + amortize - 1) / amortize : 0;
+                    var buf = _systemAmortizationBuffers[sysIdx];
+                    if (buf == null || buf.Length < Math.Max(1, bucketCount))
+                    {
+                        buf = new int[Math.Max(16, bucketCount)];
+                        _systemAmortizationBuffers[sysIdx] = buf;
+                    }
+                    int written = 0;
+                    for (int i = startOffset; i < tierCnt; i += amortize)
+                    {
+                        buf[written++] = tierArr[i];
+                    }
+                    _systemTierClusterIds[sysIdx] = buf;
+                    _systemTierClusterCount[sysIdx] = written;
+                }
+                else
+                {
+                    // Direct zero-copy reference into the TierClusterIndex buffer. Safe because the rebuild was already done at TickStart and won't run again
+                    // until next TickStart (after all parallel systems for this tick have finished).
+                    _systemTierClusterIds[sysIdx] = tierArr;
+                    _systemTierClusterCount[sysIdx] = tierCnt;
+                }
+            }
+        }
+
+        // Issue #233: dormancy filter — remove sleeping clusters from the dispatch list.
+        // Handles both tier-filtered and non-tier-filtered systems. When SleepingClusterCount == 0 this block is skipped (zero overhead).
+        {
+            var cs = _systemClusterStates[sysIdx];
+            if (cs?.SleepingClusterCount > 0 && cs.SleepStates != null)
+            {
+                var srcIds = _systemTierClusterIds[sysIdx];
+                int srcCount = _systemTierClusterCount[sysIdx];
+
+                if (srcIds == null && sys.TierFilter == SimTier.All)
+                {
+                    // Non-tier-filtered system with sleeping clusters: "promote" to use a filtered copy of ActiveClusterIds
+                    // so the tier-filtered dispatch path in ExecuteChunkWithAccessor handles it.
+                    srcIds = cs.ActiveClusterIds;
+                    srcCount = cs.ActiveClusterCount;
+                }
+
+                if (srcIds != null)
+                {
+                    // Always filter into the per-system amortization buffer (reusable, grows on demand).
+                    // When the source IS the amortization buffer (amortized tier), this filters in-place (safe: we only compact, never expand).
+                    var buf = _systemAmortizationBuffers[sysIdx];
+                    bool inPlace = ReferenceEquals(buf, srcIds);
+                    if (!inPlace && (buf == null || buf.Length < srcCount))
+                    {
+                        buf = new int[Math.Max(16, srcCount)];
+                        _systemAmortizationBuffers[sysIdx] = buf;
+                    }
+
+                    int written = 0;
+                    var sleepStates = cs.SleepStates;
+                    for (int i = 0; i < srcCount; i++)
+                    {
+                        int chunkId = srcIds[i];
+                        if (chunkId >= sleepStates.Length || sleepStates[chunkId] != ClusterSleepState.Sleeping)
+                        {
+                            buf[written++] = chunkId;
+                        }
+                    }
+
+                    _systemTierClusterIds[sysIdx] = buf;
+                    _systemTierClusterCount[sysIdx] = written;
+                }
+            }
+        }
+
+        // Issue #234: checkerboard two-phase dispatch. On first call (phase 0→1), split filtered cluster list into Red/Black and serve Red. On second call
+        // (phase 1→2, after re-dispatch), serve Black.
+        if (sys.IsCheckerboard)
+        {
+            var phase = _checkerboardPhase[sysIdx];
+            if (phase == 0)
+            {
+                // BUG-2 fix: for non-tier-filtered checkerboard systems (SimTier.All, no sleeping clusters), _systemTierClusterIds
+                // is null at this point. Promote from ActiveClusterIds so the split has cluster data to work with.
+                if (_systemTierClusterIds[sysIdx] == null)
+                {
+                    var cs2 = _systemClusterStates[sysIdx];
+                    if (cs2 != null)
+                    {
+                        _systemTierClusterIds[sysIdx] = cs2.ActiveClusterIds;
+                        _systemTierClusterCount[sysIdx] = cs2.ActiveClusterCount;
+                    }
+                }
+
+                // First call this tick: split into Red/Black, serve Red
+                _checkerboardPhase[sysIdx] = 1;
+                SplitCheckerboardClusters(sysIdx);
+                _systemTierClusterIds[sysIdx] = _checkerboardRedIds[sysIdx];
+                _systemTierClusterCount[sysIdx] = _checkerboardRedCount[sysIdx];
+            }
+            else
+            {
+                // Second call (re-dispatched after Red): serve Black
+                _checkerboardPhase[sysIdx] = 2;
+                _systemTierClusterIds[sysIdx] = _checkerboardBlackIds[sysIdx];
+                _systemTierClusterCount[sysIdx] = _checkerboardBlackCount[sysIdx];
+            }
+        }
 
         if (sys.WritesVersioned)
         {
@@ -793,8 +1156,44 @@ public sealed class TyphonRuntime : IDisposable
         EnsureParallelResources(sysIdx);
 
         ref var metrics = ref Scheduler.GetCurrentSystemMetrics(sysIdx);
-        metrics.EntitiesProcessed = view.Count;
 
+        // Issue #231: tier-filtered Path 1 partitions across the tier's cluster count (× cluster size as a proxy for entity count), not the full view.
+        // The chunk execution reads ctx.ClusterIds from the _systemTierClusterIds slot prepared in OnParallelQueryPrepare.
+        if (_systemTierClusterIds[sysIdx] != null)
+        {
+            int tierClusterCount = _systemTierClusterCount[sysIdx];
+            if (tierClusterCount == 0)
+            {
+                metrics.EntitiesProcessed = 0;
+                return 0;
+            }
+
+            var cs = _systemClusterStates[sysIdx];
+
+            // Pre-allocate per-worker tier range view array (single-threaded) to avoid racy lazy-init from worker threads.
+            if (_tierRangeViews[sysIdx] == null)
+            {
+                _tierRangeViews[sysIdx] = new ClusterRangeEntityView[Scheduler.WorkerCount];
+            }
+
+            // Pure-Transient fallback: materialize entity list here (single-threaded) to avoid the BUG where each worker would
+            // independently build and store a full list in _parallelEntityLists[sysIdx], leaking (WorkerCount-1) pooled lists per tick.
+            if (cs.ClusterSegment == null)
+            {
+                var sys = Scheduler.Systems[sysIdx];
+                var entityList = BuildTierScopedEntityList(cs, sys.TierFilter, view);
+                _parallelEntityLists[sysIdx] = entityList;
+                metrics.EntitiesProcessed = entityList.Count;
+                return entityList.Count == 0 ? 0 : ComputeChunkCount(entityList.Count);
+            }
+
+            int clusterSize = cs.Layout.ClusterSize;
+            int approxEntityCount = tierClusterCount * clusterSize;
+            metrics.EntitiesProcessed = approxEntityCount;
+            return ComputeChunkCount(approxEntityCount);
+        }
+
+        metrics.EntitiesProcessed = view.Count;
         return ComputeChunkCount(view.Count);
     }
 
@@ -884,13 +1283,22 @@ public sealed class TyphonRuntime : IDisposable
     {
         var pta = _parallelAccessors[sysIdx];
         var hasChangeFilter = _systemChangeFilterTables[sysIdx] != null;
+        var sys = Scheduler.Systems[sysIdx];
 
         IReadOnlyCollection<EntityId> entities;
         int clusterStart = 0, clusterEnd = 0;
+        int[] clusterIdArray = null;
 
+        // Change filter MUST take precedence over tier filter for the entities source.
+        //   - Change-filtered: ctx.Entities = sliced materialized list (already tier-scoped upstream).
+        //     Tier list still wins for ctx.ClusterIds so cluster-iterating systems see the tier subset.
+        //   - Tier-filtered (no change filter): ctx.Entities = ClusterRangeEntityView walking the tier's clusters.
+        //   - Neither: existing Path 1 — PartitionEntityView over the View HashMap.
+        var tierIds = _systemTierClusterIds[sysIdx];
         if (hasChangeFilter)
         {
-            // Path 2: Filtered — slice the materialized dirty entity list
+            // Path 2 with optional tier scoping. The materialized list already contains only tier-scoped dirty entities
+            // (tier scoping happens in BuildFilteredSingleTable → ScanClusterDirtyEntities).
             var fullList = _parallelEntityLists[sysIdx];
             var totalEntities = fullList.Count;
             var baseSize = totalEntities / totalChunks;
@@ -898,6 +1306,62 @@ public sealed class TyphonRuntime : IDisposable
             var start = chunkIndex * baseSize + Math.Min(chunkIndex, remainder);
             var count = baseSize + (chunkIndex < remainder ? 1 : 0);
             entities = new PooledEntitySlice(fullList.BackingArray, start, count);
+
+            // ClusterIds: tier list when present, otherwise the archetype's ActiveClusterIds. Game systems iterating via
+            // ctx.Accessor.GetClusterEnumerator(ctx.ClusterIds, ...) still get the correct cluster set.
+            if (tierIds != null)
+            {
+                int tierCount = _systemTierClusterCount[sysIdx];
+                var tierBase = tierCount / totalChunks;
+                var tierRem = tierCount % totalChunks;
+                clusterStart = chunkIndex * tierBase + Math.Min(chunkIndex, tierRem);
+                clusterEnd = clusterStart + tierBase + (chunkIndex < tierRem ? 1 : 0);
+                clusterIdArray = tierIds;
+            }
+            else
+            {
+                var cs = _systemClusterStates[sysIdx];
+                if (cs != null)
+                {
+                    var totalClusters = cs.ActiveClusterCount;
+                    var cBase = totalClusters / totalChunks;
+                    var cRemainder = totalClusters % totalChunks;
+                    clusterStart = chunkIndex * cBase + Math.Min(chunkIndex, cRemainder);
+                    clusterEnd = clusterStart + cBase + (chunkIndex < cRemainder ? 1 : 0);
+                    clusterIdArray = cs.ActiveClusterIds;
+                }
+            }
+        }
+        else if (tierIds != null)
+        {
+            // Tier-filtered, no change filter: walk the tier's clusters via ClusterRangeEntityView.
+            int tierCount = _systemTierClusterCount[sysIdx];
+            var tierBase = tierCount / totalChunks;
+            var tierRem = tierCount % totalChunks;
+            clusterStart = chunkIndex * tierBase + Math.Min(chunkIndex, tierRem);
+            clusterEnd = clusterStart + tierBase + (chunkIndex < tierRem ? 1 : 0);
+            clusterIdArray = tierIds;
+
+            var cs = _systemClusterStates[sysIdx];
+            if (cs.ClusterSegment != null)
+            {
+                // PersistentStore path: ClusterRangeEntityView for sequential cluster-order iteration.
+                var rangeView = GetOrCreateTierRangeView(sysIdx, chunkIndex);
+                rangeView.Reset(cs, cs.ClusterSegment, tierIds, clusterStart, clusterEnd);
+                entities = rangeView;
+            }
+            else
+            {
+                // Pure-Transient fallback: entity list was pre-materialized in PrepareFullNonVersioned (single-threaded) to avoid
+                // per-worker pool leak. Each worker slices the shared list by its chunk partition.
+                var entityList = _parallelEntityLists[sysIdx];
+                var totalEntities = entityList.Count;
+                var baseSize = totalEntities / totalChunks;
+                var remainder = totalEntities % totalChunks;
+                var start = chunkIndex * baseSize + Math.Min(chunkIndex, remainder);
+                var count = baseSize + (chunkIndex < remainder ? 1 : 0);
+                entities = new PooledEntitySlice(entityList.BackingArray, start, count);
+            }
         }
         else
         {
@@ -907,7 +1371,7 @@ public sealed class TyphonRuntime : IDisposable
             entities = partView;
 
             // Cluster-aware parallel dispatch: partition ActiveClusterIds range for this chunk.
-            // Systems that use GetClusterEnumerator(ctx.StartClusterIndex, ctx.EndClusterIndex) get
+            // Systems that use GetClusterEnumerator(ctx.ClusterIds, ctx.StartClusterIndex, ctx.EndClusterIndex) get
             // correct work partitioning without iterating the full cluster set on every worker.
             var cs = _systemClusterStates[sysIdx];
             if (cs != null)
@@ -917,33 +1381,116 @@ public sealed class TyphonRuntime : IDisposable
                 var cRemainder = totalClusters % totalChunks;
                 clusterStart = chunkIndex * cBase + Math.Min(chunkIndex, cRemainder);
                 clusterEnd = clusterStart + cBase + (chunkIndex < cRemainder ? 1 : 0);
+                clusterIdArray = cs.ActiveClusterIds;
             }
         }
 
         // Get this worker's EntityAccessor — direct array lookup, zero dictionary overhead
         var workerAccessor = pta.GetWorkerAccessor(workerId);
 
-        try
-        {
-            var ctx = new TickContext
-            {
-                TickNumber = Scheduler.CurrentTickNumber,
-                DeltaTime = _currentDeltaTime,
-                Accessor = workerAccessor,
-                CreateSideTransaction = _createSideTxDelegate,
-                Entities = entities,
-                ConsumedQueues = null,
-                StartClusterIndex = clusterStart,
-                EndClusterIndex = clusterEnd
-            };
+        float amortizedDt = sys.CellAmortize > 0 ? _currentDeltaTime * sys.CellAmortize : _currentDeltaTime;
 
-            Scheduler.Systems[sysIdx].CallbackAction(ctx);
-        }
-        finally
+        var ctx = new TickContext
         {
-            // Epoch cleanup: flush dirty state and advance epoch on this worker thread
-            pta.FlushWorker(workerId);
+            TickNumber = Scheduler.CurrentTickNumber,
+            DeltaTime = _currentDeltaTime,
+            AmortizedDeltaTime = amortizedDt,
+            Accessor = workerAccessor,
+            CreateSideTransaction = _createSideTxDelegate,
+            Entities = entities,
+            ConsumedQueues = null,
+            StartClusterIndex = clusterStart,
+            EndClusterIndex = clusterEnd,
+            ClusterIds = clusterIdArray,
+            TierBudgetMetrics = _previousTickMetrics,
+            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
+        };
+
+        Scheduler.Systems[sysIdx].CallbackAction(ctx);
+    }
+
+    /// <summary>
+    /// Lazy-init helper for the per-system, per-worker <see cref="ClusterRangeEntityView"/> pool used by tier-filtered Path 1 dispatch (issue #231).
+    /// Returns a view that is reconfigured each chunk via <see cref="ClusterRangeEntityView.Reset"/> — the allocation only happens the first time a given
+    /// system runs under tier-filtered dispatch.
+    /// </summary>
+    private ClusterRangeEntityView GetOrCreateTierRangeView(int sysIdx, int chunkIndex)
+    {
+        var perWorker = _tierRangeViews[sysIdx];
+        if (perWorker == null)
+        {
+            perWorker = new ClusterRangeEntityView[Scheduler.WorkerCount];
+            _tierRangeViews[sysIdx] = perWorker;
         }
+        var view = perWorker[chunkIndex];
+        if (view == null)
+        {
+            view = new ClusterRangeEntityView();
+            perWorker[chunkIndex] = view;
+        }
+        return view;
+    }
+
+    /// <summary>
+    /// Split the filtered cluster list for a checkerboard system into Red and Black sets based on cell coordinates (issue #234).
+    /// Red = clusters in cells where <c>(cellX + cellY) % 2 == 0</c>, Black = the rest. Reads <see cref="_systemTierClusterIds"/>
+    /// + <see cref="_systemTierClusterCount"/> as input, writes to the per-system Red/Black buffers.
+    /// </summary>
+    private void SplitCheckerboardClusters(int sysIdx)
+    {
+        var srcIds = _systemTierClusterIds[sysIdx];
+        int srcCount = _systemTierClusterCount[sysIdx];
+        var cs = _systemClusterStates[sysIdx];
+        var grid = Engine?.SpatialGrid;
+
+        // If no cluster data or no grid, Red = full list, Black = empty (degenerate: non-spatial archetype)
+        if (srcIds == null || cs?.ClusterCellMap == null || grid == null)
+        {
+            _checkerboardRedIds[sysIdx] = srcIds;
+            _checkerboardRedCount[sysIdx] = srcCount;
+            _checkerboardBlackIds[sysIdx] = _checkerboardBlackIds[sysIdx] ?? [];
+            _checkerboardBlackCount[sysIdx] = 0;
+            return;
+        }
+
+        // Ensure Red/Black buffers have sufficient capacity
+        if (_checkerboardRedIds[sysIdx] == null || _checkerboardRedIds[sysIdx].Length < srcCount)
+        {
+            _checkerboardRedIds[sysIdx] = new int[Math.Max(16, srcCount)];
+        }
+        if (_checkerboardBlackIds[sysIdx] == null || _checkerboardBlackIds[sysIdx].Length < srcCount)
+        {
+            _checkerboardBlackIds[sysIdx] = new int[Math.Max(16, srcCount)];
+        }
+
+        int redCount = 0, blackCount = 0;
+        var redBuf = _checkerboardRedIds[sysIdx];
+        var blackBuf = _checkerboardBlackIds[sysIdx];
+        var cellMap = cs.ClusterCellMap;
+
+        for (int i = 0; i < srcCount; i++)
+        {
+            int chunkId = srcIds[i];
+            int cellKey = (chunkId < cellMap.Length) ? cellMap[chunkId] : -1;
+            if (cellKey < 0)
+            {
+                // Unmapped cluster — put in Red as fallback
+                redBuf[redCount++] = chunkId;
+                continue;
+            }
+            var (x, y) = grid.CellKeyToCoords(cellKey);
+            if ((x + y) % 2 == 0)
+            {
+                redBuf[redCount++] = chunkId;
+            }
+            else
+            {
+                blackBuf[blackCount++] = chunkId;
+            }
+        }
+
+        _checkerboardRedCount[sysIdx] = redCount;
+        _checkerboardBlackCount[sysIdx] = blackCount;
     }
 
     /// <summary>Paths 3 & 4: Versioned fallback — per-chunk Transaction (original path).</summary>
@@ -964,14 +1511,52 @@ public sealed class TyphonRuntime : IDisposable
         try
         {
             var slice = new PooledEntitySlice(fullList.BackingArray, start, count);
+            var sys = Scheduler.Systems[sysIdx];
+            float amortizedDt = sys.CellAmortize > 0 ? _currentDeltaTime * sys.CellAmortize : _currentDeltaTime;
+
+            // Populate ClusterIds + StartClusterIndex/EndClusterIndex for tier-filtered Versioned systems so game code that iterates via
+            // ctx.Accessor.GetClusterEnumerator(ctx.ClusterIds, ...) sees the correct tier scope. The cluster partition is computed independently of
+            // the entity partition above.
+            int clusterStart = 0, clusterEnd = 0;
+            int[] clusterIdArray = null;
+            var tierIds = _systemTierClusterIds[sysIdx];
+            if (tierIds != null)
+            {
+                int tierCount = _systemTierClusterCount[sysIdx];
+                var tierBase = tierCount / totalChunks;
+                var tierRem = tierCount % totalChunks;
+                clusterStart = chunkIndex * tierBase + Math.Min(chunkIndex, tierRem);
+                clusterEnd = clusterStart + tierBase + (chunkIndex < tierRem ? 1 : 0);
+                clusterIdArray = tierIds;
+            }
+            else
+            {
+                var cs = _systemClusterStates[sysIdx];
+                if (cs != null)
+                {
+                    var totalClusters = cs.ActiveClusterCount;
+                    var cBase = totalClusters / totalChunks;
+                    var cRemainder = totalClusters % totalChunks;
+                    clusterStart = chunkIndex * cBase + Math.Min(chunkIndex, cRemainder);
+                    clusterEnd = clusterStart + cBase + (chunkIndex < cRemainder ? 1 : 0);
+                    clusterIdArray = cs.ActiveClusterIds;
+                }
+            }
+
             var ctx = new TickContext
             {
                 TickNumber = Scheduler.CurrentTickNumber,
                 DeltaTime = _currentDeltaTime,
+                AmortizedDeltaTime = amortizedDt,
                 Transaction = tx,
                 CreateSideTransaction = _createSideTxDelegate,
                 Entities = slice,
-                ConsumedQueues = null
+                ConsumedQueues = null,
+                StartClusterIndex = clusterStart,
+                EndClusterIndex = clusterEnd,
+                ClusterIds = clusterIdArray,
+                TierBudgetMetrics = _previousTickMetrics,
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
             };
 
             Scheduler.Systems[sysIdx].CallbackAction(ctx);
@@ -1000,10 +1585,32 @@ public sealed class TyphonRuntime : IDisposable
     /// Cleanup: returns pooled entity lists (if any) and resets state.
     /// Long-lived PTAs are NOT disposed here — they persist across ticks.
     /// </summary>
-    private void OnParallelQueryCleanup(int sysIdx)
+    private bool OnParallelQueryCleanup(int sysIdx)
     {
+        // Batch epoch flush: flush all workers that participated (once per system, not per chunk).
+        // This avoids N×chunks epoch refreshes and reduces global EpochManager contention.
+        var pta = _parallelAccessors[sysIdx];
+        if (pta != null)
+        {
+            for (int w = 0; w < Scheduler.WorkerCount; w++)
+            {
+                pta.FlushWorker(w);
+            }
+        }
+
         _parallelEntityLists[sysIdx].Return();
         _parallelEntityLists[sysIdx] = default;
+
+        // Issue #234: checkerboard re-dispatch. After Red phase (1), return true to trigger Black phase.
+        // After Black phase (2) or non-checkerboard (0), return false to proceed to successor dispatch.
+        var phase = _checkerboardPhase[sysIdx];
+        if (phase == 1)
+        {
+            return true; // Re-dispatch for Black phase
+        }
+        // Reset for next tick (phase 2 → 0, or was already 0)
+        _checkerboardPhase[sysIdx] = 0;
+        return false;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1019,6 +1626,12 @@ public sealed class TyphonRuntime : IDisposable
         // Create UoW for this tick (Deferred — batch all system commits, single WAL flush at end)
         _currentUow = Engine.CreateUnitOfWork();
 
+        // Rebuild per-archetype tier indexes ONCE per tick on the scheduler thread, before any parallel system dispatch. This eliminates the race where
+        // multiple worker threads concurrently invoking OnParallelQueryPrepare for different systems on the same archetype would corrupt shared
+        // TierClusterIndex buffers. After this point, every reader (parallel prepare callbacks, change-filter scans, view materialization) only READS the tier
+        // index — no concurrent rebuilds possible.
+        BuildTierIndexesAtTickStart();
+
         // OnFirstTick: runs once, on the timer thread before workers wake
         if (!_firstTickExecuted && OnFirstTick != null)
         {
@@ -1029,7 +1642,9 @@ public sealed class TyphonRuntime : IDisposable
                 DeltaTime = _currentDeltaTime,
                 Transaction = tx,
                 CreateSideTransaction = _createSideTxDelegate,
-                Entities = PooledEntityList.Empty
+                Entities = PooledEntityList.Empty,
+                TierBudgetMetrics = _previousTickMetrics,
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
             };
 
             try
@@ -1045,10 +1660,89 @@ public sealed class TyphonRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// Walk every system that declares a tier filter, and rebuild the per-archetype <see cref="TierClusterIndex"/> once per tick on the scheduler thread.
+    /// The version-skip in <see cref="TierClusterIndex.RebuildIfStale"/> means redundant calls (multiple systems on the same archetype) short-circuit on a
+    /// two-int compare. The actual rebuild only runs when the grid tier version OR the archetype cluster set has changed since the previous tick.
+    /// </summary>
+    private void BuildTierIndexesAtTickStart()
+    {
+        var grid = Engine?.SpatialGrid;
+        if (grid == null)
+        {
+            return;
+        }
+
+        // Issue #233: transition WakePending → Active for all archetypes BEFORE rebuilding tier indexes.
+        // This ensures woken clusters appear in this tick's per-tier lists. The TransitionWakePendingToActive method is guarded by _lastWakeTransitionTick
+        // so calling it for the same archetype via multiple systems is a no-op after the first call.
+        long tick = Scheduler.CurrentTickNumber;
+        for (int i = 0; i < Scheduler.SystemCount; i++)
+        {
+            var cs = _systemClusterStates[i];
+            if (cs?.SleepStates != null)
+            {
+                cs.TransitionWakePendingToActive(tick);
+            }
+        }
+
+        for (int i = 0; i < Scheduler.SystemCount; i++)
+        {
+            var sys = Scheduler.Systems[i];
+            if (sys.TierFilter == SimTier.All)
+            {
+                continue;
+            }
+
+            var cs = _systemClusterStates[i];
+
+            // Late-spawn recovery: if the archetype was empty when ResolveChangeFilters ran (construction time), _systemClusterStates[i] is null. Re-evaluate
+            // now — entities may have been spawned between construction and the first tick (e.g. via OnFirstTick). This check runs once per tick per
+            // tier-filtered system with a null slot; the inner archetype scan is O(registered archetypes) ≈ O(10), negligible.
+            if (cs == null && sys.IsParallelQuery && sys.InputFactory != null)
+            {
+                foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+                {
+                    if (meta.IsClusterEligible && meta.ArchetypeId < Engine._archetypeStates.Length)
+                    {
+                        var es = Engine._archetypeStates[meta.ArchetypeId];
+                        if (es?.ClusterState is { ActiveClusterCount: > 0 })
+                        {
+                            cs = es.ClusterState;
+                            cs.TierIndex ??= new TierClusterIndex();
+                            _systemClusterStates[i] = cs;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (cs == null || cs.TierIndex == null)
+            {
+                continue;
+            }
+            cs.TierIndex.RebuildIfStale(grid, cs);
+        }
+    }
+
     private void OnTickEndInternal(DagScheduler scheduler)
     {
         // All system transactions have been committed individually.
-        // Flush the UoW to make all Deferred writes durable, then dispose.
+        //
+        // Issue #229 Phase 3 ordering — WriteTickFence runs BEFORE UoW.Flush.
+        // Reason: the cluster tick fence publishes WAL records (ClusterTickFence chunks) describing the tick's dirty cluster-content changes.
+        // It is ALSO the point where the Phase 3 migration fence runs (DetectClusterMigrations + ExecuteMigrations), mutating cluster pages directly.
+        // By running WriteTickFence first, the subsequent UoW.Flush waits for a currentLsn that includes those publishes, so all migration writes become
+        // per-tick durable via the/ same fsync that covers normal system commits. Moving WriteTickFence after Flush (the pre-Phase-3 ordering) would make
+        // migration writes durable only at the NEXT tick's flush — a one-tick lag that's acceptable for the original R-Tree maintenance use case but unsafe
+        // for persistent cluster content mutation.
+        //
+        // See debate decision Q1 in the Phase 3 design notes, and claude/design/spatial-tiers/01-spatial-clusters.md §"Migration fence WAL atomicity".
+        Engine.WriteTickFence(scheduler.CurrentTickNumber);
+
+        // Flush the UoW to make all Deferred writes (including the tick fence publishes above) durable, then dispose. UoW.Flush in WAL mode calls
+        // WalManager.RequestFlush + WaitForDurable(currentLsn), where currentLsn is captured at the moment of the call — so it includes every publish made
+        // in WriteTickFence.
         try
         {
             _currentUow?.Flush();
@@ -1059,11 +1753,8 @@ public sealed class TyphonRuntime : IDisposable
             _currentUow = null;
         }
 
-        // #197: Tick fence — snapshot SV DirtyBitmaps, process shadow entries, update spatial indexes.
-        // This captures which entities were written this tick for next tick's change-filtered system inputs.
-        // Also fires NotifyViews for indexed field changes via ProcessShadowEntries, populating
-        // published View ring buffers with the complete set of change entries.
-        Engine.WriteTickFence(scheduler.CurrentTickNumber);
+        // Issue #234: compute per-tier budget metrics from this tick's system telemetry, for the next tick's TickContext.
+        ComputeTierBudgetMetrics();
 
         // #199: Output phase — subscription deltas.
         // Runs AFTER WriteTickFence so that:
@@ -1071,6 +1762,53 @@ public sealed class TyphonRuntime : IDisposable
         //   2. PreviousTickDirtyBitmap has this tick's dirty chunks for Modified detection
         //   3. All state is quiescent (no concurrent writers)
         _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber, Scheduler.CurrentOverloadLevel);
+    }
+
+    /// <summary>
+    /// Aggregate per-system telemetry by tier for <see cref="TierBudgetMetrics"/> (issue #234). Each system's <see cref="SystemTelemetry.DurationUs"/> is
+    /// attributed to the tier(s) in its <see cref="SystemDefinition.TierFilter"/>. Multi-tier systems contribute equally to each matching tier.
+    /// </summary>
+    private void ComputeTierBudgetMetrics()
+    {
+        var metrics = new TierBudgetMetrics { BudgetMs = 1000f / _options.BaseTickRate };
+
+        for (int i = 0; i < Scheduler.SystemCount; i++)
+        {
+            ref var t = ref Scheduler.GetCurrentSystemMetrics(i);
+            if (t.WasSkipped || t.FirstChunkGrabTick == 0)
+            {
+                continue;
+            }
+
+            // DurationUs hasn't been computed yet (ComputeAndRecordTelemetry runs after OnTickEndInternal).
+            // Compute from raw Stopwatch ticks directly.
+            long durationTicks = t.LastChunkDoneTick - t.FirstChunkGrabTick;
+            if (durationTicks <= 0)
+            {
+                continue; // Defensive: skip systems with unset or corrupted timestamps
+            }
+            float costMs = (float)((double)durationTicks / Stopwatch.Frequency * 1000.0);
+            metrics.TotalCostMs += costMs;
+
+            var tier = Scheduler.Systems[i].TierFilter;
+            if (tier == SimTier.All || tier == SimTier.None)
+            {
+                // Non-tier-filtered systems contribute to total but not per-tier buckets
+                continue;
+            }
+
+            int tierCount = tier.TierCountOf();
+            float costPerTier = tierCount > 1 ? costMs / tierCount : costMs;
+            int entitiesPerTier = tierCount > 1 ? t.EntitiesProcessed / tierCount : t.EntitiesProcessed;
+
+            if (((byte)tier & (byte)SimTier.Tier0) != 0) { metrics.Tier0CostMs += costPerTier; metrics.Tier0EntityCount += entitiesPerTier; }
+            if (((byte)tier & (byte)SimTier.Tier1) != 0) { metrics.Tier1CostMs += costPerTier; metrics.Tier1EntityCount += entitiesPerTier; }
+            if (((byte)tier & (byte)SimTier.Tier2) != 0) { metrics.Tier2CostMs += costPerTier; metrics.Tier2EntityCount += entitiesPerTier; }
+            if (((byte)tier & (byte)SimTier.Tier3) != 0) { metrics.Tier3CostMs += costPerTier; metrics.Tier3EntityCount += entitiesPerTier; }
+        }
+
+        metrics.UtilizationRatio = metrics.BudgetMs > 0 ? metrics.TotalCostMs / metrics.BudgetMs : 0f;
+        _previousTickMetrics = metrics;
     }
 
     private TickContext OnSystemStartInternal(int sysIdx)
@@ -1109,14 +1847,19 @@ public sealed class TyphonRuntime : IDisposable
             metrics.EntitiesSkippedByChangeFilter = _systemViews[sysIdx].Count - entityCount;
         }
 
+        var sys = Scheduler.Systems[sysIdx];
+        float amortizedDt = sys.CellAmortize > 0 ? _currentDeltaTime * sys.CellAmortize : _currentDeltaTime;
         return new TickContext
         {
             TickNumber = Scheduler.CurrentTickNumber,
             DeltaTime = _currentDeltaTime,
+            AmortizedDeltaTime = amortizedDt,
             Transaction = tx,
             CreateSideTransaction = _createSideTxDelegate,
             Entities = entities,
-            ConsumedQueues = _systemConsumedQueues[sysIdx]
+            ConsumedQueues = _systemConsumedQueues[sysIdx],
+            TierBudgetMetrics = _previousTickMetrics,
+            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
         };
     }
 

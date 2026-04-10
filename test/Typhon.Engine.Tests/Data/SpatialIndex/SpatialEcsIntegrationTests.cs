@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
@@ -91,36 +92,38 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         Archetype<SpatialTerrainArchetype>.Touch();
     }
 
+    // Issue #230 Phase 3 Option B: cluster spatial archetypes require a configured SpatialGrid. The setup helpers must configure one, and the SpatialTerrain
+    // path (Static mode) has its own helper that registers ONLY SpatialTerrain — the legacy "SpatialTerrain + SpatialShip in the same engine" pattern is
+    // blocked by the #229 Q10 "one spatial archetype per grid" gate and no longer works under grid-required.
     private DatabaseEngine SetupEngine()
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<SpatialShip>();
         dbe.RegisterComponentFromAccessor<SpatialName>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new Vector2(-10_000, -10_000),
+            worldMax: new Vector2(10_000, 10_000),
+            cellSize: 100f));
         dbe.InitializeArchetypes();
         return dbe;
     }
 
-    /// <summary>
-    /// Get the spatial R-Tree for a given archetype. For cluster-eligible archetypes, returns per-archetype tree;
-    /// otherwise the shared per-table tree.
-    /// </summary>
-    private static SpatialRTree<PersistentStore> GetSpatialTree<TArch>(DatabaseEngine dbe) where TArch : Archetype<TArch>
+    // ── Query-level cardinality helpers (issue #230 Option B) ───────────────
+    // These replace the pre-Option-B `GetSpatialTree<TArch>(dbe).EntityCount` structural checks. They run a high-level AABB query over a very large
+    // world-bounds region and count the results. Using the high-level Query<T>().WhereInAABB<TComp>() API means the count is served by whichever path the
+    // engine currently routes to — legacy tree before Option B commit 2, new per-cell index after.
+    private static int CountShipEntities(DatabaseEngine dbe)
     {
-        var meta = Archetype<TArch>.Metadata;
-        if (meta.HasClusterSpatial)
-        {
-            return dbe._archetypeStates[meta.ArchetypeId]?.ClusterState?.SpatialSlot.Tree;
-        }
-        // Non-cluster: find the component table with spatial index
-        for (int slot = 0; slot < meta.ComponentCount; slot++)
-        {
-            var table = dbe._archetypeStates[meta.ArchetypeId]?.SlotToComponentTable[slot];
-            if (table?.SpatialIndex != null)
-            {
-                return table.SpatialIndex.ActiveTree;
-            }
-        }
-        return null;
+        using var tx = dbe.CreateQuickTransaction();
+        var results = tx.Query<SpatialShipArchetype>().WhereInAABB<SpatialShip>(-1_000_000, -1_000_000, -1_000_000, 1_000_000, 1_000_000, 1_000_000).Execute();
+        return results.Count;
+    }
+
+    private static int CountTerrainEntities(DatabaseEngine dbe)
+    {
+        using var tx = dbe.CreateQuickTransaction();
+        var results = tx.Query<SpatialTerrainArchetype>().WhereInAABB<SpatialTerrain>(-1_000_000, -1_000_000, -1_000_000, 1_000_000, 1_000_000, 1_000_000).Execute();
+        return results.Count;
     }
 
     // ── Schema Validation ────────────────────────────────────────────────
@@ -193,9 +196,8 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        // Verify tree entity count after transaction commits (FinalizeSpawns runs on commit).
-        // SpatialShipArchetype is now cluster-eligible (Phase 3b), so entities are in the per-archetype R-Tree.
-        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(1));
+        // Verify entity count via query (FinalizeSpawns runs on commit).
+        Assert.That(CountShipEntities(dbe), Is.EqualTo(1));
     }
 
     [Test]
@@ -213,7 +215,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(50));
+        Assert.That(CountShipEntities(dbe), Is.EqualTo(50));
     }
 
     [Test]
@@ -228,20 +230,10 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        // Query a region that overlaps the entity
-        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
-
-        // Query region that overlaps the entity (bounds are enlarged by margin=5, so fat AABB is [5,15,25]→[17,27,37])
-        // Query [0,10,20]→[20,30,40] should overlap
-        int hitCount = 0;
-        using (EpochGuard.Enter(dbe.EpochManager))
-        {
-            foreach (var result in tree.QueryAABB(stackalloc double[] { 0, 10, 20, 20, 30, 40 }))
-            {
-                hitCount++;
-            }
-        }
-        Assert.That(hitCount, Is.GreaterThan(0));
+        // Query region that overlaps the entity. Use the high-level query API so this test is decoupled from the legacy-vs-new-path routing.
+        using var qtx = dbe.CreateQuickTransaction();
+        var hits = qtx.Query<SpatialShipArchetype>().WhereInAABB<SpatialShip>(0, 10, 20, 20, 30, 40).Execute();
+        Assert.That(hits.Count, Is.GreaterThan(0));
     }
 
     // ── Destroy ──────────────────────────────────────────────────────────
@@ -259,7 +251,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(1));
+        Assert.That(CountShipEntities(dbe), Is.EqualTo(1));
 
         using (var t = dbe.CreateQuickTransaction())
         {
@@ -267,40 +259,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        Assert.That(GetSpatialTree<SpatialShipArchetype>(dbe).EntityCount, Is.EqualTo(0));
-    }
-
-    // ── Fat AABB Containment ─────────────────────────────────────────────
-
-    [Test]
-    public void SvTickFence_MoveWithinMargin_NoTreeMutation()
-    {
-        using var dbe = SetupEngine();
-
-        using (var t = dbe.CreateQuickTransaction())
-        {
-            var ship = new SpatialShip { Bounds = new AABB3F { MinX = 100, MinY = 100, MinZ = 100, MaxX = 102, MaxY = 102, MaxZ = 102 }, Speed = 1.0f };
-            t.Spawn<SpatialShipArchetype>(SpatialShipArchetype.Ship.Set(in ship), SpatialShipArchetype.Name.Set(new SpatialName { Id = 1 }));
-            t.Commit();
-        }
-
-        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
-        int nodeCountBefore = tree.NodeCount;
-
-        // Write tick fence to process initial spatial state
-        dbe.WriteTickFence(1);
-
-        // Move entity within margin (5.0f) — should NOT trigger tree mutation
-        using (var t = dbe.CreateQuickTransaction())
-        {
-            // Read all spawned entities via query would be complex, so we directly test the tree state
-            // The entity was inserted at spawn time; tick fence should find it's still within fat AABB
-        }
-
-        dbe.WriteTickFence(2);
-
-        // Node count should not change (no splits from small moves)
-        Assert.That(tree.NodeCount, Is.EqualTo(nodeCountBefore));
+        Assert.That(CountShipEntities(dbe), Is.EqualTo(0));
     }
 
     // ── Back-pointer consistency ─────────────────────────────────────────
@@ -332,11 +291,9 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
-        Assert.That(tree.EntityCount, Is.EqualTo(100));
-
-        // Validate tree invariants (TreeValidator.Validate throws on failure)
-        TreeValidator.Validate(tree);
+        Assert.That(CountShipEntities(dbe), Is.EqualTo(100));
+        // TreeValidator invariant check was legacy-tree-specific and is dropped in Option B (issue #230). The query-level count plus the spawn/query
+        // round-trip covered by Spawn_AABB3F_QueryFindsEntity is sufficient regression for the mutation hook correctness.
     }
 
     // ── Bulk spawn (regression test for #192) ──────────────────────────
@@ -365,19 +322,21 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var tree = GetSpatialTree<SpatialShipArchetype>(dbe);
-        Assert.That(tree.EntityCount, Is.EqualTo(2000));
-        TreeValidator.Validate(tree);
+        Assert.That(CountShipEntities(dbe), Is.EqualTo(2000));
     }
 
     // ── Static/Dynamic Mode (F2) ──────────────────────────────────────
 
     private DatabaseEngine SetupStaticEngine()
     {
+        // Only SpatialTerrain is registered here (Option B + Q10: one spatial archetype per grid). Tests that need to inspect the SpatialShip component's
+        // schema modes use SetupEngine instead.
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<SpatialTerrain>();
-        dbe.RegisterComponentFromAccessor<SpatialShip>();
-        dbe.RegisterComponentFromAccessor<SpatialName>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new Vector2(-10_000, -10_000),
+            worldMax: new Vector2(10_000, 10_000),
+            cellSize: 100f));
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -399,61 +358,16 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
     [CancelAfter(5000)]
     public void Schema_DefaultMode_IsDynamic()
     {
-        Archetype<SpatialTerrainArchetype>.Touch();
-        using var dbe = SetupStaticEngine();
+        // Uses SetupEngine (SpatialShip + grid) — the old shared setup that also registered SpatialTerrain is blocked by #229 Q10 under Option B.
+        using var dbe = SetupEngine();
         var table = dbe.GetComponentTable<SpatialShip>();
         Assert.That(table.SpatialIndex.FieldInfo.Mode, Is.EqualTo(SpatialMode.Dynamic));
         Assert.That(table.SpatialIndex.DynamicTree, Is.Not.Null);
         Assert.That(table.SpatialIndex.StaticTree, Is.Null);
     }
 
-    [Test]
-    [CancelAfter(5000)]
-    public void BackPointer_TreeSelector_Roundtrip()
-    {
-        Archetype<SpatialTerrainArchetype>.Touch();
-        using var dbe = SetupStaticEngine();
-
-        // Spawn a static terrain entity
-        using (var t = dbe.CreateQuickTransaction())
-        {
-            var terrain = new SpatialTerrain
-            {
-                Footprint = new AABB3F { MinX = 0, MinY = 0, MinZ = 0, MaxX = 10, MaxY = 10, MaxZ = 5 }
-            };
-            t.Spawn<SpatialTerrainArchetype>(SpatialTerrainArchetype.Terrain.Set(in terrain));
-            t.Commit();
-        }
-
-        var tree = GetSpatialTree<SpatialTerrainArchetype>(dbe);
-        Assert.That(tree.EntityCount, Is.EqualTo(1));
-
-        // SpatialTerrainArchetype is cluster-eligible (all SV), so back-pointers live on the per-archetype
-        // ClusterSpatialSlot, keyed by clusterLocation (not component chunk ID).
-        var meta = Archetype<SpatialTerrainArchetype>.Metadata;
-        using var guard = EpochGuard.Enter(dbe.EpochManager);
-
-        // Query the tree to obtain the clusterLocation (stored as ComponentChunkId in cluster trees)
-        int clusterLocation = -1;
-        foreach (var hit in tree.QueryAABB(stackalloc double[] { -1, -1, -1, 11, 11, 6 }))
-        {
-            clusterLocation = hit.ComponentChunkId;
-        }
-        Assert.That(clusterLocation, Is.GreaterThan(0), "Should find entity in tree");
-
-        var bpSegment = dbe._archetypeStates[meta.ArchetypeId].ClusterState.SpatialSlot.BackPointerSegment;
-        var bpAccessor = bpSegment.CreateChunkAccessor();
-        try
-        {
-            var bp = SpatialBackPointerHelper.Read(ref bpAccessor, clusterLocation);
-            Assert.That(bp.LeafChunkId, Is.GreaterThan(0));
-            Assert.That(bp.TreeSelector, Is.EqualTo((byte)SpatialMode.Static));
-        }
-        finally
-        {
-            bpAccessor.Dispose();
-        }
-    }
+    // Note: BackPointer_TreeSelector_Roundtrip was removed in issue #230 Option B. It asserted on the per-archetype back-pointer CBS segment which is
+    // deleted alongside the legacy per-entity cluster R-Tree. No semantic replacement exists because back-pointers are part of the removed mechanism.
 
     [Test]
     [CancelAfter(5000)]
@@ -479,20 +393,13 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var tree = GetSpatialTree<SpatialTerrainArchetype>(dbe);
-        Assert.That(tree.EntityCount, Is.EqualTo(10));
+        Assert.That(CountTerrainEntities(dbe), Is.EqualTo(10));
 
-        // Query a region that overlaps the first 3 terrain pieces
-        using var guard = EpochGuard.Enter(dbe.EpochManager);
-        double[] queryCoords = { -5, -5, -5, 55, 15, 10 };
-        var results = new List<long>();
-        foreach (var hit in tree.QueryAABB(queryCoords))
-        {
-            results.Add(hit.EntityId);
-        }
-        Assert.That(results.Count, Is.EqualTo(3));
-
-        TreeValidator.Validate(tree);
+        // Query a region that overlaps the first 3 terrain pieces — terrain pieces are at x=[0..10], [20..30], [40..50], [60..70]...
+        // The query box [-5,-5,-5]→[55,15,10] covers exactly the first 3 (indices 0, 1, 2).
+        using var qtx = dbe.CreateQuickTransaction();
+        var hits = qtx.Query<SpatialTerrainArchetype>().WhereInAABB<SpatialTerrain>(-5, -5, -5, 55, 15, 10).Execute();
+        Assert.That(hits.Count, Is.EqualTo(3));
     }
 
     [Test]
@@ -513,8 +420,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var tree = GetSpatialTree<SpatialTerrainArchetype>(dbe);
-        Assert.That(tree.EntityCount, Is.EqualTo(1));
+        Assert.That(CountTerrainEntities(dbe), Is.EqualTo(1));
 
         // Destroy the entity
         using (var t = dbe.CreateQuickTransaction())
@@ -523,7 +429,7 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        Assert.That(tree.EntityCount, Is.EqualTo(0));
+        Assert.That(CountTerrainEntities(dbe), Is.EqualTo(0));
     }
 
     [Test]

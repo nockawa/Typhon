@@ -73,16 +73,48 @@ public struct TickContext
     public Func<DurabilityMode, Transaction> CreateSideTransaction { get; init; }
 
     /// <summary>
-    /// Inclusive start index into <see cref="ArchetypeClusterState.ActiveClusterIds"/> for this worker's assigned cluster range.
-    /// Used by cluster-native systems that iterate via <c>ClusterEnumerator.CreateScoped</c> for 2-3 ns/entity performance.
-    /// -1 when not applicable (non-parallel, non-cluster, or entity-level dispatch).
+    /// Inclusive start index into <see cref="ClusterIds"/> for this worker's assigned cluster range. Used by cluster-native systems that iterate
+    /// via <c>ctx.Accessor.GetClusterEnumerator&lt;TArch&gt;(ctx.ClusterIds, ctx.StartClusterIndex, ctx.EndClusterIndex)</c> for 2-3 ns/entity performance.
+    /// Default 0.
     /// </summary>
-    /// <remarks>Default 0 (not -1) due to struct constraint. Check <c>EndClusterIndex > StartClusterIndex</c> for validity.</remarks>
+    /// <remarks>
+    /// <para>Before issue #231 this range indexed directly into <c>ArchetypeClusterState.ActiveClusterIds</c>. After #231 it indexes
+    /// into <see cref="ClusterIds"/>, which points at either the full <c>ActiveClusterIds</c> (for <see cref="SimTier.All"/> systems) or a per-tier cluster
+    /// list (for tier-filtered systems). Game code that passed <c>ctx.StartClusterIndex</c> / <c>ctx.EndClusterIndex</c> to the old two-argument
+    /// <c>GetClusterEnumerator(int, int)</c> overload must migrate to the new three-argument overload that takes <see cref="ClusterIds"/> explicitly.</para>
+    /// <para>Default 0 (not -1) due to struct constraint. Check <c>EndClusterIndex &gt; StartClusterIndex</c> for validity — a zero range means not applicable
+    /// (non-parallel, non-cluster, or entity-level dispatch).</para>
+    /// </remarks>
     public int StartClusterIndex { get; init; }
 
-    /// <summary>
-    /// Exclusive end index into <see cref="ArchetypeClusterState.ActiveClusterIds"/> for this worker's assigned cluster range.
-    /// </summary>
-    /// <remarks>Default 0. Check <c>EndClusterIndex > StartClusterIndex</c> for validity — a zero range means not applicable.</remarks>
+    /// <summary>Exclusive end index into <see cref="ClusterIds"/> for this worker's assigned cluster range.</summary>
+    /// <remarks>Default 0. Check <c>EndClusterIndex &gt; StartClusterIndex</c> for validity — a zero range means not applicable.</remarks>
     public int EndClusterIndex { get; init; }
+
+    /// <summary>
+    /// Source array for the <see cref="StartClusterIndex"/> / <see cref="EndClusterIndex"/> partition (issue #231).
+    /// Points at <see cref="ArchetypeClusterState.ActiveClusterIds"/> for systems with no tier filter, or at a per-tier (or per-bucket, for <c>cellAmortize</c>)
+    /// cluster list for tier-filtered systems. Null when the system has no cluster partition (non-parallel, non-cluster-eligible, or empty view).
+    /// </summary>
+    public int[] ClusterIds { get; init; }
+
+    /// <summary>
+    /// Elapsed time in seconds since the last tick this system processed this cell bucket (issue #231). Equal to <see cref="DeltaTime"/> when the system has
+    /// no <c>cellAmortize</c>. For amortized systems, <c>AmortizedDeltaTime = DeltaTime × CellAmortize</c>, which is the effective integration step for
+    /// movement, decay, or state-machine updates that happen once per amortization cycle.
+    /// </summary>
+    public float AmortizedDeltaTime { get; init; }
+
+    /// <summary>
+    /// Per-tier cost and entity count metrics from the previous tick (issue #234). Available to all systems — primarily consumed by <c>TierAssignment</c>
+    /// <see cref="CallbackSystem"/> for adaptive tier boundary adjustment. Zero on the first tick (no previous-tick data).
+    /// </summary>
+    public TierBudgetMetrics TierBudgetMetrics { get; init; }
+
+    /// <summary>
+    /// Game-facing accessor for the engine's spatial grid (issue #232). Provides cell tier assignment, coordinate conversion, and multi-observer
+    /// helpers (<see cref="SpatialGridAccessor.SetCellTierMin"/>, <see cref="SpatialGridAccessor.ResetAllTiers"/>,
+    /// <see cref="SpatialGridAccessor.SetTierInAABB"/>). Check <see cref="SpatialGridAccessor.IsValid"/> before use — false when no grid is configured.
+    /// </summary>
+    public SpatialGridAccessor SpatialGrid { get; init; }
 }

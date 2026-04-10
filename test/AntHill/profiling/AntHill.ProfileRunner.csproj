@@ -2,9 +2,9 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>AntHill.ProfileRunner</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>default</LangVersion>
-    <Optimize>true</Optimize>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Typhon.Engine\Typhon.Engine.csproj" />

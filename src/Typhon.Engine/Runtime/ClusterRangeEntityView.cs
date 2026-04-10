@@ -1,4 +1,3 @@
-using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Numerics;
@@ -28,8 +27,11 @@ internal sealed unsafe class ClusterRangeEntityView : IReadOnlyCollection<Entity
     private ChunkAccessor<PersistentStore> _accessor;
     private bool _hasAccessor;
 
-    private int _startCluster;       // inclusive index into ActiveClusterIds
-    private int _endCluster;         // exclusive index into ActiveClusterIds
+    // Issue #231: explicit cluster-id source. For non-tier-filtered dispatch this equals state.ActiveClusterIds; for tier-filtered dispatch it points at a
+    // per-tier (or amortization bucket) cluster array owned by the archetype's TierClusterIndex.
+    private int[] _clusterIds;
+    private int _startCluster;       // inclusive index into _clusterIds
+    private int _endCluster;         // exclusive index into _clusterIds
     private int _currentCluster;     // current position in range (-1 = before first)
     private ulong _currentBits;      // remaining occupancy bits in current cluster
     private byte* _currentBase;      // base pointer of current cluster page
@@ -39,11 +41,15 @@ internal sealed unsafe class ClusterRangeEntityView : IReadOnlyCollection<Entity
     /// <summary>
     /// Reconfigure this view for a new cluster range. O(1) for the configuration, creates ChunkAccessor on first use.
     /// </summary>
-    /// <param name="state">Archetype cluster state (provides ActiveClusterIds, Layout).</param>
+    /// <param name="state">Archetype cluster state (provides Layout).</param>
     /// <param name="segment">Cluster segment for creating ChunkAccessor.</param>
-    /// <param name="startCluster">Inclusive start index into <c>ActiveClusterIds</c>.</param>
-    /// <param name="endCluster">Exclusive end index into <c>ActiveClusterIds</c>.</param>
-    public void Reset(ArchetypeClusterState state, ChunkBasedSegment<PersistentStore> segment, int startCluster, int endCluster)
+    /// <param name="clusterIds">
+    /// Source cluster-id array. Pass <see cref="ArchetypeClusterState.ActiveClusterIds"/> for non-tier dispatch, or a <see cref="TierClusterIndex"/>-owned
+    /// tier list for tier-filtered dispatch (issue #231).
+    /// </param>
+    /// <param name="startCluster">Inclusive start index into <paramref name="clusterIds"/>.</param>
+    /// <param name="endCluster">Exclusive end index into <paramref name="clusterIds"/>.</param>
+    public void Reset(ArchetypeClusterState state, ChunkBasedSegment<PersistentStore> segment, int[] clusterIds, int startCluster, int endCluster)
     {
         // Dispose previous accessor if any
         if (_hasAccessor)
@@ -54,6 +60,7 @@ internal sealed unsafe class ClusterRangeEntityView : IReadOnlyCollection<Entity
 
         _state = state;
         _segment = segment;
+        _clusterIds = clusterIds;
         _startCluster = startCluster;
         _endCluster = endCluster;
         _currentCluster = startCluster - 1;
@@ -117,7 +124,7 @@ internal sealed unsafe class ClusterRangeEntityView : IReadOnlyCollection<Entity
                 return false;
             }
 
-            int chunkId = _state.ActiveClusterIds[_currentCluster];
+            int chunkId = _clusterIds[_currentCluster];
             _currentBase = _accessor.GetChunkAddress(chunkId);
             _currentBits = *(ulong*)_currentBase; // OccupancyBits
         }

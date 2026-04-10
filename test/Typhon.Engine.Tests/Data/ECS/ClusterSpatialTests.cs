@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -85,23 +86,61 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
     public void OneTimeSetup()
     {
         Archetype<ClSpatialUnit>.Touch();
-        Archetype<ClSpatialNonClusterUnit>.Touch();
         Archetype<ClSpatialStaticUnit>.Touch();
+        // ClSpatialNonClusterUnit is no longer touched — the Mixed_* tests that used it were deleted in issue #230 Phase 3 Option B (see note above).
     }
 
+    // Issue #230 Phase 3 Option B: cluster spatial archetypes require a configured SpatialGrid. We register ONLY ClSpatialPos + ClSpatialMeta so
+    // ClSpatialNonClusterUnit (needs ClSpatialVData) and ClSpatialStaticUnit (needs ClSpatialStaticPos) are skipped by InitializeArchetypes'
+    // "all components registered" gate. Under the #229 Q10 "one spatial archetype per grid" constraint, this is the only viable pattern — see the
+    // StaticSpatial test below which uses a dedicated SetupStaticEngine for its own single-archetype engine.
     private DatabaseEngine SetupEngine()
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClSpatialPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
-        dbe.RegisterComponentFromAccessor<ClSpatialVData>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new Vector2(-10_000, -10_000),
+            worldMax: new Vector2(10_000, 10_000),
+            cellSize: 100f));
+        dbe.InitializeArchetypes();
+        return dbe;
+    }
+
+    private DatabaseEngine SetupStaticEngine()
+    {
+        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClSpatialStaticPos>();
+        dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new Vector2(-10_000, -10_000),
+            worldMax: new Vector2(10_000, 10_000),
+            cellSize: 100f));
         dbe.InitializeArchetypes();
         return dbe;
     }
 
     private static ClSpatialPos MakePos(float x, float y, float z, float size = 1.0f, float speed = 0f) =>
         new() { Bounds = new AABB3F { MinX = x - size, MinY = y - size, MinZ = z - size, MaxX = x + size, MaxY = y + size, MaxZ = z + size }, Speed = speed };
+
+    // ── Query-level cardinality helpers (issue #230 Option B) ───────────────
+    // These replace the pre-Option-B `cs.SpatialSlot.Tree.EntityCount` structural checks. They run a high-level AABB query over a very large world-bounds
+    // region and count the results, which is a semantic equivalent: "how many entities of this archetype currently live in the spatial index?"
+    // Using the high-level Query<T>().WhereInAABB<TComp>() API means the count is served by whichever path the engine currently routes to — legacy tree before
+    // Option B commit 2, new per-cell index after. This keeps the assertions stable across the commit boundary.
+    private static int CountClSpatialEntities(DatabaseEngine dbe)
+    {
+        using var tx = dbe.CreateQuickTransaction();
+        var results = tx.Query<ClSpatialUnit>().WhereInAABB<ClSpatialPos>(-1_000_000, -1_000_000, -1_000_000, 1_000_000, 1_000_000, 1_000_000).Execute();
+        return results.Count;
+    }
+
+    private static int CountClSpatialStaticEntities(DatabaseEngine dbe)
+    {
+        using var tx = dbe.CreateQuickTransaction();
+        var results = tx.Query<ClSpatialStaticUnit>().WhereInAABB<ClSpatialStaticPos>(-1_000_000, -1_000_000, -1_000_000, 1_000_000, 1_000_000, 1_000_000).Execute();
+        return results.Count;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Infrastructure verification
@@ -117,9 +156,8 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
 
         var es = dbe._archetypeStates[meta.ArchetypeId];
         Assert.That(es.ClusterState, Is.Not.Null);
-        Assert.That(es.ClusterState.SpatialSlot.Tree, Is.Not.Null, "Per-archetype R-Tree should exist");
-        Assert.That(es.ClusterState.SpatialSlot.BackPointerSegment, Is.Not.Null, "Per-archetype BP segment should exist");
-        Assert.That(es.ClusterState.SpatialSlot.DirtyRing, Is.Not.Null, "Per-archetype DirtyBitmapRing should exist");
+        Assert.That(es.ClusterState.SpatialSlot.HasSpatialIndex, Is.True, "Cluster spatial slot should be configured");
+        Assert.That(es.ClusterState.ClusterDirtyRing, Is.Not.Null, "Per-archetype DirtyBitmapRing should exist");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -137,9 +175,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in pos), ClSpatialUnit.Meta.Set(in met));
         tx.Commit();
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(1), "Per-archetype R-Tree should have 1 entry");
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(1), "Spatial index should have 1 entry");
     }
 
     [Test]
@@ -156,9 +192,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         }
         tx.Commit();
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(50));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(50));
     }
 
     [Test]
@@ -174,9 +208,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(1));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(1));
 
         {
             using var tx = dbe.CreateQuickTransaction();
@@ -184,7 +216,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(0), "Destroyed entity removed from R-Tree");
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(0), "Destroyed entity removed from spatial index");
     }
 
     [Test]
@@ -348,9 +380,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(0), "Spawn+destroy in same tx: no R-Tree leak");
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(0), "Spawn+destroy in same tx: no spatial index leak");
     }
 
     [Test]
@@ -367,9 +397,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         }
         tx.Commit();
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(100));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(100));
     }
 
     [Test]
@@ -398,9 +426,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
 
         Assert.DoesNotThrow(() => dbe.WriteTickFence(1));
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(0));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(0));
     }
 
     [Test]
@@ -420,9 +446,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(10));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(10));
 
         {
             using var tx = dbe.CreateQuickTransaction();
@@ -433,102 +457,13 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(5));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(5));
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Mixed cluster + non-cluster archetypes sharing same spatial component
-    // ═══════════════════════════════════════════════════════════════════════
-
-    [Test]
-    public void Mixed_ClusterAndNonCluster_BothQueryable()
-    {
-        using var dbe = SetupEngine();
-
-        // Both archetypes are cluster-eligible since Phase 5 (mixed SV+Versioned allowed)
-        var metaCluster = Archetype<ClSpatialUnit>.Metadata;
-        var metaNonCluster = Archetype<ClSpatialNonClusterUnit>.Metadata;
-        Assert.That(metaCluster.HasClusterSpatial, Is.True);
-        Assert.That(metaNonCluster.IsClusterEligible, Is.True); // Phase 5: SV+Versioned → cluster-eligible
-
-        EntityId clusterEntityId, nonClusterEntityId;
-        {
-            using var tx = dbe.CreateQuickTransaction();
-            // Cluster entity at (10,10,10)
-            var pos1 = MakePos(10, 10, 10);
-            var met1 = new ClSpatialMeta { Tag = 1 };
-            clusterEntityId = tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in pos1), ClSpatialUnit.Meta.Set(in met1));
-
-            // Non-cluster entity at (20,20,20) — same ClSpatialPos component, different archetype
-            var pos2 = MakePos(20, 20, 20);
-            var vd = new ClSpatialVData { Value = 42 };
-            nonClusterEntityId = tx.Spawn<ClSpatialNonClusterUnit>(ClSpatialNonClusterUnit.Pos.Set(in pos2), ClSpatialNonClusterUnit.VData.Set(in vd));
-            tx.Commit();
-        }
-
-        // Phase 5: both archetypes are cluster-eligible — both use per-archetype spatial trees
-        var cs = dbe._archetypeStates[metaCluster.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(1), "Per-archetype tree should have cluster entity");
-
-        var csNonCluster = dbe._archetypeStates[metaNonCluster.ArchetypeId].ClusterState;
-        Assert.That(csNonCluster.SpatialSlot.Tree.EntityCount, Is.EqualTo(1), "Per-archetype tree should have non-cluster entity (now cluster-eligible)");
-
-        // Spatial query covering both should find BOTH entities
-        {
-            using var tx = dbe.CreateQuickTransaction();
-            var results = tx.Query<ClSpatialUnit>().WhereInAABB<ClSpatialPos>(0, 0, 0, 30, 30, 30).Execute();
-            Assert.That(results, Does.Contain(clusterEntityId), "Cluster entity should be found");
-            // Note: non-cluster entity is a different archetype, Query<ClSpatialUnit> filters by archetype mask
-        }
-
-        // Query for non-cluster archetype should find only its entity via per-archetype tree
-        {
-            using var tx = dbe.CreateQuickTransaction();
-            var results = tx.Query<ClSpatialNonClusterUnit>().WhereInAABB<ClSpatialPos>(0, 0, 0, 30, 30, 30).Execute();
-            Assert.That(results, Does.Contain(nonClusterEntityId), "Non-cluster entity should be found");
-            Assert.That(results, Does.Not.Contain(clusterEntityId), "Cluster entity should NOT be in non-cluster query");
-        }
-    }
-
-    [Test]
-    public void Mixed_TriggerRegion_DetectsEntitiesFromBothPaths()
-    {
-        using var dbe = SetupEngine();
-
-        var metaCluster = Archetype<ClSpatialUnit>.Metadata;
-        var metaNonCluster = Archetype<ClSpatialNonClusterUnit>.Metadata;
-
-        // Spawn one entity per archetype in the same spatial region
-        EntityId clusterEntityId, nonClusterEntityId;
-        {
-            using var tx = dbe.CreateQuickTransaction();
-            var pos1 = MakePos(10, 10, 10);
-            var met1 = new ClSpatialMeta { Tag = 1 };
-            clusterEntityId = tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in pos1), ClSpatialUnit.Meta.Set(in met1));
-
-            var pos2 = MakePos(15, 15, 15);
-            var vd = new ClSpatialVData { Value = 1 };
-            nonClusterEntityId = tx.Spawn<ClSpatialNonClusterUnit>(ClSpatialNonClusterUnit.Pos.Set(in pos2), ClSpatialNonClusterUnit.VData.Set(in vd));
-            tx.Commit();
-        }
-
-        // Create trigger region covering both entities
-        var table = dbe.GetComponentTable<ClSpatialPos>();
-        var triggerSystem = table.SpatialIndex.GetOrCreateTriggerSystem(table);
-        double[] regionBounds = { 0, 0, 0, 30, 30, 30 };
-        var handle = triggerSystem.CreateRegion(regionBounds);
-
-        // First evaluation: both entities should enter
-        var result = triggerSystem.EvaluateRegion(handle, 1);
-        Assert.That(result.Entered.Length, Is.EqualTo(2), "Both cluster and non-cluster entities should enter the region");
-
-        // Second evaluation: both should stay (no change)
-        var result2 = triggerSystem.EvaluateRegion(handle, 2);
-        Assert.That(result2.Entered.Length, Is.EqualTo(0), "No new entries on second eval");
-        Assert.That(result2.StayCount, Is.EqualTo(2), "Both entities should stay");
-
-        triggerSystem.DestroyRegion(handle);
-    }
+    // Note: the Mixed_ClusterAndNonCluster_BothQueryable and Mixed_TriggerRegion_DetectsEntitiesFromBothPaths tests were deleted in issue #230 Phase 3
+    // Option B. They exercised the legacy no-grid fallback with TWO cluster-spatial archetypes registered against the same grid — a scenario the #229 Q10
+    // "one spatial archetype per grid" gate blocks and which Option B's grid-required rule makes entirely infeasible. When Q10 is resolved (split per-cell
+    // cluster lists per archetype), these scenarios should be re-added as fixtures configuring a multi-archetype grid.
 
     // ═══════════════════════════════════════════════════════════════════════
     // Back-pointer swap consistency under bulk remove
@@ -551,9 +486,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        var meta = Archetype<ClSpatialUnit>.Metadata;
-        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(50));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(50));
 
         // Remove every other entity (forces many swap-on-remove operations)
         {
@@ -565,7 +498,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(25));
+        Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(25));
 
         // Every surviving entity should be queryable at its correct position
         for (int i = 1; i < 50; i += 2)
@@ -585,13 +518,13 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
     [Test]
     public void StaticSpatial_ClusterEligible_SpawnAndQuery()
     {
-        using var dbe = SetupEngine();
+        using var dbe = SetupStaticEngine();
         var meta = Archetype<ClSpatialStaticUnit>.Metadata;
         Assert.That(meta.IsClusterEligible, Is.True, "Static SV spatial archetype should be cluster-eligible");
         Assert.That(meta.HasClusterSpatial, Is.True);
 
         var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        Assert.That(cs.SpatialSlot.Tree, Is.Not.Null, "Per-archetype R-Tree should exist for Static spatial");
+        Assert.That(cs.SpatialSlot.HasSpatialIndex, Is.True, "Cluster spatial slot should be configured for Static spatial");
 
         // Spawn static entities
         EntityId id1, id2;
@@ -606,7 +539,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             tx.Commit();
         }
 
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(2));
+        Assert.That(CountClSpatialStaticEntities(dbe), Is.EqualTo(2));
 
         // Query should find both
         {
@@ -617,9 +550,9 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             Assert.That(results, Does.Contain(id2));
         }
 
-        // Tick fence should NOT process static spatial (no crash, no tree modification)
+        // Tick fence should NOT affect static spatial entities (no crash, no change in count)
         dbe.WriteTickFence(1);
-        Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(2), "Static tree unaffected by tick fence");
+        Assert.That(CountClSpatialStaticEntities(dbe), Is.EqualTo(2), "Static spatial unaffected by tick fence");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -644,8 +577,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             id2 = tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in pos2), ClSpatialUnit.Meta.Set(in met));
             tx.Commit();
 
-            var meta = Archetype<ClSpatialUnit>.Metadata;
-            Assert.That(dbe._archetypeStates[meta.ArchetypeId].ClusterState.SpatialSlot.Tree.EntityCount, Is.EqualTo(2));
+            Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(2));
         }
 
         // Session 2: reopen, verify spatial query works
@@ -654,8 +586,8 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
             var meta = Archetype<ClSpatialUnit>.Metadata;
             var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
             Assert.That(cs, Is.Not.Null, "ClusterState should exist after reopen");
-            Assert.That(cs.SpatialSlot.Tree, Is.Not.Null, "Per-archetype R-Tree should exist after reopen");
-            Assert.That(cs.SpatialSlot.Tree.EntityCount, Is.EqualTo(2), "R-Tree should have 2 entities after reopen");
+            Assert.That(cs.SpatialSlot.HasSpatialIndex, Is.True, "Cluster spatial slot should be configured after reopen");
+            Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(2), "Spatial index should have 2 entities after reopen");
 
             // Spatial query should find both entities
             using var tx = dbe.CreateQuickTransaction();
@@ -685,8 +617,10 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         var dbe = sp.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClSpatialPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
-        dbe.RegisterComponentFromAccessor<ClSpatialVData>();
-        dbe.RegisterComponentFromAccessor<ClSpatialStaticPos>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new Vector2(-10_000, -10_000),
+            worldMax: new Vector2(10_000, 10_000),
+            cellSize: 100f));
         dbe.InitializeArchetypes();
         return dbe;
     }

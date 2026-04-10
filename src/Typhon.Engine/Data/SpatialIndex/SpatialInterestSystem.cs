@@ -181,7 +181,7 @@ internal sealed unsafe class SpatialInterestSystem
         {
             foreach (var clSt in _spatialState.ClusterArchetypes)
             {
-                var clRing = clSt.SpatialSlot.DirtyRing;
+                var clRing = clSt.ClusterDirtyRing;
                 if (clRing != null && clRing.HeadTick > effectiveHeadTick)
                 {
                     effectiveHeadTick = clRing.HeadTick;
@@ -206,7 +206,7 @@ internal sealed unsafe class SpatialInterestSystem
         {
             foreach (var clSt in _spatialState.ClusterArchetypes)
             {
-                var clRing = clSt.SpatialSlot.DirtyRing;
+                var clRing = clSt.ClusterDirtyRing;
                 if (clRing != null && clRing.IsTickAvailable(startTick))
                 {
                     anyRingAvailable = true;
@@ -299,15 +299,25 @@ internal sealed unsafe class SpatialInterestSystem
                 }
             }
 
-            // Fan out to per-archetype cluster spatial R-Trees.
-            // Cluster entities have their own DirtyBitmapRing indexed by ClusterLocation.
+            // Fan out to per-archetype cluster spatial index — delta path (issue #230 Phase 3 migration).
+            // Cluster entities have their own DirtyBitmapRing indexed by ClusterLocation = clusterChunkId × 64 + slotIndex. For each dirty entity, we read
+            // its bounds directly from the cluster SoA storage via the spatial field offset — no legacy tree back-pointer walk required. This is the
+            // Phase 3 migration that closes issue body criterion 9 ("InterestSystem dirty-set processing works via new path") and removes the interest
+            // system's last dependency on the legacy per-entity cluster tree.
             if (_spatialState.ClusterArchetypes != null)
             {
-                Span<double> clCoords = stackalloc double[coordCount];
+                // Sized for 3D ([minX, minY, minZ, maxX, maxY, maxZ]); 2D reads only populate the first 4 slots.
+                Span<double> clCoords = stackalloc double[6];
                 foreach (var clusterState in _spatialState.ClusterArchetypes)
                 {
-                    var ring = clusterState.SpatialSlot.DirtyRing;
+                    // Use ArchetypeClusterState.ClusterDirtyRing (relocated from SpatialSlot.DirtyRing in Phase 3 commit 1). Both pointers reference the
+                    // same ring instance during the transition; post-purge only this one remains.
+                    var ring = clusterState.ClusterDirtyRing;
                     if (ring == null || ring.HeadTick == 0 || !ring.IsTickAvailable(startTick))
+                    {
+                        continue;
+                    }
+                    if (!clusterState.SpatialSlot.HasSpatialIndex || clusterState.ClusterSegment == null)
                     {
                         continue;
                     }
@@ -318,39 +328,59 @@ internal sealed unsafe class SpatialInterestSystem
                         continue;
                     }
 
-                    // Accumulate per-archetype dirty ring for tick range (reuse cached scratch)
+                    // Accumulate per-archetype dirty ring for tick range (reuse cached scratch).
                     if (_clusterAccumScratch == null || _clusterAccumScratch.Length < clMaxWords)
                     {
-                        _clusterAccumScratch = new long[clMaxWords];
+                        if (_clusterAccumScratch != null)
+                        {
+                            System.Buffers.ArrayPool<long>.Shared.Return(_clusterAccumScratch);
+                        }
+                        _clusterAccumScratch = System.Buffers.ArrayPool<long>.Shared.Rent(clMaxWords);
                     }
                     Array.Clear(_clusterAccumScratch, 0, clMaxWords);
                     int clAccumWords = ring.AccumulateDirty(startTick, endTick, _clusterAccumScratch);
 
                     ref var ss = ref clusterState.SpatialSlot;
-                    var clBpAccessor = ss.BackPointerSegment.CreateChunkAccessor();
-                    var clTreeAccessor = ss.Tree.Segment.CreateChunkAccessor();
+                    var layout = clusterState.Layout;
+                    int spatialCompOffset = layout.ComponentOffset(ss.Slot);
+                    int spatialCompSize = layout.ComponentSize(ss.Slot);
+                    int spatialFieldOffset = ss.FieldOffset;
+                    uint archetypeCategory = ss.FieldInfo.Category;
+                    var fieldInfo = ss.FieldInfo;
+                    var descriptor = ss.Descriptor;
+
+                    var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
                     try
                     {
                         for (int wordIdx = 0; wordIdx < clAccumWords; wordIdx++)
                         {
                             long word = _clusterAccumScratch[wordIdx];
-                            while (word != 0)
+                            if (word == 0)
                             {
-                                int bit = BitOperations.TrailingZeroCount((ulong)word);
-                                int clusterLocation = wordIdx * 64 + bit;
-                                word &= word - 1;
+                                continue;
+                            }
+                            // wordIdx = clusterChunkId (the dirty bitmap ring aligns each cluster to exactly one 64-bit word).
+                            int clusterChunkId = wordIdx;
+                            byte* clusterBase = clusterAccessor.GetChunkAddress(clusterChunkId);
+                            ulong occupancy = *(ulong*)clusterBase;
 
-                                var bp = SpatialBackPointerHelper.Read(ref clBpAccessor, clusterLocation);
-                                if (bp.LeafChunkId == 0)
+                            // Mask dirty bits with live occupancy to skip slots that were cleared by a destroy since the dirty bit was set.
+                            long liveDirty = word & (long)occupancy;
+                            while (liveDirty != 0)
+                            {
+                                int slotIndex = BitOperations.TrailingZeroCount((ulong)liveDirty);
+                                liveDirty &= liveDirty - 1;
+
+                                // Archetype-level category filter. The interest system uses strict all-bits match (matching the legacy tree semantic):
+                                // skip when the archetype's category does not fully contain the observer's requested bits.
+                                if (config.CategoryMask != 0 && (archetypeCategory & config.CategoryMask) != config.CategoryMask)
                                 {
                                     continue;
                                 }
 
-                                byte* leafBase = clTreeAccessor.GetChunkAddress(bp.LeafChunkId);
-                                SpatialNodeHelper.ReadLeafEntryCoords(leafBase, bp.SlotIndex, clCoords, desc);
-                                uint category = SpatialNodeHelper.ReadLeafCategoryMask(leafBase, bp.SlotIndex, desc);
-
-                                if (config.CategoryMask != 0 && (category & config.CategoryMask) != config.CategoryMask)
+                                // Read entity's tight bounds from the cluster SoA storage.
+                                byte* fieldPtr = clusterBase + spatialCompOffset + slotIndex * spatialCompSize + spatialFieldOffset;
+                                if (!SpatialMaintainer.ReadAndValidateBoundsFromPtr(fieldPtr, fieldInfo, clCoords, descriptor))
                                 {
                                     continue;
                                 }
@@ -360,7 +390,7 @@ internal sealed unsafe class SpatialInterestSystem
                                     continue;
                                 }
 
-                                long entityId = SpatialNodeHelper.ReadLeafEntityId(leafBase, bp.SlotIndex, desc);
+                                long entityId = *(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8);
                                 EnsureChangeBufferCapacity(state);
                                 state.ChangeBuffer[state.ChangeCount++] = entityId;
                             }
@@ -368,8 +398,7 @@ internal sealed unsafe class SpatialInterestSystem
                     }
                     finally
                     {
-                        clTreeAccessor.Dispose();
-                        clBpAccessor.Dispose();
+                        clusterAccessor.Dispose();
                     }
                 }
             }
@@ -403,16 +432,42 @@ internal sealed unsafe class SpatialInterestSystem
                 state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;
             }
 
-            // Fan out to per-archetype cluster spatial R-Trees
+            // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 Option B — full-sync path).
+            // Under Option B, cluster spatial archetypes require a configured SpatialGrid (enforced at init time in DatabaseEngine.InitializeArchetypes).
+            // Both Dynamic and Static cluster archetypes use the per-cell index path; the two-pass cell walk visits DynamicIndex and StaticIndex for each cell,
+            // so the caller doesn't need to branch on mode. The interest system's DELTA path reads cluster SoA data directly via ClusterDirtyRing (unchanged).
             if (_spatialState.ClusterArchetypes != null)
             {
+                var grid = _table.DBE.SpatialGrid;
+                float qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ;
+                if (coordCount == 4)
+                {
+                    // 2D region — [minX, minY, maxX, maxY] with infinite Z bounds so the Z overlap test trivially passes.
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = float.NegativeInfinity;
+                    qMaxX = (float)queryCoords[2];
+                    qMaxY = (float)queryCoords[3];
+                    qMaxZ = float.PositiveInfinity;
+                }
+                else
+                {
+                    // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
+                    qMinX = (float)queryCoords[0];
+                    qMinY = (float)queryCoords[1];
+                    qMinZ = (float)queryCoords[2];
+                    qMaxX = (float)queryCoords[3];
+                    qMaxY = (float)queryCoords[4];
+                    qMaxZ = (float)queryCoords[5];
+                }
+
                 foreach (var clusterState in _spatialState.ClusterArchetypes)
                 {
-                    if (clusterState.SpatialSlot.Tree == null)
+                    if (!clusterState.SpatialSlot.HasSpatialIndex)
                     {
                         continue;
                     }
-                    foreach (var hit in clusterState.SpatialSlot.Tree.QueryAABBOccupants(queryCoords, categoryMask: config.CategoryMask))
+                    foreach (var hit in clusterState.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
                     {
                         EnsureChangeBufferCapacity(state);
                         state.ChangeBuffer[state.ChangeCount++] = hit.EntityId;

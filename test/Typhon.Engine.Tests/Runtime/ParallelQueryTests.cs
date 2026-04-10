@@ -82,7 +82,7 @@ public class ParallelQueryTests
             onChunk(sysIdx, chunk, totalChunks);
         };
 
-        scheduler.ParallelQueryCleanupCallback = _ => { };
+        scheduler.ParallelQueryCleanupCallback = _ => false;
 
         return scheduler;
     }
@@ -262,7 +262,7 @@ public class ParallelQueryTests
         // Wire: prepare returns 0 (empty)
         scheduler.ParallelQueryPrepareCallback = _ => 0;
         scheduler.ParallelQueryChunkCallback = (_, _, _, _) => Interlocked.Increment(ref parallelRan);
-        scheduler.ParallelQueryCleanupCallback = _ => { };
+        scheduler.ParallelQueryCleanupCallback = _ => false;
         scheduler.TickEndCallback = _ => Interlocked.Exchange(ref captured, 1);
 
         scheduler.Start();
@@ -305,7 +305,7 @@ public class ParallelQueryTests
                 throw new InvalidOperationException("Chunk 0 failed");
             }
         };
-        scheduler.ParallelQueryCleanupCallback = _ => { };
+        scheduler.ParallelQueryCleanupCallback = _ => false;
         scheduler.TickEndCallback = _ => Interlocked.Exchange(ref captured, 1);
 
         scheduler.Start();
@@ -385,7 +385,7 @@ public class ParallelQueryTests
                 timestamps[$"Chunk{chunk}"] = Stopwatch.GetTimestamp();
             }
         };
-        scheduler.ParallelQueryCleanupCallback = _ => { };
+        scheduler.ParallelQueryCleanupCallback = _ => false;
 
         scheduler.Start();
         SpinWait.SpinUntil(() => scheduler.CurrentTickNumber >= 1, TimeSpan.FromSeconds(5));
@@ -721,7 +721,7 @@ public class ParallelQueryTests
                 Interlocked.Exchange(ref captured, 1);
             }
         };
-        scheduler.ParallelQueryCleanupCallback = _ => { };
+        scheduler.ParallelQueryCleanupCallback = _ => false;
 
         scheduler.Start();
         SpinWait.SpinUntil(() => scheduler.CurrentTickNumber >= 1, TimeSpan.FromSeconds(5));
@@ -751,7 +751,7 @@ public class ParallelQueryTests
                 Interlocked.Exchange(ref captured, 1);
             }
         };
-        scheduler.ParallelQueryCleanupCallback = _ => { };
+        scheduler.ParallelQueryCleanupCallback = _ => false;
 
         scheduler.Start();
         SpinWait.SpinUntil(() => scheduler.CurrentTickNumber >= 1, TimeSpan.FromSeconds(5));

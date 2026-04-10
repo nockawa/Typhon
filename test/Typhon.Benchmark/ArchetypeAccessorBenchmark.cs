@@ -749,7 +749,6 @@ static class ArchetypeAccessorBenchmark
         Console.WriteLine($"  Cluster eligible: {meta.IsClusterEligible}");
         Console.WriteLine($"  Has cluster spatial: {meta.HasClusterSpatial}");
         Console.WriteLine($"  Active clusters: {clusterState?.ActiveClusterCount ?? 0}");
-        Console.WriteLine($"  R-Tree entities: {clusterState?.SpatialSlot.Tree?.EntityCount ?? 0}");
         Console.WriteLine();
 
         // ── 1. Spatial Write benchmark: Write(Pos) with new bounds ──

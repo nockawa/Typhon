@@ -1739,16 +1739,81 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             QuerySingleTree(state.DynamicTree, state, result);
         }
 
-        // Fan out to per-archetype cluster spatial R-Trees.
-        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype trees.
-        // QuerySingleTree internally uses MaskTest(archetypeId) on each result, so we don't need to pre-filter here.
+        // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 Option B).
+        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype indexes. AABB and Radius queries route to the per-cell cluster
+        // index via ArchetypeClusterState.QueryAabb / QueryRadius. Under Option B, the SpatialGrid is guaranteed non-null for cluster spatial archetypes
+        // (enforced at DatabaseEngine.InitializeArchetypes). Any other query shape on the cluster tier (e.g. Ray, Frustum) throws NotSupportedException —
+        // adding Ray/Frustum on cluster archetypes is tracked as a follow-up sub-issue of #228.
         if (state.ClusterArchetypes != null)
         {
+            SpatialGrid grid = _tx.DBE.SpatialGrid;
             foreach (var cs in state.ClusterArchetypes)
             {
-                if (cs.SpatialSlot.Tree != null)
+                if (!cs.SpatialSlot.HasSpatialIndex)
                 {
-                    QuerySingleTree(cs.SpatialSlot.Tree, state, result);
+                    continue;
+                }
+                if (_spatialQueryType == SpatialQueryType.AABB)
+                {
+                    // New path: per-cell cluster index AABB query. Extract the 2D/3D query bounds from _spatialParams (same layout as in QuerySingleTree's
+                    // AABB case: 6 doubles stored as [minX, minY, minZ, maxX, maxY, maxZ], with the 3D slots ignored for 2D archetypes).
+                    float qMinX = (float)_spatialParams[0];
+                    float qMinY = (float)_spatialParams[1];
+                    float qMinZ;
+                    float qMaxX;
+                    float qMaxY;
+                    float qMaxZ;
+                    if (state.Descriptor.CoordCount == 4)
+                    {
+                        qMinZ = float.NegativeInfinity;
+                        qMaxX = (float)_spatialParams[2];
+                        qMaxY = (float)_spatialParams[3];
+                        qMaxZ = float.PositiveInfinity;
+                    }
+                    else
+                    {
+                        qMinZ = (float)_spatialParams[2];
+                        qMaxX = (float)_spatialParams[3];
+                        qMaxY = (float)_spatialParams[4];
+                        qMaxZ = (float)_spatialParams[5];
+                    }
+
+                    using var guard = EpochGuard.Enter(_tx.DBE.EpochManager);
+                    foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ))
+                    {
+                        var entityId = EntityId.FromRaw(hit.EntityId);
+                        if (MaskTest(entityId.ArchetypeId))
+                        {
+                            result.Add(entityId);
+                        }
+                    }
+                }
+                else if (_spatialQueryType == SpatialQueryType.Radius)
+                {
+                    // Per-cell cluster index Radius query (issue #230 Phase 3). Parameter layout matches QuerySingleTree's Radius case:
+                    // _spatialParams[0..halfCoord] is the center, _spatialParams[3] is the radius (regardless of dimension — a quirk of the existing
+                    // parameter packing for the per-entity tree).
+                    float cX = (float)_spatialParams[0];
+                    float cY = (float)_spatialParams[1];
+                    float cZ = state.Descriptor.CoordCount == 6 ? (float)_spatialParams[2] : 0f;
+                    float radius = (float)_spatialParams[3];
+
+                    using var guard = EpochGuard.Enter(_tx.DBE.EpochManager);
+                    foreach (var hit in cs.QueryRadius(grid, cX, cY, cZ, radius))
+                    {
+                        var entityId = EntityId.FromRaw(hit.EntityId);
+                        if (MaskTest(entityId.ArchetypeId))
+                        {
+                            result.Add(entityId);
+                        }
+                    }
+                }
+                else
+                {
+                    // Option B: any query shape beyond AABB / Radius is unsupported on the cluster tier. No silent fallback — surface the limitation.
+                    throw new NotSupportedException(
+                        $"Cluster spatial queries for shape '{_spatialQueryType}' are not implemented in issue #230 Phase 3 Option B. " +
+                        $"Supported shapes on the cluster tier are AABB and Radius. See follow-up sub-issues of #228 for Ray/Frustum support.");
                 }
             }
         }

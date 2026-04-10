@@ -19,6 +19,9 @@ internal static unsafe partial class SpatialMaintainer
     [LoggerMessage(Level = LogLevel.Warning, Message = "Spatial escape rate {EscapeRate:P1} ({EscapeCount}/{DirtyCount}) for {ComponentName} exceeds 10% — consider increasing margin")]
     internal static partial void LogHighEscapeRate(ILogger logger, string componentName, double escapeRate, int escapeCount, int dirtyCount);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Cluster migration storm: {MigrationCount} migrations in a single tick for archetype id {ArchetypeId} ({DurationMs:F3} ms) — possible viewport warp, teleport event, or unphysical speed")]
+    internal static partial void LogHighMigrationRate(ILogger logger, int migrationCount, ushort archetypeId, double durationMs);
+
     // ── Public API ───────────────────────────────────────────────────────────
 
     /// <summary>
@@ -231,101 +234,9 @@ internal static unsafe partial class SpatialMaintainer
         }
     }
 
-    // ── Cluster-specific API ────────────────────────────────────
-
-    /// <summary>
-    /// Insert a newly spawned cluster entity into a per-archetype spatial R-Tree.
-    /// Called at FinalizeSpawns for cluster entities with spatial fields.
-    /// </summary>
-    internal static void InsertSpatialCluster(long entityPK, int clusterLocation, byte* fieldPtr, ref ClusterSpatialSlot state, 
-        ref ChunkAccessor<PersistentStore> treeAccessor, ref ChunkAccessor<PersistentStore> bpAccessor, ChangeSet changeSet)
-    {
-        Span<double> coords = stackalloc double[state.Descriptor.CoordCount];
-        if (!ReadAndValidateBoundsFromPtr(fieldPtr, state.FieldInfo, coords, state.Descriptor))
-        {
-            return;
-        }
-
-        EnlargeCoords(coords, state.FieldInfo.Margin, state.Descriptor);
-
-        var (leafChunkId, slotIndex) = state.Tree.Insert(entityPK, clusterLocation, coords, ref treeAccessor, changeSet);
-        SpatialBackPointerHelper.Write(ref bpAccessor, clusterLocation, leafChunkId, (short)slotIndex, (byte)state.FieldInfo.Mode);
-    }
-
-    /// <summary>
-    /// Batch-optimized spatial update for a cluster entity. Reads current bounds from the provided field pointer (cluster SoA).
-    /// Fast path if tight AABB is still within fat AABB (~25ns). Slow path removes and reinserts (~500-700ns).
-    /// </summary>
-    /// <returns>True if the entity escaped the fat AABB and was reinserted (slow path).</returns>
-    internal static bool UpdateSpatialBatchCluster(long entityPK, int clusterLocation, byte* fieldPtr, ref ClusterSpatialSlot state, 
-        ref ChunkAccessor<PersistentStore> treeAccessor, ref ChunkAccessor<PersistentStore> bpAccessor, ChangeSet changeSet)
-    {
-        var desc = state.Descriptor;
-        Span<double> tightCoords = stackalloc double[desc.CoordCount];
-        if (!ReadAndValidateBoundsFromPtr(fieldPtr, state.FieldInfo, tightCoords, desc))
-        {
-            return false;
-        }
-
-        var bp = SpatialBackPointerHelper.Read(ref bpAccessor, clusterLocation);
-        if (bp.LeafChunkId == 0)
-        {
-            // No back-pointer — entity was never inserted (degenerate at spawn). Try inserting now.
-            EnlargeCoords(tightCoords, state.FieldInfo.Margin, desc);
-            var (newLeaf, newSlot) = state.Tree.Insert(entityPK, clusterLocation, tightCoords, ref treeAccessor, changeSet);
-            SpatialBackPointerHelper.Write(ref bpAccessor, clusterLocation, newLeaf, (short)newSlot, (byte)state.FieldInfo.Mode);
-            return false;
-        }
-
-        Span<double> fatCoords = stackalloc double[desc.CoordCount];
-        state.Tree.ReadLeafCoords(bp.LeafChunkId, bp.SlotIndex, fatCoords, ref treeAccessor);
-
-        // Fast path: containment check
-        if (CoordsContained(fatCoords, tightCoords, desc.CoordCount))
-        {
-            return false;
-        }
-
-        // Slow path: remove + reinsert
-        long swappedEntityId = state.Tree.Remove(bp.LeafChunkId, bp.SlotIndex, ref treeAccessor);
-
-        // If swap occurred, update the swapped entity's back-pointer.
-        // Key simplification for clusters: read swapped entity's ClusterLocation directly from the leaf (now at bp.SlotIndex after swap). No EntityMap lookup needed.
-        if (swappedEntityId != 0 && swappedEntityId != entityPK)
-        {
-            int swappedClusterLocation = SpatialNodeHelper.ReadLeafCompChunkId(treeAccessor.GetChunkAddress(bp.LeafChunkId), bp.SlotIndex, desc);
-            SpatialBackPointerHelper.Write(ref bpAccessor, swappedClusterLocation, bp.LeafChunkId, (short)bp.SlotIndex, bp.TreeSelector);
-        }
-
-        EnlargeCoords(tightCoords, state.FieldInfo.Margin, desc);
-        var (insertLeaf, insertSlot) = state.Tree.Insert(entityPK, clusterLocation, tightCoords, ref treeAccessor, changeSet);
-        SpatialBackPointerHelper.Write(ref bpAccessor, clusterLocation, insertLeaf, (short)insertSlot, bp.TreeSelector);
-
-        return true; // Escaped fat AABB → reinserted
-    }
-
-    /// <summary>
-    /// Remove a destroyed cluster entity from a per-archetype spatial R-Tree.
-    /// </summary>
-    internal static void RemoveFromSpatialCluster(long entityPK, int clusterLocation, ref ClusterSpatialSlot state, 
-        ref ChunkAccessor<PersistentStore> treeAccessor, ref ChunkAccessor<PersistentStore> bpAccessor, ChangeSet changeSet)
-    {
-        var bp = SpatialBackPointerHelper.Read(ref bpAccessor, clusterLocation);
-        if (bp.LeafChunkId == 0)
-        {
-            return; // Never inserted (degenerate bounds)
-        }
-
-        long swappedEntityId = state.Tree.Remove(bp.LeafChunkId, bp.SlotIndex, ref treeAccessor);
-
-        if (swappedEntityId != 0 && swappedEntityId != entityPK)
-        {
-            int swappedClusterLocation = SpatialNodeHelper.ReadLeafCompChunkId(treeAccessor.GetChunkAddress(bp.LeafChunkId), bp.SlotIndex, state.Descriptor);
-            SpatialBackPointerHelper.Write(ref bpAccessor, swappedClusterLocation, bp.LeafChunkId, bp.SlotIndex, bp.TreeSelector);
-        }
-
-        SpatialBackPointerHelper.Clear(ref bpAccessor, clusterLocation);
-    }
+    // Note: InsertSpatialCluster, UpdateSpatialBatchCluster, and RemoveFromSpatialCluster were removed in issue #230 Phase 3 Option B. The legacy per-entity
+    // cluster R-Tree is gone; spawn/destroy/migration hooks now only maintain the per-cell cluster index via ArchetypeClusterState.AddClusterToPerCellIndex
+    // / RemoveClusterFromPerCellIndex.
 
     // ── Private helpers ──────────────────────────────────────────────────────
 

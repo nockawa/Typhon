@@ -213,6 +213,7 @@ public class DatabaseDefinitions
                 field.SpatialMargin = spa.Margin;
                 field.SpatialCellSize = spa.CellSize;
                 field.SpatialMode = spa.Mode;
+                field.SpatialCategory = spa.Category;
                 field.SpatialFieldType = MapToSpatialFieldType(field.Type);
             }
 

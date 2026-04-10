@@ -5,7 +5,7 @@ namespace Typhon.Schema.Definition;
 // Float32 AABB types
 
 [PublicAPI]
-public struct AABB2F
+public struct AABB2F : ISpatialBox
 {
     public float MinX;
     public float MinY;
@@ -14,7 +14,7 @@ public struct AABB2F
 }
 
 [PublicAPI]
-public struct AABB3F
+public struct AABB3F : ISpatialBox
 {
     public float MinX;
     public float MinY;
@@ -46,7 +46,7 @@ public struct BSphere3F
 // Float64 AABB types
 
 [PublicAPI]
-public struct AABB2D
+public struct AABB2D : ISpatialBox
 {
     public double MinX;
     public double MinY;
@@ -55,7 +55,7 @@ public struct AABB2D
 }
 
 [PublicAPI]
-public struct AABB3D
+public struct AABB3D : ISpatialBox
 {
     public double MinX;
     public double MinY;

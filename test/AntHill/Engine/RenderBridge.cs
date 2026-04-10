@@ -1,4 +1,4 @@
-namespace AntHill.Engine;
+namespace AntHill;
 
 /// <summary>
 /// Immutable snapshot of entity render data for one tick.

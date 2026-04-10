@@ -22,6 +22,9 @@ public sealed class SystemBuilder
     internal bool _canShed;
     internal bool _parallel;
     internal bool _writesVersioned;
+    internal SimTier _tierFilter = SimTier.All;
+    internal int _cellAmortize;
+    internal bool _checkerboard;
 
     /// <summary>Set the system's unique name in the DAG.</summary>
     public void Name(string name) => _name = name;
@@ -58,4 +61,21 @@ public sealed class SystemBuilder
 
     /// <summary>Declare that this parallel QuerySystem writes Versioned components. Forces per-chunk Transaction fallback instead of the optimized PointInTimeAccessor path.</summary>
     public void WritesVersioned() => _writesVersioned = true;
+
+    /// <summary>
+    /// Set the simulation-tier dispatch filter (issue #231). Default <see cref="SimTier.All"/> matches pre-#231 behaviour (all clusters dispatched).
+    /// Single-tier (e.g. <see cref="SimTier.Tier0"/>) or multi-tier flag combinations (<see cref="SimTier.Near"/>, <see cref="SimTier.Active"/>) are both
+    /// supported.
+    /// </summary>
+    public void Tier(SimTier tier) => _tierFilter = tier;
+
+    /// <summary>
+    /// Set the cell-level amortization denominator (issue #231). When greater than 0, the system processes <c>1/N</c> of the tier's clusters per tick,
+    /// and <see cref="TickContext.AmortizedDeltaTime"/> becomes <c>DeltaTime × N</c>. Requires a non-<see cref="SimTier.All"/> <see cref="Tier"/>.
+    /// </summary>
+    public void CellAmortize(int denominator) => _cellAmortize = denominator;
+
+    /// <summary>Enable two-phase checkerboard dispatch (issue #234). Requires <see cref="Parallel"/>. Clusters are split into Red/Black sets
+    /// based on cell coordinates — no two adjacent cells are processed simultaneously.</summary>
+    public void Checkerboard() => _checkerboard = true;
 }

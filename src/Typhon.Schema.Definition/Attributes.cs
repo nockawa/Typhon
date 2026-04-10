@@ -115,6 +115,26 @@ public sealed class SpatialIndexAttribute : Attribute
     public float CellSize { get; }
     public SpatialMode Mode { get; set; } = SpatialMode.Dynamic;
 
+    /// <summary>
+    /// Archetype-level category bitmask used by the per-cell cluster spatial broadphase to skip entire clusters whose category does not intersect the
+    /// query's category mask (issue #230 Phase 3). Defaults to <see cref="uint.MaxValue"/> — "accept every query" — so archetypes that don't set this
+    /// remain queryable with any mask, including the default <c>uint.MaxValue</c> query mask.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Archetype-level, not per-entity.</b> Every entity in an archetype contributes the same <c>Category</c> value, so the per-cluster category mask
+    /// is the OR of N identical values — effectively a constant for the archetype. This simplification makes the design-doc "incremental OR on spawn,
+    /// recompute on destroy" invariants trivially satisfied: both are no-ops because the mask never changes.
+    /// </para>
+    /// <para>
+    /// <b>Query semantics.</b> A cluster is admitted when <c>(clusterMask &amp; queryMask) != 0</c> — "any bit overlap".
+    /// A query mask of <c>0</c> is a special sentinel that bypasses category filtering entirely (accepts all clusters regardless of their mask).
+    /// Typical usage: assign distinct bit positions to archetype roles (Ants = <c>1 &lt;&lt; 0</c>,
+    /// Food = <c>1 &lt;&lt; 1</c>, Enemies = <c>1 &lt;&lt; 2</c>) and query with the OR of the roles you want.
+    /// </para>
+    /// </remarks>
+    public uint Category { get; set; } = uint.MaxValue;
+
     public SpatialIndexAttribute(float margin, float cellSize = 0f)
     {
         Margin = margin;

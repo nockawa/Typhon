@@ -1,12 +1,11 @@
 using System;
 using System.Numerics;
 using System.Threading;
-using AntHill.ECS;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Typhon.Engine;
 
-namespace AntHill.Engine;
+namespace AntHill;
 
 /// <summary>
 /// Encapsulates all Typhon engine setup: DI, DatabaseEngine, entity spawning, Runtime + systems.
@@ -15,7 +14,7 @@ namespace AntHill.Engine;
 public sealed class TyphonBridge : IDisposable
 {
     public const int AntCount = 100_000;
-    public const float WorldSize = 10_000f;
+    public const float WorldSize = 20_000f;
 
     private ServiceProvider _serviceProvider;
     private IServiceScope _scope;
@@ -57,6 +56,7 @@ public sealed class TyphonBridge : IDisposable
             });
 
         _serviceProvider = services.BuildServiceProvider();
+        _serviceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
 
         // Create a scope so scoped services resolve properly (must store ref to prevent GC)
         _scope = _serviceProvider.CreateScope();
@@ -79,94 +79,17 @@ public sealed class TyphonBridge : IDisposable
         _runtime = TyphonRuntime.Create(_dbe, schedule =>
         {
             // Movement system: parallel, cluster iteration (fast path — 2-3 ns/entity vs 150 ns/entity)
-            schedule.QuerySystem("AntMovement", ctx =>
-            {
-                // Scoped cluster enumerator: each worker gets a non-overlapping range of clusters
-                var ants = ctx.Accessor.For<Ant>();
-                using var clusters = ctx.EndClusterIndex > ctx.StartClusterIndex
-                    ? ants.GetClusterEnumerator(ctx.StartClusterIndex, ctx.EndClusterIndex)
-                    : ants.GetClusterEnumerator(); // Fallback for non-parallel or single-worker
-                foreach (var cluster in clusters)
-                {
-                    ulong bits = cluster.OccupancyBits;
-                    var positions = cluster.GetSpan(Ant.Position);
-                    var movements = cluster.GetReadOnlySpan(Ant.Movement);
-                    float dt = ctx.DeltaTime;
-                    while (bits != 0)
-                    {
-                        int idx = BitOperations.TrailingZeroCount(bits);
-                        bits &= bits - 1;
-                        ref var pos = ref positions[idx];
-                        ref readonly var mov = ref movements[idx];
-                        pos.X += mov.VX * dt;
-                        pos.Y += mov.VY * dt;
-                        if (pos.X < 0f) pos.X += WorldSize;
-                        else if (pos.X >= WorldSize) pos.X -= WorldSize;
-                        if (pos.Y < 0f) pos.Y += WorldSize;
-                        else if (pos.Y >= WorldSize) pos.Y -= WorldSize;
-                    }
-                }
-            }, input: () => _antView, parallel: true);
+            schedule.QuerySystem("AntMovement", MoveAnts, input: () => _antView, parallel: true);
 
             // ── Render buffer pipeline (3 systems) ──────────────────────
             // PrepareRenderBuffer: allocate/reset shared buffer
-            schedule.CallbackSystem("PrepareRenderBuffer", ctx =>
-            {
-                int count = _antView.Count;
-                int needed = count * Stride;
-                if (_renderBuffer == null || _renderBuffer.Length != needed)
-                {
-                    _renderBuffer = new float[needed];
-                }
-                _renderBufferWriteIdx = 0;
-            }, after: "AntMovement");
+            schedule.CallbackSystem("PrepareRenderBuffer", PrepareRender, after: "AntMovement");
 
             // FillRenderBuffer: parallel read via scoped cluster iteration (fast path)
-            schedule.QuerySystem("FillRenderBuffer", ctx =>
-            {
-                var ants = ctx.Accessor.For<Ant>();
-                using var clusters = ctx.EndClusterIndex > ctx.StartClusterIndex
-                    ? ants.GetClusterEnumerator(ctx.StartClusterIndex, ctx.EndClusterIndex)
-                    : ants.GetClusterEnumerator();
-                foreach (var cluster in clusters)
-                {
-                    int liveCount = cluster.LiveCount;
-                    int startSlot = Interlocked.Add(ref _renderBufferWriteIdx, liveCount) - liveCount;
-                    int localIdx = 0;
-                    ulong bits = cluster.OccupancyBits;
-                    var positions = cluster.GetReadOnlySpan(Ant.Position);
-                    while (bits != 0)
-                    {
-                        int idx = BitOperations.TrailingZeroCount(bits);
-                        bits &= bits - 1;
-                        ref readonly var pos = ref positions[idx];
-                        int off = (startSlot + localIdx) * Stride;
-                        _renderBuffer[off + 0] = 1f;    // cos
-                        _renderBuffer[off + 1] = 0f;    // -sin
-                        _renderBuffer[off + 2] = 0f;    // padding
-                        _renderBuffer[off + 3] = pos.X; // origin.x
-                        _renderBuffer[off + 4] = 0f;    // sin
-                        _renderBuffer[off + 5] = 1f;    // cos
-                        _renderBuffer[off + 6] = 0f;    // padding
-                        _renderBuffer[off + 7] = pos.Y; // origin.y
-                        _renderBuffer[off + 8] = 1f;    // R
-                        _renderBuffer[off + 9] = 1f;    // G
-                        _renderBuffer[off + 10] = 1f;   // B
-                        _renderBuffer[off + 11] = 1f;   // A
-                        localIdx++;
-                    }
-                }
-            }, input: () => _antView, parallel: true, after: "PrepareRenderBuffer");
+            schedule.QuerySystem("FillRenderBuffer", FillRender, input: () => _antView, parallel: true, after: "PrepareRenderBuffer");
 
             // PublishRenderFrame: push completed buffer to Godot
-            schedule.CallbackSystem("PublishRenderFrame", ctx =>
-            {
-                int count = _renderBufferWriteIdx;
-                if (count > 0)
-                {
-                    _renderBridge.Publish(new RenderFrame { Buffer = _renderBuffer, Count = count });
-                }
-            }, after: "FillRenderBuffer");
+            schedule.CallbackSystem("PublishRenderFrame", PublishRender, after: "FillRenderBuffer");
 
         }, new RuntimeOptions
         {
@@ -175,21 +98,116 @@ public sealed class TyphonBridge : IDisposable
         });
     }
 
+    private void PublishRender(TickContext ctx)
+    {
+        var count = _renderBufferWriteIdx;
+        if (count > 0)
+        {
+            _renderBridge.Publish(new RenderFrame { Buffer = _renderBuffer, Count = count });
+        }
+    }
+
+    private void PrepareRender(TickContext ctx)
+    {
+        var count = _antView.Count;
+        var needed = count * Stride;
+        if (_renderBuffer == null || _renderBuffer.Length != needed)
+        {
+            _renderBuffer = new float[needed];
+        }
+
+        _renderBufferWriteIdx = 0;
+    }
+
+    private void FillRender(TickContext ctx)
+    {
+        using var clusters = ctx.EndClusterIndex > ctx.StartClusterIndex ? 
+            ctx.Accessor.GetClusterEnumerator<Ant>(ctx.StartClusterIndex, ctx.EndClusterIndex) : ctx.Accessor.GetClusterEnumerator<Ant>();
+        foreach (var cluster in clusters)
+        {
+            var liveCount = cluster.LiveCount;
+            var startSlot = Interlocked.Add(ref _renderBufferWriteIdx, liveCount) - liveCount;
+            var localIdx = 0;
+            var bits = cluster.OccupancyBits;
+            var positions = cluster.GetReadOnlySpan(Ant.Position);
+            while (bits != 0)
+            {
+                var idx = BitOperations.TrailingZeroCount(bits);
+                bits &= bits - 1;
+                ref readonly var pos = ref positions[idx];
+                var off = (startSlot + localIdx) * Stride;
+                _renderBuffer[off + 0] = 1f; // cos
+                _renderBuffer[off + 1] = 0f; // -sin
+                _renderBuffer[off + 2] = 0f; // padding
+                _renderBuffer[off + 3] = pos.X; // origin.x
+                _renderBuffer[off + 4] = 0f; // sin
+                _renderBuffer[off + 5] = 1f; // cos
+                _renderBuffer[off + 6] = 0f; // padding
+                _renderBuffer[off + 7] = pos.Y; // origin.y
+                _renderBuffer[off + 8] = 1f; // R
+                _renderBuffer[off + 9] = 1f; // G
+                _renderBuffer[off + 10] = 1f; // B
+                _renderBuffer[off + 11] = 1f; // A
+                localIdx++;
+            }
+        }
+    }
+
+    private void MoveAnts(TickContext ctx)
+    {
+        // Direct cluster iteration: bypasses ArchetypeAccessor (no EntityMap/duplicate ChunkAccessor overhead)
+        using var clusters = ctx.EndClusterIndex > ctx.StartClusterIndex ? 
+            ctx.Accessor.GetClusterEnumerator<Ant>(ctx.StartClusterIndex, ctx.EndClusterIndex) : ctx.Accessor.GetClusterEnumerator<Ant>();
+        foreach (var cluster in clusters)
+        {
+            var bits = cluster.OccupancyBits;
+            var positions = cluster.GetSpan(Ant.Position);
+            var movements = cluster.GetReadOnlySpan(Ant.Movement);
+            var dt = ctx.DeltaTime;
+            while (bits != 0)
+            {
+                var idx = BitOperations.TrailingZeroCount(bits);
+                bits &= bits - 1;
+                ref var pos = ref positions[idx];
+                ref readonly var mov = ref movements[idx];
+                pos.X += mov.VX * dt;
+                pos.Y += mov.VY * dt;
+                if (pos.X < 0f)
+                {
+                    pos.X += WorldSize;
+                }
+                else if (pos.X >= WorldSize)
+                {
+                    pos.X -= WorldSize;
+                }
+
+                if (pos.Y < 0f)
+                {
+                    pos.Y += WorldSize;
+                }
+                else if (pos.Y >= WorldSize)
+                {
+                    pos.Y -= WorldSize;
+                }
+            }
+        }
+    }
+
     public void Start() => _runtime.Start();
 
     private void SpawnAnts()
     {
         var rng = new Random(42);
         const int batchSize = 1_000;
-        int remaining = AntCount;
+        var remaining = AntCount;
 
         while (remaining > 0)
         {
-            int count = Math.Min(batchSize, remaining);
+            var count = Math.Min(batchSize, remaining);
             remaining -= count;
             using var tx = _dbe.CreateQuickTransaction();
 
-            for (int i = 0; i < count; i++)
+            for (var i = 0; i < count; i++)
             {
                 // Random position across the world
                 var pos = new Position(
@@ -197,8 +215,8 @@ public sealed class TyphonBridge : IDisposable
                     (float)(rng.NextDouble() * WorldSize));
 
                 // Random velocity: speed 20-80 units/sec, random direction
-                float angle = (float)(rng.NextDouble() * Math.PI * 2);
-                float speed = 20f + (float)(rng.NextDouble() * 60);
+                var angle = (float)(rng.NextDouble() * Math.PI * 2);
+                var speed = 20f + (float)(rng.NextDouble() * 60);
                 var mov = new Movement(
                     MathF.Cos(angle) * speed,
                     MathF.Sin(angle) * speed);
@@ -216,7 +234,10 @@ public sealed class TyphonBridge : IDisposable
     public string GetTimingInfo()
     {
         var telemetry = _runtime?.Telemetry;
-        if (telemetry == null || telemetry.TotalTicksRecorded == 0) return "no ticks";
+        if (telemetry == null || telemetry.TotalTicksRecorded == 0)
+        {
+            return "no ticks";
+        }
 
         try
         {
@@ -228,10 +249,14 @@ public sealed class TyphonBridge : IDisposable
             var parts = new System.Text.StringBuilder();
             parts.Append($"Tick {tick.ActualDurationMs:F1}ms");
 
-            for (int i = 0; i < systems.Length && i < sysDefs.Length; i++)
+            for (var i = 0; i < systems.Length && i < sysDefs.Length; i++)
             {
                 ref readonly var s = ref systems[i];
-                if (s.WasSkipped) continue;
+                if (s.WasSkipped)
+                {
+                    continue;
+                }
+
                 parts.Append($" | {sysDefs[i].Name}: {s.DurationUs:F0}us/{s.EntitiesProcessed}e");
             }
 

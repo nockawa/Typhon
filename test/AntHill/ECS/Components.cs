@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using Typhon.Schema.Definition;
 
-namespace AntHill.ECS;
+namespace AntHill;
 
 [Component("AntHill.Position", 1, StorageMode = StorageMode.SingleVersion)]
 [StructLayout(LayoutKind.Sequential)]

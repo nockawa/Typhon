@@ -570,7 +570,7 @@ class ClusterQueryTests : TestBase<ClusterQueryTests>
         using var tx2 = dbe.CreateQuickTransaction();
 
         var rangeView = new ClusterRangeEntityView();
-        rangeView.Reset(cs, cs.ClusterSegment, 0, cs.ActiveClusterCount);
+        rangeView.Reset(cs, cs.ClusterSegment, cs.ActiveClusterIds, 0, cs.ActiveClusterCount);
 
         var iteratedIds = new HashSet<EntityId>();
         foreach (var entityId in rangeView)
@@ -757,7 +757,7 @@ class ClusterQueryTests : TestBase<ClusterQueryTests>
 
         // Empty range: start == end
         var view = new ClusterRangeEntityView();
-        view.Reset(cs, cs.ClusterSegment, 0, 0);
+        view.Reset(cs, cs.ClusterSegment, cs.ActiveClusterIds, 0, 0);
 
         int count = 0;
         foreach (var _ in view)

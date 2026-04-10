@@ -1149,9 +1149,6 @@ public unsafe partial class Transaction
         public bool HasClusterTransientAccessor;
         public ChunkAccessor<PersistentStore> ClusterIdxAccessor;
         public bool HasClusterIdxAccessor;
-        public ChunkAccessor<PersistentStore> ClusterSpatialTreeAccessor;
-        public ChunkAccessor<PersistentStore> ClusterSpatialBpAccessor;
-        public bool HasClusterSpatialAccessors;
         public ChunkAccessor<PersistentStore>[] ClusterSrcAccessors;
         public int ClusterSrcAccessorCount;
         public ChunkAccessor<TransientStore>[] ClusterTransientSrcAccessors;
@@ -1163,6 +1160,14 @@ public unsafe partial class Transaction
         public int TrIdxAccessorTotal;
         public ChunkAccessor<TransientStore>[] TrCompAccessors;
         public ChunkAccessor<TransientStore>[] TrIdxAccessors;
+
+        // Issue #229 Phase 1+2: cached spatial-slot fields used by the spawn hot path to route through ClaimSlotInCell without chasing pointers per entity.
+        // Populated once per archetype switch in SetupSpawnAccessors. SpatialSlotIndexCached == -1 means either not spatial or no grid configured.
+        public SpatialGrid SpatialGridCached;
+        public int SpatialSlotIndexCached;
+        public int SpatialComponentOverheadCached;
+        public int SpatialFieldOffsetCached;
+        public SpatialFieldType SpatialFieldTypeCached;
     }
 
     /// <summary>
@@ -1218,6 +1223,12 @@ public unsafe partial class Transaction
         Span<int> svIdxAccessorBase = stackalloc int[16]; // offset into svIdxAccessors for each slot
         Span<int> trSlots = stackalloc int[16];
         Span<int> trIdxAccessorBase = stackalloc int[16];
+        // Narrowphase scratch for ReadAndValidateBoundsFromPtr in the cluster spatial spawn hook (#230
+        // Phase 1). Hoisted out of the per-entity loop to avoid CA2014 stack-pressure accumulation when
+        // spawning many entities in one transaction — the per-iteration allocation would not release
+        // until FinalizeSpawns returns.
+        // Sized for 3D ([minX, minY, minZ, maxX, maxY, maxZ]); 2D reads only populate the first 4 slots. Issue #230 Phase 3 unified 2D/3D per-cell index paths.
+        Span<double> spawnSpatialCoords = stackalloc double[6];
 
         try
         {
@@ -1260,10 +1271,37 @@ public unsafe partial class Transaction
                     byte* clusterBase; // Primary segment base (has metadata: OccupancyBits, EnabledBits, EntityIds)
                     byte* clusterTransientBase = null; // TransientStore base (only for mixed archetypes)
 
+                    // Issue #229 Phase 1+2: when the engine has a configured SpatialGrid AND this archetype has a spatial field, route the claim through
+                    // ClaimSlotInCell so the new entity lands in a cluster belonging to its spatial cell. SpawnContext caches the spatial-slot routing info
+                    // once per archetype switch (see SetupSpawnAccessors) so this hot branch is a single field read.
+                    int spatialSlotIdx = ctx.SpatialSlotIndexCached;
+                    bool useCellClaim = spatialSlotIdx >= 0;
+                    int computedCellKey = -1;
+                    if (useCellClaim)
+                    {
+                        int spatialSrcChunkId = entry.Loc[spatialSlotIdx];
+                        if (spatialSrcChunkId == 0)
+                        {
+                            throw new InvalidOperationException(
+                                $"Spatial archetype must provide its spatial component at spawn time (slot {spatialSlotIdx} is missing).");
+                        }
+                        ref var spatialSrcAccessor = ref ctx.ClusterSrcAccessors[spatialSlotIdx];
+                        byte* spatialSrcAddr = spatialSrcAccessor.GetChunkAddress(spatialSrcChunkId);
+                        byte* spatialFieldPtr = spatialSrcAddr + ctx.SpatialComponentOverheadCached + ctx.SpatialFieldOffsetCached;
+                        computedCellKey = ctx.SpatialGridCached.WorldToCellKeyFromSpatialField(spatialFieldPtr, ctx.SpatialFieldTypeCached);
+                    }
+
                     if (ctx.ClusterState.ClusterSegment != null)
                     {
                         // Mixed or pure-SV/V: PersistentStore is primary
-                        (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterAccessor, _changeSet);
+                        if (useCellClaim)
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlotInCell(computedCellKey, ref ctx.ClusterAccessor, _changeSet, ctx.SpatialGridCached);
+                        }
+                        else
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterAccessor, _changeSet);
+                        }
                         clusterBase = ctx.ClusterAccessor.GetChunkAddress(clusterChunkId, true);
                         if (ctx.HasClusterTransientAccessor)
                         {
@@ -1273,7 +1311,14 @@ public unsafe partial class Transaction
                     else
                     {
                         // Pure-Transient: TransientStore is primary
-                        (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterTransientAccessor);
+                        if (useCellClaim)
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlotInCell(computedCellKey, ref ctx.ClusterTransientAccessor, ctx.SpatialGridCached);
+                        }
+                        else
+                        {
+                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlot(ref ctx.ClusterTransientAccessor);
+                        }
                         clusterBase = ctx.ClusterTransientAccessor.GetChunkAddress(clusterChunkId, true);
                     }
 
@@ -1365,7 +1410,15 @@ public unsafe partial class Transaction
                             {
                                 ref var field = ref ixSlot.Fields[fi];
                                 byte* fieldPtr = compBase + field.FieldOffset;
-                                field.Index.Add(fieldPtr, clusterLocation, ref ctx.ClusterIdxAccessor);
+                                int elementId = field.Index.Add(fieldPtr, clusterLocation, ref ctx.ClusterIdxAccessor);
+                                // For AllowMultiple fields, record elementId in the cluster tail so destroy/migration can call RemoveValue(key,
+                                // elementId, value) — removes only this entity's entry, not the entire buffer at the key (which would wipe all siblings on
+                                // a non-unique index).
+                                // Issue #229 Phase 3.
+                                if (field.AllowMultiple)
+                                {
+                                    *(int*)(clusterBase + layout.IndexElementIdOffset(field.MultiFieldIndex, slotIdx)) = elementId;
+                                }
                                 field.ZoneMap?.Widen(clusterChunkId, fieldPtr);
 
                                 // Notify views of creation (isCreation flag so incremental views detect the new entity)
@@ -1387,20 +1440,72 @@ public unsafe partial class Transaction
                         }
                     }
 
-                    // Insert per-archetype spatial R-Tree entry for cluster entity
-                    if (ctx.ClusterState.SpatialSlot.Tree != null)
+                    // Maintain the per-cell cluster AABB index for cluster spatial archetypes (issue #230 Phase 3 Option B).
+                    // The legacy per-archetype R-Tree + back-pointer insert is gone — the per-cell index is now the single source of truth. Populates
+                    // both DynamicIndex and StaticIndex depending on the archetype's SpatialMode (see AddClusterToPerCellIndex for the split).
+                    if (ctx.ClusterState.SpatialSlot.HasSpatialIndex)
                     {
-                        int clusterLocation = clusterChunkId * 64 + slotIdx;
                         ref var ss = ref ctx.ClusterState.SpatialSlot;
                         int spatialCompSize = layout.ComponentSize(ss.Slot);
                         byte* spatialFieldPtr = clusterBase + layout.ComponentOffset(ss.Slot) + slotIdx * spatialCompSize + ss.FieldOffset;
 
-                        // Zero back-pointer before insert (same safety pattern as legacy path)
-                        SpatialBackPointerHelper.Clear(ref ctx.ClusterSpatialBpAccessor, clusterLocation);
+                        if (ctx.ClusterState.ClusterCellMap != null)
+                        {
+                            if (SpatialMaintainer.ReadAndValidateBoundsFromPtr(spatialFieldPtr, ss.FieldInfo, spawnSpatialCoords, ss.Descriptor))
+                            {
+                                ctx.ClusterState.EnsureClusterAabbsCapacity(clusterChunkId + 1);
+                                ctx.ClusterState.EnsureClusterSpatialIndexSlotCapacity(clusterChunkId + 1);
 
-                        SpatialMaintainer.InsertSpatialCluster(
-                            (long)entry.Id.RawValue, clusterLocation, spatialFieldPtr,
-                            ref ss, ref ctx.ClusterSpatialTreeAccessor, ref ctx.ClusterSpatialBpAccessor, _changeSet);
+                                bool wasInIndex = ctx.ClusterState.ClusterSpatialIndexSlot[clusterChunkId] >= 0;
+                                ref var clusterAabb = ref ctx.ClusterState.ClusterAabbs[clusterChunkId];
+                                if (!wasInIndex)
+                                {
+                                    // First entity of (possibly reused) cluster — reset to Empty to drop any
+                                    // stale AABB left over from a prior life of this chunk id.
+                                    clusterAabb = ClusterSpatialAabb.Empty;
+                                }
+                                // Tier-dispatched union: 2D fields wrote [minX, minY, maxX, maxY] into the first 4 slots; 3D fields wrote the full
+                                // [minX, minY, minZ, maxX, maxY, maxZ] layout. Prior to issue #230 Phase 3 this site was hardcoded to the 2D layout
+                                // regardless of tier — a latent bug that was masked because 3D archetypes only reach this hook when ConfigureSpatialGrid
+                                // was called, and the trigger/interest tests (the only 3D cluster callers) didn't call it.
+                                // Category mask comes from the archetype-level [SpatialIndex(Category=)] attribute (issue #230 Phase 3). It's the same value
+                                // for every entity in the archetype, so the cluster-level OR trivially converges to the archetype value. Defaults to
+                                // uint.MaxValue when the attribute doesn't set Category, matching pre-Phase-3 behavior.
+                                uint archetypeCategory = ss.FieldInfo.Category;
+                                if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
+                                {
+                                    clusterAabb.Union3F(
+                                        (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1], (float)spawnSpatialCoords[2],
+                                        (float)spawnSpatialCoords[3], (float)spawnSpatialCoords[4], (float)spawnSpatialCoords[5],
+                                        archetypeCategory);
+                                }
+                                else
+                                {
+                                    clusterAabb.Union2F(
+                                        (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1],
+                                        (float)spawnSpatialCoords[2], (float)spawnSpatialCoords[3],
+                                        archetypeCategory);
+                                }
+
+                                int cellKey = ctx.ClusterState.ClusterCellMap[clusterChunkId];
+                                if (cellKey >= 0)
+                                {
+                                    if (!wasInIndex)
+                                    {
+                                        ctx.ClusterState.AddClusterToPerCellIndex(clusterChunkId, cellKey, clusterAabb);
+                                    }
+                                    else
+                                    {
+                                        int indexSlot = ctx.ClusterState.ClusterSpatialIndexSlot[clusterChunkId];
+                                        // Issue #230 Phase 3: route the UpdateAt to the correct sub-index based on archetype mode (Static → StaticIndex,
+                                        // Dynamic → DynamicIndex). Same split used by AddClusterToPerCellIndex.
+                                        var perCellSlot = ctx.ClusterState.PerCellIndex[cellKey];
+                                        var targetIndex = ss.FieldInfo.Mode == SpatialMode.Static ? perCellSlot.StaticIndex : perCellSlot.DynamicIndex;
+                                        targetIndex.UpdateAt(indexSlot, in clusterAabb);
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Insert Transient indexed fields into per-ComponentTable TransientIndex.
@@ -1640,12 +1745,6 @@ public unsafe partial class Transaction
             ctx.ClusterIdxAccessor.Dispose();
             ctx.HasClusterIdxAccessor = false;
         }
-        if (ctx.HasClusterSpatialAccessors)
-        {
-            ctx.ClusterSpatialTreeAccessor.Dispose();
-            ctx.ClusterSpatialBpAccessor.Dispose();
-            ctx.HasClusterSpatialAccessors = false;
-        }
         for (int si = 0; si < ctx.SvSlotCount; si++)
         {
             ctx.SvCompAccessors[si].Dispose();
@@ -1695,7 +1794,7 @@ public unsafe partial class Transaction
             ctx.ClusterState = ctx.EngineState.ClusterState;
 
             // PersistentStore cluster accessor (null for pure-Transient)
-            if (ctx.ClusterState.ClusterSegment != null)
+            if (ctx.ClusterState?.ClusterSegment != null)
             {
                 ctx.ClusterAccessor = ctx.ClusterState.ClusterSegment.CreateChunkAccessor(_changeSet);
                 ctx.HasClusterAccessor = true;
@@ -1743,13 +1842,26 @@ public unsafe partial class Transaction
                 ctx.HasClusterIdxAccessor = true;
             }
 
-            // Per-archetype spatial accessors for cluster R-Tree insertion
-            if (ctx.ClusterState.SpatialSlot.Tree != null)
+            // Issue #229 Phase 1+2: cache spatial-cell routing info once per archetype. The hot spawn path reads SpatialSlotIndexCached once per entity to
+            // decide between ClaimSlot and ClaimSlotInCell — no per-entity pointer chasing through EngineState → table → overhead.
+            ctx.SpatialGridCached = _dbe.SpatialGrid;
+            if (ctx.SpatialGridCached != null && ctx.ClusterState.SpatialSlot.HasSpatialIndex)
             {
-                ctx.ClusterSpatialTreeAccessor = ctx.ClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
-                ctx.ClusterSpatialBpAccessor = ctx.ClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
-                ctx.HasClusterSpatialAccessors = true;
+                ref readonly var ss = ref ctx.ClusterState.SpatialSlot;
+                ctx.SpatialSlotIndexCached = ss.Slot;
+                ctx.SpatialComponentOverheadCached = ctx.EngineState.SlotToComponentTable[ss.Slot].ComponentOverhead;
+                ctx.SpatialFieldOffsetCached = ss.FieldOffset;
+                ctx.SpatialFieldTypeCached = ss.FieldInfo.FieldType;
             }
+            else
+            {
+                ctx.SpatialSlotIndexCached = -1;
+            }
+        }
+        else
+        {
+            ctx.SpatialSlotIndexCached = -1;
+            ctx.SpatialGridCached = null;
         }
 
         // Build SV indexed slot accessors for this archetype (Transient handled separately below).
@@ -1932,27 +2044,8 @@ public unsafe partial class Transaction
                 state.BackPointerSegment.EnsureCapacity(compCapNeeded, _changeSet);
             }
 
-            // Pre-grow per-archetype cluster spatial segments
-            if (es.ClusterState?.SpatialSlot.Tree != null)
-            {
-                var cs = es.ClusterState;
-                {
-                    ref var ss = ref cs.SpatialSlot;
-                    int leafCapacity = ss.Descriptor.LeafCapacity;
-                    int estimatedLeaves = (spawnCount + leafCapacity - 1) / leafCapacity;
-                    int estimatedTotal = ss.Tree.EntityCount > 0
-                        ? (int)((ss.Tree.EntityCount + spawnCount) / (leafCapacity * 0.7)) + 10
-                        : (int)(estimatedLeaves * 1.3) + 10;
-                    ss.Tree.Segment.EnsureCapacity(estimatedTotal, _changeSet);
-
-                    // BP segment keyed by ClusterLocation = clusterChunkId * 64 + slotIndex
-                    // Estimate max ClusterLocation after spawns
-                    int currentMaxClusterLoc = cs.ClusterSegment.ChunkCapacity * 64;
-                    int additionalClusters = (spawnCount + cs.Layout.ClusterSize - 1) / cs.Layout.ClusterSize;
-                    int estimatedMaxClusterLoc = currentMaxClusterLoc + additionalClusters * 64 + 64;
-                    ss.BackPointerSegment.EnsureCapacity(estimatedMaxClusterLoc, _changeSet);
-                }
-            }
+            // Issue #230 Phase 3 Option B: the per-archetype R-Tree + back-pointer segment pre-grow is gone (those segments no longer exist). The per-cell
+            // cluster index is grown lazily on first cluster insert into a cell (AddClusterToPerCellIndex), so there's nothing to pre-size here.
 
             break; // All entries in a single spawn batch share the same archetype — one pass suffices
         }
@@ -1984,9 +2077,6 @@ public unsafe partial class Transaction
         ArchetypeClusterState destroyClusterState = null;
         var destroyClusterIdxAccessor = default(ChunkAccessor<PersistentStore>);
         bool hasDestroyClusterIdxAccessor = false;
-        var destroyClusterSpatialTreeAccessor = default(ChunkAccessor<PersistentStore>);
-        var destroyClusterSpatialBpAccessor = default(ChunkAccessor<PersistentStore>);
-        bool hasDestroyClusterSpatialAccessors = false;
 
         try
         {
@@ -2023,12 +2113,6 @@ public unsafe partial class Transaction
                             destroyClusterIdxAccessor.Dispose();
                             hasDestroyClusterIdxAccessor = false;
                         }
-                        if (hasDestroyClusterSpatialAccessors)
-                        {
-                            destroyClusterSpatialTreeAccessor.Dispose();
-                            destroyClusterSpatialBpAccessor.Dispose();
-                            hasDestroyClusterSpatialAccessors = false;
-                        }
                     }
                     accessor = engineState.EntityMap.Segment.CreateChunkAccessor(_changeSet);
                     lastArchId = entityId.ArchetypeId;
@@ -2053,12 +2137,6 @@ public unsafe partial class Transaction
                         {
                             destroyClusterIdxAccessor = destroyClusterState.IndexSegment.CreateChunkAccessor(_changeSet);
                             hasDestroyClusterIdxAccessor = true;
-                        }
-                        if (destroyClusterState.SpatialSlot.Tree != null)
-                        {
-                            destroyClusterSpatialTreeAccessor = destroyClusterState.SpatialSlot.Tree.Segment.CreateChunkAccessor(_changeSet);
-                            destroyClusterSpatialBpAccessor = destroyClusterState.SpatialSlot.BackPointerSegment.CreateChunkAccessor(_changeSet);
-                            hasDestroyClusterSpatialAccessors = true;
                         }
                     }
                 }
@@ -2091,12 +2169,25 @@ public unsafe partial class Transaction
                                     ref var ixSlot = ref ixSlots[s];
                                     int compSize = layout.ComponentSize(ixSlot.Slot);
                                     byte* compBase = clusterBase + layout.ComponentOffset(ixSlot.Slot) + slotIndex * compSize;
+                                    int destroyClusterLocation = clusterChunkId * 64 + slotIndex;
                                     for (int fi = 0; fi < ixSlot.Fields.Length; fi++)
                                     {
                                         ref var field = ref ixSlot.Fields[fi];
                                         byte* fieldPtr = compBase + field.FieldOffset;
                                         var key = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
-                                        field.Index.Remove(&key, out _, ref destroyClusterIdxAccessor);
+                                        // Non-unique index: read the per-entity elementId from the cluster tail and call RemoveValue so only this entity's
+                                        // specific (key, clusterLocation) entry is removed — Remove(key) would wipe the entire buffer at the key and corrupt
+                                        // sibling entities sharing the same field value. Issue #229 Phase 3.
+                                        // Regression test: ClusterIndex_NonUniqueField_DestroyOneEntity_PreservesSiblingsInIndex.
+                                        if (field.AllowMultiple)
+                                        {
+                                            int elementId = *(int*)(clusterBase + layout.IndexElementIdOffset(field.MultiFieldIndex, slotIndex));
+                                            field.Index.RemoveValue(&key, elementId, destroyClusterLocation, ref destroyClusterIdxAccessor);
+                                        }
+                                        else
+                                        {
+                                            field.Index.Remove(&key, out _, ref destroyClusterIdxAccessor);
+                                        }
 
                                         // Notify views of deletion
                                         var destroyTable = engineState.SlotToComponentTable[ixSlot.Slot];
@@ -2118,24 +2209,15 @@ public unsafe partial class Transaction
                             // else: shadow processing at tick fence will handle removal
                         }
 
-                        // Remove per-archetype spatial R-Tree entry before releasing the slot.
-                        // Spatial doesn't need shadow logic — back-pointer provides O(1) leaf lookup.
-                        if (destroyClusterState.SpatialSlot.Tree != null)
-                        {
-                            int clusterLocation = clusterChunkId * 64 + slotIndex;
-                            SpatialMaintainer.RemoveFromSpatialCluster(
-                                (long)entityId.RawValue, clusterLocation,
-                                ref destroyClusterState.SpatialSlot,
-                                ref destroyClusterSpatialTreeAccessor, ref destroyClusterSpatialBpAccessor, _changeSet);
-                        }
-
+                        // Issue #230 Phase 3 Option B: the per-archetype R-Tree remove call is gone; ReleaseSlot below handles per-cell index cleanup
+                        // via FinaliseEmptyClusterCellState when the source cluster becomes empty.
                         if (hasClusterAccessor)
                         {
-                            destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet);
+                            destroyClusterState.ReleaseSlot(ref clusterAccessor, clusterChunkId, slotIndex, _changeSet, _dbe.SpatialGrid);
                         }
                         else if (hasDestroyTransientClusterAccessor)
                         {
-                            destroyClusterState.ReleaseSlot(ref destroyTransientClusterAccessor, clusterChunkId, slotIndex);
+                            destroyClusterState.ReleaseSlot(ref destroyTransientClusterAccessor, clusterChunkId, slotIndex, _dbe.SpatialGrid);
                         }
                     }
 
@@ -2165,11 +2247,6 @@ public unsafe partial class Transaction
             if (hasDestroyClusterIdxAccessor)
             {
                 destroyClusterIdxAccessor.Dispose();
-            }
-            if (hasDestroyClusterSpatialAccessors)
-            {
-                destroyClusterSpatialTreeAccessor.Dispose();
-                destroyClusterSpatialBpAccessor.Dispose();
             }
         }
     }
