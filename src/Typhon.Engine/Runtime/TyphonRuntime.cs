@@ -248,7 +248,8 @@ public sealed class TyphonRuntime : IDisposable
                 Transaction = tx,
                 CreateSideTransaction = _createSideTxDelegate,
                 Entities = PooledEntityList.Empty,
-                TierBudgetMetrics = _previousTickMetrics
+                TierBudgetMetrics = _previousTickMetrics,
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
             };
             OnShutdown.Invoke(ctx);
             tx.Commit();
@@ -1383,7 +1384,8 @@ public sealed class TyphonRuntime : IDisposable
             StartClusterIndex = clusterStart,
             EndClusterIndex = clusterEnd,
             ClusterIds = clusterIdArray,
-            TierBudgetMetrics = _previousTickMetrics
+            TierBudgetMetrics = _previousTickMetrics,
+            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
         };
 
         Scheduler.Systems[sysIdx].CallbackAction(ctx);
@@ -1535,7 +1537,8 @@ public sealed class TyphonRuntime : IDisposable
                 StartClusterIndex = clusterStart,
                 EndClusterIndex = clusterEnd,
                 ClusterIds = clusterIdArray,
-                TierBudgetMetrics = _previousTickMetrics
+                TierBudgetMetrics = _previousTickMetrics,
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
             };
 
             Scheduler.Systems[sysIdx].CallbackAction(ctx);
@@ -1622,7 +1625,8 @@ public sealed class TyphonRuntime : IDisposable
                 Transaction = tx,
                 CreateSideTransaction = _createSideTxDelegate,
                 Entities = PooledEntityList.Empty,
-                TierBudgetMetrics = _previousTickMetrics
+                TierBudgetMetrics = _previousTickMetrics,
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
             };
 
             try
@@ -1765,7 +1769,7 @@ public sealed class TyphonRuntime : IDisposable
             {
                 continue; // Defensive: skip systems with unset or corrupted timestamps
             }
-            float costMs = (float)((double)durationTicks / System.Diagnostics.Stopwatch.Frequency * 1000.0);
+            float costMs = (float)((double)durationTicks / Stopwatch.Frequency * 1000.0);
             metrics.TotalCostMs += costMs;
 
             var tier = Scheduler.Systems[i].TierFilter;
@@ -1836,7 +1840,8 @@ public sealed class TyphonRuntime : IDisposable
             CreateSideTransaction = _createSideTxDelegate,
             Entities = entities,
             ConsumedQueues = _systemConsumedQueues[sysIdx],
-            TierBudgetMetrics = _previousTickMetrics
+            TierBudgetMetrics = _previousTickMetrics,
+            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
         };
     }
 

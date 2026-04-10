@@ -110,4 +110,11 @@ public struct TickContext
     /// <see cref="CallbackSystem"/> for adaptive tier boundary adjustment. Zero on the first tick (no previous-tick data).
     /// </summary>
     public TierBudgetMetrics TierBudgetMetrics { get; init; }
+
+    /// <summary>
+    /// Game-facing accessor for the engine's spatial grid (issue #232). Provides cell tier assignment, coordinate conversion, and multi-observer
+    /// helpers (<see cref="SpatialGridAccessor.SetCellTierMin"/>, <see cref="SpatialGridAccessor.ResetAllTiers"/>,
+    /// <see cref="SpatialGridAccessor.SetTierInAABB"/>). Check <see cref="SpatialGridAccessor.IsValid"/> before use — false when no grid is configured.
+    /// </summary>
+    public SpatialGridAccessor SpatialGrid { get; init; }
 }

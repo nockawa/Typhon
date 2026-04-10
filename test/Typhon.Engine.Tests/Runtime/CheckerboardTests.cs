@@ -462,4 +462,108 @@ class CheckerboardTests : TestBase<CheckerboardTests>
         // Newly covered cells: Tier1 (was Tier3, Tier1 < Tier3)
         Assert.That(grid.GetCell(grid.WorldToCellKey(45f, 45f)).Tier, Is.EqualTo((byte)SimTier.Tier1));
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SpatialGridAccessor (issue #232)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void SpatialGridAccessor_AccessibleFromTickContext()
+    {
+        using var dbe = SetupEngineWithGrid();
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            tx.Spawn<TierUnit>(TierUnit.Pos.Set(PointAt(5f, 5f)));
+            tx.Commit();
+        }
+
+        using var txView = dbe.CreateQuickTransaction();
+        var view = txView.Query<TierUnit>().ToView();
+
+        SpatialGridAccessor captured = default;
+        var ticksDone = 0;
+        using var runtime = TyphonRuntime.Create(dbe, schedule =>
+        {
+            schedule.CallbackSystem("GridAccess", ctx =>
+            {
+                if (Interlocked.Increment(ref ticksDone) == 1)
+                {
+                    captured = ctx.SpatialGrid;
+
+                    // Basic operations via the accessor API
+                    Assert.That(ctx.SpatialGrid.IsValid, Is.True);
+                    Assert.That(ctx.SpatialGrid.CellCount, Is.GreaterThan(0));
+                    Assert.That(ctx.SpatialGrid.GridWidth, Is.EqualTo(10));
+                    Assert.That(ctx.SpatialGrid.GridHeight, Is.EqualTo(10));
+                    Assert.That(ctx.SpatialGrid.CellSize, Is.EqualTo(10f));
+
+                    // Coordinate conversion
+                    int cellKey = ctx.SpatialGrid.WorldToCell(5f, 5f);
+                    var (cx, cy) = ctx.SpatialGrid.GetCellCoords(cellKey);
+                    Assert.That(cx, Is.EqualTo(0));
+                    Assert.That(cy, Is.EqualTo(0));
+
+                    // Tier assignment via accessor
+                    ctx.SpatialGrid.SetCellTier(0, 0, SimTier.Tier0);
+                    ctx.SpatialGrid.SetCellTier(1, 0, SimTier.Tier1);
+                }
+            });
+        }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
+
+        runtime.Start();
+        SpinWait.SpinUntil(() => ticksDone >= 1, TimeSpan.FromSeconds(5));
+        runtime.Shutdown();
+
+        Assert.That(captured.IsValid, Is.True);
+        // Verify the tier assignments stuck
+        Assert.That(dbe.SpatialGrid.GetCell(dbe.SpatialGrid.WorldToCellKey(5f, 5f)).Tier, Is.EqualTo((byte)SimTier.Tier0));
+        Assert.That(dbe.SpatialGrid.GetCell(dbe.SpatialGrid.WorldToCellKey(15f, 5f)).Tier, Is.EqualTo((byte)SimTier.Tier1));
+        view.Dispose();
+    }
+
+    [Test]
+    public void SpatialGridAccessor_MultiObserver_Union()
+    {
+        using var dbe = SetupEngineWithGrid();
+
+        using var txView = dbe.CreateQuickTransaction();
+        var view = txView.Query<TierUnit>().ToView();
+
+        var ticksDone = 0;
+        using var runtime = TyphonRuntime.Create(dbe, schedule =>
+        {
+            schedule.CallbackSystem("TierAssignment", ctx =>
+            {
+                if (Interlocked.Increment(ref ticksDone) == 1)
+                {
+                    var grid = ctx.SpatialGrid;
+
+                    // Multi-observer pattern: reset → per-observer SetTierInAABB
+                    grid.ResetAllTiers(SimTier.Tier3);
+
+                    // Observer A: Tier0 for area (0,0)→(30,30) → cells (0,0)-(2,2)
+                    grid.SetTierInAABB(0f, 0f, 30f, 30f, SimTier.Tier0);
+
+                    // Observer B: Tier1 for area (20,20)→(60,60) → cells (2,2)-(5,5)
+                    // Cell (2,2) overlaps both: min(Tier0=1, Tier1=2) = Tier0
+                    grid.SetTierInAABB(20f, 20f, 60f, 60f, SimTier.Tier1);
+                }
+            });
+        }, new RuntimeOptions { WorkerCount = 1, BaseTickRate = 1000 });
+
+        runtime.Start();
+        SpinWait.SpinUntil(() => ticksDone >= 1, TimeSpan.FromSeconds(5));
+        runtime.Shutdown();
+
+        // Cell (0,0): Observer A only → Tier0
+        Assert.That(dbe.SpatialGrid.GetCell(dbe.SpatialGrid.WorldToCellKey(5f, 5f)).Tier, Is.EqualTo((byte)SimTier.Tier0));
+        // Cell (2,2): Both observers → min(Tier0, Tier1) = Tier0
+        Assert.That(dbe.SpatialGrid.GetCell(dbe.SpatialGrid.WorldToCellKey(25f, 25f)).Tier, Is.EqualTo((byte)SimTier.Tier0));
+        // Cell (4,4): Observer B only → Tier1
+        Assert.That(dbe.SpatialGrid.GetCell(dbe.SpatialGrid.WorldToCellKey(45f, 45f)).Tier, Is.EqualTo((byte)SimTier.Tier1));
+        // Cell (8,8): Neither observer → Tier3
+        Assert.That(dbe.SpatialGrid.GetCell(dbe.SpatialGrid.WorldToCellKey(85f, 85f)).Tier, Is.EqualTo((byte)SimTier.Tier3));
+        view.Dispose();
+    }
 }
