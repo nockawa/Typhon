@@ -155,7 +155,11 @@ internal sealed class CellClusterPool
         int newSize = _pool.Length;
         while (newSize < required)
         {
-            newSize *= 2;
+            newSize = (int)Math.Min((long)newSize * 2, int.MaxValue);
+            if (newSize == int.MaxValue && newSize < required)
+            {
+                throw new OutOfMemoryException($"CellClusterPool capacity ({required}) exceeds int.MaxValue.");
+            }
         }
         Array.Resize(ref _pool, newSize);
     }

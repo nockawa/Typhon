@@ -323,11 +323,19 @@ internal sealed unsafe class SpatialGrid
     internal void ResetAllTiers(SimTier tier)
     {
         byte val = (byte)tier;
+        bool changed = false;
         for (int i = 0; i < _cells.Length; i++)
         {
-            _cells[i].Tier = val;
+            if (_cells[i].Tier != val)
+            {
+                _cells[i].Tier = val;
+                changed = true;
+            }
         }
-        _tierVersion++;
+        if (changed)
+        {
+            _tierVersion++;
+        }
     }
 
     /// <summary>

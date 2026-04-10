@@ -213,4 +213,183 @@ class SpatialGridTests
         var cfg = new SpatialGridConfig(new Vector2(0, 0), new Vector2(32_768, 32_768), cellSize: 1f);
         Assert.That(cfg.KeySpaceDim, Is.EqualTo(32_768));
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // SetCellTier (strict)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void SetCellTier_SingleBitTier_IsReadableViaGetCell()
+    {
+        var grid = new SpatialGrid(Config100);
+        int key = grid.ComputeCellKey(3, 4);
+
+        grid.SetCellTier(key, SimTier.Tier0);
+        Assert.That(grid.GetCell(key).Tier, Is.EqualTo((byte)SimTier.Tier0));
+
+        grid.SetCellTier(key, SimTier.Tier2);
+        Assert.That(grid.GetCell(key).Tier, Is.EqualTo((byte)SimTier.Tier2));
+    }
+
+    [Test]
+    public void SetCellTier_SameValue_DoesNotBumpTierVersion()
+    {
+        var grid = new SpatialGrid(Config100);
+        int key = grid.ComputeCellKey(5, 5);
+
+        grid.SetCellTier(key, SimTier.Tier1);
+        int versionAfterFirst = grid.TierVersion;
+
+        grid.SetCellTier(key, SimTier.Tier1);
+        Assert.That(grid.TierVersion, Is.EqualTo(versionAfterFirst));
+    }
+
+    [Test]
+    public void SetCellTier_DifferentValue_BumpsTierVersion()
+    {
+        var grid = new SpatialGrid(Config100);
+        int key = grid.ComputeCellKey(2, 7);
+
+        grid.SetCellTier(key, SimTier.Tier0);
+        int versionAfterFirst = grid.TierVersion;
+
+        grid.SetCellTier(key, SimTier.Tier3);
+        Assert.That(grid.TierVersion, Is.EqualTo(versionAfterFirst + 1));
+    }
+
+    [Test]
+    public void SetCellTier_BoundaryCells_FirstAndLast()
+    {
+        var grid = new SpatialGrid(Config100);
+
+        // First cell: (0, 0)
+        int firstKey = grid.ComputeCellKey(0, 0);
+        grid.SetCellTier(firstKey, SimTier.Tier0);
+        Assert.That(grid.GetCell(firstKey).Tier, Is.EqualTo((byte)SimTier.Tier0));
+
+        // Last valid cell: (9, 9) — the grid is 10×10 in world cells
+        int lastKey = grid.ComputeCellKey(9, 9);
+        grid.SetCellTier(lastKey, SimTier.Tier3);
+        Assert.That(grid.GetCell(lastKey).Tier, Is.EqualTo((byte)SimTier.Tier3));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // WorldToCellRange tests
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void WorldToCellRange_FullyInsideOneCell_Returns1x1Range()
+    {
+        var grid = new SpatialGrid(Config100);
+        // AABB sitting entirely within cell (3, 5): world X [310,390], Y [510,590]
+        grid.WorldToCellRange(310f, 510f, 390f, 590f,
+            out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY);
+
+        Assert.That(cellMinX, Is.EqualTo(3));
+        Assert.That(cellMinY, Is.EqualTo(5));
+        Assert.That(cellMaxX, Is.EqualTo(3));
+        Assert.That(cellMaxY, Is.EqualTo(5));
+    }
+
+    [Test]
+    public void WorldToCellRange_SpanningMultipleCells_ReturnsCorrectRange()
+    {
+        var grid = new SpatialGrid(Config100);
+        // AABB from world (150,250) to (450,650) → cells X [1,4], Y [2,6]
+        grid.WorldToCellRange(150f, 250f, 450f, 650f,
+            out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY);
+
+        Assert.That(cellMinX, Is.EqualTo(1));
+        Assert.That(cellMinY, Is.EqualTo(2));
+        Assert.That(cellMaxX, Is.EqualTo(4));
+        Assert.That(cellMaxY, Is.EqualTo(6));
+    }
+
+    [Test]
+    public void WorldToCellRange_PartiallyOutsideWorldBounds_ClampedToValidRange()
+    {
+        var grid = new SpatialGrid(Config100);
+        // AABB from (-200, -100) to (350, 250) — negative coords clamp to cell 0
+        grid.WorldToCellRange(-200f, -100f, 350f, 250f,
+            out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY);
+
+        Assert.That(cellMinX, Is.EqualTo(0));
+        Assert.That(cellMinY, Is.EqualTo(0));
+        Assert.That(cellMaxX, Is.EqualTo(3));
+        Assert.That(cellMaxY, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void WorldToCellRange_FullyOutsideWorldBounds_ReturnsClamped0WidthRange()
+    {
+        var grid = new SpatialGrid(Config100);
+
+        // Entirely below-left of world: both min and max clamp to cell (0,0)
+        grid.WorldToCellRange(-500f, -500f, -100f, -100f,
+            out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY);
+
+        Assert.That(cellMinX, Is.EqualTo(0));
+        Assert.That(cellMinY, Is.EqualTo(0));
+        Assert.That(cellMaxX, Is.EqualTo(0));
+        Assert.That(cellMaxY, Is.EqualTo(0));
+
+        // Entirely above-right of world: both min and max clamp to cell (9,9)
+        grid.WorldToCellRange(1500f, 1500f, 2000f, 2000f,
+            out cellMinX, out cellMinY, out cellMaxX, out cellMaxY);
+
+        Assert.That(cellMinX, Is.EqualTo(9));
+        Assert.That(cellMinY, Is.EqualTo(9));
+        Assert.That(cellMaxX, Is.EqualTo(9));
+        Assert.That(cellMaxY, Is.EqualTo(9));
+    }
+
+    [Test]
+    public void WorldToCellRange_ExactlyAlignedOnCellBoundaries_ReturnsCorrectRange()
+    {
+        var grid = new SpatialGrid(Config100);
+        // AABB from (200,300) to (500,600) — exact cell boundaries.
+        // Floor((200-0)*0.01)=2, Floor((300-0)*0.01)=3, Floor((500-0)*0.01)=5, Floor((600-0)*0.01)=6.
+        // Points exactly on a cell boundary (e.g. 500) land in the next cell via Floor.
+        grid.WorldToCellRange(200f, 300f, 500f, 600f,
+            out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY);
+
+        Assert.That(cellMinX, Is.EqualTo(2));
+        Assert.That(cellMinY, Is.EqualTo(3));
+        Assert.That(cellMaxX, Is.EqualTo(5));
+        Assert.That(cellMaxY, Is.EqualTo(6));
+    }
+
+    [Test]
+    public void WorldToCellRange_ExactlyOnMaxWorldEdge_ClampsToLastCell()
+    {
+        var grid = new SpatialGrid(Config100);
+        // maxX=1000 → Floor((1000-0)*0.01)=10, clamped to 9. Same for Y.
+        grid.WorldToCellRange(900f, 900f, 1000f, 1000f,
+            out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY);
+
+        Assert.That(cellMinX, Is.EqualTo(9));
+        Assert.That(cellMinY, Is.EqualTo(9));
+        Assert.That(cellMaxX, Is.EqualTo(9));
+        Assert.That(cellMaxY, Is.EqualTo(9));
+    }
+
+    [Test]
+    public void WorldToCellRange_NaN_Throws()
+    {
+        var grid = new SpatialGrid(Config100);
+        Assert.Throws<System.ArgumentException>(
+            () => grid.WorldToCellRange(float.NaN, 0f, 100f, 100f, out _, out _, out _, out _));
+        Assert.Throws<System.ArgumentException>(
+            () => grid.WorldToCellRange(0f, 0f, float.NaN, 100f, out _, out _, out _, out _));
+    }
+
+    [Test]
+    public void WorldToCellRange_Infinity_Throws()
+    {
+        var grid = new SpatialGrid(Config100);
+        Assert.Throws<System.ArgumentException>(
+            () => grid.WorldToCellRange(float.PositiveInfinity, 0f, 100f, 100f, out _, out _, out _, out _));
+        Assert.Throws<System.ArgumentException>(
+            () => grid.WorldToCellRange(0f, 0f, 100f, float.NegativeInfinity, out _, out _, out _, out _));
+    }
 }

@@ -25,6 +25,9 @@ internal static class DormancyReporter
     // systems complete.
     private static readonly ConcurrentBag<List<long>> s_allLists = new();
 
+    // Atomic flag for O(1) HasPendingRequests in the common case (no requests). Set by RequestWake, cleared by DrainAll.
+    private static volatile bool s_hasAnyRequest;
+
     /// <summary>
     /// Request that a sleeping cluster be woken. Safe to call from any thread during parallel system execution.
     /// The request is deferred — the cluster transitions to <see cref="ClusterSleepState.WakePending"/> at the next migration fence,
@@ -44,6 +47,7 @@ internal static class DormancyReporter
             }
         }
         t_wakeRequests.Add(((long)archetypeId << 32) | (uint)clusterChunkId);
+        s_hasAnyRequest = true;
     }
 
     /// <summary>
@@ -69,25 +73,13 @@ internal static class DormancyReporter
             }
             list.Clear();
         }
+        s_hasAnyRequest = false;
     }
 
     /// <summary>
-    /// Returns true if any thread-local list has pending wake requests. Cheap scan for the common case (no requests).
+    /// Returns true if any thread-local list has pending wake requests. O(1) via atomic flag in the common case (no requests).
     /// </summary>
-    internal static bool HasPendingRequests
-    {
-        get
-        {
-            foreach (var list in s_allLists)
-            {
-                if (list.Count > 0)
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
+    internal static bool HasPendingRequests => s_hasAnyRequest;
 
     /// <summary>
     /// Reset all thread-local lists. For test teardown only — ensures no stale state bleeds between tests.

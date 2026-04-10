@@ -32,7 +32,7 @@ internal sealed class TierClusterIndex
     private readonly int[] _tierClusterCounts = new int[TierExtensions.TierCount];
 
     // Multi-tier merge cache, keyed by the combined SimTier flag value (0..15). Lazily allocated on first multi-tier query.
-    // Counts are zeroed on rebuild; backing arrays survive across rebuilds and grow on demand.
+    // Counts use -1 as "not yet built" sentinel; 0 is a valid cached result meaning "empty". Backing arrays survive across rebuilds and grow on demand.
     private readonly int[][] _mergedCache = new int[16][];
     private readonly int[] _mergedCounts = new int[16];
 
@@ -56,61 +56,69 @@ internal sealed class TierClusterIndex
         Debug.Assert(Interlocked.CompareExchange(ref _rebuildInProgress, 1, 0) == 0,
             "TierClusterIndex.Rebuild called concurrently — this must run single-threaded from BuildTierIndexesAtTickStart.");
 
-        // Reset counts (but keep buffers).
-        for (int t = 0; t < TierExtensions.TierCount; t++)
+        try
         {
-            _tierClusterCounts[t] = 0;
+            // Reset counts (but keep buffers).
+            for (int t = 0; t < TierExtensions.TierCount; t++)
+            {
+                _tierClusterCounts[t] = 0;
+            }
+
+            // Invalidate the multi-tier merge cache. Counts set to -1 ("not built"); backing arrays are reused on next query.
+            Array.Fill(_mergedCounts, -1);
+
+            var cellMap = state.ClusterCellMap;
+            var activeIds = state.ActiveClusterIds;
+            int active = state.ActiveClusterCount;
+            for (int i = 0; i < active; i++)
+            {
+                int chunkId = activeIds[i];
+                if (cellMap == null || chunkId >= cellMap.Length)
+                {
+                    continue;
+                }
+                int cellKey = cellMap[chunkId];
+                if (cellKey < 0)
+                {
+                    continue;
+                }
+
+                byte tierByte = grid.GetCell(cellKey).Tier;
+                if (tierByte == 0)
+                {
+                    // Cell tier was never set (or was explicitly cleared via SetCellTier(SimTier.None)). Skip — game code
+                    // and tests using tier dispatch must set cell tiers explicitly.
+                    continue;
+                }
+
+                // tierByte is a SimTier flag value. SetCellTier enforces the single-bit invariant, so TZCNT maps directly
+                // to the array index.
+                Debug.Assert(BitOperations.PopCount((uint)tierByte) == 1,
+                    $"Cell tier byte has multiple bits set ({tierByte:X2}) — SetCellTier should enforce single-bit invariant.");
+                int tierIdx = BitOperations.TrailingZeroCount((uint)tierByte);
+                ref var buf = ref _tierClusters[tierIdx];
+                int cnt = _tierClusterCounts[tierIdx];
+                if (buf == null)
+                {
+                    // Lazy per-tier allocation: only pay for tiers that actually have clusters.
+                    buf = new int[16];
+                }
+                else if (cnt >= buf.Length)
+                {
+                    Array.Resize(ref buf, buf.Length * 2);
+                }
+                buf[cnt] = chunkId;
+                _tierClusterCounts[tierIdx] = cnt + 1;
+            }
+
+            _lastGridTierVersion = grid.TierVersion;
+            _lastClusterSetVersion = state.ClusterSetVersion;
+            RebuildCount++;
         }
-
-        // Invalidate the multi-tier merge cache. Counts are zeroed; backing arrays are reused on next query.
-        Array.Clear(_mergedCounts);
-
-        var cellMap = state.ClusterCellMap;
-        var activeIds = state.ActiveClusterIds;
-        int active = state.ActiveClusterCount;
-        for (int i = 0; i < active; i++)
+        finally
         {
-            int chunkId = activeIds[i];
-            if (cellMap == null || chunkId >= cellMap.Length)
-            {
-                continue;
-            }
-            int cellKey = cellMap[chunkId];
-            if (cellKey < 0)
-            {
-                continue;
-            }
-
-            byte tierByte = grid.GetCell(cellKey).Tier;
-            if (tierByte == 0)
-            {
-                // Cell tier was never set (or was explicitly cleared via SetCellTier(SimTier.None)). Skip — game code
-                // and tests using tier dispatch must set cell tiers explicitly.
-                continue;
-            }
-
-            // tierByte is a SimTier flag value. SetCellTier enforces the single-bit invariant, so TZCNT maps directly
-            // to the array index.
-            int tierIdx = BitOperations.TrailingZeroCount((uint)tierByte);
-            ref var buf = ref _tierClusters[tierIdx];
-            int cnt = _tierClusterCounts[tierIdx];
-            if (buf == null)
-            {
-                // Lazy per-tier allocation: only pay for tiers that actually have clusters.
-                buf = new int[16];
-            }
-            else if (cnt >= buf.Length)
-            {
-                Array.Resize(ref buf, buf.Length * 2);
-            }
-            buf[cnt] = chunkId;
-            _tierClusterCounts[tierIdx] = cnt + 1;
+            Interlocked.Exchange(ref _rebuildInProgress, 0);
         }
-
-        _lastGridTierVersion = grid.TierVersion;
-        _lastClusterSetVersion = state.ClusterSetVersion;
-        RebuildCount++;
-        Interlocked.Exchange(ref _rebuildInProgress, 0);
     }
 
     /// <summary>Rebuild only when the grid tier version or the archetype's cluster-set version has changed since the
@@ -150,7 +158,7 @@ internal sealed class TierClusterIndex
 
         // Multi-tier merge: ensure the cache entry is fresh, then return it.
         int key = (byte)tier;
-        if (_mergedCounts[key] == 0)
+        if (_mergedCounts[key] < 0)
         {
             BuildMergedEntry(tier, key);
         }
@@ -181,7 +189,8 @@ internal sealed class TierClusterIndex
 
         if (total == 0)
         {
-            // Mark cache hit by leaving count==0 and the cache slot null. GetClustersArray returns Array.Empty.
+            // Mark cache hit with count=0 (empty result). GetClustersArray returns Array.Empty.
+            _mergedCounts[key] = 0;
             return;
         }
 

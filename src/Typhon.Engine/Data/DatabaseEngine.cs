@@ -280,6 +280,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             throw new InvalidOperationException("ConfigureSpatialGrid must be called before InitializeArchetypes. The spatial grid has already been constructed.");
         }
+        if (_pendingGridConfig.HasValue)
+        {
+            throw new InvalidOperationException("ConfigureSpatialGrid was already called. Configuration cannot be changed after the first call.");
+        }
         _pendingGridConfig = config;
     }
 

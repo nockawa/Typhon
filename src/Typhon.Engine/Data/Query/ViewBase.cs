@@ -59,7 +59,17 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
 
     /// <summary>
     /// Set this view's tier filter to scope subsequent materializations to a subset of <see cref="SimTier"/> values.
-    /// Returns <c>this</c> to allow chaining: <c>tx.Query&lt;Ant&gt;().ToView().WithTier(SimTier.Tier0)</c>. Issue #231.
+    /// Returns <c>this</c> (as <typeparamref name="T"/>) to allow chaining: <c>tx.Query&lt;Ant&gt;().ToView().WithTier(SimTier.Tier0)</c>. Issue #231.
+    /// </summary>
+    public T WithTier<T>(SimTier tier) where T : ViewBase
+    {
+        TierFilter = tier;
+        return (T)this;
+    }
+
+    /// <summary>
+    /// Set this view's tier filter to scope subsequent materializations to a subset of <see cref="SimTier"/> values.
+    /// Non-generic overload. Returns <c>this</c> for chaining when the concrete type is not needed. Issue #231.
     /// </summary>
     public ViewBase WithTier(SimTier tier)
     {

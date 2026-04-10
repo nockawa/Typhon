@@ -331,7 +331,11 @@ internal sealed unsafe class SpatialInterestSystem
                     // Accumulate per-archetype dirty ring for tick range (reuse cached scratch).
                     if (_clusterAccumScratch == null || _clusterAccumScratch.Length < clMaxWords)
                     {
-                        _clusterAccumScratch = new long[clMaxWords];
+                        if (_clusterAccumScratch != null)
+                        {
+                            System.Buffers.ArrayPool<long>.Shared.Return(_clusterAccumScratch);
+                        }
+                        _clusterAccumScratch = System.Buffers.ArrayPool<long>.Shared.Rent(clMaxWords);
                     }
                     Array.Clear(_clusterAccumScratch, 0, clMaxWords);
                     int clAccumWords = ring.AccumulateDirty(startTick, endTick, _clusterAccumScratch);

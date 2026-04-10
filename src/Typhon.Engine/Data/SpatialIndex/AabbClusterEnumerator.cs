@@ -240,8 +240,8 @@ public unsafe ref struct AabbClusterEnumerator
                 int idx = _currentBroadphaseSlot++;
                 // Category filter. Convention matches the legacy SpatialRTree: a zero categoryMask means "no filter" (accept all). A non-zero categoryMask
                 // requires the cluster's union mask to intersect (any overlapping bit is enough). This is intentionally "any bit overlap" rather than the
-                // legacy tree's stricter "all bits present" — the broadphase wants to admit a cluster whenever *any* of its entities could match the query
-                // category, since the narrowphase will re-filter per-entity. Phase 1/2 pre-migration code had this same "any overlap" rule but failed to
+                // legacy tree's stricter "all bits present". Because category is per-archetype (all entities in a cluster share the same mask), the broadphase
+                // filter is exact — no per-entity narrowphase re-filter is needed. Phase 1/2 pre-migration code had this same "any overlap" rule but failed to
                 // special-case categoryMask=0 as "no filter"; Phase 3 restores the legacy-compatible zero semantic so callers that pass 0 (e.g. the default
                 // SpatialTriggerSystem CategoryMask) accept all clusters.
                 if (_categoryMask != 0)

@@ -1167,7 +1167,27 @@ public sealed class TyphonRuntime : IDisposable
                 metrics.EntitiesProcessed = 0;
                 return 0;
             }
-            int clusterSize = _systemClusterStates[sysIdx].Layout.ClusterSize;
+
+            var cs = _systemClusterStates[sysIdx];
+
+            // Pre-allocate per-worker tier range view array (single-threaded) to avoid racy lazy-init from worker threads.
+            if (_tierRangeViews[sysIdx] == null)
+            {
+                _tierRangeViews[sysIdx] = new ClusterRangeEntityView[Scheduler.WorkerCount];
+            }
+
+            // Pure-Transient fallback: materialize entity list here (single-threaded) to avoid the BUG where each worker would
+            // independently build and store a full list in _parallelEntityLists[sysIdx], leaking (WorkerCount-1) pooled lists per tick.
+            if (cs.ClusterSegment == null)
+            {
+                var sys = Scheduler.Systems[sysIdx];
+                var entityList = BuildTierScopedEntityList(cs, sys.TierFilter, view);
+                _parallelEntityLists[sysIdx] = entityList;
+                metrics.EntitiesProcessed = entityList.Count;
+                return entityList.Count == 0 ? 0 : ComputeChunkCount(entityList.Count);
+            }
+
+            int clusterSize = cs.Layout.ClusterSize;
             int approxEntityCount = tierClusterCount * clusterSize;
             metrics.EntitiesProcessed = approxEntityCount;
             return ComputeChunkCount(approxEntityCount);
@@ -1332,11 +1352,9 @@ public sealed class TyphonRuntime : IDisposable
             }
             else
             {
-                // Pure-Transient fallback: ClusterRangeEntityView requires a PersistentStore segment. Fall back to a materialized entity list via
-                // BuildTierScopedEntityList (which handles TransientSegment natively). Slightly less cache-friendly than ClusterRangeEntityView but
-                // correct and allocation-free after the first tick (PooledEntityList is pooled).
-                var entityList = BuildTierScopedEntityList(cs, sys.TierFilter, _systemViews[sysIdx]);
-                _parallelEntityLists[sysIdx] = entityList;
+                // Pure-Transient fallback: entity list was pre-materialized in PrepareFullNonVersioned (single-threaded) to avoid
+                // per-worker pool leak. Each worker slices the shared list by its chunk partition.
+                var entityList = _parallelEntityLists[sysIdx];
                 var totalEntities = entityList.Count;
                 var baseSize = totalEntities / totalChunks;
                 var remainder = totalEntities % totalChunks;

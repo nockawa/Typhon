@@ -185,8 +185,14 @@ internal sealed unsafe class ArchetypeClusterState
     internal ushort[] SleepCounters;
 
     /// <summary>Number of consecutive clean ticks before a cluster transitions to <see cref="ClusterSleepState.Sleeping"/>.
-    /// 0 = dormancy disabled (counters still increment but no transition). Default 0. Set by game code. Issue #233.</summary>
-    public int SleepThresholdTicks;
+    /// 0 = dormancy disabled (counters still increment but no transition). Default 0. Set by game code. Issue #233.
+    /// Clamped to [0, 65535] because <see cref="SleepCounters"/> uses <c>ushort</c> storage (~18 minutes at 60Hz).</summary>
+    private int _sleepThresholdTicks;
+    public int SleepThresholdTicks
+    {
+        get => _sleepThresholdTicks;
+        set => _sleepThresholdTicks = Math.Clamp(value, 0, ushort.MaxValue);
+    }
 
     /// <summary>When &gt; 0, sleeping clusters periodically wake on a staggered schedule: cluster wakes when
     /// <c>(tickNumber % HeartbeatIntervalTicks) == (chunkId % HeartbeatIntervalTicks)</c>. 0 = no heartbeat. Issue #233.</summary>
@@ -302,10 +308,10 @@ internal sealed unsafe class ArchetypeClusterState
 
         int targetCount = Math.Min(k, results.Length);
 
-        // Generous radius: grid diagonal. Covers the entire grid so no entity is excluded by the broadphase.
-        float worldWidth = grid.Config.WorldMax.X - grid.Config.WorldMin.X;
-        float worldHeight = grid.Config.WorldMax.Y - grid.Config.WorldMin.Y;
-        float maxRadius = MathF.Sqrt(worldWidth * worldWidth + worldHeight * worldHeight);
+        // Generous radius: use float.MaxValue so no entity is excluded by the broadphase. QueryRadius clamps the AABB to the
+        // grid's world bounds, so this won't allocate more cells than exist. Using float.MaxValue instead of the grid diagonal
+        // ensures 3D archetypes with entities far along the Z axis are also captured.
+        float maxRadius = float.MaxValue;
 
         var scratch = new System.Collections.Generic.List<(long entityId, float distSq)>(64);
         foreach (var hit in QueryRadius(grid, centerX, centerY, centerZ, maxRadius, categoryMask))

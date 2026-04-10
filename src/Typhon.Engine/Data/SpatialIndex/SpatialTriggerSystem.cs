@@ -51,6 +51,10 @@ internal sealed class RegionOccupantState
 
     /// <summary>Previous cluster occupants tracked by EntityId (separate from bitmap to avoid namespace collision).</summary>
     internal HashSet<long> PreviousClusterOccupants;
+
+    /// <summary>Scratch set for current-tick cluster occupants. Double-buffered with <see cref="PreviousClusterOccupants"/> to avoid
+    /// per-evaluation allocation. After the diff, the sets are swapped.</summary>
+    internal HashSet<long> ClusterOccupantsScratch;
 }
 
 /// <summary>
@@ -284,7 +288,12 @@ internal sealed unsafe class SpatialTriggerSystem
                     {
                         continue;
                     }
-                    clusterOccupants ??= new HashSet<long>();
+                    if (clusterOccupants == null)
+                    {
+                        // Double-buffer: reuse the scratch set from the previous evaluation cycle to avoid per-call HashSet allocation.
+                        clusterOccupants = occ.ClusterOccupantsScratch ?? new HashSet<long>();
+                        clusterOccupants.Clear();
+                    }
                     foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
                     {
                         clusterOccupants.Add(hit.EntityId);
@@ -400,6 +409,8 @@ internal sealed unsafe class SpatialTriggerSystem
                     }
                 }
             }
+            // Double-buffer swap: current becomes previous, old previous becomes scratch for next cycle.
+            occ.ClusterOccupantsScratch = occ.PreviousClusterOccupants;
             occ.PreviousClusterOccupants = clusterOccupants;
         }
 

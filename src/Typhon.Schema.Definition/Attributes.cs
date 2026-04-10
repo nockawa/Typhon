@@ -127,8 +127,9 @@ public sealed class SpatialIndexAttribute : Attribute
     /// recompute on destroy" invariants trivially satisfied: both are no-ops because the mask never changes.
     /// </para>
     /// <para>
-    /// <b>Query semantics.</b> A cluster is admitted to the query's narrowphase when <c>(clusterMask &amp; queryMask) != 0</c> — "any bit overlap".
-    /// A query mask of <c>0</c> means "no filter" (accept all). Typical usage: assign distinct bit positions to archetype roles (Ants = <c>1 &lt;&lt; 0</c>,
+    /// <b>Query semantics.</b> A cluster is admitted when <c>(clusterMask &amp; queryMask) != 0</c> — "any bit overlap".
+    /// A query mask of <c>0</c> is a special sentinel that bypasses category filtering entirely (accepts all clusters regardless of their mask).
+    /// Typical usage: assign distinct bit positions to archetype roles (Ants = <c>1 &lt;&lt; 0</c>,
     /// Food = <c>1 &lt;&lt; 1</c>, Enemies = <c>1 &lt;&lt; 2</c>) and query with the OR of the roles you want.
     /// </para>
     /// </remarks>
