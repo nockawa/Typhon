@@ -154,6 +154,22 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     internal CellClusterPool CellClusterPool;
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Issue #231: Tier dispatch state. The version counter is bumped whenever
+    // a cluster is added to or removed from the active list — the per-archetype
+    // TierClusterIndex reads it to skip rebuilds when the cluster set is stable.
+    // The index itself is allocated lazily on the first tier-filtered dispatch.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Monotonic counter, incremented by <see cref="AddToActiveList"/> and <see cref="RemoveFromActiveList"/>.
+    /// Consumed by <see cref="TierClusterIndex.RebuildIfStale"/> to short-circuit when no cluster has been added or removed since the last rebuild. Issue #231.
+    /// </summary>
+    public int ClusterSetVersion { get; private set; }
+
+    /// <summary>Lazily-allocated per-archetype tier index (issue #231). Built on demand by <c>TyphonRuntime.OnParallelQueryPrepare</c> the first time a
+    /// tier-filtered system runs against this archetype. Subsequent rebuilds are version-guarded and usually no-ops.</summary>
+    internal TierClusterIndex TierIndex;
+
     private ArchetypeClusterState() { }
 
     /// <summary>Chunk capacity of the primary (non-null) segment.</summary>
@@ -1291,6 +1307,8 @@ internal sealed unsafe class ArchetypeClusterState
             Array.Resize(ref ActiveClusterIds, ActiveClusterIds.Length * 2);
         }
         ActiveClusterIds[ActiveClusterCount++] = chunkId;
+        // Issue #231: any change to the active cluster set invalidates the tier index.
+        ClusterSetVersion++;
     }
 
     /// <summary>Remove a cluster chunk ID from the active list (swap-with-last, O(1)).</summary>
@@ -1309,6 +1327,8 @@ internal sealed unsafe class ArchetypeClusterState
                     FreeClusterHead = -1;
                 }
 
+                // Issue #231: any change to the active cluster set invalidates the tier index.
+                ClusterSetVersion++;
                 return;
             }
         }

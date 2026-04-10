@@ -278,6 +278,24 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
         return ClusterEnumerator<TArch>.CreateScoped(_clusterState, _archetype, _clusterState.ClusterSegment, _clusterState.TransientSegment, startIndex, endIndex);
     }
 
+    /// <summary>
+    /// Get a scoped enumerator over an explicit cluster-id source array (issue #231). Typical usage from a tier-filtered QuerySystem:
+    /// <code>
+    /// foreach (var cluster in ctx.Accessor.GetClusterEnumerator&lt;Ant&gt;(ctx.ClusterIds, ctx.StartClusterIndex, ctx.EndClusterIndex)) { ... }
+    /// </code>
+    /// When <paramref name="clusterIds"/> is the archetype's <c>ActiveClusterIds</c>, this overload is semantically equivalent
+    /// to <see cref="GetClusterEnumerator(int, int)"/>. When it is a per-tier cluster list, the enumerator iterates only the tier's clusters.
+    /// </summary>
+    public ClusterEnumerator<TArch> GetClusterEnumerator(int[] clusterIds, int startIndex, int endIndex)
+    {
+        if (!_hasClusterStorage)
+        {
+            throw new InvalidOperationException($"Archetype {typeof(TArch).Name} does not use cluster storage");
+        }
+        return ClusterEnumerator<TArch>.CreateScoped(
+            _clusterState, _archetype, _clusterState.ClusterSegment, _clusterState.TransientSegment, clusterIds, startIndex, endIndex);
+    }
+
     /// <summary>Release the cached EntityMap and cluster ChunkAccessors.</summary>
     public void Dispose()
     {

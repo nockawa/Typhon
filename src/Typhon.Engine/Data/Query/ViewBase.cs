@@ -46,6 +46,27 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     internal ViewDeltaRingBuffer DeltaBuffer { get; }
     ViewDeltaRingBuffer IView.DeltaBuffer => DeltaBuffer;
 
+    /// <summary>
+    /// Simulation-tier filter for materialization (issue #231). When set to anything other than <see cref="SimTier.All"/>, any system that materializes this
+    /// view's entity set scopes the iteration to clusters in cells whose tier matches. Most useful for published views (subscription scenarios) where the view
+    /// itself encodes tier scoping; for system dispatch the system-level <c>tier:</c> parameter is more direct.
+    /// </summary>
+    /// <remarks>
+    /// <para>The effective tier filter applied at materialization time is <c>system.TierFilter &amp; view.TierFilter</c> (bit-AND of the system filter and view
+    /// filter). When either is <see cref="SimTier.All"/>, that side is a no-op and the other wins; when both are set, only the intersection survives.</para>
+    /// </remarks>
+    internal SimTier TierFilter { get; private set; } = SimTier.All;
+
+    /// <summary>
+    /// Set this view's tier filter to scope subsequent materializations to a subset of <see cref="SimTier"/> values.
+    /// Returns <c>this</c> to allow chaining: <c>tx.Query&lt;Ant&gt;().ToView().WithTier(SimTier.Tier0)</c>. Issue #231.
+    /// </summary>
+    public ViewBase WithTier(SimTier tier)
+    {
+        TierFilter = tier;
+        return this;
+    }
+
     /// <summary>True if this View has been published for client subscriptions via <c>PublishView()</c>.</summary>
     public bool IsPublished { get; internal set; }
 

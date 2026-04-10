@@ -162,6 +162,9 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
     private ChunkAccessor<TransientStore> _transientAccessor;
     private bool _hasTransientAccessor;
     private bool _hasPersistentAccessor;
+    // Issue #231: source array for cluster chunk ids. Defaults to state.ActiveClusterIds but can point at a tier-filtered partition supplied
+    // by TickContext.ClusterIds when a system declares a tier filter.
+    private int[] _clusterIds;
     private int _index;
     private int _endIndex;
 
@@ -180,14 +183,15 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
             result._transientAccessor = transientSegment.CreateChunkAccessor();
             result._hasTransientAccessor = true;
         }
+        result._clusterIds = state.ActiveClusterIds;
         result._index = -1;
         result._endIndex = state.ActiveClusterCount;
         return result;
     }
 
     /// <summary>
-    /// Create a scoped enumerator that only iterates a range of active clusters.
-    /// Used by parallel dispatch to partition cluster work across workers.
+    /// Create a scoped enumerator that iterates a range of <see cref="ArchetypeClusterState.ActiveClusterIds"/>.
+    /// Used by non-tier-filtered parallel dispatch to partition cluster work across workers.
     /// </summary>
     [AllowCopy]
     internal static ClusterEnumerator<TArch> CreateScoped(ArchetypeClusterState state, ArchetypeMetadata meta,
@@ -205,6 +209,34 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
             result._transientAccessor = transientSegment.CreateChunkAccessor();
             result._hasTransientAccessor = true;
         }
+        result._clusterIds = state.ActiveClusterIds;
+        result._index = startIndex - 1;
+        result._endIndex = endIndex;
+        return result;
+    }
+
+    /// <summary>
+    /// Create a scoped enumerator over an explicit cluster-id source array (issue #231). The source is typically a per-tier cluster list returned
+    /// by <see cref="TierClusterIndex.GetClusters"/>. The range <c>[startIndex, endIndex)</c> indexes into <paramref name="clusterIds"/>, not
+    /// into <see cref="ArchetypeClusterState.ActiveClusterIds"/>.
+    /// </summary>
+    [AllowCopy]
+    internal static ClusterEnumerator<TArch> CreateScoped(ArchetypeClusterState state, ArchetypeMetadata meta, ChunkBasedSegment<PersistentStore> segment, 
+        ChunkBasedSegment<TransientStore> transientSegment, int[] clusterIds, int startIndex, int endIndex)
+    {
+        ArgumentNullException.ThrowIfNull(clusterIds);
+        var result = new ClusterEnumerator<TArch> { _state = state, _meta = meta };
+        if (segment != null)
+        {
+            result._accessor = segment.CreateChunkAccessor();
+            result._hasPersistentAccessor = true;
+        }
+        if (transientSegment != null)
+        {
+            result._transientAccessor = transientSegment.CreateChunkAccessor();
+            result._hasTransientAccessor = true;
+        }
+        result._clusterIds = clusterIds;
         result._index = startIndex - 1;
         result._endIndex = endIndex;
         return result;
@@ -220,7 +252,7 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            int chunkId = _state.ActiveClusterIds[_index];
+            int chunkId = _clusterIds[_index];
             // Primary base: PersistentStore for mixed/SV, TransientStore for pure-Transient
             byte* basePtr = _hasPersistentAccessor ? _accessor.GetChunkAddress(chunkId) : _transientAccessor.GetChunkAddress(chunkId);
             // TransientStore base for mixed archetypes (null for pure-SV/V and pure-Transient)

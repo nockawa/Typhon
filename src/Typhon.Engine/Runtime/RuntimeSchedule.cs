@@ -73,7 +73,8 @@ public sealed class RuntimeSchedule
     /// </summary>
     public RuntimeSchedule QuerySystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
-        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false, bool parallel = false, bool writesVersioned = false)
+        int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false, bool parallel = false, bool writesVersioned = false,
+        SimTier tier = SimTier.All, int cellAmortize = 0)
     {
         ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(name);
@@ -94,7 +95,9 @@ public sealed class RuntimeSchedule
             ThrottledTickDivisor = throttledTickDivisor,
             CanShed = canShed,
             Parallel = parallel,
-            WritesVersioned = writesVersioned
+            WritesVersioned = writesVersioned,
+            TierFilter = tier,
+            CellAmortize = cellAmortize
         });
         return this;
     }
@@ -188,7 +191,9 @@ public sealed class RuntimeSchedule
             InputFactory = builder._inputFactory,
             ChangeFilter = builder._changeFilter,
             Parallel = builder._parallel,
-            WritesVersioned = builder._writesVersioned
+            WritesVersioned = builder._writesVersioned,
+            TierFilter = builder._tierFilter,
+            CellAmortize = builder._cellAmortize
         });
         return this;
     }
@@ -359,6 +364,33 @@ public sealed class RuntimeSchedule
                 throw new InvalidOperationException(
                     $"System '{reg.Name}': WritesVersioned is only meaningful for parallel QuerySystems. Add b.Parallel() or parallel: true.");
             }
+
+            // Issue #231: tier filter + amortization validation.
+            if (reg.TierFilter == SimTier.None)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': tier: SimTier.None would dispatch zero clusters. Use a specific tier (e.g. SimTier.Tier0), " +
+                    "a flag combination (e.g. SimTier.Near), or SimTier.All (the default) to disable tier filtering.");
+            }
+
+            if (reg.CellAmortize < 0)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': cellAmortize must be >= 0 (0 = no amortization), got {reg.CellAmortize}.");
+            }
+
+            if (reg.CellAmortize > 0 && reg.TierFilter == SimTier.All)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': cellAmortize requires a tier filter. Amortizing the full cluster set without tier scoping " +
+                    "is not supported — amortization is a per-tier policy (typically used with coarse tiers like SimTier.Tier2).");
+            }
+
+            if (reg.TierFilter != SimTier.All && reg.TierFilter != SimTier.None && reg.Type != SystemType.QuerySystem)
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}': tier filter is only supported on QuerySystem, not {reg.Type}.");
+            }
         }
 
         _built = true;
@@ -478,6 +510,8 @@ public sealed class RuntimeSchedule
             systems[sysIdx].ChangeFilterTypes = reg.ChangeFilter;
             systems[sysIdx].IsParallelQuery = reg.Parallel;
             systems[sysIdx].WritesVersioned = reg.WritesVersioned;
+            systems[sysIdx].TierFilter = reg.TierFilter;
+            systems[sysIdx].CellAmortize = reg.CellAmortize;
         }
 
         // Phase 6: Create scheduler
@@ -514,5 +548,7 @@ public sealed class RuntimeSchedule
         public Type[] ChangeFilter;
         public bool Parallel;
         public bool WritesVersioned;
+        public SimTier TierFilter = SimTier.All;
+        public int CellAmortize;
     }
 }

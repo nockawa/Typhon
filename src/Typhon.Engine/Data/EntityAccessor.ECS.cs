@@ -61,6 +61,28 @@ public unsafe partial class EntityAccessor
             es.ClusterState.ClusterSegment, es.ClusterState.TransientSegment);
     }
 
+    /// <summary>
+    /// Get a scoped cluster enumerator over an explicit cluster-id source array (issue #231). Used by tier-filtered
+    /// QuerySystems that read <see cref="TickContext.ClusterIds"/> at dispatch time:
+    /// <code>
+    /// foreach (var cluster in ctx.Accessor.GetClusterEnumerator&lt;Ant&gt;(ctx.ClusterIds, ctx.StartClusterIndex, ctx.EndClusterIndex)) { ... }
+    /// </code>
+    /// When <paramref name="clusterIds"/> is the archetype's <c>ActiveClusterIds</c>, this is semantically equivalent to
+    /// <see cref="GetClusterEnumerator{TArch}(int,int)"/>. When it is a per-tier cluster list, the enumerator iterates only
+    /// the tier's clusters.
+    /// </summary>
+    public ClusterEnumerator<TArch> GetClusterEnumerator<TArch>(int[] clusterIds, int startIndex, int endIndex) where TArch : class
+    {
+        var meta = ArchetypeRegistry.GetMetadata<TArch>();
+        var es = _dbe._archetypeStates[meta.ArchetypeId];
+        if (!meta.IsClusterEligible || es?.ClusterState == null)
+        {
+            throw new InvalidOperationException($"Archetype {typeof(TArch).Name} does not use cluster storage");
+        }
+        return ClusterEnumerator<TArch>.CreateScoped(es.ClusterState, meta, es.ClusterState.ClusterSegment, es.ClusterState.TransientSegment, clusterIds, 
+            startIndex, endIndex);
+    }
+
     /// <summary>Pre-warm the ComponentInfo cache for a given component type. Called by ArchetypeAccessor during construction.</summary>
     internal void EnsureComponentInfoCached(Type componentType) => GetComponentInfo(componentType);
 

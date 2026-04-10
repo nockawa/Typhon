@@ -123,4 +123,23 @@ public sealed class SystemDefinition
     /// Set by <see cref="RuntimeSchedule"/> from <see cref="SystemBuilder.WritesVersioned"/>.
     /// </summary>
     public bool WritesVersioned { get; internal set; }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Issue #231: Tier dispatch filter
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Simulation-tier dispatch filter (issue #231). When set to anything other than <see cref="SimTier.All"/>, the parallel cluster partition is computed
+    /// over the per-tier cluster list instead of <see cref="ArchetypeClusterState.ActiveClusterIds"/>, and this system only processes entities whose
+    /// cluster lives in a cell with a matching tier. The default <see cref="SimTier.All"/> preserves the pre-#231 fast path.
+    /// </summary>
+    public SimTier TierFilter { get; internal set; } = SimTier.All;
+
+    /// <summary>
+    /// Cell-level amortization denominator (issue #231). When greater than 0, this system processes only <c>1/N</c> of the tier's clusters per tick,
+    /// rotating through buckets as <c>tickNumber % N</c>. The callback's <see cref="TickContext.AmortizedDeltaTime"/> is set to <c>DeltaTime × CellAmortize</c>
+    /// so integrations over the full elapsed time happen in one step. Must be paired with a non-<see cref="SimTier.All"/> <see cref="TierFilter"/>; amortizing
+    /// the full cluster set without tier scoping is rejected at <c>RuntimeSchedule.Build</c>.
+    /// </summary>
+    public int CellAmortize { get; internal set; }
 }

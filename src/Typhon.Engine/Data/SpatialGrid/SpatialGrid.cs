@@ -20,6 +20,10 @@ internal sealed unsafe class SpatialGrid
     private readonly SpatialGridConfig _config;
     private readonly CellDescriptor[] _cells;
 
+    // Issue #231: bumped every time SetCellTier actually changes a cell's tier byte. The per-archetype
+    // TierClusterIndex uses this to skip its rebuild when no cell tier has changed since the last dispatch.
+    private int _tierVersion;
+
     public SpatialGrid(SpatialGridConfig config)
     {
         _config = config;
@@ -29,6 +33,49 @@ internal sealed unsafe class SpatialGrid
     public ref readonly SpatialGridConfig Config => ref _config;
 
     public int CellCount => _cells.Length;
+
+    /// <summary>
+    /// Monotonic version counter, incremented each time a <see cref="SetCellTier"/> call actually flips a cell's tier byte.
+    /// Consumed by per-archetype <see cref="TierClusterIndex"/> to short-circuit rebuilds when nothing changed (issue #231).
+    /// </summary>
+    internal int TierVersion => _tierVersion;
+
+    /// <summary>
+    /// Assign a <see cref="SimTier"/> to a single cell. No-op when the cell already has the requested tier (avoids spurious version bumps).
+    /// Passing <see cref="SimTier.None"/> clears the cell's tier — the tier index will then skip the cell entirely during rebuild.
+    /// </summary>
+    /// <remarks>
+    /// <para>The tier byte stored on <see cref="CellDescriptor.Tier"/> is a single-bit flag value from <see cref="SimTier"/>.
+    /// Callers must pass a single-bit tier; multi-bit combinations (e.g. <see cref="SimTier.Near"/>) are rejected because the rebuild path
+    /// uses <see cref="System.Numerics.BitOperations.TrailingZeroCount(uint)"/> to map the byte to an array index.</para>
+    /// <para>Intentionally <c>internal</c>: issue #231 exposes only the minimum needed for tests. The public <c>SpatialGridAccessor</c> /
+    /// <c>TickContext.SpatialGrid</c> surface lands with the tick-lifecycle integration in #232.</para>
+    /// </remarks>
+    internal void SetCellTier(int cellKey, SimTier tier)
+    {
+        if (tier != SimTier.None && !tier.IsSingleTier())
+        {
+            throw new ArgumentException(
+                $"SetCellTier requires a single-bit SimTier flag, got '{tier}'. Multi-tier combinations (e.g. SimTier.Near) are not valid at the cell level.",
+                nameof(tier));
+        }
+
+        // Descriptive bounds error rather than the bare IndexOutOfRangeException from the array access.
+        if ((uint)cellKey >= (uint)_cells.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cellKey), cellKey,
+                $"SetCellTier: cellKey {cellKey} is outside the valid range [0, {_cells.Length}). " +
+                $"Compute cell keys via WorldToCellKey or ComputeCellKey to stay in range.");
+        }
+
+        ref var cell = ref _cells[cellKey];
+        byte newTier = (byte)tier;
+        if (cell.Tier != newTier)
+        {
+            cell.Tier = newTier;
+            _tierVersion++;
+        }
+    }
 
     /// <summary>
     /// Access a cell descriptor by cell key for read + write (callers bump <see cref="CellDescriptor.EntityCount"/>
