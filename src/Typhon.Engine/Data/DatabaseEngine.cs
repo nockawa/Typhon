@@ -854,6 +854,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     private unsafe void WriteClusterTickFence(long tickNumber, ref long highestLSN)
     {
+        // Issue #233: drain all deferred wake requests collected during parallel system execution. Must run once BEFORE the per-archetype loop so each
+        // archetype's DormancySweep (below) sees up-to-date WakePending states and skips those clusters instead of re-sleeping them.
+        DormancyReporter.DrainAll(_archetypeStates);
+
         foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
         {
             if (!meta.IsClusterEligible || meta.ArchetypeId >= _archetypeStates.Length)
@@ -874,17 +878,22 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 // Still snapshot dirty bitmap for change-filtered dispatch
                 if (clusterState.ClusterDirtyBitmap.HasDirty)
                 {
-                    clusterState.PreviousTickDirtySnapshot = clusterState.ClusterDirtyBitmap.Snapshot();
+                    var transientDirtyBits = clusterState.ClusterDirtyBitmap.Snapshot();
+                    clusterState.PreviousTickDirtySnapshot = transientDirtyBits;
                     // Propagate dirty status to per-ComponentTable flags
                     for (int slot = 0; slot < clusterState.Layout.ComponentCount; slot++)
                     {
                         engineState.SlotToComponentTable[slot].PreviousTickHadDirtyEntities = true;
                         engineState.SlotToComponentTable[slot].PreviousTickDirtyBitmap ??= Array.Empty<long>();
                     }
+                    // Issue #233: dormancy sweep with the actual dirty snapshot
+                    clusterState.DormancySweep(transientDirtyBits, tickNumber);
                 }
                 else
                 {
                     clusterState.PreviousTickDirtySnapshot = null;
+                    // Issue #233: all clusters clean — sweep with empty bitmap so counters increment
+                    clusterState.DormancySweep(Array.Empty<long>(), tickNumber);
                 }
                 continue;
             }
@@ -892,6 +901,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             if (!clusterState.ClusterDirtyBitmap.HasDirty)
             {
                 clusterState.PreviousTickDirtySnapshot = null;
+                // Issue #233: all clusters clean this tick — sweep with empty bitmap so sleep counters increment.
+                // This is the most common path for dormancy (idle clusters accumulating clean ticks toward the threshold).
+                clusterState.DormancySweep(Array.Empty<long>(), tickNumber);
                 continue;
             }
 
@@ -954,6 +966,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     // whose hysteresis-absorbed drift has inflated their AABB beyond cellSize × 1.2.
                     clusterState.RecomputeDirtyClusterAabbs(dirtyBits, ref accessor, _spatialGrid);
                 }
+
+                // Issue #233: advance dormancy sleep counters and transition idle clusters to Sleeping.
+                // Runs AFTER wake requests are processed (line above drains DormancyReporter globally) and AFTER migrations/AABBs so the dirtyBits snapshot
+                // is final.
+                clusterState.DormancySweep(dirtyBits, tickNumber);
 
                 // Archive dirty bitmap into per-archetype DirtyBitmapRing for spatial interest management.
                 // Issue #230 Phase 3: the ring was relocated from ClusterSpatialSlot.DirtyRing to ArchetypeClusterState.ClusterDirtyRing.
@@ -3314,7 +3331,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         // Issue #230 Phase 3 Option B: no per-archetype R-Tree + back-pointer CBS segments to allocate or load. The per-cell cluster index
                         // is transient and is rebuilt from cluster data at startup by RebuildCellState + RebuildClusterAabbs below.
                         // Issue #229 Q10: InitializeSpatial now also allocates this archetype's own CellClusterPool sized to the grid's cell count.
-                        clusterState.InitializeSpatial(slotToTable, _spatialGrid);
+                        clusterState.InitializeSpatial(slotToTable, _spatialGrid, meta.ArchetypeId);
 
                         // Register with per-table SpatialInterestSystem for fan-out
                         for (int slot = 0; slot < meta.ComponentCount; slot++)

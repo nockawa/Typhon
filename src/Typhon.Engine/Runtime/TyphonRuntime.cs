@@ -586,9 +586,15 @@ public sealed class TyphonRuntime : IDisposable
                     // Tier-scoped path: the archetype has a TierIndex (pre-created in ResolveChangeFilters and rebuilt at TickStart).
                     // Scan only the tier's clusters.
                     var tierClusters = cs.TierIndex.GetClustersArray(effectiveTier, out int tierCount);
+                    var sleepStates = cs.SleepStates; // Issue #233: may be null for non-spatial secondary archetypes
                     for (int i = 0; i < tierCount; i++)
                     {
                         int chunkId = tierClusters[i];
+                        // Issue #233: skip sleeping clusters in the dirty scan
+                        if (sleepStates != null && chunkId < sleepStates.Length && sleepStates[chunkId] == ClusterSleepState.Sleeping)
+                        {
+                            continue;
+                        }
                         if (chunkId >= snapshot.Length)
                         {
                             continue;
@@ -1005,6 +1011,52 @@ public sealed class TyphonRuntime : IDisposable
                     // until next TickStart (after all parallel systems for this tick have finished).
                     _systemTierClusterIds[sysIdx] = tierArr;
                     _systemTierClusterCount[sysIdx] = tierCnt;
+                }
+            }
+        }
+
+        // Issue #233: dormancy filter — remove sleeping clusters from the dispatch list.
+        // Handles both tier-filtered and non-tier-filtered systems. When SleepingClusterCount == 0 this block is skipped (zero overhead).
+        {
+            var cs = _systemClusterStates[sysIdx];
+            if (cs?.SleepingClusterCount > 0 && cs.SleepStates != null)
+            {
+                var srcIds = _systemTierClusterIds[sysIdx];
+                int srcCount = _systemTierClusterCount[sysIdx];
+
+                if (srcIds == null && sys.TierFilter == SimTier.All)
+                {
+                    // Non-tier-filtered system with sleeping clusters: "promote" to use a filtered copy of ActiveClusterIds
+                    // so the tier-filtered dispatch path in ExecuteChunkWithAccessor handles it.
+                    srcIds = cs.ActiveClusterIds;
+                    srcCount = cs.ActiveClusterCount;
+                }
+
+                if (srcIds != null)
+                {
+                    // Always filter into the per-system amortization buffer (reusable, grows on demand).
+                    // When the source IS the amortization buffer (amortized tier), this filters in-place (safe: we only compact, never expand).
+                    var buf = _systemAmortizationBuffers[sysIdx];
+                    bool inPlace = ReferenceEquals(buf, srcIds);
+                    if (!inPlace && (buf == null || buf.Length < srcCount))
+                    {
+                        buf = new int[Math.Max(16, srcCount)];
+                        _systemAmortizationBuffers[sysIdx] = buf;
+                    }
+
+                    int written = 0;
+                    var sleepStates = cs.SleepStates;
+                    for (int i = 0; i < srcCount; i++)
+                    {
+                        int chunkId = srcIds[i];
+                        if (chunkId >= sleepStates.Length || sleepStates[chunkId] != ClusterSleepState.Sleeping)
+                        {
+                            buf[written++] = chunkId;
+                        }
+                    }
+
+                    _systemTierClusterIds[sysIdx] = buf;
+                    _systemTierClusterCount[sysIdx] = written;
                 }
             }
         }
@@ -1470,6 +1522,19 @@ public sealed class TyphonRuntime : IDisposable
         if (grid == null)
         {
             return;
+        }
+
+        // Issue #233: transition WakePending → Active for all archetypes BEFORE rebuilding tier indexes.
+        // This ensures woken clusters appear in this tick's per-tier lists. The TransitionWakePendingToActive method is guarded by _lastWakeTransitionTick
+        // so calling it for the same archetype via multiple systems is a no-op after the first call.
+        long tick = Scheduler.CurrentTickNumber;
+        for (int i = 0; i < Scheduler.SystemCount; i++)
+        {
+            var cs = _systemClusterStates[i];
+            if (cs?.SleepStates != null)
+            {
+                cs.TransitionWakePendingToActive(tick);
+            }
         }
 
         for (int i = 0; i < Scheduler.SystemCount; i++)

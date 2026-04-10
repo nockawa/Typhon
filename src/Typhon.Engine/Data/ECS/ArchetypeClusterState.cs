@@ -170,6 +170,40 @@ internal sealed unsafe class ArchetypeClusterState
     /// tier-filtered system runs against this archetype. Subsequent rebuilds are version-guarded and usually no-ops.</summary>
     internal TierClusterIndex TierIndex;
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Issue #233: Cluster dormancy state. Per-cluster sleep tracking for
+    // skipping idle clusters during dispatch. Null arrays = dormancy not
+    // enabled (non-spatial archetypes or threshold not set).
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Per-cluster sleep state, indexed by cluster chunk ID. Null for non-spatial archetypes (zero overhead).
+    /// Allocated eagerly for spatial archetypes in <see cref="InitializeSpatial"/>. Issue #233.</summary>
+    internal ClusterSleepState[] SleepStates;
+
+    /// <summary>Per-cluster ticks-since-last-dirty counter. ushort gives ~18 minutes at 60Hz before wrap, which far exceeds
+    /// any reasonable <see cref="SleepThresholdTicks"/>. Same sizing/lifecycle as <see cref="SleepStates"/>. Issue #233.</summary>
+    internal ushort[] SleepCounters;
+
+    /// <summary>Number of consecutive clean ticks before a cluster transitions to <see cref="ClusterSleepState.Sleeping"/>.
+    /// 0 = dormancy disabled (counters still increment but no transition). Default 0. Set by game code. Issue #233.</summary>
+    public int SleepThresholdTicks;
+
+    /// <summary>When &gt; 0, sleeping clusters periodically wake on a staggered schedule: cluster wakes when
+    /// <c>(tickNumber % HeartbeatIntervalTicks) == (chunkId % HeartbeatIntervalTicks)</c>. 0 = no heartbeat. Issue #233.</summary>
+    public int HeartbeatIntervalTicks;
+
+    /// <summary>Count of clusters currently in <see cref="ClusterSleepState.Sleeping"/> state. When 0, all dormancy filtering
+    /// in <c>OnParallelQueryPrepare</c> is skipped (zero overhead). Issue #233.</summary>
+    public int SleepingClusterCount;
+
+    /// <summary>Archetype ID for this cluster state. Set during <see cref="InitializeSpatial"/>. Used by
+    /// <see cref="SetDirty"/> to tag wake requests via <see cref="DormancyReporter"/>. Issue #233.</summary>
+    internal int ArchetypeId;
+
+    /// <summary>Tick number of the last <see cref="TransitionWakePendingToActive"/> call. Guards against redundant scans
+    /// when multiple systems reference the same archetype. Issue #233.</summary>
+    private long _lastWakeTransitionTick = -1;
+
     private ArchetypeClusterState() { }
 
     /// <summary>Chunk capacity of the primary (non-null) segment.</summary>
@@ -181,6 +215,14 @@ internal sealed unsafe class ArchetypeClusterState
     {
         int entityIndex = clusterChunkId * 64 + slotIndex;
         ClusterDirtyBitmap.Set(entityIndex);
+
+        // Issue #233: if this cluster is sleeping, request a deferred wake. The null check on SleepStates is the zero-cost bypass for non-spatial archetypes.
+        // The byte read + compare is branch-predicted not-taken for Active clusters (common case). Race: parallel workers may see stale state — false negative
+        // means one extra tick of sleep (dirty bit still records the writes); false positive is a harmless duplicate request.
+        if (SleepStates != null && clusterChunkId < SleepStates.Length && SleepStates[clusterChunkId] == ClusterSleepState.Sleeping)
+        {
+            DormancyReporter.RequestWake(ArchetypeId, clusterChunkId);
+        }
     }
 
     /// <summary>
@@ -873,6 +915,138 @@ internal sealed unsafe class ArchetypeClusterState
         Array.Resize(ref PerCellIndex, newLen);
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // Issue #233: Dormancy capacity + core logic
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Grow <see cref="SleepStates"/> and <see cref="SleepCounters"/> to hold at least <paramref name="requiredLength"/> entries.
+    /// New entries initialize to <see cref="ClusterSleepState.Active"/> / 0. Issue #233.
+    /// </summary>
+    internal void EnsureSleepStateCapacity(int requiredLength)
+    {
+        if (SleepStates == null || SleepCounters == null)
+        {
+            return; // Dormancy not enabled for this archetype
+        }
+        if (SleepStates.Length >= requiredLength)
+        {
+            return;
+        }
+        int newLen = Math.Max(SleepStates.Length, 1);
+        while (newLen < requiredLength)
+        {
+            newLen *= 2;
+        }
+        // SleepStates: new entries default to 0 = Active (Array.Resize zero-fills)
+        Array.Resize(ref SleepStates, newLen);
+        // SleepCounters: new entries default to 0 (Array.Resize zero-fills)
+        Array.Resize(ref SleepCounters, newLen);
+    }
+
+    /// <summary>
+    /// Advance sleep counters for all active clusters and transition idle clusters to <see cref="ClusterSleepState.Sleeping"/>.
+    /// Also handles heartbeat wake for already-sleeping clusters. Called single-threaded from <c>WriteClusterTickFence</c>
+    /// after migrations and AABB recomputation. Issue #233.
+    /// </summary>
+    /// <param name="dirtyBits">Occupancy-masked dirty bitmap snapshot from the tick fence. Word index = chunkId.
+    /// A nonzero word means at least one entity in that cluster was written this tick.</param>
+    /// <param name="tickNumber">Current tick number, used for heartbeat staggering.</param>
+    internal void DormancySweep(long[] dirtyBits, long tickNumber)
+    {
+        if (SleepStates == null || SleepThresholdTicks <= 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < ActiveClusterCount; i++)
+        {
+            int chunkId = ActiveClusterIds[i];
+            if (chunkId >= SleepStates.Length)
+            {
+                continue;
+            }
+
+            var state = SleepStates[chunkId];
+
+            if (state == ClusterSleepState.Active)
+            {
+                // Check dirty bitmap: nonzero word means at least one entity written this tick
+                bool dirty = chunkId < dirtyBits.Length && dirtyBits[chunkId] != 0;
+                if (dirty)
+                {
+                    SleepCounters[chunkId] = 0;
+                }
+                else
+                {
+                    int counter = SleepCounters[chunkId] + 1;
+                    if (counter >= SleepThresholdTicks)
+                    {
+                        SleepStates[chunkId] = ClusterSleepState.Sleeping;
+                        SleepingClusterCount++;
+                    }
+                    else
+                    {
+                        SleepCounters[chunkId] = (ushort)counter;
+                    }
+                }
+            }
+            else if (state == ClusterSleepState.Sleeping && HeartbeatIntervalTicks > 0)
+            {
+                // Heartbeat: staggered wake so only ~1/N sleeping clusters wake per tick
+                if ((int)(tickNumber % HeartbeatIntervalTicks) == chunkId % HeartbeatIntervalTicks)
+                {
+                    SleepStates[chunkId] = ClusterSleepState.WakePending;
+                    // SleepingClusterCount is decremented when WakePending→Active in TransitionWakePendingToActive
+                }
+            }
+            // WakePending clusters are left alone — they'll transition to Active at tick start.
+        }
+    }
+
+    /// <summary>
+    /// Process a single wake request: if the cluster is <see cref="ClusterSleepState.Sleeping"/>, transition to <see cref="ClusterSleepState.WakePending"/>.
+    /// Deduplication is implicit: calling on an already-WakePending cluster is a no-op. Called single-threaded from <c>WriteClusterTickFence</c> after
+    /// draining <see cref="DormancyReporter"/>. Issue #233.
+    /// </summary>
+    internal void ProcessWakeRequest(int chunkId)
+    {
+        if (SleepStates == null || chunkId >= SleepStates.Length)
+        {
+            return;
+        }
+        if (SleepStates[chunkId] == ClusterSleepState.Sleeping)
+        {
+            SleepStates[chunkId] = ClusterSleepState.WakePending;
+            // SleepingClusterCount is decremented in TransitionWakePendingToActive (next tick start)
+        }
+    }
+
+    /// <summary>
+    /// Transition all <see cref="ClusterSleepState.WakePending"/> clusters to <see cref="ClusterSleepState.Active"/>.
+    /// Called single-threaded from <c>BuildTierIndexesAtTickStart</c> before tier index rebuild so woken clusters appear in this tick's per-tier lists.
+    /// Guarded by <see cref="_lastWakeTransitionTick"/> to avoid redundant scans when multiple systems reference the same archetype. Issue #233.
+    /// </summary>
+    internal void TransitionWakePendingToActive(long currentTick)
+    {
+        if (SleepStates == null || _lastWakeTransitionTick == currentTick)
+        {
+            return;
+        }
+        _lastWakeTransitionTick = currentTick;
+
+        for (int i = 0; i < ActiveClusterCount; i++)
+        {
+            int chunkId = ActiveClusterIds[i];
+            if (chunkId < SleepStates.Length && SleepStates[chunkId] == ClusterSleepState.WakePending)
+            {
+                SleepStates[chunkId] = ClusterSleepState.Active;
+                SleepCounters[chunkId] = 0;
+                SleepingClusterCount--;
+            }
+        }
+    }
+
     /// <summary>
     /// Recompute the tight 2D AABB and category-mask union of a cluster by scanning its occupied slots. The spatial field is read
     /// via <see cref="SpatialMaintainer.ReadAndValidateBoundsFromPtr"/> which dispatches on the archetype's <see cref="SpatialFieldInfo.FieldType"/>.
@@ -1309,6 +1483,13 @@ internal sealed unsafe class ArchetypeClusterState
         ActiveClusterIds[ActiveClusterCount++] = chunkId;
         // Issue #231: any change to the active cluster set invalidates the tier index.
         ClusterSetVersion++;
+        // Issue #233: ensure dormancy arrays cover the new chunkId, initialize to Active/0.
+        if (SleepStates != null)
+        {
+            EnsureSleepStateCapacity(chunkId + 1);
+            SleepStates[chunkId] = ClusterSleepState.Active;
+            SleepCounters[chunkId] = 0;
+        }
     }
 
     /// <summary>Remove a cluster chunk ID from the active list (swap-with-last, O(1)).</summary>
@@ -1318,6 +1499,18 @@ internal sealed unsafe class ArchetypeClusterState
         {
             if (ActiveClusterIds[i] == chunkId)
             {
+                // Issue #233: if the removed cluster was sleeping or wake-pending, adjust the count.
+                // WakePending clusters are still counted in SleepingClusterCount (they were incremented at the
+                // Active→Sleeping transition and decremented only when WakePending→Active completes).
+                if (SleepStates != null && chunkId < SleepStates.Length)
+                {
+                    var sleepState = SleepStates[chunkId];
+                    if (sleepState == ClusterSleepState.Sleeping || sleepState == ClusterSleepState.WakePending)
+                    {
+                        SleepingClusterCount--;
+                    }
+                }
+
                 ActiveClusterIds[i] = ActiveClusterIds[ActiveClusterCount - 1];
                 ActiveClusterCount--;
 
@@ -1624,8 +1817,10 @@ internal sealed unsafe class ArchetypeClusterState
     /// <param name="grid">The engine's configured spatial grid. Used to size the per-archetype <see cref="CellClusterPool"/> so its per-cell arrays cover
     /// every valid cell key. Under Q10 the pool is per-archetype — each cluster-spatial archetype sharing the grid gets its own instance sized to the
     /// grid's cell count.</param>
-    public void InitializeSpatial(ComponentTable[] slotToTable, SpatialGrid grid)
+    public void InitializeSpatial(ComponentTable[] slotToTable, SpatialGrid grid, int archetypeId = 0)
     {
+        ArchetypeId = archetypeId;
+
         for (int slot = 0; slot < slotToTable.Length; slot++)
         {
             var table = slotToTable[slot];
@@ -1651,6 +1846,11 @@ internal sealed unsafe class ArchetypeClusterState
             // Issue #229 Q10: allocate this archetype's own CellClusterPool. Other cluster-spatial archetypes sharing the same grid each get their own
             // instance, so claim-list scans at spawn time only walk clusters of the current archetype.
             CellClusterPool = new CellClusterPool(grid.CellCount);
+
+            // Issue #233: allocate dormancy arrays for spatial archetypes. Non-spatial archetypes leave SleepStates null (zero overhead).
+            int capacity = Math.Max(16, PrimarySegmentCapacity);
+            SleepStates = new ClusterSleepState[capacity];
+            SleepCounters = new ushort[capacity];
 
             SpatialSlot = new ClusterSpatialSlot
             {
