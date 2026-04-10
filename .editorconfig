@@ -214,9 +214,13 @@ dotnet_naming_rule.private_or_internal_static_field_should_be_begins_with_unders
 dotnet_naming_rule.private_or_internal_static_field_should_be_begins_with_underscore.symbols = private_or_internal_static_field
 dotnet_naming_rule.private_or_internal_static_field_should_be_begins_with_underscore.style = pascal_case
 
-dotnet_naming_rule.private_or_internal_field_should_be_begins_with_underscore.severity = suggestion
-dotnet_naming_rule.private_or_internal_field_should_be_begins_with_underscore.symbols = private_or_internal_field
-dotnet_naming_rule.private_or_internal_field_should_be_begins_with_underscore.style = begins_with_underscore
+dotnet_naming_rule.internal_field_naming.severity = none
+dotnet_naming_rule.internal_field_naming.symbols = internal_field
+dotnet_naming_rule.internal_field_naming.style = pascal_case
+
+dotnet_naming_rule.private_field_should_be_begins_with_underscore.severity = suggestion
+dotnet_naming_rule.private_field_should_be_begins_with_underscore.symbols = private_field
+dotnet_naming_rule.private_field_should_be_begins_with_underscore.style = begins_with_underscore
 
 # Symbol specifications
 
@@ -228,9 +232,13 @@ dotnet_naming_symbols.private_or_internal_static_field.applicable_kinds = field
 dotnet_naming_symbols.private_or_internal_static_field.applicable_accessibilities = internal, private, private_protected
 dotnet_naming_symbols.private_or_internal_static_field.required_modifiers = static
 
-dotnet_naming_symbols.private_or_internal_field.applicable_kinds = field
-dotnet_naming_symbols.private_or_internal_field.applicable_accessibilities = internal, private, private_protected
-dotnet_naming_symbols.private_or_internal_field.required_modifiers = 
+dotnet_naming_symbols.internal_field.applicable_kinds = field
+dotnet_naming_symbols.internal_field.applicable_accessibilities = internal
+dotnet_naming_symbols.internal_field.required_modifiers =
+
+dotnet_naming_symbols.private_field.applicable_kinds = field
+dotnet_naming_symbols.private_field.applicable_accessibilities = private, private_protected
+dotnet_naming_symbols.private_field.required_modifiers =
 
 dotnet_naming_symbols.types.applicable_kinds = class, struct, interface, enum
 dotnet_naming_symbols.types.applicable_accessibilities = public, internal, private, protected, protected_internal, private_protected

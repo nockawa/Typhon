@@ -283,4 +283,68 @@ internal sealed unsafe class SpatialGrid
     /// <c>CellClusterPool</c> is reset separately by the archetype itself — this method only clears per-cell global counters (Q10).
     /// </summary>
     public void ResetCellState() => Array.Clear(_cells);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Issue #234: multi-observer helpers
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Set a cell's tier using min (promote-only) semantics (issue #234 Q7). If the cell's current tier is already higher priority
+    /// (lower flag value, e.g. <see cref="SimTier.Tier0"/> = 1 vs <see cref="SimTier.Tier1"/> = 2), the call is a no-op. If the cell
+    /// is unset (<see cref="SimTier.None"/> / 0), any tier overrides it. Bumps <see cref="TierVersion"/> only when the cell actually changes.
+    /// </summary>
+    internal void SetCellTierMin(int cellKey, SimTier tier)
+    {
+        if (tier == SimTier.None || !tier.IsSingleTier())
+        {
+            return;
+        }
+
+        if ((uint)cellKey >= (uint)_cells.Length)
+        {
+            return; // Silently ignore out-of-bounds (AABB iteration may produce edge cells)
+        }
+
+        ref var cell = ref _cells[cellKey];
+        byte newTier = (byte)tier;
+        // Min semantics: 0 (None/unset) is overridden by any tier. Among set tiers, keep the lower value (higher priority).
+        if (cell.Tier == 0 || newTier < cell.Tier)
+        {
+            cell.Tier = newTier;
+            _tierVersion++;
+        }
+    }
+
+    /// <summary>
+    /// Bulk-set all cells to the specified tier (issue #234 Q7). Typically called at the start of <c>TierAssignment</c> to reset all cells
+    /// to <see cref="SimTier.Tier3"/> before applying per-observer <see cref="SetCellTierMin"/> or <see cref="SetTierInAABB"/>.
+    /// Bumps <see cref="TierVersion"/> once.
+    /// </summary>
+    internal void ResetAllTiers(SimTier tier)
+    {
+        byte val = (byte)tier;
+        for (int i = 0; i < _cells.Length; i++)
+        {
+            _cells[i].Tier = val;
+        }
+        _tierVersion++;
+    }
+
+    /// <summary>
+    /// Set tiers for all cells overlapping a world-space AABB, using min (promote-only) semantics (issue #234 Q7).
+    /// Combines <see cref="WorldToCellRange"/> with <see cref="SetCellTierMin"/>. Useful for multi-observer tier assignment:
+    /// <c>grid.ResetAllTiers(SimTier.Tier3); foreach observer: grid.SetTierInAABB(obs.ViewAABB, SimTier.Tier0);</c>
+    /// </summary>
+    internal void SetTierInAABB(float minX, float minY, float maxX, float maxY, SimTier tier)
+    {
+        WorldToCellRange(minX, minY, maxX, maxY, out int cellMinX, out int cellMinY, out int cellMaxX, out int cellMaxY);
+        for (int cy = cellMinY; cy <= cellMaxY; cy++)
+        {
+            for (int cx = cellMinX; cx <= cellMaxX; cx++)
+            {
+                int cellKey = ComputeCellKey(cx, cy);
+                SetCellTierMin(cellKey, tier);
+            }
+        }
+    }
 }

@@ -24,6 +24,7 @@ public sealed class SystemBuilder
     internal bool _writesVersioned;
     internal SimTier _tierFilter = SimTier.All;
     internal int _cellAmortize;
+    internal bool _checkerboard;
 
     /// <summary>Set the system's unique name in the DAG.</summary>
     public void Name(string name) => _name = name;
@@ -73,4 +74,8 @@ public sealed class SystemBuilder
     /// and <see cref="TickContext.AmortizedDeltaTime"/> becomes <c>DeltaTime × N</c>. Requires a non-<see cref="SimTier.All"/> <see cref="Tier"/>.
     /// </summary>
     public void CellAmortize(int denominator) => _cellAmortize = denominator;
+
+    /// <summary>Enable two-phase checkerboard dispatch (issue #234). Requires <see cref="Parallel"/>. Clusters are split into Red/Black sets
+    /// based on cell coordinates — no two adjacent cells are processed simultaneously.</summary>
+    public void Checkerboard() => _checkerboard = true;
 }

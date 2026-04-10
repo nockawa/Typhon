@@ -142,4 +142,11 @@ public sealed class SystemDefinition
     /// the full cluster set without tier scoping is rejected at <c>RuntimeSchedule.Build</c>.
     /// </summary>
     public int CellAmortize { get; internal set; }
+
+    /// <summary>
+    /// When true, this parallel QuerySystem uses two-phase checkerboard dispatch (issue #234). Clusters are split into Red
+    /// (<c>(cellX + cellY) % 2 == 0</c>) and Black sets, dispatched as two sequential parallel phases within one DAG node.
+    /// No two adjacent cells are processed simultaneously, enabling conflict-free cross-cell reads/writes (e.g. pheromone diffusion).
+    /// </summary>
+    public bool IsCheckerboard { get; internal set; }
 }

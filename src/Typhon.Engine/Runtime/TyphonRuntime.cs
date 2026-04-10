@@ -58,11 +58,22 @@ public sealed class TyphonRuntime : IDisposable
     // ticks. [sysIdx][workerIdx]. Null slot = not allocated yet.
     private readonly ClusterRangeEntityView[][] _tierRangeViews;
 
+    // Issue #234: checkerboard two-phase dispatch. Phase tracking + Red/Black cluster buffers per system.
+    // _checkerboardPhase: 0 = not checkerboard or reset, 1 = Red (phase A active), 2 = Black (phase B active).
+    private readonly int[] _checkerboardPhase;
+    private readonly int[][] _checkerboardRedIds;
+    private readonly int[] _checkerboardRedCount;
+    private readonly int[][] _checkerboardBlackIds;
+    private readonly int[] _checkerboardBlackCount;
+
     // Cached delegate — avoids per-TickContext allocation from method group conversion
     private readonly Func<DurabilityMode, Transaction> _createSideTxDelegate;
 
     // First-tick flag
     private bool _firstTickExecuted;
+
+    // Issue #234: per-tier budget metrics. Computed at tick end, exposed as _previousTickMetrics on the next tick's TickContext.
+    private TierBudgetMetrics _previousTickMetrics;
 
     // DeltaTime tracking
     private long _previousTickTimestamp;
@@ -164,6 +175,11 @@ public sealed class TyphonRuntime : IDisposable
         _systemTierClusterCount = new int[scheduler.SystemCount];
         _systemAmortizationBuffers = new int[scheduler.SystemCount][];
         _tierRangeViews = new ClusterRangeEntityView[scheduler.SystemCount][];
+        _checkerboardPhase = new int[scheduler.SystemCount];
+        _checkerboardRedIds = new int[scheduler.SystemCount][];
+        _checkerboardRedCount = new int[scheduler.SystemCount];
+        _checkerboardBlackIds = new int[scheduler.SystemCount][];
+        _checkerboardBlackCount = new int[scheduler.SystemCount];
         _createSideTxDelegate = CreateSideTransactionInternal;
 
         ResolveChangeFilters(scheduler);
@@ -231,7 +247,8 @@ public sealed class TyphonRuntime : IDisposable
                 DeltaTime = 0f,
                 Transaction = tx,
                 CreateSideTransaction = _createSideTxDelegate,
-                Entities = PooledEntityList.Empty
+                Entities = PooledEntityList.Empty,
+                TierBudgetMetrics = _previousTickMetrics
             };
             OnShutdown.Invoke(ctx);
             tx.Commit();
@@ -1061,6 +1078,40 @@ public sealed class TyphonRuntime : IDisposable
             }
         }
 
+        // Issue #234: checkerboard two-phase dispatch. On first call (phase 0→1), split filtered cluster list into Red/Black and serve Red. On second call
+        // (phase 1→2, after re-dispatch), serve Black.
+        if (sys.IsCheckerboard)
+        {
+            var phase = _checkerboardPhase[sysIdx];
+            if (phase == 0)
+            {
+                // BUG-2 fix: for non-tier-filtered checkerboard systems (SimTier.All, no sleeping clusters), _systemTierClusterIds
+                // is null at this point. Promote from ActiveClusterIds so the split has cluster data to work with.
+                if (_systemTierClusterIds[sysIdx] == null)
+                {
+                    var cs2 = _systemClusterStates[sysIdx];
+                    if (cs2 != null)
+                    {
+                        _systemTierClusterIds[sysIdx] = cs2.ActiveClusterIds;
+                        _systemTierClusterCount[sysIdx] = cs2.ActiveClusterCount;
+                    }
+                }
+
+                // First call this tick: split into Red/Black, serve Red
+                _checkerboardPhase[sysIdx] = 1;
+                SplitCheckerboardClusters(sysIdx);
+                _systemTierClusterIds[sysIdx] = _checkerboardRedIds[sysIdx];
+                _systemTierClusterCount[sysIdx] = _checkerboardRedCount[sysIdx];
+            }
+            else
+            {
+                // Second call (re-dispatched after Red): serve Black
+                _checkerboardPhase[sysIdx] = 2;
+                _systemTierClusterIds[sysIdx] = _checkerboardBlackIds[sysIdx];
+                _systemTierClusterCount[sysIdx] = _checkerboardBlackCount[sysIdx];
+            }
+        }
+
         if (sys.WritesVersioned)
         {
             // Paths 3 & 4: Versioned fallback — materialize entity list, per-chunk Transactions
@@ -1331,7 +1382,8 @@ public sealed class TyphonRuntime : IDisposable
             ConsumedQueues = null,
             StartClusterIndex = clusterStart,
             EndClusterIndex = clusterEnd,
-            ClusterIds = clusterIdArray
+            ClusterIds = clusterIdArray,
+            TierBudgetMetrics = _previousTickMetrics
         };
 
         Scheduler.Systems[sysIdx].CallbackAction(ctx);
@@ -1357,6 +1409,68 @@ public sealed class TyphonRuntime : IDisposable
             perWorker[chunkIndex] = view;
         }
         return view;
+    }
+
+    /// <summary>
+    /// Split the filtered cluster list for a checkerboard system into Red and Black sets based on cell coordinates (issue #234).
+    /// Red = clusters in cells where <c>(cellX + cellY) % 2 == 0</c>, Black = the rest. Reads <see cref="_systemTierClusterIds"/>
+    /// + <see cref="_systemTierClusterCount"/> as input, writes to the per-system Red/Black buffers.
+    /// </summary>
+    private void SplitCheckerboardClusters(int sysIdx)
+    {
+        var srcIds = _systemTierClusterIds[sysIdx];
+        int srcCount = _systemTierClusterCount[sysIdx];
+        var cs = _systemClusterStates[sysIdx];
+        var grid = Engine?.SpatialGrid;
+
+        // If no cluster data or no grid, Red = full list, Black = empty (degenerate: non-spatial archetype)
+        if (srcIds == null || cs?.ClusterCellMap == null || grid == null)
+        {
+            _checkerboardRedIds[sysIdx] = srcIds;
+            _checkerboardRedCount[sysIdx] = srcCount;
+            _checkerboardBlackIds[sysIdx] = _checkerboardBlackIds[sysIdx] ?? [];
+            _checkerboardBlackCount[sysIdx] = 0;
+            return;
+        }
+
+        // Ensure Red/Black buffers have sufficient capacity
+        if (_checkerboardRedIds[sysIdx] == null || _checkerboardRedIds[sysIdx].Length < srcCount)
+        {
+            _checkerboardRedIds[sysIdx] = new int[Math.Max(16, srcCount)];
+        }
+        if (_checkerboardBlackIds[sysIdx] == null || _checkerboardBlackIds[sysIdx].Length < srcCount)
+        {
+            _checkerboardBlackIds[sysIdx] = new int[Math.Max(16, srcCount)];
+        }
+
+        int redCount = 0, blackCount = 0;
+        var redBuf = _checkerboardRedIds[sysIdx];
+        var blackBuf = _checkerboardBlackIds[sysIdx];
+        var cellMap = cs.ClusterCellMap;
+
+        for (int i = 0; i < srcCount; i++)
+        {
+            int chunkId = srcIds[i];
+            int cellKey = (chunkId < cellMap.Length) ? cellMap[chunkId] : -1;
+            if (cellKey < 0)
+            {
+                // Unmapped cluster — put in Red as fallback
+                redBuf[redCount++] = chunkId;
+                continue;
+            }
+            var (x, y) = grid.CellKeyToCoords(cellKey);
+            if ((x + y) % 2 == 0)
+            {
+                redBuf[redCount++] = chunkId;
+            }
+            else
+            {
+                blackBuf[blackCount++] = chunkId;
+            }
+        }
+
+        _checkerboardRedCount[sysIdx] = redCount;
+        _checkerboardBlackCount[sysIdx] = blackCount;
     }
 
     /// <summary>Paths 3 & 4: Versioned fallback — per-chunk Transaction (original path).</summary>
@@ -1420,7 +1534,8 @@ public sealed class TyphonRuntime : IDisposable
                 ConsumedQueues = null,
                 StartClusterIndex = clusterStart,
                 EndClusterIndex = clusterEnd,
-                ClusterIds = clusterIdArray
+                ClusterIds = clusterIdArray,
+                TierBudgetMetrics = _previousTickMetrics
             };
 
             Scheduler.Systems[sysIdx].CallbackAction(ctx);
@@ -1449,7 +1564,7 @@ public sealed class TyphonRuntime : IDisposable
     /// Cleanup: returns pooled entity lists (if any) and resets state.
     /// Long-lived PTAs are NOT disposed here — they persist across ticks.
     /// </summary>
-    private void OnParallelQueryCleanup(int sysIdx)
+    private bool OnParallelQueryCleanup(int sysIdx)
     {
         // Batch epoch flush: flush all workers that participated (once per system, not per chunk).
         // This avoids N×chunks epoch refreshes and reduces global EpochManager contention.
@@ -1464,6 +1579,17 @@ public sealed class TyphonRuntime : IDisposable
 
         _parallelEntityLists[sysIdx].Return();
         _parallelEntityLists[sysIdx] = default;
+
+        // Issue #234: checkerboard re-dispatch. After Red phase (1), return true to trigger Black phase.
+        // After Black phase (2) or non-checkerboard (0), return false to proceed to successor dispatch.
+        var phase = _checkerboardPhase[sysIdx];
+        if (phase == 1)
+        {
+            return true; // Re-dispatch for Black phase
+        }
+        // Reset for next tick (phase 2 → 0, or was already 0)
+        _checkerboardPhase[sysIdx] = 0;
+        return false;
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1495,7 +1621,8 @@ public sealed class TyphonRuntime : IDisposable
                 DeltaTime = _currentDeltaTime,
                 Transaction = tx,
                 CreateSideTransaction = _createSideTxDelegate,
-                Entities = PooledEntityList.Empty
+                Entities = PooledEntityList.Empty,
+                TierBudgetMetrics = _previousTickMetrics
             };
 
             try
@@ -1604,12 +1731,62 @@ public sealed class TyphonRuntime : IDisposable
             _currentUow = null;
         }
 
+        // Issue #234: compute per-tier budget metrics from this tick's system telemetry, for the next tick's TickContext.
+        ComputeTierBudgetMetrics();
+
         // #199: Output phase — subscription deltas.
         // Runs AFTER WriteTickFence so that:
         //   1. Ring buffer has ALL entries (commit-time + shadow-time) for correct View membership
         //   2. PreviousTickDirtyBitmap has this tick's dirty chunks for Modified detection
         //   3. All state is quiescent (no concurrent writers)
         _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber, Scheduler.CurrentOverloadLevel);
+    }
+
+    /// <summary>
+    /// Aggregate per-system telemetry by tier for <see cref="TierBudgetMetrics"/> (issue #234). Each system's <see cref="SystemTelemetry.DurationUs"/> is
+    /// attributed to the tier(s) in its <see cref="SystemDefinition.TierFilter"/>. Multi-tier systems contribute equally to each matching tier.
+    /// </summary>
+    private void ComputeTierBudgetMetrics()
+    {
+        var metrics = new TierBudgetMetrics { BudgetMs = 1000f / _options.BaseTickRate };
+
+        for (int i = 0; i < Scheduler.SystemCount; i++)
+        {
+            ref var t = ref Scheduler.GetCurrentSystemMetrics(i);
+            if (t.WasSkipped || t.FirstChunkGrabTick == 0)
+            {
+                continue;
+            }
+
+            // DurationUs hasn't been computed yet (ComputeAndRecordTelemetry runs after OnTickEndInternal).
+            // Compute from raw Stopwatch ticks directly.
+            long durationTicks = t.LastChunkDoneTick - t.FirstChunkGrabTick;
+            if (durationTicks <= 0)
+            {
+                continue; // Defensive: skip systems with unset or corrupted timestamps
+            }
+            float costMs = (float)((double)durationTicks / System.Diagnostics.Stopwatch.Frequency * 1000.0);
+            metrics.TotalCostMs += costMs;
+
+            var tier = Scheduler.Systems[i].TierFilter;
+            if (tier == SimTier.All || tier == SimTier.None)
+            {
+                // Non-tier-filtered systems contribute to total but not per-tier buckets
+                continue;
+            }
+
+            int tierCount = tier.TierCountOf();
+            float costPerTier = tierCount > 1 ? costMs / tierCount : costMs;
+            int entitiesPerTier = tierCount > 1 ? t.EntitiesProcessed / tierCount : t.EntitiesProcessed;
+
+            if (((byte)tier & (byte)SimTier.Tier0) != 0) { metrics.Tier0CostMs += costPerTier; metrics.Tier0EntityCount += entitiesPerTier; }
+            if (((byte)tier & (byte)SimTier.Tier1) != 0) { metrics.Tier1CostMs += costPerTier; metrics.Tier1EntityCount += entitiesPerTier; }
+            if (((byte)tier & (byte)SimTier.Tier2) != 0) { metrics.Tier2CostMs += costPerTier; metrics.Tier2EntityCount += entitiesPerTier; }
+            if (((byte)tier & (byte)SimTier.Tier3) != 0) { metrics.Tier3CostMs += costPerTier; metrics.Tier3EntityCount += entitiesPerTier; }
+        }
+
+        metrics.UtilizationRatio = metrics.BudgetMs > 0 ? metrics.TotalCostMs / metrics.BudgetMs : 0f;
+        _previousTickMetrics = metrics;
     }
 
     private TickContext OnSystemStartInternal(int sysIdx)
@@ -1658,7 +1835,8 @@ public sealed class TyphonRuntime : IDisposable
             Transaction = tx,
             CreateSideTransaction = _createSideTxDelegate,
             Entities = entities,
-            ConsumedQueues = _systemConsumedQueues[sysIdx]
+            ConsumedQueues = _systemConsumedQueues[sysIdx],
+            TierBudgetMetrics = _previousTickMetrics
         };
     }
 

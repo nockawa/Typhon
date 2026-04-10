@@ -136,8 +136,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Called per chunk: creates Transaction on worker thread, slices entities, calls Execute, commits. Args: (sysIdx, chunkIndex, totalChunks, workerId).</summary>
     internal Action<int, int, int, int> ParallelQueryChunkCallback;
 
-    /// <summary>Called once after all chunks complete (or on skip). Returns pooled entity list.</summary>
-    internal Action<int> ParallelQueryCleanupCallback;
+    /// <summary>Called once after all chunks of a phase complete (or on skip). Returns <c>true</c> to re-dispatch the system for another phase
+    /// (checkerboard two-phase dispatch, issue #234); <c>false</c> to proceed to successor dispatch.</summary>
+    internal Func<int, bool> ParallelQueryCleanupCallback;
 
     // ═══════════════════════════════════════════════════════════════
     // Logging
@@ -528,13 +529,18 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
             if (sys.IsParallelQuery)
             {
-                var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
-                if (totalChunks <= 0)
+                // Issue #234: do/while loop supports checkerboard two-phase dispatch. For non-checkerboard systems, cleanup returns false on
+                // the first iteration → loop executes exactly once → zero overhead.
+                bool morePhases;
+                do
                 {
-                    ParallelQueryCleanupCallback?.Invoke(sysIdx);
-                }
-                else
-                {
+                    var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
+                    if (totalChunks <= 0)
+                    {
+                        morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+                        continue;
+                    }
+
                     Systems[sysIdx].TotalChunks = totalChunks;
                     var chunkFailed = false;
                     for (var chunk = 0; chunk < totalChunks; chunk++)
@@ -556,12 +562,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                         }
                     }
 
-                    ParallelQueryCleanupCallback?.Invoke(sysIdx);
+                    morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
                     if (chunkFailed)
                     {
-                        // Failure already propagated above
+                        morePhases = false; // Abort remaining phases on failure
                     }
-                }
+                } while (morePhases);
             }
             else if (sys.Type == SystemType.PipelineSystem)
             {
@@ -911,8 +917,16 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             {
                 RecordSystemDone(sysIdx, workEnd);
                 _currentTickSystemMetrics[sysIdx].WorkersTouched = sys.TotalChunks;
-                ParallelQueryCleanupCallback?.Invoke(sysIdx);
-                OnSystemComplete(sysIdx, workerId, trackUtilization);
+                // Issue #234: cleanup may return true to re-dispatch for another phase (checkerboard Black after Red).
+                var reDispatch = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+                if (reDispatch)
+                {
+                    DispatchParallelQuery(sysIdx, workerId, trackUtilization);
+                }
+                else
+                {
+                    OnSystemComplete(sysIdx, workerId, trackUtilization);
+                }
                 break;
             }
         }
@@ -925,11 +939,19 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// </summary>
     private void DispatchParallelQuery(int sysIdx, int workerId, bool trackUtilization)
     {
+        // Issue #234: reset chunk counter for re-dispatch (checkerboard phase B). No-op for first dispatch (already 0 from ResetTickState).
+        _nextChunk[sysIdx].Value = 0;
+
         var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
         if (totalChunks <= 0)
         {
-            // Empty entity set — skip, dispatch successors
-            ParallelQueryCleanupCallback?.Invoke(sysIdx);
+            // Empty entity set — cleanup may trigger re-dispatch (checkerboard: zero Red clusters but non-zero Black).
+            var reDispatch = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+            if (reDispatch)
+            {
+                DispatchParallelQuery(sysIdx, workerId, trackUtilization);
+                return;
+            }
             OnSystemComplete(sysIdx, workerId, trackUtilization);
             return;
         }

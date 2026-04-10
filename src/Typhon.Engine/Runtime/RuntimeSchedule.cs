@@ -74,7 +74,7 @@ public sealed class RuntimeSchedule
     public RuntimeSchedule QuerySystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
         int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false, bool parallel = false, bool writesVersioned = false,
-        SimTier tier = SimTier.All, int cellAmortize = 0)
+        SimTier tier = SimTier.All, int cellAmortize = 0, bool checkerboard = false)
     {
         ThrowIfBuilt();
         ArgumentNullException.ThrowIfNull(name);
@@ -97,7 +97,8 @@ public sealed class RuntimeSchedule
             Parallel = parallel,
             WritesVersioned = writesVersioned,
             TierFilter = tier,
-            CellAmortize = cellAmortize
+            CellAmortize = cellAmortize,
+            Checkerboard = checkerboard
         });
         return this;
     }
@@ -193,7 +194,8 @@ public sealed class RuntimeSchedule
             Parallel = builder._parallel,
             WritesVersioned = builder._writesVersioned,
             TierFilter = builder._tierFilter,
-            CellAmortize = builder._cellAmortize
+            CellAmortize = builder._cellAmortize,
+            Checkerboard = builder._checkerboard
         });
         return this;
     }
@@ -391,6 +393,12 @@ public sealed class RuntimeSchedule
                 throw new InvalidOperationException(
                     $"System '{reg.Name}': tier filter is only supported on QuerySystem, not {reg.Type}.");
             }
+
+            // Issue #234: checkerboard validation.
+            if (reg.Checkerboard && !reg.Parallel)
+            {
+                throw new InvalidOperationException($"System '{reg.Name}': checkerboard dispatch requires parallel: true. Add b.Parallel() or parallel: true.");
+            }
         }
 
         _built = true;
@@ -512,6 +520,7 @@ public sealed class RuntimeSchedule
             systems[sysIdx].WritesVersioned = reg.WritesVersioned;
             systems[sysIdx].TierFilter = reg.TierFilter;
             systems[sysIdx].CellAmortize = reg.CellAmortize;
+            systems[sysIdx].IsCheckerboard = reg.Checkerboard;
         }
 
         // Phase 6: Create scheduler
@@ -550,5 +559,6 @@ public sealed class RuntimeSchedule
         public bool WritesVersioned;
         public SimTier TierFilter = SimTier.All;
         public int CellAmortize;
+        public bool Checkerboard;
     }
 }

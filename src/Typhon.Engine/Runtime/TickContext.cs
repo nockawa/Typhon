@@ -104,4 +104,10 @@ public struct TickContext
     /// movement, decay, or state-machine updates that happen once per amortization cycle.
     /// </summary>
     public float AmortizedDeltaTime { get; init; }
+
+    /// <summary>
+    /// Per-tier cost and entity count metrics from the previous tick (issue #234). Available to all systems — primarily consumed by <c>TierAssignment</c>
+    /// <see cref="CallbackSystem"/> for adaptive tier boundary adjustment. Zero on the first tick (no previous-tick data).
+    /// </summary>
+    public TierBudgetMetrics TierBudgetMetrics { get; init; }
 }
