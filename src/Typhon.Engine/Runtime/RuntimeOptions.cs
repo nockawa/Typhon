@@ -48,6 +48,13 @@ public class RuntimeOptions
     public int ParallelQueryMinChunkSize { get; set; } = 64;
 
     /// <summary>
+    /// Optional deep runtime inspector. When set, the scheduler calls <see cref="IRuntimeInspector"/> methods
+    /// at each instrumentation point (tick start/end, system ready/chunk start/chunk end, phase transitions).
+    /// Set to null (default) for no inspection overhead. Only active when <see cref="TelemetryConfig.SchedulerDeepTrace"/> is also true.
+    /// </summary>
+    public IRuntimeInspector Inspector { get; set; }
+
+    /// <summary>
     /// Resolves the effective worker count, applying the auto-detect formula if <see cref="WorkerCount"/> is -1.
     /// </summary>
     internal int ResolveWorkerCount() => WorkerCount == -1 ? Math.Max(1, Environment.ProcessorCount - 4) : WorkerCount;
