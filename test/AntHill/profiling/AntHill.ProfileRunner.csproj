@@ -7,7 +7,13 @@
     <LangVersion>default</LangVersion>
   </PropertyGroup>
   <ItemGroup>
+    <None Update="typhon.telemetry.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
+    <ProjectReference Include="..\..\..\src\Typhon.Profiler\Typhon.Profiler.csproj" />
     <ProjectReference Include="..\..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj"
                       ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
     <ProjectReference Include="..\..\..\src\Typhon.Generators\Typhon.Generators.csproj"

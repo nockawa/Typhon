@@ -1,0 +1,23 @@
+{
+  "Typhon": {
+    "Telemetry": {
+      "Enabled": true,
+      "Scheduler": {
+        "Enabled": true,
+        "DeepTrace": true
+      },
+      "Transaction": {
+        "Enabled": true,
+        "TrackCommitRollback": true,
+        "TrackDuration": true
+      },
+      "PagedMMF": {
+        "Enabled": true,
+        "SpanLevel": "IOOnly"
+      },
+      "ECS": {
+        "Enabled": true
+      }
+    }
+  }
+}

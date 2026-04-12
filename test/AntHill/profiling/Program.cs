@@ -1,10 +1,13 @@
 using System;
+using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Typhon.Engine;
+using Typhon.Profiler;
 using Typhon.Schema.Definition;
 
 namespace AntHill.ProfileRunner;
@@ -41,6 +44,8 @@ public static class Program
     {
         int antCount = 100_000;
         int[] workerCounts = [4, 8, 16, 30];
+        string traceFile = null;
+        int livePort = -1;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -52,6 +57,41 @@ public static class Program
             {
                 workerCounts = [int.Parse(args[++i])];
             }
+            else if (args[i] == "--trace")
+            {
+                traceFile = i + 1 < args.Length && !args[i + 1].StartsWith("--")
+                    ? args[++i]
+                    : Path.Combine(AppContext.BaseDirectory, "anthill.typhon-trace");
+            }
+            else if (args[i] == "--live")
+            {
+                livePort = i + 1 < args.Length && int.TryParse(args[i + 1], out var p)
+                    ? args[++i] != null ? p : 9001
+                    : 9001;
+            }
+        }
+
+        if (livePort >= 0)
+        {
+            Console.WriteLine($"AntHill ProfileRunner: LIVE MODE — {antCount:N0} ants, {workerCounts[0]} workers, port {livePort}");
+            Console.WriteLine($"  Listening on port {livePort}... Press Ctrl+C to stop");
+            RunConfig(antCount, workerCounts[0], null, livePort);
+            return;
+        }
+
+        if (traceFile != null)
+        {
+            Console.WriteLine($"AntHill ProfileRunner: TRACE MODE — {antCount:N0} ants, {workerCounts[0]} workers, {RunSeconds}s");
+            Console.WriteLine($"  Trace file: {traceFile}");
+            RunConfig(antCount, workerCounts[0], traceFile);
+
+            // Export to Chrome Trace JSON for immediate visualization
+            var jsonFile = Path.ChangeExtension(traceFile, ".json");
+            Console.WriteLine($"  Exporting Chrome Trace to: {jsonFile}");
+            using var jsonStream = File.Create(jsonFile);
+            ChromeTraceExporter.Export(traceFile, jsonStream);
+            Console.WriteLine($"  Done! Open {jsonFile} in https://ui.perfetto.dev");
+            return;
         }
 
         Console.WriteLine($"AntHill ProfileRunner: {RunSeconds}s per config, {antCount:N0} ants");
@@ -64,7 +104,7 @@ public static class Program
         }
     }
 
-    static void RunConfig(int antCount, int workerCount)
+    static void RunConfig(int antCount, int workerCount, string traceFile = null, int livePort = -1)
     {
         var services = new ServiceCollection();
         services
@@ -142,9 +182,30 @@ public static class Program
                     }
                 }
             }, input: () => antView, parallel: true);
-        }, new RuntimeOptions { BaseTickRate = 60, WorkerCount = workerCount });
+        }, new RuntimeOptions
+        {
+            BaseTickRate = 60,
+            WorkerCount = workerCount,
+            Inspector = livePort >= 0
+                ? new TcpStreamInspector(livePort)
+                : traceFile != null ? new TraceFileInspector(traceFile) : null
+        });
 
         runtime.Start();
+
+        // Live mode: run until Ctrl+C
+        if (livePort >= 0)
+        {
+            var cts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+            try { Task.Delay(Timeout.Infinite, cts.Token).Wait(); } catch (AggregateException) { }
+            Console.WriteLine("\nShutting down...");
+            runtime.Shutdown();
+            try { antView.Dispose(); } catch { }
+            try { scope.Dispose(); } catch { }
+            try { sp.Dispose(); } catch { }
+            return;
+        }
 
         // Warm up 2s, then measure
         Thread.Sleep(2000);
