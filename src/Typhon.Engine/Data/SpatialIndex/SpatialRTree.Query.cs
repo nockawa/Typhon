@@ -493,7 +493,9 @@ internal unsafe partial class SpatialRTree<TStore>
                 aabb[d] = center[d] - radius;
                 aabb[d + halfCoord] = center[d] + radius;
             }
+#pragma warning disable CS9080 // Use of variable in this context may expose referenced variables outside of their declaration scope
             _inner = new AABBQueryEnumerator(tree, aabb, changeSet, categoryMask);
+#pragma warning restore CS9080 // Use of variable in this context may expose referenced variables outside of their declaration scope
         }
 
         public SpatialQueryResult Current => _inner.Current;

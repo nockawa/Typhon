@@ -285,6 +285,13 @@ public static class TelemetryConfig
     /// </summary>
     public static readonly bool SchedulerActive;
 
+    /// <summary>
+    /// Whether deep trace recording is enabled (per-chunk, per-worker events written to <c>.typhon-trace</c> file).
+    /// When true, the scheduler emits <see cref="IRuntimeInspector"/> callbacks for every system ready/chunk start/chunk end event.
+    /// Overhead: ~20-30 ns per event (~3-4 µs per tick for a 20-system DAG). Default: false.
+    /// </summary>
+    public static readonly bool SchedulerDeepTrace;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // CONFIGURATION SOURCE TRACKING (for diagnostics)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -367,6 +374,7 @@ public static class TelemetryConfig
         SchedulerTrackTransitionLatency = schedSection.GetValue("TrackTransitionLatency", true);
         SchedulerTrackWorkerUtilization = schedSection.GetValue("TrackWorkerUtilization", true);
         SchedulerTrackStragglerGap = schedSection.GetValue("TrackStragglerGap", true);
+        SchedulerDeepTrace = schedSection.GetValue("DeepTrace", false);
         SchedulerActive = Enabled && SchedulerEnabled;
     }
 
@@ -454,7 +462,8 @@ public static class TelemetryConfig
 
            Scheduler: Active={SchedulerActive}
              Enabled={SchedulerEnabled}, TransitionLatency={SchedulerTrackTransitionLatency},
-             WorkerUtilization={SchedulerTrackWorkerUtilization}, StragglerGap={SchedulerTrackStragglerGap}
+             WorkerUtilization={SchedulerTrackWorkerUtilization}, StragglerGap={SchedulerTrackStragglerGap},
+             DeepTrace={SchedulerDeepTrace}
          """;
 
     /// <summary>

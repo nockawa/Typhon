@@ -209,6 +209,12 @@ public sealed class TyphonRuntime : IDisposable
         };
 
         Scheduler.OnCriticalOverloadCallback = () => OnCriticalOverload?.Invoke(this);
+
+        // Wire deep trace inspector (if configured and enabled)
+        if (_options.Inspector != null)
+        {
+            Scheduler.SetInspector(_options.Inspector);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -270,6 +276,9 @@ public sealed class TyphonRuntime : IDisposable
         {
             _parallelAccessors[i]?.Dispose();
         }
+
+        // Dispose deep trace inspector (flushes remaining data to file)
+        (_options.Inspector as IDisposable)?.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1738,20 +1747,23 @@ public sealed class TyphonRuntime : IDisposable
         // for persistent cluster content mutation.
         //
         // See debate decision Q1 in the Phase 3 design notes, and claude/design/spatial-tiers/01-spatial-clusters.md §"Migration fence WAL atomicity".
-        Engine.WriteTickFence(scheduler.CurrentTickNumber);
+        InspectorPhase(TickPhase.WriteTickFence, () => Engine.WriteTickFence(scheduler.CurrentTickNumber));
 
         // Flush the UoW to make all Deferred writes (including the tick fence publishes above) durable, then dispose. UoW.Flush in WAL mode calls
         // WalManager.RequestFlush + WaitForDurable(currentLsn), where currentLsn is captured at the moment of the call — so it includes every publish made
         // in WriteTickFence.
-        try
+        InspectorPhase(TickPhase.UowFlush, () =>
         {
-            _currentUow?.Flush();
-        }
-        finally
-        {
-            _currentUow?.Dispose();
-            _currentUow = null;
-        }
+            try
+            {
+                _currentUow?.Flush();
+            }
+            finally
+            {
+                _currentUow?.Dispose();
+                _currentUow = null;
+            }
+        });
 
         // Issue #234: compute per-tier budget metrics from this tick's system telemetry, for the next tick's TickContext.
         ComputeTierBudgetMetrics();
@@ -1761,7 +1773,26 @@ public sealed class TyphonRuntime : IDisposable
         //   1. Ring buffer has ALL entries (commit-time + shadow-time) for correct View membership
         //   2. PreviousTickDirtyBitmap has this tick's dirty chunks for Modified detection
         //   3. All state is quiescent (no concurrent writers)
-        _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber, Scheduler.CurrentOverloadLevel);
+        InspectorPhase(TickPhase.OutputPhase, () => _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber, Scheduler.CurrentOverloadLevel));
+    }
+
+    /// <summary>
+    /// Wraps a tick phase in inspector PhaseStart/PhaseEnd calls when deep tracing is active.
+    /// When tracing is disabled, this compiles to a direct call (JIT eliminates the guard).
+    /// </summary>
+    private void InspectorPhase(TickPhase phase, Action action)
+    {
+        if (TelemetryConfig.SchedulerDeepTrace && _options.Inspector != null)
+        {
+            var start = Stopwatch.GetTimestamp();
+            _options.Inspector.OnPhaseStart(phase, start);
+            action();
+            _options.Inspector.OnPhaseEnd(phase, Stopwatch.GetTimestamp());
+        }
+        else
+        {
+            action();
+        }
     }
 
     /// <summary>

@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>default</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\Typhon.Profiler\Typhon.Profiler.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.2" />
+    </ItemGroup>
+
+    <!-- Exclude client build artifacts and node_modules from the C# project -->
+    <ItemGroup>
+        <Content Remove="ClientApp\**" />
+        <None Remove="ClientApp\**" />
+    </ItemGroup>
+
+    <!-- Build the client app when wwwroot/index.html is missing (first build or after clean) -->
+    <Target Name="BuildClientApp" BeforeTargets="Build" Condition="!Exists('wwwroot\index.html')">
+        <Message Importance="high" Text="Building Typhon Profiler client..." />
+        <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="ClientApp" />
+        <Exec Command="npm run build" WorkingDirectory="ClientApp" />
+    </Target>
+
+    <!-- Always rebuild client on publish -->
+    <Target Name="PublishClientApp" BeforeTargets="Publish">
+        <Message Importance="high" Text="Building Typhon Profiler client for publish..." />
+        <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="ClientApp" />
+        <Exec Command="npm run build" WorkingDirectory="ClientApp" />
+    </Target>
+
+    <!-- Clean: remove wwwroot build output -->
+    <Target Name="CleanClientApp" AfterTargets="Clean">
+        <RemoveDir Directories="wwwroot" />
+    </Target>
+
+</Project>

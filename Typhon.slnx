@@ -14,6 +14,7 @@
         <Project Path="src/Typhon.Client/Typhon.Client.csproj" />
         <Project Path="src/Typhon.Shell/Typhon.Shell.csproj" />
         <Project Path="src/Typhon.Shell.Extensibility/Typhon.Shell.Extensibility.csproj" />
+        <Project Path="src/Typhon.Profiler/Typhon.Profiler.csproj" />
     </Folder>
     <Folder Name="/test/">
         <Project Path="test/AntHill/AntHill.csproj">
@@ -25,5 +26,8 @@
         <Project Path="test/Typhon.Client.Tests/Typhon.Client.Tests.csproj" />
         <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
         <Project Path="test/Typhon.MonitoringDemo/Typhon.MonitoringDemo.csproj" />
+    </Folder>
+    <Folder Name="/tools/">
+        <Project Path="tools/Typhon.Profiler.Server/Typhon.Profiler.Server.csproj" />
     </Folder>
 </Solution>

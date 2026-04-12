@@ -101,6 +101,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly long[] _workerActiveTicks;
     private readonly long[] _workerIdleTicks;
 
+    // Deep trace inspector (optional, guarded by TelemetryConfig.SchedulerDeepTrace)
+    private IRuntimeInspector _inspector;
+
     // ═══════════════════════════════════════════════════════════════
     // Tick lifecycle hooks (set by TyphonRuntime)
     // ═══════════════════════════════════════════════════════════════
@@ -318,6 +321,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     public void Shutdown()
     {
         LogShutdownRequested();
+        InspectorShutdown();
 
         // Signal workers to exit
         _workerShutdown = 1;
@@ -391,16 +395,19 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         // 2. Tick start hook (TyphonRuntime creates UoW)
         TickStartCallback?.Invoke(this);
+        InspectorTickStart(_currentTickNumber, tickStartTimestamp);
 
         // 3. Mark root systems ready (evaluate runIf and ReactiveSkip for roots before waking workers)
         var readyNow = Stopwatch.GetTimestamp();
         foreach (var root in _rootSystems)
         {
             _currentTickSystemMetrics[root].ReadyTick = readyNow;
+            InspectorSystemReady(root, readyNow);
             var sys = Systems[root];
             if (sys.RunIf != null && !sys.RunIf())
             {
                 _currentTickSystemMetrics[root].SkipReason = SkipReason.RunIfFalse;
+                InspectorSystemSkipped(root, SkipReason.RunIfFalse, Stopwatch.GetTimestamp());
                 // Skip root — dispatch its successors immediately.
                 // Safe to call here: workers haven't woken yet.
                 OnSystemComplete(root, -1, false);
@@ -408,6 +415,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             else if (sys.ReactiveSkip != null && sys.ReactiveSkip())
             {
                 _currentTickSystemMetrics[root].SkipReason = SkipReason.EmptyInput;
+                InspectorSystemSkipped(root, SkipReason.EmptyInput, Stopwatch.GetTimestamp());
                 OnSystemComplete(root, -1, false);
             }
             else
@@ -416,6 +424,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 if (overloadSkip != SkipReason.NotSkipped)
                 {
                     _currentTickSystemMetrics[root].SkipReason = overloadSkip;
+                    InspectorSystemSkipped(root, overloadSkip, Stopwatch.GetTimestamp());
                     OnSystemComplete(root, -1, false);
                 }
                 else if (sys.IsParallelQuery)
@@ -450,6 +459,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         TickEndCallback?.Invoke(this);
 
         var tickEndTimestamp = Stopwatch.GetTimestamp();
+        InspectorTickEnd(_currentTickNumber, tickEndTimestamp);
 
         // 6. Record telemetry
         //    Note: _nextTickTimestamp is updated by GetNextTick() which the base timer loop
@@ -479,6 +489,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         // Tick start hook
         TickStartCallback?.Invoke(this);
+        InspectorTickStart(_currentTickNumber, tickStartTimestamp);
 
         // Execute in topological order
         for (var i = 0; i < _topologicalOrder.Length; i++)
@@ -488,11 +499,13 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
             var readyTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].ReadyTick = readyTick;
+            InspectorSystemReady(sysIdx, readyTick);
 
             // Check if a predecessor failed
             if (_systemFailed[sysIdx])
             {
                 _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.DependencyFailed;
+                InspectorSystemSkipped(sysIdx, SkipReason.DependencyFailed, Stopwatch.GetTimestamp());
                 // Propagate failure to successors
                 foreach (var succ in sys.Successors)
                 {
@@ -506,12 +519,14 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             if (sys.RunIf != null && !sys.RunIf())
             {
                 _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.RunIfFalse;
+                InspectorSystemSkipped(sysIdx, SkipReason.RunIfFalse, Stopwatch.GetTimestamp());
                 continue;
             }
 
             if (sys.ReactiveSkip != null && sys.ReactiveSkip())
             {
                 _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.EmptyInput;
+                InspectorSystemSkipped(sysIdx, SkipReason.EmptyInput, Stopwatch.GetTimestamp());
                 continue;
             }
 
@@ -520,6 +535,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 if (overloadSkip != SkipReason.NotSkipped)
                 {
                     _currentTickSystemMetrics[sysIdx].SkipReason = overloadSkip;
+                    InspectorSystemSkipped(sysIdx, overloadSkip, Stopwatch.GetTimestamp());
                     continue;
                 }
             }
@@ -622,6 +638,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         TickEndCallback?.Invoke(this);
 
         var tickEndTimestamp = Stopwatch.GetTimestamp();
+        InspectorTickEnd(_currentTickNumber, tickEndTimestamp);
         ComputeAndRecordTelemetry(tickStartTimestamp, tickEndTimestamp);
     }
 
@@ -777,6 +794,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
+        InspectorChunkStart(sysIdx, 0, workerId, workStart, 1);
 
         var success = true;
         try
@@ -796,6 +814,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             SystemEndCallback?.Invoke(sysIdx, success);
 
             var workEnd = Stopwatch.GetTimestamp();
+            InspectorChunkEnd(sysIdx, 0, workerId, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
             if (trackUtilization)
             {
                 _workerActiveTicks[workerId] += workEnd - workStart;
@@ -833,6 +852,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workStart = Stopwatch.GetTimestamp();
+            InspectorChunkStart(sysIdx, chunk, workerId, workStart, sys.TotalChunks);
             try
             {
                 sys.PipelineChunkAction(chunk, sys.TotalChunks);
@@ -845,6 +865,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workEnd = Stopwatch.GetTimestamp();
+            InspectorChunkEnd(sysIdx, chunk, workerId, workEnd, 0);
 
             if (trackUtilization)
             {
@@ -893,6 +914,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workStart = Stopwatch.GetTimestamp();
+            InspectorChunkStart(sysIdx, chunk, workerId, workStart, sys.TotalChunks);
             try
             {
                 ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, sys.TotalChunks, workerId);
@@ -905,6 +927,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workEnd = Stopwatch.GetTimestamp();
+            InspectorChunkEnd(sysIdx, chunk, workerId, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
 
             if (trackUtilization)
             {
@@ -983,13 +1006,16 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var depsLeft = Interlocked.Decrement(ref _remainingDeps[succIdx].Value);
             if (depsLeft == 0)
             {
-                _currentTickSystemMetrics[succIdx].ReadyTick = Stopwatch.GetTimestamp();
+                var readyTs = Stopwatch.GetTimestamp();
+                _currentTickSystemMetrics[succIdx].ReadyTick = readyTs;
+                InspectorSystemReady(succIdx, readyTs);
                 var succ = Systems[succIdx];
 
                 // Check if any predecessor failed — skip this system entirely
                 if (_systemFailed[succIdx])
                 {
                     _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.DependencyFailed;
+                    InspectorSystemSkipped(succIdx, SkipReason.DependencyFailed, Stopwatch.GetTimestamp());
                     OnSystemComplete(succIdx, workerId, trackUtilization);
                 }
                 // Evaluate runIf here — before any worker can grab chunks.
@@ -997,11 +1023,13 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 else if (succ.RunIf != null && !succ.RunIf())
                 {
                     _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.RunIfFalse;
+                    InspectorSystemSkipped(succIdx, SkipReason.RunIfFalse, Stopwatch.GetTimestamp());
                     OnSystemComplete(succIdx, workerId, trackUtilization);
                 }
                 else if (succ.ReactiveSkip != null && succ.ReactiveSkip())
                 {
                     _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.EmptyInput;
+                    InspectorSystemSkipped(succIdx, SkipReason.EmptyInput, Stopwatch.GetTimestamp());
                     OnSystemComplete(succIdx, workerId, trackUtilization);
                 }
                 else
@@ -1010,6 +1038,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     if (overloadSkip != SkipReason.NotSkipped)
                     {
                         _currentTickSystemMetrics[succIdx].SkipReason = overloadSkip;
+                        InspectorSystemSkipped(succIdx, overloadSkip, Stopwatch.GetTimestamp());
                         OnSystemComplete(succIdx, workerId, trackUtilization);
                     }
                     else if (succ.IsParallelQuery)
@@ -1037,6 +1066,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
+        InspectorChunkStart(sysIdx, 0, workerId, workStart, 1);
 
         var success = true;
         try
@@ -1055,6 +1085,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             SystemEndCallback?.Invoke(sysIdx, success);
 
             var workEnd = Stopwatch.GetTimestamp();
+            InspectorChunkEnd(sysIdx, 0, workerId, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
             if (trackUtilization)
             {
                 _workerActiveTicks[workerId] += workEnd - workStart;
