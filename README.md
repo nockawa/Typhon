@@ -12,6 +12,7 @@ There is no documentation, no stable API, no NuGet package, and no support.
 Typhon is an embedded data engine for real-time workloads like game servers, simulations, and stateful dataflow.<br/> 
 It pairs a microsecond-latency ACID store — MVCC snapshot isolation, configurable durability, source-generated ECS archetype accessors — with a tick-based parallel runtime that dispatches fine-grained system chunks across worker threads, each operating directly on the store.<br/>
 The runtime doesn't sit on top of the database — it runs inside it.
+
 ---
 
 ## Key Features
