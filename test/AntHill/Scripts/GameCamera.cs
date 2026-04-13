@@ -6,7 +6,7 @@ public partial class GameCamera : Camera2D
 {
     [Export] public float PanSpeed = 500f;
     [Export] public float ZoomSpeed = 0.1f;
-    [Export] public float MinZoom = 0.01f;
+    [Export] public float MinZoom = 0.02f;
     [Export] public float MaxZoom = 4.0f;
 
     private bool _dragging;

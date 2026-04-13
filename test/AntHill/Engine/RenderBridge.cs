@@ -1,26 +1,81 @@
+using System;
+
 namespace AntHill;
 
 /// <summary>
-/// Immutable snapshot of entity render data for one tick.
-/// Published by the Typhon CopyToRenderBuffer system, consumed by Godot's _Process.
+/// Double-buffered growable render buffer owned by a single worker thread.
+/// The engine writes to <see cref="Data"/>/<see cref="Count"/>, then <see cref="Reset"/> swaps
+/// the backing array so Godot can read the completed buffer while the engine writes the next frame.
 /// </summary>
-public sealed class RenderFrame
+public sealed class RenderWorkerBuffer
 {
-    /// <summary>
-    /// MultiMesh buffer: 12 floats per instance (8 Transform2D as 2x4 GPU matrix + 4 Color RGBA).
-    /// Layout per instance: [bx0, bx1, 0, ox, by0, by1, 0, oy, r, g, b, a]
-    /// </summary>
-    public float[] Buffer;
+    private const int Stride = 12;
 
-    /// <summary>Number of visible instances in the buffer.</summary>
+    private float[][] _buffers = new float[2][];
+    private int _writeSlot;
+
+    /// <summary>Current write buffer. Written by the engine during FillRender.</summary>
+    public float[] Data;
+
+    /// <summary>Number of instances written to <see cref="Data"/> this frame.</summary>
+    public int Count;
+
+    public RenderWorkerBuffer(int initialCapacity)
+    {
+        int len = initialCapacity * Stride;
+        _buffers[0] = new float[len];
+        _buffers[1] = new float[len];
+        _writeSlot = 0;
+        Data = _buffers[0];
+    }
+
+    /// <summary>Swap to the other buffer for the next frame. Call AFTER snapshotting Data/Count.</summary>
+    public void Reset()
+    {
+        _writeSlot ^= 1;
+        Data = _buffers[_writeSlot];
+        Count = 0;
+    }
+
+    /// <summary>Ensure backing array can hold at least <paramref name="additionalInstances"/> more. Call once per cluster.</summary>
+    public void EnsureCapacity(int additionalInstances)
+    {
+        int needed = (Count + additionalInstances) * Stride;
+        if (needed > Data.Length)
+        {
+            int newLen = Data.Length;
+            while (newLen < needed) newLen *= 2;
+            Array.Resize(ref Data, newLen);
+            _buffers[_writeSlot] = Data;
+        }
+    }
+}
+
+/// <summary>
+/// Immutable snapshot of one buffer: array reference + count at publish time.
+/// Godot reads these — engine never modifies a published snapshot.
+/// </summary>
+public struct BufferSnapshot
+{
+    public float[] Data;
     public int Count;
 }
 
 /// <summary>
-/// Lock-free bridge between Typhon worker threads and Godot main thread.
-/// Runtime publishes a new RenderFrame each tick via volatile write.
-/// Godot reads the latest frame — no lock, no contention.
+/// Published render data: immutable snapshots of per-worker buffers + overlay.
+/// Each snapshot is consumed by its own MultiMeshInstance2D — zero copies.
 /// </summary>
+public sealed class RenderFrame
+{
+    public BufferSnapshot[] Buffers;
+    public BufferSnapshot Overlay;
+    public int VisibleAnts;
+
+    /// <summary>Downsampled pheromone heatmap: RGBA byte array (200×200×4). Green=food, Blue=home. Ready for Image.SetData.</summary>
+    public byte[] HeatmapRGBA;
+    public const int HeatmapSize = 200;
+}
+
 public sealed class RenderBridge
 {
     private volatile RenderFrame _latest;

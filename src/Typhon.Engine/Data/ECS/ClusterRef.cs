@@ -32,13 +32,18 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
     private readonly byte* _transientBase;  // TransientStore cluster base; null for pure-SV/V or pure-Transient (where _base IS TS)
     private readonly ArchetypeClusterInfo _layout;
     private readonly ArchetypeMetadata _meta;
+    private readonly int _chunkId;
+    private readonly ClusterSpatialAabb[] _clusterAabbs; // null when archetype has no spatial index
 
-    internal ClusterRef(byte* basePtr, byte* transientBasePtr, ArchetypeClusterInfo layout, ArchetypeMetadata meta)
+    internal ClusterRef(byte* basePtr, byte* transientBasePtr, ArchetypeClusterInfo layout, ArchetypeMetadata meta, int chunkId,
+        ClusterSpatialAabb[] clusterAabbs)
     {
         _base = basePtr;
         _transientBase = transientBasePtr;
         _layout = layout;
         _meta = meta;
+        _chunkId = chunkId;
+        _clusterAabbs = clusterAabbs;
     }
 
     /// <summary>Bitmask of occupied slots. Bit i = 1 means slot i contains a live entity.</summary>
@@ -136,6 +141,23 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public EntityId GetEntityId(int slotIndex) =>
         EntityId.FromRaw(*(long*)(_base + _layout.EntityIdsOffset + slotIndex * 8));
+
+    /// <summary>The chunk ID of this cluster within the archetype's segment.</summary>
+    public int ChunkId
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _chunkId;
+    }
+
+    /// <summary>
+    /// Tight AABB of all entities in this cluster. Returns <see cref="ClusterSpatialAabb.Empty"/> if the archetype has no spatial index.
+    /// For 2D archetypes, MinZ/MaxZ are ±infinity sentinels — use MinX/MinY/MaxX/MaxY only.
+    /// </summary>
+    public ref readonly ClusterSpatialAabb SpatialBounds
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => ref (_clusterAabbs != null ? ref _clusterAabbs[_chunkId] : ref ClusterSpatialAabb.s_empty);
+    }
 }
 
 /// <summary>
@@ -242,6 +264,39 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
         return result;
     }
 
+    /// <summary>The chunk ID of the current cluster. Available after <see cref="MoveNext"/> returns true.</summary>
+    public int CurrentChunkId
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _clusterIds[_index];
+    }
+
+    /// <summary>
+    /// Mark all occupied slots in the current cluster as dirty. Call this after writing to component data via
+    /// <see cref="ClusterRef{TArch}.GetSpan{T}"/> — the direct cluster path does not set dirty bits automatically.
+    /// Without this call, <c>DetectClusterMigrations</c> and the WAL tick fence will not see the changes.
+    /// </summary>
+    public void MarkCurrentDirty()
+    {
+        int chunkId = _clusterIds[_index];
+        byte* basePtr = _hasPersistentAccessor ? _accessor.GetChunkAddress(chunkId) : _transientAccessor.GetChunkAddress(chunkId);
+        ulong occupancy = *(ulong*)basePtr;
+        while (occupancy != 0)
+        {
+            int slot = BitOperations.TrailingZeroCount(occupancy);
+            occupancy &= occupancy - 1;
+            _state.SetDirty(chunkId, slot);
+        }
+    }
+
+    /// <summary>
+    /// Mark a single slot in the current cluster as dirty. More precise than <see cref="MarkCurrentDirty"/> —
+    /// use when only specific entities changed (e.g., after a cell-boundary crossing check). The slot index
+    /// is the bit position from the <see cref="ClusterRef{TArch}.OccupancyBits"/> TZCNT loop.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void MarkSlotDirty(int slotIndex) => _state.SetDirty(_clusterIds[_index], slotIndex);
+
     /// <summary>Advance to the next active cluster in the range.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext() => ++_index < _endIndex;
@@ -257,7 +312,7 @@ public unsafe ref struct ClusterEnumerator<TArch> where TArch : class
             byte* basePtr = _hasPersistentAccessor ? _accessor.GetChunkAddress(chunkId) : _transientAccessor.GetChunkAddress(chunkId);
             // TransientStore base for mixed archetypes (null for pure-SV/V and pure-Transient)
             byte* transientPtr = (_hasTransientAccessor && _hasPersistentAccessor) ? _transientAccessor.GetChunkAddress(chunkId) : null;
-            return new ClusterRef<TArch>(basePtr, transientPtr, _state.Layout, _meta);
+            return new ClusterRef<TArch>(basePtr, transientPtr, _state.Layout, _meta, chunkId, _state.ClusterAabbs);
         }
     }
 

@@ -1410,7 +1410,8 @@ public sealed partial class TyphonRuntime : IDisposable
             EndClusterIndex = clusterEnd,
             ClusterIds = clusterIdArray,
             TierBudgetMetrics = _previousTickMetrics,
-            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
+            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid),
+            WorkerId = workerId
         };
 
         Scheduler.Systems[sysIdx].CallbackAction(ctx);
