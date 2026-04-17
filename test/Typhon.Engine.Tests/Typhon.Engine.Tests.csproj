@@ -40,6 +40,13 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- Test-only telemetry config: enables ProfilerActive so producer tests can exercise the on-path -->
+        <Content Include="typhon.telemetry.json">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
+    <ItemGroup>
         <!-- Reference the Roslyn analyzer for ChunkAccessor enforcement -->
         <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj" ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
         <ProjectReference Include="..\..\src\Typhon.Generators\Typhon.Generators.csproj" ReferenceOutputAssembly="false" OutputItemType="Analyzer" />

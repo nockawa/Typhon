@@ -29,11 +29,11 @@ public class ResourceTreeTests
     }
 
     [Test]
-    public void Root_HasSevenChildren()
+    public void Root_HasEightChildren()
     {
         var children = _registry.Root.Children.ToList();
-        Assert.That(children, Has.Count.EqualTo(7));
-        Assert.That(children.Select(c => c.Id), Is.EquivalentTo(new[] { "Storage", "DataEngine", "Durability", "Allocation", "Synchronization", "Timer", "Runtime" }));
+        Assert.That(children, Has.Count.EqualTo(8));
+        Assert.That(children.Select(c => c.Id), Is.EquivalentTo(new[] { "Storage", "DataEngine", "Durability", "Allocation", "Synchronization", "Timer", "Runtime", "Profiler" }));
     }
 
     [Test]

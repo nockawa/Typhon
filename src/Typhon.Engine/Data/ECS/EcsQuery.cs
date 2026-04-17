@@ -5,6 +5,7 @@ using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 using JetBrains.Annotations;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -537,56 +538,53 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     /// <summary>Execute the query and collect matching entity IDs into a HashSet.</summary>
     public HashSet<EntityId> Execute()
     {
-        Activity activity = null;
-        if (TelemetryConfig.EcsActive)
+        var scope = TyphonEvent.BeginEcsQueryExecute(0);
+        try
         {
-            activity = TyphonActivitySource.StartActivity("ECS.Query.Execute");
-            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
-        }
+            var result = new HashSet<EntityId>(_take > 0 ? _take : 64);
+            if (MaskIsEmpty)
+            {
+                scope.ScanMode = EcsQueryScanMode.Empty;
+                scope.ResultCount = 0;
+                return result;
+            }
 
-        var result = new HashSet<EntityId>(_take > 0 ? _take : 64);
-        if (MaskIsEmpty)
-        {
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, 0);
-            activity?.Dispose();
+            // Targeted scan via PipelineExecutor when field predicates are present
+            if (HasFieldPredicates)
+            {
+                var targeted = ExecuteTargeted();
+                scope.ScanMode = EcsQueryScanMode.Targeted;
+                scope.ResultCount = targeted.Count;
+                return targeted;
+            }
+
+            // Spatial-driven scan: spatial index produces candidates, filtered by archetype mask + visibility
+            if (_spatialQueryType != SpatialQueryType.None)
+            {
+                var spatial = ExecuteSpatial();
+                scope.ScanMode = EcsQueryScanMode.Spatial;
+                scope.ResultCount = spatial.Count;
+                return spatial;
+            }
+
+            CollectMatching((id, _) => result.Add(id));
+
+            // T3 post-filter: evaluate WHERE predicate per entity via Transaction.Open
+            var filter = _whereFilter;
+            var tx = _tx;
+            if (filter != null)
+            {
+                result.RemoveWhere(id => !filter(id, tx));
+            }
+
+            scope.ScanMode = EcsQueryScanMode.Broad;
+            scope.ResultCount = result.Count;
             return result;
         }
-
-        // Targeted scan via PipelineExecutor when field predicates are present
-        if (HasFieldPredicates)
+        finally
         {
-            var targeted = ExecuteTargeted();
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, targeted.Count);
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "targeted");
-            activity?.Dispose();
-            return targeted;
+            scope.Dispose();
         }
-
-        // Spatial-driven scan: spatial index produces candidates, filtered by archetype mask + visibility
-        if (_spatialQueryType != SpatialQueryType.None)
-        {
-            var spatial = ExecuteSpatial();
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, spatial.Count);
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "spatial");
-            activity?.Dispose();
-            return spatial;
-        }
-
-        CollectMatching((id, _) => result.Add(id));
-
-        // T3 post-filter: evaluate WHERE predicate per entity via Transaction.Open
-        var filter = _whereFilter;
-        var tx = _tx;
-        if (filter != null)
-        {
-            result.RemoveWhere(id => !filter(id, tx));
-        }
-
-        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, result.Count);
-        activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "broad");
-        activity?.Dispose();
-
-        return result;
     }
 
     /// <summary>Execute the query with ordering support. Requires <see cref="OrderByField{T,TKey}"/>.</summary>
@@ -1927,111 +1925,110 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     /// <summary>Count matching entities.</summary>
     public int Count()
     {
-        Activity activity = null;
-        if (TelemetryConfig.EcsActive)
+        var scope = TyphonEvent.BeginEcsQueryCount(0);
+        try
         {
-            activity = TyphonActivitySource.StartActivity("ECS.Query.Count");
-            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
-        }
-
-        if (MaskIsEmpty)
-        {
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, 0);
-            activity?.Dispose();
-            return 0;
-        }
-
-        // Targeted count via PipelineExecutor — avoids allocating result collections
-        if (HasFieldPredicates)
-        {
-            // If any matching archetypes use cluster storage, fall through to Execute().Count (cluster scan path handles counting correctly)
-            bool anyCluster = false;
-            foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+            if (MaskIsEmpty)
             {
-                if (MaskTest(meta.ArchetypeId) && meta.HasClusterIndexes)
+                scope.ScanMode = EcsQueryScanMode.Empty;
+                scope.ResultCount = 0;
+                return 0;
+            }
+
+            // Targeted count via PipelineExecutor — avoids allocating result collections
+            if (HasFieldPredicates)
+            {
+                // If any matching archetypes use cluster storage, fall through to Execute().Count (cluster scan path handles counting correctly)
+                bool anyCluster = false;
+                foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
                 {
-                    anyCluster = true;
-                    break;
+                    if (MaskTest(meta.ArchetypeId) && meta.HasClusterIndexes)
+                    {
+                        anyCluster = true;
+                        break;
+                    }
                 }
+
+                if (anyCluster)
+                {
+                    var targetedCount = ExecuteTargeted().Count;
+                    scope.ScanMode = EcsQueryScanMode.TargetedCluster;
+                    scope.ResultCount = targetedCount;
+                    return targetedCount;
+                }
+
+                var ct = _whereComponentTable;
+                var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
+                var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+                var scanCount = _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx);
+                scope.ScanMode = EcsQueryScanMode.Targeted;
+                scope.ResultCount = scanCount;
+                return scanCount;
             }
 
-            if (anyCluster)
+            // If WHERE filter, use Execute (which applies post-filter) then count
+            if (_whereFilter != null)
             {
-                int hybrid = ExecuteTargeted().Count;
-                activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, hybrid);
-                activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "targeted-cluster");
-                activity?.Dispose();
-                return hybrid;
+                var executeCount = Execute().Count;
+                scope.ScanMode = EcsQueryScanMode.Broad;
+                scope.ResultCount = executeCount;
+                return executeCount;
             }
 
-            var ct = _whereComponentTable;
-            var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
-            var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
-            int targeted = _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx);
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, targeted);
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "targeted");
-            activity?.Dispose();
-            return targeted;
+            int count = 0;
+            CollectMatching((_, _) => count++);
+            scope.ScanMode = EcsQueryScanMode.Broad;
+            scope.ResultCount = count;
+            return count;
         }
-
-        // If WHERE filter, use Execute (which applies post-filter) then count
-        if (_whereFilter != null)
+        finally
         {
-            int filtered = Execute().Count;
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, filtered);
-            activity?.Dispose();
-            return filtered;
+            scope.Dispose();
         }
-
-        int count = 0;
-        CollectMatching((_, _) => count++);
-        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, count);
-        activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "broad");
-        activity?.Dispose();
-        return count;
     }
 
     /// <summary>Test if any entity matches. Short-circuits on first match.</summary>
     public bool Any()
     {
-        Activity activity = null;
-        if (TelemetryConfig.EcsActive)
+        var scope = TyphonEvent.BeginEcsQueryAny(0);
+        try
         {
-            activity = TyphonActivitySource.StartActivity("ECS.Query.Any");
-            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
-        }
+            if (MaskIsEmpty)
+            {
+                scope.ScanMode = EcsQueryScanMode.Empty;
+                scope.Found = false;
+                return false;
+            }
 
-        if (MaskIsEmpty)
+            if (HasFieldPredicates)
+            {
+                var ct = _whereComponentTable;
+                var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
+                var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
+                var hasMatch = _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx) > 0;
+                scope.ScanMode = EcsQueryScanMode.Targeted;
+                scope.Found = hasMatch;
+                return hasMatch;
+            }
+
+            if (_whereFilter != null)
+            {
+                var hasMatch = Execute().Count > 0;
+                scope.ScanMode = EcsQueryScanMode.Broad;
+                scope.Found = hasMatch;
+                return hasMatch;
+            }
+
+            bool found = false;
+            CollectMatching((_, _) => found = true, stopOnFirst: true);
+            scope.ScanMode = EcsQueryScanMode.Broad;
+            scope.Found = found;
+            return found;
+        }
+        finally
         {
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, 0);
-            activity?.Dispose();
-            return false;
+            scope.Dispose();
         }
-
-        if (HasFieldPredicates)
-        {
-            var ct = _whereComponentTable;
-            var evaluators = QueryResolverHelper.ResolveEvaluators(_fieldPredicateBranches[0], ct, 0);
-            var plan = PlanBuilder.Instance.BuildPlan(evaluators, ct, AdvancedSelectivityEstimator.Instance);
-            bool any = _whereFieldReader.CountScan(plan, plan.OrderedEvaluators, ct, _tx) > 0;
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, any ? 1 : 0);
-            activity?.Dispose();
-            return any;
-        }
-
-        if (_whereFilter != null)
-        {
-            bool any = Execute().Count > 0;
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, any ? 1 : 0);
-            activity?.Dispose();
-            return any;
-        }
-
-        bool found = false;
-        CollectMatching((_, _) => found = true, stopOnFirst: true);
-        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, found ? 1 : 0);
-        activity?.Dispose();
-        return found;
     }
 
     /// <summary>Get an enumerator for foreach support. Pre-collects matching entities then iterates.</summary>

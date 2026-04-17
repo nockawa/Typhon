@@ -1,0 +1,10 @@
+{
+  "Typhon": {
+    "Telemetry": {
+      "Enabled": true,
+      "Profiler": {
+        "Enabled": true
+      }
+    }
+  }
+}

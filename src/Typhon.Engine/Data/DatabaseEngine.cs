@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Reflection;
 using System.Linq.Expressions;
+using Typhon.Engine.Profiler;
 using Typhon.Schema.Definition;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
@@ -20,6 +21,7 @@ using Typhon.Schema.Definition;
 [assembly: InternalsVisibleTo("tsh")]
 [assembly: InternalsVisibleTo("AntHill")]
 [assembly: InternalsVisibleTo("AntHill.ProfileRunner")]
+[assembly: InternalsVisibleTo("Typhon.IOProfileRunner")]
 
 namespace Typhon.Engine;
 
@@ -1370,16 +1372,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         long startTimestamp = Stopwatch.GetTimestamp();
 
-        // Manual-dispose span pattern: null init + conditional start + null-conditional dispose lets the JIT
-        // eliminate the span branch entirely when TelemetryConfig.SpatialActive is false. See MEMORY.md
-        // "Span Instrumentation" notes.
-        Activity migrationActivity = null;
-        if (TelemetryConfig.SpatialActive)
-        {
-            migrationActivity = TyphonActivitySource.StartActivity("Cluster.Migration");
-            migrationActivity?.SetTag("typhon.archetype.id", (int)archetypeId);
-            migrationActivity?.SetTag("typhon.migration.count", count);
-        }
+        using var migrationScope = TyphonEvent.BeginClusterMigration(archetypeId, count);
 
         var grid = _spatialGrid;
         var layout = clusterState.Layout;
@@ -1661,7 +1654,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 clusterAccessor.Dispose();
             }
             changeSet.SaveChanges();
-            migrationActivity?.Dispose();
 
             // Reset queue for next tick BEFORE any re-throw path can escape. Leaving entries in the queue after a mid-batch exception would cause the next
             // tick's ExecuteMigrations to re-attempt already-applied migrations, double-allocating destination slots and orphaning source clusters.

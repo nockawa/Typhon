@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Typhon.Engine.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -1326,70 +1327,76 @@ public unsafe partial class Transaction : EntityAccessor
         // No yield point — rollback/cleanup must always complete
         using var holdoff = ctx.EnterHoldoff();
 
-        using var activity = TyphonActivitySource.StartActivity("Transaction.Rollback");
-        activity?.SetTag(TyphonSpanAttributes.TransactionTsn, TSN);
-        activity?.SetTag(TyphonSpanAttributes.TransactionComponentCount, _componentInfos.Count);
+        var scope = TyphonEvent.BeginTransactionRollback(TSN);
+        scope.ComponentCount = _componentInfos.Count;
+        try
+        {
 
-        var context = new CommitContext();
+            var context = new CommitContext();
 #pragma warning disable CS9093 // ref-assign is safe: CommitContext is a ref struct that never escapes this method
-        context.Ctx = ref ctx;
+            context.Ctx = ref ctx;
 #pragma warning restore CS9093
 
-        // Determine tail status once for the entire rollback — saves N-1 shared lock acquires on TransactionChain
-        var wcTail = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
-        if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
-        {
-            ThrowHelper.ThrowLockTimeout("TransactionChain/RollbackTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
-        }
-        context.IsTail = _dbe.TransactionChain.Tail == this;
-        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
-        context.TailTSN = _dbe.TransactionChain.MinTSN;
-        _dbe.TransactionChain.Control.ExitSharedAccess();
-
-        var rollbackAction = new RollbackAction { Tx = this };
-        // Hoisted outside loop to avoid per-iteration stackalloc accumulation (CA2014)
-        Span<long> createdPkBuffer = stackalloc long[128];
-        // Process every Component Type and their components
-        foreach (var componentInfo in _componentInfos.Values)
-        {
-            context.Info = componentInfo;
-
-            componentInfo.ForEachMutableEntry(ref context, ref rollbackAction);
-
-            // Remove rolled-back Created entities from Single cache.
-            // Can't modify dictionary during ForEachMutableEntry, so do a second pass.
-            if (!componentInfo.IsMultiple)
+            // Determine tail status once for the entire rollback — saves N-1 shared lock acquires on TransactionChain
+            var wcTail = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
+            if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
             {
-                var cacheCount = componentInfo.SingleCache.Count;
-                Span<long> toRemove = cacheCount <= 128 ? createdPkBuffer[..cacheCount] : new long[cacheCount];
-                var removeCount = 0;
-                foreach (var kvp in componentInfo.SingleCache)
+                ThrowHelper.ThrowLockTimeout("TransactionChain/RollbackTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
+            }
+            context.IsTail = _dbe.TransactionChain.Tail == this;
+            context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
+            context.TailTSN = _dbe.TransactionChain.MinTSN;
+            _dbe.TransactionChain.Control.ExitSharedAccess();
+
+            var rollbackAction = new RollbackAction { Tx = this };
+            // Hoisted outside loop to avoid per-iteration stackalloc accumulation (CA2014)
+            Span<long> createdPkBuffer = stackalloc long[128];
+            // Process every Component Type and their components
+            foreach (var componentInfo in _componentInfos.Values)
+            {
+                context.Info = componentInfo;
+
+                componentInfo.ForEachMutableEntry(ref context, ref rollbackAction);
+
+                // Remove rolled-back Created entities from Single cache.
+                // Can't modify dictionary during ForEachMutableEntry, so do a second pass.
+                if (!componentInfo.IsMultiple)
                 {
-                    if ((kvp.Value.Operations & ComponentInfo.OperationType.Created) != 0)
+                    var cacheCount = componentInfo.SingleCache.Count;
+                    Span<long> toRemove = cacheCount <= 128 ? createdPkBuffer[..cacheCount] : new long[cacheCount];
+                    var removeCount = 0;
+                    foreach (var kvp in componentInfo.SingleCache)
                     {
-                        toRemove[removeCount++] = kvp.Key;
+                        if ((kvp.Value.Operations & ComponentInfo.OperationType.Created) != 0)
+                        {
+                            toRemove[removeCount++] = kvp.Key;
+                        }
+                    }
+                    for (var i = 0; i < removeCount; i++)
+                    {
+                        componentInfo.SingleCache.Remove(toRemove[i]);
+                        _deletedComponentCount++;
                     }
                 }
-                for (var i = 0; i < removeCount; i++)
-                {
-                    componentInfo.SingleCache.Remove(toRemove[i]);
-                    _deletedComponentCount++;
-                }
             }
-        }
 
-        // Flush batched deferred enqueue entries (non-tail path: single lock acquire for all entities)
-        if (_deferredEnqueueBatch is { Count: > 0 })
+            // Flush batched deferred enqueue entries (non-tail path: single lock acquire for all entities)
+            if (_deferredEnqueueBatch is { Count: > 0 })
+            {
+                _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
+                _deferredEnqueueBatch.Clear();
+            }
+
+            // New state
+            TransitionTo(TransactionState.Rollbacked);
+            _dbe?.RecordRollback();
+            return true;
+
+        }
+        finally
         {
-            _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
-            _deferredEnqueueBatch.Clear();
+            scope.Dispose();
         }
-
-        // New state
-        TransitionTo(TransactionState.Rollbacked);
-        activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "rolledback");
-        _dbe?.RecordRollback();
-        return true;
     }
 
     public bool Rollback()
@@ -1405,7 +1412,16 @@ public unsafe partial class Transaction : EntityAccessor
         long walHighLsn = 0;
         if (_dbe.WalManager != null && State != TransactionState.Created)
         {
-            walHighLsn = WalSerializer.SerializeToWal(_componentInfos, _dbe.WalManager, TSN, UowId, ref ctx);
+            var persistScope = TyphonEvent.BeginTransactionPersist(TSN);
+            try
+            {
+                walHighLsn = WalSerializer.SerializeToWal(_componentInfos, _dbe.WalManager, TSN, UowId, ref ctx);
+                persistScope.WalLsn = walHighLsn;
+            }
+            finally
+            {
+                persistScope.Dispose();
+            }
         }
 
         // Durability wait for Immediate mode
@@ -1494,128 +1510,134 @@ public unsafe partial class Transaction : EntityAccessor
         // ── Yield point: safe to cancel before any modifications ──
         ctx.ThrowIfCancelled();
 
-        using var activity = TyphonActivitySource.StartActivity("Transaction.Commit");
-        activity?.SetTag(TyphonSpanAttributes.TransactionTsn, TSN);
-        activity?.SetTag(TyphonSpanAttributes.TransactionComponentCount, _componentInfos.Count);
+        var scope = TyphonEvent.BeginTransactionCommit(TSN);
+        try
+        {
+            // Must sit inside the try so the finally still runs if this property access ever gains side effects that can throw.
+            scope.ComponentCount = _componentInfos.Count;
 
-        var startTicks = Stopwatch.GetTimestamp();
+            var startTicks = Stopwatch.GetTimestamp();
 
-        _dbe.LogCommitStart(TSN, _componentInfos.Count);
+            _dbe.LogCommitStart(TSN, _componentInfos.Count);
 
-        // ── Holdoff: entire commit loop runs to completion ──
-        using var holdoff = ctx.EnterHoldoff();
+            // ── Holdoff: entire commit loop runs to completion ──
+            using var holdoff = ctx.EnterHoldoff();
 
-        var conflictSolver = handler != null ? ConcurrencyConflictSolver.GetConflictSolver() : null;
-        var context = new CommitContext { Solver = conflictSolver, Handler = handler };
+            var conflictSolver = handler != null ? ConcurrencyConflictSolver.GetConflictSolver() : null;
+            var context = new CommitContext { Solver = conflictSolver, Handler = handler };
 #pragma warning disable CS9093 // ref-assign is safe: CommitContext is a ref struct that never escapes this method
-        context.Ctx = ref ctx;
+            context.Ctx = ref ctx;
 #pragma warning restore CS9093
-        var hasConflict = false;
+            var hasConflict = false;
 
-        // Determine tail status once for the entire commit — saves N-1 shared lock acquires on TransactionChain
-        var wcTail = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
-        if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
-        {
-            ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
-        }
-        context.IsTail = _dbe.TransactionChain.Tail == this;
-        context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
-        context.TailTSN = _dbe.TransactionChain.MinTSN;
-        _dbe.TransactionChain.Control.ExitSharedAccess();
-
-        // Prepare ECS destroy operations: create component-level tombstone revisions BEFORE CommitComponentCore so it can handle index removal,
-        // WAL, and cleanup.
-        PrepareEcsDestroys();
-
-        _dbe.LogCommitPhase(TSN, "CommitComponentCore");
-
-        // Process every Component Type and their components (old CRUD path — Versioned only)
-        var commitAction = new CommitAction { Tx = this };
-        foreach (var kvp in _componentInfos)
-        {
-            var info = kvp.Value;
-
-            // Skip non-Versioned components — the old CRUD commit path only applies to Versioned.
-            // SV/Transient components in _componentInfos were added by the ECS path (Spawn/Read/Write)
-            // and don't have old CRUD mutations to commit.
-            if (info.ComponentTable.StorageMode != StorageMode.Versioned)
+            // Determine tail status once for the entire commit — saves N-1 shared lock acquires on TransactionChain
+            var wcTail = ComposeWaitContext(ref ctx, TimeoutOptions.Current.TransactionChainLockTimeout);
+            if (!_dbe.TransactionChain.Control.EnterSharedAccess(ref wcTail))
             {
-                continue;
+                ThrowHelper.ThrowLockTimeout("TransactionChain/CommitTailCheck", TimeoutOptions.Current.TransactionChainLockTimeout);
             }
+            context.IsTail = _dbe.TransactionChain.Tail == this;
+            context.NextMinTSN = context.IsTail ? _dbe.TransactionChain.ComputeNextMinTSN() : 0;
+            context.TailTSN = _dbe.TransactionChain.MinTSN;
+            _dbe.TransactionChain.Control.ExitSharedAccess();
 
-            context.Info = info;
-            _dbe.LogCommitComponentEntries(TSN, kvp.Key.Name, info.EntryCount);
+            // Prepare ECS destroy operations: create component-level tombstone revisions BEFORE CommitComponentCore so it can handle index removal,
+            // WAL, and cleanup.
+            PrepareEcsDestroys();
 
-            // Start a sub-span for this component type
-            using var componentActivity = TyphonActivitySource.StartActivity("Transaction.CommitComponentCore");
-            componentActivity?.SetTag(TyphonSpanAttributes.ComponentType, kvp.Key.Name);
+            _dbe.LogCommitPhase(TSN, "CommitComponentCore");
 
-            // Hoist accessor creation for batch index maintenance
-            var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
-            _batchIndexAccessors = new ChunkAccessor<PersistentStore>[indexedFieldInfos.Length];
-            for (int i = 0; i < indexedFieldInfos.Length; i++)
+            // Process every Component Type and their components (old CRUD path — Versioned only)
+            var commitAction = new CommitAction { Tx = this };
+            foreach (var kvp in _componentInfos)
             {
-                _batchIndexAccessors[i] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
-            }
-            var tailVSBS = info.ComponentTable.TailVSBS;
-            _batchTailAccessor = tailVSBS != null ? tailVSBS.Segment.CreateChunkAccessor(_changeSet) : default;
-            _batchIndexActive = true;
-            _batchEntityCount = 0;
-            ChunkBasedSegment<PersistentStore>.EnterBatchMode();
+                var info = kvp.Value;
 
-            try
-            {
-                kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
-            }
-            finally
-            {
-                // Exit batch mode + dispose hoisted accessors
-                ChunkBasedSegment<PersistentStore>.ExitBatchMode();
-                _batchIndexActive = false;
-                for (int i = 0; i < _batchIndexAccessors.Length; i++)
+                // Skip non-Versioned components — the old CRUD commit path only applies to Versioned.
+                // SV/Transient components in _componentInfos were added by the ECS path (Spawn/Read/Write)
+                // and don't have old CRUD mutations to commit.
+                if (info.ComponentTable.StorageMode != StorageMode.Versioned)
                 {
-                    _batchIndexAccessors[i].Dispose();
+                    continue;
                 }
-                if (tailVSBS != null)
-                {
-                    _batchTailAccessor.Dispose();
-                }
-                _batchIndexAccessors = null;
 
-                // Dispose cluster commit accessors between component types — the next type may target a different archetype
-                DisposeClusterCommitAccessors();
+                context.Info = info;
+                _dbe.LogCommitComponentEntries(TSN, kvp.Key.Name, info.EntryCount);
+
+                // Start a sub-span for this component type. The int ID comes from the archetype registry — -1 means "unregistered"
+                // (can happen for schema-less tests), which is fine to carry through as a placeholder.
+                using var componentScope = TyphonEvent.BeginTransactionCommitComponent(TSN, ArchetypeRegistry.GetComponentTypeId(kvp.Key));
+
+                // Hoist accessor creation for batch index maintenance
+                var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+                _batchIndexAccessors = new ChunkAccessor<PersistentStore>[indexedFieldInfos.Length];
+                for (int i = 0; i < indexedFieldInfos.Length; i++)
+                {
+                    _batchIndexAccessors[i] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
+                }
+                var tailVSBS = info.ComponentTable.TailVSBS;
+                _batchTailAccessor = tailVSBS != null ? tailVSBS.Segment.CreateChunkAccessor(_changeSet) : default;
+                _batchIndexActive = true;
+                _batchEntityCount = 0;
+                ChunkBasedSegment<PersistentStore>.EnterBatchMode();
+
+                try
+                {
+                    kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+                }
+                finally
+                {
+                    // Exit batch mode + dispose hoisted accessors
+                    ChunkBasedSegment<PersistentStore>.ExitBatchMode();
+                    _batchIndexActive = false;
+                    for (int i = 0; i < _batchIndexAccessors.Length; i++)
+                    {
+                        _batchIndexAccessors[i].Dispose();
+                    }
+                    if (tailVSBS != null)
+                    {
+                        _batchTailAccessor.Dispose();
+                    }
+                    _batchIndexAccessors = null;
+
+                    // Dispose cluster commit accessors between component types — the next type may target a different archetype
+                    DisposeClusterCommitAccessors();
+                }
+
+                _dbe.LogCommitComponentDone(TSN, kvp.Key.Name);
             }
 
-            _dbe.LogCommitComponentDone(TSN, kvp.Key.Name);
+            _dbe.LogCommitPhase(TSN, "DeferredCleanup");
+
+            // Enqueue current transaction's entities for deferred cleanup (single lock acquire for all entities).
+            // Processing happens in Dispose (after cached indices are no longer relevant) or via FlushDeferredCleanups.
+            if (_deferredEnqueueBatch is { Count: > 0 })
+            {
+                _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
+                _deferredEnqueueBatch.Clear();
+            }
+
+            // Flush ECS pending operations (spawns, destroys, enable/disable)
+            _dbe.LogCommitPhase(TSN, "EcsFlush");
+            FlushEcsPendingOperations();
+
+            // Check if any conflicts were detected during the commit loop
+            if (conflictSolver is { HasConflict: true })
+            {
+                hasConflict = true;
+            }
+
+            _dbe.LogCommitPhase(TSN, "PersistAndFinalize");
+            PersistAndFinalize(ref ctx, startTicks);
+            _dbe.LogCommitPhase(TSN, "Complete");
+            scope.ConflictDetected = hasConflict;
+            return true;
+
         }
-
-        _dbe.LogCommitPhase(TSN, "DeferredCleanup");
-
-        // Enqueue current transaction's entities for deferred cleanup (single lock acquire for all entities).
-        // Processing happens in Dispose (after cached indices are no longer relevant) or via FlushDeferredCleanups.
-        if (_deferredEnqueueBatch is { Count: > 0 })
+        finally
         {
-            _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
-            _deferredEnqueueBatch.Clear();
+            scope.Dispose();
         }
-
-        // Flush ECS pending operations (spawns, destroys, enable/disable)
-        _dbe.LogCommitPhase(TSN, "EcsFlush");
-        FlushEcsPendingOperations();
-
-        // Check if any conflicts were detected during the commit loop
-        if (conflictSolver is { HasConflict: true })
-        {
-            hasConflict = true;
-        }
-
-        activity?.SetTag(TyphonSpanAttributes.TransactionConflictDetected, hasConflict);
-        activity?.SetTag(TyphonSpanAttributes.TransactionStatus, "committed");
-
-        _dbe.LogCommitPhase(TSN, "PersistAndFinalize");
-        PersistAndFinalize(ref ctx, startTicks);
-        _dbe.LogCommitPhase(TSN, "Complete");
-        return true;
     }
 
     public bool Commit(ConcurrencyConflictHandler handler = null)

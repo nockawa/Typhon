@@ -8,6 +8,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -1118,11 +1119,7 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
 
     public int Add(TKey key, int value, ref ChunkAccessor<TStore> accessor, out int bufferRootId)
     {
-        Activity activity = null;
-        if (TelemetryConfig.BTreeActive)
-        {
-            activity = TyphonActivitySource.StartActivity("BTree.Insert");
-        }
+        using var scope = TyphonEvent.BeginBTreeInsert();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
@@ -1132,7 +1129,6 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
             var args = new InsertArguments(key, value, Comparer, ref opAccessor, ref sibAccessor);
             AddOrUpdateCore(ref args);
             SyncHeader(ref opAccessor);
-            activity?.SetTag(TyphonSpanAttributes.IndexOperation, "insert");
             bufferRootId = args.BufferRootId;
             return args.ElementId;
         }
@@ -1140,17 +1136,12 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
         {
             _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
-            activity?.Dispose();
         }
     }
 
     public bool Remove(TKey key, out int value, ref ChunkAccessor<TStore> accessor)
     {
-        Activity activity = null;
-        if (TelemetryConfig.BTreeActive)
-        {
-            activity = TyphonActivitySource.StartActivity("BTree.Delete");
-        }
+        using var scope = TyphonEvent.BeginBTreeDelete();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
@@ -1161,14 +1152,12 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
             RemoveCore(ref args);
             SyncHeader(ref opAccessor);
             value = args.Value;
-            activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
             return args.Removed;
         }
         finally
         {
             _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
-            activity?.Dispose();
         }
     }
 
@@ -1343,12 +1332,7 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
 
     public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor<TStore> accessor, bool preserveEmptyBuffer = false)
     {
-        Activity activity = null;
-        if (TelemetryConfig.BTreeActive)
-        {
-            activity = TyphonActivitySource.StartActivity("BTree.Delete");
-            activity?.SetTag(TyphonSpanAttributes.IndexOperation, "delete");
-        }
+        using var scope = TyphonEvent.BeginBTreeDelete();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
@@ -1405,7 +1389,6 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
         {
             _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
-            activity?.Dispose();
         }
 
         return true;

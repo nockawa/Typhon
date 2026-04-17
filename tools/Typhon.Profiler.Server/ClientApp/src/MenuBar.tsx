@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import type { ProcessedTrace } from './traceModel';
+import type { TimeRange } from './uiTypes';
+import type { NavHistory } from './useNavHistory';
 import { HEADER_BG, BORDER_COLOR, SELECTED_COLOR, TEXT_COLOR, DIM_TEXT, BG_COLOR } from './canvasUtils';
 
 interface MenuBarProps {
@@ -8,11 +10,18 @@ interface MenuBarProps {
   loading: boolean;
   isLive: boolean;
   onFileSelected: (files: File[]) => void;
+  /**
+   * Open a trace by its server-side filesystem path. Skips the upload-to-temp-dir step, so the sidecar cache file lives alongside the source
+   * trace instead of accumulating under the system TEMP folder. Path can be absolute or relative to the server's working directory.
+   */
+  onOpenByPath: (path: string) => void;
   onLiveConnect: () => void;
   onLiveDisconnect: () => void;
+  navHistory: NavHistory;
+  onViewRangeChange: (range: TimeRange) => void;
 }
 
-export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onLiveConnect, onLiveDisconnect }: MenuBarProps) {
+export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOpenByPath, onLiveConnect, onLiveDisconnect, navHistory, onViewRangeChange }: MenuBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -32,6 +41,18 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onLi
   const handleLoad = () => {
     setMenuOpen(false);
     fileInputRef.current?.click();
+  };
+
+  const handleOpenByPath = () => {
+    setMenuOpen(false);
+    // Browsers can't give JS access to a file's full filesystem path (sandbox), so prompt the user for it directly. Use the last-used path
+    // as the default so re-opening the same file is one click + Enter. Local-only dev tool; prompt UX is acceptable here.
+    const remembered = window.localStorage.getItem('typhon-profiler.lastOpenPath') ?? '';
+    const path = window.prompt('Path to .typhon-trace file (absolute, or relative to server working directory):', remembered);
+    if (!path || !path.trim()) return;
+    const trimmed = path.trim();
+    window.localStorage.setItem('typhon-profiler.lastOpenPath', trimmed);
+    onOpenByPath(trimmed);
   };
 
   const handleFileChange = (e: Event) => {
@@ -104,6 +125,26 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onLi
             >
               Load...
             </button>
+            <button
+              onClick={handleOpenByPath}
+              style={{
+                display: 'block',
+                width: '100%',
+                background: 'transparent',
+                color: TEXT_COLOR,
+                border: 'none',
+                padding: '6px 16px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontFamily: 'monospace',
+                textAlign: 'left',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = BORDER_COLOR)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              title="Open a .typhon-trace by server-side path. Cache file will be written alongside the source, not in %TEMP%."
+            >
+              Open from path...
+            </button>
             <div style={{ height: '1px', background: BORDER_COLOR, margin: '2px 8px' }} />
             {!isLive ? (
               <button
@@ -149,6 +190,30 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onLi
           </div>
         )}
       </div>
+
+      {/* Nav undo/redo buttons — these call onViewRangeChange directly which snaps the viewport. The animated transition
+           happens via the mouse back/forward buttons in GraphArea which use animateToRange. The menu buttons are a simple
+           fallback for users without a 5-button mouse. */}
+      <button
+        onClick={() => { const r = navHistory.undo(); if (r) onViewRangeChange(r); }}
+        disabled={!navHistory.canUndo}
+        title="Navigate back (Mouse Back)"
+        style={{
+          background: 'transparent', border: 'none', cursor: navHistory.canUndo ? 'pointer' : 'default',
+          color: navHistory.canUndo ? TEXT_COLOR : DIM_TEXT, fontSize: '14px', fontFamily: 'monospace',
+          padding: '2px 6px', opacity: navHistory.canUndo ? 1 : 0.4,
+        }}
+      >◀</button>
+      <button
+        onClick={() => { const r = navHistory.redo(); if (r) onViewRangeChange(r); }}
+        disabled={!navHistory.canRedo}
+        title="Navigate forward (Mouse Forward)"
+        style={{
+          background: 'transparent', border: 'none', cursor: navHistory.canRedo ? 'pointer' : 'default',
+          color: navHistory.canRedo ? TEXT_COLOR : DIM_TEXT, fontSize: '14px', fontFamily: 'monospace',
+          padding: '2px 6px', opacity: navHistory.canRedo ? 1 : 0.4,
+        }}
+      >▶</button>
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />

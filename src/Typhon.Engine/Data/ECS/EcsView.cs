@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -153,63 +153,65 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             throw new ObjectDisposedException(nameof(EcsView<TArchetype>));
         }
 
-        Activity activity = null;
-        if (TelemetryConfig.EcsActive)
+        // Each EcsView is bound to a single TArchetype at construction, so we can hand the profiler a concrete archetype ID.
+        // A null meta falls back to 0 — can happen if the view's archetype isn't in the registry yet (test-only edge case).
+        var archetypeMeta = ArchetypeRegistry.GetMetadata<TArchetype>();
+        var scope = TyphonEvent.BeginEcsViewRefresh(archetypeMeta?.ArchetypeId ?? 0);
+        try
         {
-            activity = TyphonActivitySource.StartActivity("ECS.View.Refresh");
-            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArchetype).Name);
-        }
+            // Clear previous delta state
+            ClearDelta();
+            _addedCache.Clear();
+            _removedCache.Clear();
 
-        // Clear previous delta state
-        ClearDelta();
-        _addedCache.Clear();
-        _removedCache.Clear();
-
-        // Pull mode: no FieldEvaluators → full re-query every time
-        if (_evaluators.Length == 0)
-        {
-            RefreshPull(tx);
-            BuildEntityIdCaches();
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryScanMode, "pull");
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, Count);
-            activity?.Dispose();
-            return;
-        }
-
-        // Incremental mode: drain ring buffer
-        bool overflow = DeltaBuffer.HasOverflow;
-        if (overflow)
-        {
-            SetOverflowDetected(true);
-            if (IsOrMode) { RefreshFullOr(tx); } else { RefreshFull(tx); }
-            BuildEntityIdCaches();
-            activity?.SetTag(TyphonSpanAttributes.ViewOverflow, true);
-            activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, Count);
-            activity?.Dispose();
-            return;
-        }
-
-        int deltaCount = 0;
-        var targetTSN = tx.TSN;
-        while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
-        {
-            DeltaBuffer.Advance();
-            deltaCount++;
-            if (IsOrMode)
+            // Pull mode: no FieldEvaluators → full re-query every time
+            if (_evaluators.Length == 0)
             {
-                ProcessEntryOr(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
+                RefreshPull(tx);
+                BuildEntityIdCaches();
+                scope.Mode = EcsViewRefreshMode.Pull;
+                scope.ResultCount = _entityIds.Count;
+                return;
             }
-            else
-            {
-                ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
-            }
-            SetLastRefreshTSN(tsn);
-        }
 
-        BuildEntityIdCaches();
-        activity?.SetTag(TyphonSpanAttributes.ViewDeltaCount, deltaCount);
-        activity?.SetTag(TyphonSpanAttributes.EcsQueryResultCount, Count);
-        activity?.Dispose();
+            // Incremental mode: drain ring buffer
+            bool overflow = DeltaBuffer.HasOverflow;
+            if (overflow)
+            {
+                SetOverflowDetected(true);
+                if (IsOrMode) { RefreshFullOr(tx); } else { RefreshFull(tx); }
+                BuildEntityIdCaches();
+                scope.Mode = EcsViewRefreshMode.Overflow;
+                scope.ResultCount = _entityIds.Count;
+                return;
+            }
+
+            var targetTSN = tx.TSN;
+            var deltaCount = 0;
+            while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
+            {
+                DeltaBuffer.Advance();
+                if (IsOrMode)
+                {
+                    ProcessEntryOr(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
+                }
+                else
+                {
+                    ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
+                }
+                SetLastRefreshTSN(tsn);
+                deltaCount++;
+            }
+
+            BuildEntityIdCaches();
+            scope.Mode = EcsViewRefreshMode.Incremental;
+            scope.ResultCount = _entityIds.Count;
+            scope.DeltaCount = deltaCount;
+        }
+        finally
+        {
+            scope.Dispose();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

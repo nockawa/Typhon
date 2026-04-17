@@ -34,9 +34,6 @@ public sealed partial class LiveSessionService
         Message = "LZ4 decompression mismatch: expected {Expected}, got {Got}")]
     private partial void LogDecompressionMismatch(int expected, int got);
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Received {Count} new span names")]
-    private partial void LogSpanNamesReceived(int count);
-
     [LoggerMessage(Level = LogLevel.Information, Message = "SSE subscriber {Id} connected (total: {Count})")]
     private partial void LogSubscriberConnected(int id, int count);
 

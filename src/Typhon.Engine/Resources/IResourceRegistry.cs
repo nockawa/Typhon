@@ -28,7 +28,10 @@ public enum ResourceSubsystem
     Timer,
 
     /// <summary>Runtime subsystem: DAG scheduler, tick loop, worker pool</summary>
-    Runtime
+    Runtime,
+
+    /// <summary>Profiler subsystem: Tracy-style capture pipeline (consumer thread, exporters)</summary>
+    Profiler
 }
 
 /// <summary>
@@ -74,6 +77,9 @@ public interface IResourceRegistry : IDisposable
 
     /// <summary>Runtime subsystem node (DAG scheduler, tick loop, worker pool).</summary>
     IResource Runtime { get; }
+
+    /// <summary>Profiler subsystem node (Tracy-style consumer thread + exporters).</summary>
+    IResource Profiler { get; }
 
     /// <summary>
     /// Gets the subsystem node for the specified category.

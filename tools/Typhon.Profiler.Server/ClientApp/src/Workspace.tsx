@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'preact/hooks';
-import type { ProcessedTrace, ChunkSpan } from './traceModel';
+import type { ProcessedTrace, ChunkSpan, SpanData } from './traceModel';
 import type { TimeRange } from './uiTypes';
+import type { NavHistory } from './useNavHistory';
 import { GraphArea } from './GraphArea';
 import { DetailPane } from './DetailPane';
 import { BORDER_COLOR, HEADER_BG, DIM_TEXT } from './canvasUtils';
@@ -12,13 +13,16 @@ interface WorkspaceProps {
   onViewRangeChange: (range: TimeRange) => void;
   selectedChunk: ChunkSpan | null;
   onChunkSelect: (chunk: ChunkSpan | null) => void;
+  selectedSpan: SpanData | null;
+  onSpanSelect: (span: SpanData | null) => void;
+  navHistory: NavHistory;
 }
 
 const MIN_DETAIL_WIDTH = 200;
 const MAX_DETAIL_WIDTH = 600;
 const DEFAULT_DETAIL_WIDTH = 280;
 
-export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, selectedChunk, onChunkSelect }: WorkspaceProps) {
+export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, selectedChunk, onChunkSelect, selectedSpan, onSpanSelect, navHistory }: WorkspaceProps) {
   const [detailOpen, setDetailOpen] = useState(true);
   const [detailWidth, setDetailWidth] = useState(DEFAULT_DETAIL_WIDTH);
   const isDraggingRef = useRef(false);
@@ -51,13 +55,14 @@ export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, sele
   const handleClose = useCallback(() => {
     setDetailOpen(false);
     onChunkSelect(null);
-  }, [onChunkSelect]);
+    onSpanSelect(null);
+  }, [onChunkSelect, onSpanSelect]);
 
   useEffect(() => {
-    if (selectedChunk && !detailOpen) {
+    if ((selectedChunk || selectedSpan) && !detailOpen) {
       setDetailOpen(true);
     }
-  }, [selectedChunk, detailOpen]);
+  }, [selectedChunk, selectedSpan, detailOpen]);
 
   return (
     <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -69,6 +74,9 @@ export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, sele
           onViewRangeChange={onViewRangeChange}
           selectedChunk={selectedChunk}
           onChunkSelect={onChunkSelect}
+          selectedSpan={selectedSpan}
+          onSpanSelect={onSpanSelect}
+          navHistory={navHistory}
         />
       </div>
 
@@ -86,6 +94,7 @@ export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, sele
           <div style={{ width: `${detailWidth}px`, flexShrink: 0, overflow: 'hidden' }}>
             <DetailPane
               chunk={selectedChunk}
+              span={selectedSpan}
               systems={trace.metadata.systems}
               onClose={handleClose}
             />

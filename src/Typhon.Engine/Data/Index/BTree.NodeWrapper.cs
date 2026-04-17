@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -111,21 +112,8 @@ public abstract partial class BTree<TKey, TStore>
 
         private void MergeLeft(NodeWrapper right, ref ChunkAccessor<TStore> accessor)
         {
-            Activity activity = null;
-            if (TelemetryConfig.BTreeActive)
-            {
-                activity = TyphonActivitySource.StartActivity("BTree.NodeMerge");
-                activity?.SetTag(TyphonSpanAttributes.IndexNodeMerge, true);
-            }
-
-            try
-            {
-                _storage.MergeLeft(this, right, ref accessor);
-            }
-            finally
-            {
-                activity?.Dispose();
-            }
+            using var scope = TyphonEvent.BeginBTreeNodeMerge();
+            _storage.MergeLeft(this, right, ref accessor);
         }
 
         public NodeWrapper GetChild(int index, ref ChunkAccessor<TStore> accessor) => _storage.GetChild(this, index, ref accessor);
@@ -627,23 +615,10 @@ public abstract partial class BTree<TKey, TStore>
 
         private NodeWrapper SplitRight(NodeStates states, ref ChunkAccessor<TStore> accessor)
         {
-            Activity activity = null;
-            if (TelemetryConfig.BTreeActive)
-            {
-                activity = TyphonActivitySource.StartActivity("BTree.NodeSplit");
-                activity?.SetTag(TyphonSpanAttributes.IndexNodeSplit, true);
-            }
-
-            try
-            {
-                var result = _storage.SplitRight(this, states, ref accessor);
-                Interlocked.Increment(ref _storage.Owner._splitCount);
-                return result;
-            }
-            finally
-            {
-                activity?.Dispose();
-            }
+            using var scope = TyphonEvent.BeginBTreeNodeSplit();
+            var result = _storage.SplitRight(this, states, ref accessor);
+            Interlocked.Increment(ref _storage.Owner._splitCount);
+            return result;
         }
 
         /// <summary>

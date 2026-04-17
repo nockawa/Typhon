@@ -12,6 +12,7 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -38,6 +39,34 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     internal const int DatabaseFormatRevision   = 1;
     internal const ulong MinimumCacheSize       = DefaultMemPageCount * PageSize;
     internal const int WriteCachePageSize       = 1024 * 1024;
+
+    #endregion
+
+    #region Profiler async-completion wiring
+
+    // Per-call state passed to the ContinueWith static handlers as a boxed struct. Boxing is the only allocation per tracked completion on top
+    // of what ContinueWith itself already costs (the generated Task + continuation closure). We capture the begin-side SpanId + StartTimestamp
+    // so the completion event can correlate back to the kickoff span and compute the full async duration as (completionTs - beginTs).
+    private readonly record struct PageCacheReadCompletionState(ulong SpanId, long BeginTs, int FilePageIndex);
+    private readonly record struct PageCacheWriteCompletionState(ulong SpanId, long BeginTs, int FilePageIndex);
+
+    // Static delegates — one per completion kind. Cached in readonly static fields so ContinueWith doesn't allocate a delegate per call site;
+    // only the state box is per-call. The `static` lambda modifier forbids captures, enforcing the "no closure" guarantee at compile time.
+    // Func<Task<int>, object, int> rather than Action<Task<int>, object> because the wrapping continuation must preserve the int result
+    // (the byte count from RandomAccess.ReadAsync) so callers awaiting the returned ValueTask<int> get the original value. Returning
+    // task.Result re-throws any exception the read faulted with, propagating faults through the wrapper transparently.
+    private static readonly Func<Task<int>, object, int> s_readCompletionHandler = static (task, stateObj) =>
+    {
+        var state = (PageCacheReadCompletionState)stateObj;
+        TyphonEvent.EmitPageCacheDiskReadCompleted(state.SpanId, state.BeginTs, state.FilePageIndex, Stopwatch.GetTimestamp());
+        return task.Result;
+    };
+
+    private static readonly Action<Task, object> s_writeCompletionHandler = static (task, stateObj) =>
+    {
+        var state = (PageCacheWriteCompletionState)stateObj;
+        TyphonEvent.EmitPageCacheDiskWriteCompleted(state.SpanId, state.BeginTs, state.FilePageIndex, Stopwatch.GetTimestamp());
+    };
 
     #endregion
 
@@ -612,20 +641,16 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             ++_metrics.MemPageCacheMiss;
             LogMemPageCacheMiss();
 
-            // At CacheMiss level: create rootless Fetch parent span with link to trigger
-            // At CacheMiss level: Fetch is a child of the current activity (RequestPage or Transaction)
-            // DiskRead will become a child of Fetch
-            Activity fetchActivity = null;
-            if (TelemetryConfig.PagedMMFSpanCacheMiss)
-            {
-                fetchActivity = TyphonActivitySource.StartActivity("PageCache.Fetch");
-                fetchActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
-            }
+            // Synchronous span brackets only the kickoff, not the async disk-read tail. Same tradeoff as PageCacheDiskWrite in SavePageInternal:
+            // the raw async wait isn't captured, but in return we get (a) zero allocations on the fetch path, (b) no closure/display-class
+            // capture of scopes, (c) no cross-thread TLS leak (Dispose always runs on the begin thread, so PublishEvent restores
+            // CurrentOpenSpanId cleanly). If someone needs true async-tail attribution, it should come from a dedicated instant-event emit
+            // on the completion thread, not from a span whose scope straddles an await.
+            using var fetchScope = TyphonEvent.BeginPageCacheFetch(filePageIndex);
 
             // Page is not cached, we assign an available Memory Page to it
             if (!AllocateMemoryPage(filePageIndex, out memPageIndex, timeout, cancellationToken))
             {
-                fetchActivity?.Dispose();
                 return false;
             }
 
@@ -641,40 +666,26 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 LogAllocatePageLoad();
                 ++_metrics.ReadFromDiskCount;
 
-                // At IOOnly level: DiskRead is a child of the current activity
-                // - If Fetch exists (CacheMiss level): child of Fetch
-                // - If no Fetch (IOOnly only): child of RequestPage or Transaction
-                Activity diskReadActivity = null;
-                if (TelemetryConfig.PagedMMFSpanIOOnly)
-                {
-                    diskReadActivity = TyphonActivitySource.StartActivity("PageCache.DiskRead");
-                    diskReadActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
-                }
+                using var diskReadScope = TyphonEvent.BeginPageCacheDiskRead(filePageIndex);
 
                 var pi = _memPagesInfo[memPageIndex];
                 var readTask = RandomAccess.ReadAsync(_fileHandle, MemPages.DataAsMemory.Slice(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken);
 
-                // Wrap the task to dispose activities when complete
-                if (diskReadActivity != null || fetchActivity != null)
+                // Async-completion tracking: opt-in via UnsuppressKind(PageCacheDiskReadCompleted). When the DiskRead kickoff span was itself
+                // suppressed (SpanId == 0), there's nothing to correlate with, so skip the wrap. When the completion kind is suppressed,
+                // skip the wrap — producer hot path stays allocation-free by default.
+                if (diskReadScope.SpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted))
                 {
-                    var wrappedTask = readTask.AsTask().ContinueWith(t =>
-                    {
-                        diskReadActivity?.Dispose();
-                        fetchActivity?.Dispose();
-                        return t.Result;
-                    }, TaskContinuationOptions.ExecuteSynchronously);
-                    pi.SetIOReadTask(new ValueTask<int>(wrappedTask));
+                    var state = new PageCacheReadCompletionState(diskReadScope.SpanId, diskReadScope.StartTimestamp, filePageIndex);
+                    var wrapped = readTask.AsTask().ContinueWith(
+                        s_readCompletionHandler, state,
+                        CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                    pi.SetIOReadTask(new ValueTask<int>(wrapped));
                 }
                 else
                 {
                     pi.SetIOReadTask(readTask);
                 }
-            }
-            else
-            {
-                // No disk read needed - dispose Fetch span now
-                // Dispose() automatically restores Activity.Current to the parent
-                fetchActivity?.Dispose();
             }
         }
         else
@@ -719,21 +730,8 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// </remarks>
     private bool AllocateMemoryPage(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-        Activity allocateActivity = null;
-        if (TelemetryConfig.PagedMMFSpanCacheMiss)
-        {
-            allocateActivity = TyphonActivitySource.StartActivity("PageCache.AllocatePage");
-            allocateActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
-        }
-
-        try
-        {
-            return AllocateMemoryPageCore(filePageIndex, out memPageIndex, timeout, cancellationToken);
-        }
-        finally
-        {
-            allocateActivity?.Dispose();
-        }
+        using var scope = TyphonEvent.BeginPageCacheAllocatePage(filePageIndex);
+        return AllocateMemoryPageCore(filePageIndex, out memPageIndex, timeout, cancellationToken);
     }
 
     private bool AllocateMemoryPageCore(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
@@ -830,44 +828,57 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
                 if (!found)
                 {
-                    // Collect pressure diagnostics for the strategy
-                    var dirtyCount = 0;
-                    var epochCount = 0;
-                    for (var i = 0; i < MemPagesCount; i++)
+                    // Backpressure span wraps the diagnostics collection + strategy wait. Suppressed by default alongside
+                    // the other PageCache.* kinds, so zero cost unless the user explicitly opts in for cache-pressure analysis.
+                    var bpScope = TyphonEvent.BeginPageCacheBackpressure();
+                    try
                     {
-                        var p = _memPagesInfo[i];
-                        if (p.PageState == PageState.Free)
+                        // Collect pressure diagnostics for the strategy
+                        var dirtyCount = 0;
+                        var epochCount = 0;
+                        for (var i = 0; i < MemPagesCount; i++)
                         {
-                            continue;
+                            var p = _memPagesInfo[i];
+                            if (p.PageState == PageState.Free)
+                            {
+                                continue;
+                            }
+
+                            if (p.DirtyCounter > 0)
+                            {
+                                dirtyCount++;
+                            }
+
+                            if (p.AccessEpoch >= minActiveEpoch)
+                            {
+                                epochCount++;
+                            }
                         }
 
-                        if (p.DirtyCounter > 0)
-                        {
-                            dirtyCount++;
-                        }
+                        bpScope.RetryCount = bpCtx.RetryCount;
+                        bpScope.DirtyCount = dirtyCount;
+                        bpScope.EpochCount = epochCount;
 
-                        if (p.AccessEpoch >= minActiveEpoch)
+                        ++_metrics.BackpressureWaitCount;
+
+                        Logger.LogWarning(
+                            "Page cache backpressure: wait#{WaitCount} dirty={DirtyCount} epoch={EpochCount} retry={RetryCount} remaining={RemainingMs}ms",
+                            _metrics.BackpressureWaitCount, dirtyCount, epochCount, bpCtx.RetryCount, bpCtx.WaitContext.Remaining.TotalMilliseconds);
+
+                        // Demand-driven flush: wake the checkpoint manager immediately so dirty pages get written to
+                        // disk → DecrementDirty → SignalPageAvailable → waiter wakes.
+                        OnBackpressure?.Invoke();
+
+                        if (!_backpressureStrategy.OnPressure(ref bpCtx, dirtyCount, epochCount))
                         {
-                            epochCount++;
+                            ThrowHelper.ThrowPageCacheBackpressureTimeout(
+                                dirtyCount, epochCount,
+                                TimeoutOptions.Current.PageCacheBackpressureTimeout - bpCtx.WaitContext.Remaining);
                         }
                     }
-
-                    ++_metrics.BackpressureWaitCount;
-
-                    Logger.LogWarning(
-                        "Page cache backpressure: wait#{WaitCount} dirty={DirtyCount} epoch={EpochCount} retry={RetryCount} remaining={RemainingMs}ms",
-                        _metrics.BackpressureWaitCount, dirtyCount, epochCount, bpCtx.RetryCount, bpCtx.WaitContext.Remaining.TotalMilliseconds);
-
-                    // Demand-driven flush: wake the checkpoint manager immediately so dirty pages get written to
-                    // disk → DecrementDirty → SignalPageAvailable → waiter wakes.
-                    // Idempotent — safe to call on every retry iteration.
-                    OnBackpressure?.Invoke();
-
-                    if (!_backpressureStrategy.OnPressure(ref bpCtx, dirtyCount, epochCount))
+                    finally
                     {
-                        ThrowHelper.ThrowPageCacheBackpressureTimeout(
-                            dirtyCount, epochCount,
-                            TimeoutOptions.Current.PageCacheBackpressureTimeout - bpCtx.WaitContext.Remaining);
+                        bpScope.Dispose();
                     }
 
                     continue;
@@ -875,18 +886,16 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             }
 
             pi.FilePageIndex = filePageIndex;
-            
+
             ++_metrics.TotalMemPageAllocatedCount;
             LogAllocatePageFound(memPageIndex);
 
-            // Record eviction event on the parent AllocatePage span when a cached page was displaced
-            if (TelemetryConfig.PagedMMFSpanCacheMiss && evictedFilePageIndex >= 0)
+            // Record the eviction as a zero-duration marker span, parented under the enclosing PageCacheAllocatePage scope via TLS. Default-
+            // suppressed alongside the other PageCache.* kinds — when the profiler is off or this kind is suppressed the whole call
+            // dead-code-eliminates in Tier 1. evictedFilePageIndex < 0 means we claimed a slot that was previously Free (no displacement).
+            if (evictedFilePageIndex >= 0)
             {
-                Activity.Current?.AddEvent(new ActivityEvent("PageEvicted",
-                    tags: new ActivityTagsCollection
-                    {
-                        { TyphonSpanAttributes.PageId, evictedFilePageIndex }
-                    }));
+                TyphonEvent.EmitPageEvicted(evictedFilePageIndex);
             }
 
             if (Options.PagesDebugPattern)
@@ -1622,13 +1631,18 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
     unsafe internal Task SavePages(int[] memPageIndices)
     {
-        // Flush is a child of the current activity (typically Transaction.Commit or UnitOfWork) DiskWrite spans will become children of Flush
-        Activity flushActivity = null;
-        if (TelemetryConfig.PagedMMFSpanIOOnly)
-        {
-            flushActivity = TyphonActivitySource.StartActivity("PageCache.Flush");
-            flushActivity?.SetTag(TyphonSpanAttributes.PageCount, memPageIndices.Length);
-        }
+        // Synchronous span brackets the setup+kickoff work. The async fsync+decrement completion in the ContinueWith is NOT captured under
+        // this span because SpanScope is a ref struct — instead, we emit a separate PageCacheFlushCompleted record from inside the continuation,
+        // correlated to this span by SpanId. PageCache.Flush is suppressed by default; opting it in AND PageCacheFlushCompleted gives the full
+        // "kickoff → all writes done → fsync done" timeline. The delta between FlushCompleted.duration and max(DiskWriteCompleted.duration)
+        // is pure fsync cost — the single most useful number on a checkpoint-heavy workload.
+        using var flushScope = TyphonEvent.BeginPageCacheFlush(memPageIndices.Length);
+
+        // Capture begin-side correlator values before the ref-struct scope goes out of method scope. The existing ContinueWith already captures
+        // memPageIndices into a display class, so adding these three fields to the capture costs zero extra allocations.
+        var flushSpanId = flushScope.SpanId;
+        var flushBeginTs = flushScope.StartTimestamp;
+        var flushPageCount = memPageIndices.Length;
 
         // We want to generate as few IO operations as possible, so we sort the pages to identify the ones that are contiguous in the file
         Array.Sort(memPageIndices, (x, y) => x - y);
@@ -1701,13 +1715,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             tasks[i] = SavePageInternal(operations[i].memPageIndex, operations[i].length).AsTask();
         }
 
-        // Restore Activity.Current to parent (Flush set it to itself during StartActivity)
-        // This ensures subsequent code doesn't accidentally become children of Flush
-        if (flushActivity != null)
-        {
-            Activity.Current = flushActivity.Parent;
-        }
-
         var saveTask = Task.WhenAll(tasks).ContinueWith(_ =>
         {
             // CP-03: fsync data file before decrementing DirtyCounter.
@@ -1719,8 +1726,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             {
                 DecrementDirty(memPageIndex);
             }
-            // Dispose the Flush span when all writes complete
-            flushActivity?.Dispose();
+
+            // Completion event: captures the full "kickoff → writes done → fsync done" duration. No-op when either Flush or FlushCompleted
+            // is suppressed — the internal helper checks both. flushSpanId == 0 means the kickoff span itself was suppressed, so nothing to
+            // correlate with either.
+            if (flushSpanId != 0)
+            {
+                TyphonEvent.EmitPageCacheFlushCompleted(flushSpanId, flushBeginTs, flushPageCount, Stopwatch.GetTimestamp());
+            }
         });
         return saveTask;
     }
@@ -1740,21 +1753,25 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         _metrics.PageWrittenToDiskCount += length;
         _metrics.WrittenOperationCount++;
 
-        // DiskWrite is a child of Flush (or whatever is current if Flush is disabled)
-        Activity diskWriteActivity = null;
-        if (TelemetryConfig.PagedMMFSpanIOOnly)
-        {
-            diskWriteActivity = TyphonActivitySource.StartActivity("PageCache.DiskWrite");
-            diskWriteActivity?.SetTag(TyphonSpanAttributes.PageId, filePageIndex);
-            diskWriteActivity?.SetTag(TyphonSpanAttributes.PageCount, length);
-        }
+        // Synchronous span brackets only the WriteAsync kickoff. Manual scope + Dispose: `using var` marks the local readonly and blocks the
+        // PageCount setter (CS1654). We capture SpanId + StartTimestamp before disposing so the optional async-completion wrap below can
+        // correlate with this kickoff record through PageCacheDiskWriteCompleted.
+        var writeScope = TyphonEvent.BeginPageCacheDiskWrite(filePageIndex);
+        writeScope.PageCount = length;
+        var writeSpanId = writeScope.SpanId;
+        var writeBeginTs = writeScope.StartTimestamp;
+        writeScope.Dispose();
 
         var writeTask = RandomAccess.WriteAsync(_fileHandle, pageData, pageOffset);
 
-        // Wrap the task to dispose the activity when complete
-        if (diskWriteActivity != null)
+        // Async-completion tracking: opt-in via UnsuppressKind(PageCacheDiskWriteCompleted). Same gating logic as the read path — skip the
+        // wrap when either the kickoff span is suppressed (nothing to correlate with) or the completion kind is suppressed (zero-alloc path).
+        if (writeSpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskWriteCompleted))
         {
-            return new ValueTask(writeTask.AsTask().ContinueWith(_ => diskWriteActivity.Dispose(), TaskContinuationOptions.ExecuteSynchronously));
+            var state = new PageCacheWriteCompletionState(writeSpanId, writeBeginTs, filePageIndex);
+            return new ValueTask(writeTask.AsTask().ContinueWith(
+                s_writeCompletionHandler, state,
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default));
         }
 
         return writeTask;

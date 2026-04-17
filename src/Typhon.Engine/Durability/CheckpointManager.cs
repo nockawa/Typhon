@@ -2,6 +2,7 @@ using JetBrains.Annotations;
 using System;
 using System.Diagnostics;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -225,7 +226,7 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
                     continue;
                 }
 
-                RunCheckpointCycle(durableLsn);
+                RunCheckpointCycle(durableLsn, force ? CheckpointReason.Forced : CheckpointReason.Periodic);
             }
 
             // Shutdown: run one final checkpoint cycle to flush all dirty pages
@@ -234,7 +235,7 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
                 var finalLsn = _walManager.DurableLsn;
                 if (finalLsn > Interlocked.Read(ref _checkpointLsn))
                 {
-                    RunCheckpointCycle(finalLsn);
+                    RunCheckpointCycle(finalLsn, CheckpointReason.Shutdown);
                 }
             }
         }
@@ -251,28 +252,39 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
     /// <summary>
     /// Executes one full checkpoint cycle. Visible internally for testability.
     /// </summary>
-    internal void RunCheckpointCycle(long targetLsn)
+    internal void RunCheckpointCycle(long targetLsn, CheckpointReason reason = CheckpointReason.Periodic)
     {
         var sw = Stopwatch.GetTimestamp();
 
+        // CheckpointCycle span wraps the full cycle. DirtyPageCount is set after collection (not known at span-begin time).
+        var cycleScope = TyphonEvent.BeginCheckpointCycle(targetLsn, reason);
         try
         {
             // Step 0: Reset FPI bitmap — new modifications from this point need fresh FPIs
             _mmf.FpiBitmap?.ClearAll();
 
-            // Step 1: Capture target LSN (already passed as parameter)
-            // This is the DurableLsn read atomically before entering the cycle.
-
             // Step 2: Collect dirty pages
-            var dirtyPages = _mmf.CollectDirtyMemPageIndices();
+            int[] dirtyPages;
+            {
+                using var collectScope = TyphonEvent.BeginCheckpointCollect();
+                dirtyPages = _mmf.CollectDirtyMemPageIndices();
+            }
+            cycleScope.DirtyPageCount = dirtyPages.Length;
 
             // Step 3: Write dirty pages via staging buffers (without decrementing DirtyCounter)
-            // Pages with an active writer (odd ModificationCounter) are skipped to prevent
-            // deadlock with the backpressure path. writtenCount <= dirtyPages.Length.
             int writtenCount = 0;
             if (dirtyPages.Length > 0)
             {
-                _mmf.WritePagesForCheckpoint(dirtyPages, _stagingPool, out writtenCount);
+                var writeScope = TyphonEvent.BeginCheckpointWrite();
+                try
+                {
+                    _mmf.WritePagesForCheckpoint(dirtyPages, _stagingPool, out writtenCount);
+                    writeScope.WrittenCount = writtenCount;
+                }
+                finally
+                {
+                    writeScope.Dispose();
+                }
             }
 
             if (_shutdown)
@@ -281,11 +293,12 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             }
 
             // Step 4: Fsync data file
-            _mmf.FlushToDisk();
+            {
+                using var fsyncScope = TyphonEvent.BeginCheckpointFsync();
+                _mmf.FlushToDisk();
+            }
 
-            // Step 5: Decrement DirtyCounter for written pages only (first writtenCount entries)
-            // Skipped pages retain their DirtyCounter and will be flushed in the next cycle.
-            // Pages re-dirtied during write will have DirtyCounter > 1, so after decrement they stay > 0
+            // Step 5: Decrement DirtyCounter for written pages only
             for (int i = 0; i < writtenCount; i++)
             {
                 _mmf.DecrementDirty(dirtyPages[i]);
@@ -294,8 +307,13 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             Interlocked.Add(ref _totalPagesWritten, writtenCount);
 
             // Step 6: Transition WalDurable → Committed
-            var transitioned = _uowRegistry.TransitionWalDurableToCommitted();
-            Interlocked.Add(ref _totalUowTransitioned, transitioned);
+            {
+                var transitionScope = TyphonEvent.BeginCheckpointTransition();
+                var transitioned = _uowRegistry.TransitionWalDurableToCommitted();
+                transitionScope.TransitionedCount = transitioned;
+                transitionScope.Dispose();
+                Interlocked.Add(ref _totalUowTransitioned, transitioned);
+            }
 
             // Step 7: Advance CheckpointLSN in file header + fsync
             _mmf.UpdateCheckpointLSN(targetLsn, _epochManager);
@@ -305,12 +323,19 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             var segmentManager = _walManager.SegmentManager;
             if (segmentManager != null)
             {
-                // WAL segments must be retained if they contain TickFence data needed for SV crash recovery.
-                // Only reclaim segments with LSN below both CheckpointLSN and LastTickFenceLSN.
-                var tickFenceLsn = _lastTickFenceLsnProvider?.Invoke() ?? 0;
-                var trimLsn = tickFenceLsn > 0 ? Math.Min(targetLsn, tickFenceLsn) : targetLsn;
-                var recycled = segmentManager.MarkReclaimable(trimLsn);
-                Interlocked.Add(ref _totalSegmentsRecycled, recycled);
+                var recycleScope = TyphonEvent.BeginCheckpointRecycle();
+                try
+                {
+                    var tickFenceLsn = _lastTickFenceLsnProvider?.Invoke() ?? 0;
+                    var trimLsn = tickFenceLsn > 0 ? Math.Min(targetLsn, tickFenceLsn) : targetLsn;
+                    var recycled = segmentManager.MarkReclaimable(trimLsn);
+                    recycleScope.RecycledCount = recycled;
+                    Interlocked.Add(ref _totalSegmentsRecycled, recycled);
+                }
+                finally
+                {
+                    recycleScope.Dispose();
+                }
             }
 
             Interlocked.Increment(ref _totalCheckpoints);
@@ -319,6 +344,10 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
         {
             _fatalError = ex;
             return;
+        }
+        finally
+        {
+            cycleScope.Dispose();
         }
 
         // Record duration

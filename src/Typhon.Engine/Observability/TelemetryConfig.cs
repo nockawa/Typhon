@@ -9,37 +9,6 @@ using System.Runtime.CompilerServices;
 namespace Typhon.Engine;
 
 /// <summary>
-/// Defines the level of span instrumentation for PagedMMF/PageCache operations.
-/// Higher levels include all spans from lower levels.
-/// </summary>
-[PublicAPI]
-public enum PageCacheSpanLevel
-{
-    /// <summary>
-    /// No spans for page cache operations (default, zero overhead).
-    /// </summary>
-    None = 0,
-
-    /// <summary>
-    /// Spans for disk I/O operations only (reads and writes).
-    /// Suitable for production - disk ops are already slow.
-    /// </summary>
-    IOOnly = 1,
-
-    /// <summary>
-    /// Adds spans for cache allocation and eviction events.
-    /// Useful for investigating cache behavior.
-    /// </summary>
-    CacheMiss = 2,
-
-    /// <summary>
-    /// Spans for every RequestPage call (dangerous for performance!).
-    /// Use only for deep diagnostics.
-    /// </summary>
-    All = 3
-}
-
-/// <summary>
 /// Global telemetry configuration for Typhon Engine.
 ///
 /// <para>
@@ -152,29 +121,6 @@ public static class TelemetryConfig
     /// </summary>
     public static readonly bool PagedMMFActive;
 
-    /// <summary>
-    /// The configured span instrumentation level for PagedMMF operations.
-    /// </summary>
-    public static readonly PageCacheSpanLevel PagedMMFSpanLevel;
-
-    /// <summary>
-    /// True if span level is IOOnly or higher (Level >= 1).
-    /// Use for disk read/write span guards.
-    /// </summary>
-    public static readonly bool PagedMMFSpanIOOnly;
-
-    /// <summary>
-    /// True if span level is CacheMiss or higher (Level >= 2).
-    /// Use for allocation/eviction span guards.
-    /// </summary>
-    public static readonly bool PagedMMFSpanCacheMiss;
-
-    /// <summary>
-    /// True if span level is All (Level == 3).
-    /// Use for every RequestPage span guard (dangerous!).
-    /// </summary>
-    public static readonly bool PagedMMFSpanAll;
-
     // ═══════════════════════════════════════════════════════════════════════════
     // BTREE TELEMETRY
     // ═══════════════════════════════════════════════════════════════════════════
@@ -204,11 +150,6 @@ public static class TelemetryConfig
     /// </summary>
     public static readonly bool BTreeTrackKeyComparisons;
 
-    /// <summary>
-    /// Combined flag: true only if global AND component telemetry are enabled.
-    /// </summary>
-    public static readonly bool BTreeActive;
-
     // ═══════════════════════════════════════════════════════════════════════════
     // TRANSACTION TELEMETRY
     // ═══════════════════════════════════════════════════════════════════════════
@@ -237,21 +178,6 @@ public static class TelemetryConfig
     /// Combined flag: true only if global AND component telemetry are enabled.
     /// </summary>
     public static readonly bool TransactionActive;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // ECS TELEMETRY
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Whether ECS component telemetry is enabled in configuration.
-    /// </summary>
-    public static readonly bool EcsEnabled;
-
-    /// <summary>
-    /// Combined flag: true only if global AND ECS telemetry are enabled.
-    /// Use this single check in ECS hot paths (Spawn, Destroy, Open, Query).
-    /// </summary>
-    public static readonly bool EcsActive;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SPATIAL INDEX TELEMETRY
@@ -285,12 +211,28 @@ public static class TelemetryConfig
     /// </summary>
     public static readonly bool SchedulerActive;
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PROFILER (#243)
+    // ═══════════════════════════════════════════════════════════════════════════
+
     /// <summary>
-    /// Whether deep trace recording is enabled (per-chunk, per-worker events written to <c>.typhon-trace</c> file).
-    /// When true, the scheduler emits <see cref="IRuntimeInspector"/> callbacks for every system ready/chunk start/chunk end event.
-    /// Overhead: ~20-30 ns per event (~3-4 µs per tick for a 20-system DAG). Default: false.
+    /// Whether the general-purpose profiler is enabled in configuration.
     /// </summary>
-    public static readonly bool SchedulerDeepTrace;
+    public static readonly bool ProfilerEnabled;
+
+    /// <summary>
+    /// Combined flag: true only if global telemetry AND the profiler are enabled.
+    /// </summary>
+    /// <remarks>
+    /// This is the single hot-path gate on every <c>TyphonEvent.BeginSpan</c> producer call. When <c>false</c>, the JIT folds
+    /// <c>if (!TelemetryConfig.ProfilerActive) return default;</c> into a no-op on Tier 1 compilation, so the entire profiler producer
+    /// path costs zero CPU when disabled. Same JIT-elimination pattern as <see cref="EcsActive"/>/<see cref="BTreeActive"/>.
+    /// <para>
+    /// Note that <c>TyphonProfiler.Start/Stop</c> only controls consumer + exporter lifecycle — not this gate. The gate is set once at
+    /// class load from the config file and never changes for the life of the process.
+    /// </para>
+    /// </remarks>
+    public static readonly bool ProfilerActive;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CONFIGURATION SOURCE TRACKING (for diagnostics)
@@ -332,23 +274,12 @@ public static class TelemetryConfig
         PagedMMFTrackCacheHitRatio = mmfSection.GetValue("TrackCacheHitRatio", true);
         PagedMMFActive = Enabled && PagedMMFEnabled;
 
-        // PagedMMF span level (for distributed tracing)
-        var spanLevelStr = mmfSection.GetValue("SpanLevel", "None");
-        PagedMMFSpanLevel = System.Enum.TryParse<PageCacheSpanLevel>(spanLevelStr, true, out var parsedLevel)
-            ? parsedLevel
-            : PageCacheSpanLevel.None;
-        PagedMMFSpanIOOnly = Enabled && PagedMMFSpanLevel >= PageCacheSpanLevel.IOOnly;
-        PagedMMFSpanCacheMiss = Enabled && PagedMMFSpanLevel >= PageCacheSpanLevel.CacheMiss;
-        PagedMMFSpanAll = Enabled && PagedMMFSpanLevel >= PageCacheSpanLevel.All;
-
         // BTree
         var btreeSection = section.GetSection("BTree");
-        BTreeEnabled = btreeSection.GetValue("Enabled", false);
         BTreeTrackNodeSplits = btreeSection.GetValue("TrackNodeSplits", true);
         BTreeTrackNodeMerges = btreeSection.GetValue("TrackNodeMerges", true);
         BTreeTrackSearchDepth = btreeSection.GetValue("TrackSearchDepth", true);
         BTreeTrackKeyComparisons = btreeSection.GetValue("TrackKeyComparisons", false);
-        BTreeActive = Enabled && BTreeEnabled;
 
         // Transaction
         var txSection = section.GetSection("Transaction");
@@ -357,11 +288,6 @@ public static class TelemetryConfig
         TransactionTrackConflicts = txSection.GetValue("TrackConflicts", true);
         TransactionTrackDuration = txSection.GetValue("TrackDuration", true);
         TransactionActive = Enabled && TransactionEnabled;
-
-        // ECS
-        var ecsSection = section.GetSection("ECS");
-        EcsEnabled = ecsSection.GetValue("Enabled", false);
-        EcsActive = Enabled && EcsEnabled;
 
         // Spatial Index
         var spatialSection = section.GetSection("Spatial");
@@ -374,8 +300,12 @@ public static class TelemetryConfig
         SchedulerTrackTransitionLatency = schedSection.GetValue("TrackTransitionLatency", true);
         SchedulerTrackWorkerUtilization = schedSection.GetValue("TrackWorkerUtilization", true);
         SchedulerTrackStragglerGap = schedSection.GetValue("TrackStragglerGap", true);
-        SchedulerDeepTrace = schedSection.GetValue("DeepTrace", false);
         SchedulerActive = Enabled && SchedulerEnabled;
+
+        // Profiler (#243)
+        var profilerSection = section.GetSection("Profiler");
+        ProfilerEnabled = profilerSection.GetValue("Enabled", false);
+        ProfilerActive = Enabled && ProfilerEnabled;
     }
 
     private static (IConfiguration config, string loadedPath) BuildConfiguration()
@@ -447,23 +377,24 @@ public static class TelemetryConfig
            PagedMMF: Active={PagedMMFActive}
              Enabled={PagedMMFEnabled}, Allocations={PagedMMFTrackPageAllocations},
              Evictions={PagedMMFTrackPageEvictions}, IO={PagedMMFTrackIOOperations}, CacheRatio={PagedMMFTrackCacheHitRatio}
-             SpanLevel={PagedMMFSpanLevel} (IOOnly={PagedMMFSpanIOOnly}, CacheMiss={PagedMMFSpanCacheMiss}, All={PagedMMFSpanAll})
 
-           BTree: Active={BTreeActive}
-             Enabled={BTreeEnabled}, Splits={BTreeTrackNodeSplits}, Merges={BTreeTrackNodeMerges},
+           BTree:
+             Splits={BTreeTrackNodeSplits}, Merges={BTreeTrackNodeMerges},
              Depth={BTreeTrackSearchDepth}, Comparisons={BTreeTrackKeyComparisons}
 
            Transaction: Active={TransactionActive}
              Enabled={TransactionEnabled}, CommitRollback={TransactionTrackCommitRollback},
              Conflicts={TransactionTrackConflicts}, Duration={TransactionTrackDuration}
 
-           ECS: Active={EcsActive}
-             Enabled={EcsEnabled}
+           Spatial: Active={SpatialActive}
+             Enabled={SpatialEnabled}
 
            Scheduler: Active={SchedulerActive}
              Enabled={SchedulerEnabled}, TransitionLatency={SchedulerTrackTransitionLatency},
-             WorkerUtilization={SchedulerTrackWorkerUtilization}, StragglerGap={SchedulerTrackStragglerGap},
-             DeepTrace={SchedulerDeepTrace}
+             WorkerUtilization={SchedulerTrackWorkerUtilization}, StragglerGap={SchedulerTrackStragglerGap}
+
+           Profiler: Active={ProfilerActive}
+             Enabled={ProfilerEnabled}
          """;
 
     /// <summary>
@@ -487,19 +418,14 @@ public static class TelemetryConfig
             active.Add("PagedMMF");
         }
 
-        if (BTreeActive)
-        {
-            active.Add("BTree");
-        }
-
         if (TransactionActive)
         {
             active.Add("Transaction");
         }
 
-        if (EcsActive)
+        if (SpatialActive)
         {
-            active.Add("ECS");
+            active.Add("Spatial");
         }
 
         if (SchedulerActive)
@@ -507,8 +433,11 @@ public static class TelemetryConfig
             active.Add("Scheduler");
         }
 
-        return active.Count > 0
-            ? $"Telemetry: Enabled [{string.Join(", ", active)}]"
-            : "Telemetry: Enabled (no components active)";
+        if (ProfilerActive)
+        {
+            active.Add("Profiler");
+        }
+
+        return active.Count > 0 ? $"Telemetry: Enabled [{string.Join(", ", active)}]" : "Telemetry: Enabled (no components active)";
     }
 }

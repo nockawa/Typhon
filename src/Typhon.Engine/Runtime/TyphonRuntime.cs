@@ -209,12 +209,6 @@ public sealed class TyphonRuntime : IDisposable
         };
 
         Scheduler.OnCriticalOverloadCallback = () => OnCriticalOverload?.Invoke(this);
-
-        // Wire deep trace inspector (if configured and enabled)
-        if (_options.Inspector != null)
-        {
-            Scheduler.SetInspector(_options.Inspector);
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -276,9 +270,6 @@ public sealed class TyphonRuntime : IDisposable
         {
             _parallelAccessors[i]?.Dispose();
         }
-
-        // Dispose deep trace inspector (flushes remaining data to file)
-        (_options.Inspector as IDisposable)?.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1777,22 +1768,16 @@ public sealed class TyphonRuntime : IDisposable
     }
 
     /// <summary>
-    /// Wraps a tick phase in inspector PhaseStart/PhaseEnd calls when deep tracing is active.
-    /// When tracing is disabled, this compiles to a direct call (JIT eliminates the guard).
+    /// Wraps a tick phase with paired profiler boundary events. When <see cref="TelemetryConfig.ProfilerActive"/> is false the JIT folds both
+    /// Emit calls to no-ops — this method compiles to just <c>action()</c>.
     /// </summary>
     private void InspectorPhase(TickPhase phase, Action action)
     {
-        if (TelemetryConfig.SchedulerDeepTrace && _options.Inspector != null)
-        {
-            var start = Stopwatch.GetTimestamp();
-            _options.Inspector.OnPhaseStart(phase, start);
-            action();
-            _options.Inspector.OnPhaseEnd(phase, Stopwatch.GetTimestamp());
-        }
-        else
-        {
-            action();
-        }
+        // Scheduler's TickPhase and profiler's TickPhase share byte values — reinterpret without a lookup table.
+        var profilerPhase = (Profiler.TickPhase)(byte)phase;
+        Profiler.TyphonEvent.EmitPhaseStart(profilerPhase, Stopwatch.GetTimestamp());
+        action();
+        Profiler.TyphonEvent.EmitPhaseEnd(profilerPhase, Stopwatch.GetTimestamp());
     }
 
     /// <summary>

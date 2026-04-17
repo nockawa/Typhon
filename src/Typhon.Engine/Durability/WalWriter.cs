@@ -4,6 +4,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -195,6 +196,11 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
             ThrowHelper.ThrowWalWriteFailure(_fatalError);
         }
 
+        // Slow path — actual wait. The WalWait span captures how long this thread blocked waiting for the WAL writer to catch up.
+        // Emitted on the CALLING thread (inside TransactionCommit), not the WAL writer thread. Parents under TransactionCommit
+        // via the TLS open-span chain, so the viewer shows "Commit contained a WAL wait of N µs".
+        using var waitScope = TyphonEvent.BeginWalWait(lsn);
+
         while (Interlocked.Read(ref _durableLsn) < lsn)
         {
             if (!Unsafe.IsNullRef(ref ctx) && ctx.ShouldStop)
@@ -318,80 +324,93 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                 // We compute it from the commit buffer's NextLsn at drain time minus remaining undrained records
                 batchHighLsn = _commitBuffer.NextLsn - 1;
 
-                // 4. Copy to staging buffer with 4096-byte alignment
-                var bytesToWrite = AlignUp(data.Length, PageSize);
-
-                if (bytesToWrite > _stagingBufferSize)
+                // WalFlush span: covers the write + signal cycle. The WAL writer thread claims its own ThreadSlotRegistry slot
+                // on first emit, so it appears as a dedicated lane in the viewer.
+                var flushScope = TyphonEvent.BeginWalFlush(data.Length, frameCount, batchHighLsn);
+                try
                 {
-                    // Data exceeds staging buffer — write in chunks
-                    WriteInChunks(data);
-                }
-                else
-                {
-                    // Copy data to staging buffer and zero-pad
-                    data.CopyTo(new Span<byte>(_stagingBuffer, _stagingBufferSize));
 
-                    // Zero-pad the remainder to the 4096 boundary
-                    var padStart = data.Length;
-                    var padLength = bytesToWrite - padStart;
-                    if (padLength > 0)
+                    // 4. Copy to staging buffer with 4096-byte alignment
+                    var bytesToWrite = AlignUp(data.Length, PageSize);
+
+                    if (bytesToWrite > _stagingBufferSize)
                     {
-                        new Span<byte>(_stagingBuffer + padStart, padLength).Clear();
+                        // Data exceeds staging buffer — write in chunks
+                        WriteInChunks(data);
+                    }
+                    else
+                    {
+                        // Copy data to staging buffer and zero-pad
+                        data.CopyTo(new Span<byte>(_stagingBuffer, _stagingBufferSize));
+
+                        // Zero-pad the remainder to the 4096 boundary
+                        var padStart = data.Length;
+                        var padLength = bytesToWrite - padStart;
+                        if (padLength > 0)
+                        {
+                            new Span<byte>(_stagingBuffer + padStart, padLength).Clear();
+                        }
+
+                        // Patch chunk CRCs before writing to disk
+                        PatchChunkCrcs(new Span<byte>(_stagingBuffer, _stagingBufferSize), data.Length);
+
+                        // 5. Write aligned to active segment
+                        var segment = _segmentManager.ActiveSegment;
+                        var writeSpan = new ReadOnlySpan<byte>(_stagingBuffer, bytesToWrite);
+
+                        var flushStart = Stopwatch.GetTimestamp();
+                        _fileIO.WriteAligned(segment.Handle, segment.WriteOffset, writeSpan);
+                        RecordFlushLatency(flushStart);
+
+                        segment.WriteOffset += bytesToWrite;
+                        Interlocked.Add(ref _totalBytesWritten, bytesToWrite);
                     }
 
-                    // Patch chunk CRCs before writing to disk
-                    PatchChunkCrcs(new Span<byte>(_stagingBuffer, _stagingBufferSize), data.Length);
+                    // 6. Complete drain to advance buffer position
+                    _commitBuffer.CompleteDrain(data.Length);
 
-                    // 5. Write aligned to active segment
-                    var segment = _segmentManager.ActiveSegment;
-                    var writeSpan = new ReadOnlySpan<byte>(_stagingBuffer, bytesToWrite);
-
-                    var flushStart = Stopwatch.GetTimestamp();
-                    _fileIO.WriteAligned(segment.Handle, segment.WriteOffset, writeSpan);
-                    RecordFlushLatency(flushStart);
-
-                    segment.WriteOffset += bytesToWrite;
-                    Interlocked.Add(ref _totalBytesWritten, bytesToWrite);
-                }
-
-                // 6. Complete drain to advance buffer position
-                _commitBuffer.CompleteDrain(data.Length);
-
-                // 7. Advance durable LSN and signal waiters
-                if (batchHighLsn > 0)
-                {
-                    Logger?.LogDebug("WAL writer: advancing durable LSN to {DurableLsn}, wrote {BytesWritten} bytes ({FrameCount} frames)",
-                        batchHighLsn, bytesToWrite, frameCount);
-                    Interlocked.Exchange(ref _durableLsn, batchHighLsn);
-                    _durabilityEvent.Set();
-                }
-
-                Interlocked.Increment(ref _totalFlushes);
-
-                // 8. Check segment rotation threshold
-                if (_segmentManager.ActiveSegmentUtilization >= RotationThreshold)
-                {
-                    Logger?.LogInformation("WAL segment rotation at {Utilization:P0}, rotating after LSN {LastLsn}",
-                        _segmentManager.ActiveSegmentUtilization, batchHighLsn);
-                    try
+                    // 7. Advance durable LSN and signal waiters
+                    if (batchHighLsn > 0)
                     {
-                        _segmentManager.RotateSegment(firstLSN: batchHighLsn + 1, prevLastLSN: batchHighLsn);
-                        _lastFooterCrc = 0; // Reset CRC chain for new segment
-                        Logger?.LogInformation("WAL segment rotation complete, new segment {SegmentId}",
-                            _segmentManager.ActiveSegment?.SegmentId ?? -1);
+                        Logger?.LogDebug("WAL writer: advancing durable LSN to {DurableLsn}, wrote {BytesWritten} bytes ({FrameCount} frames)",
+                            batchHighLsn, bytesToWrite, frameCount);
+                        Interlocked.Exchange(ref _durableLsn, batchHighLsn);
+                        _durabilityEvent.Set();
                     }
-                    catch (Exception rotEx)
-                    {
-                        Logger?.LogError(rotEx, "WAL segment rotation FAILED");
-                        throw; // Let outer catch handle it
-                    }
-                }
 
-                // Handle explicit flush request
-                if (_flushRequested)
+                    Interlocked.Increment(ref _totalFlushes);
+
+                    // 8. Check segment rotation threshold
+                    if (_segmentManager.ActiveSegmentUtilization >= RotationThreshold)
+                    {
+                        Logger?.LogInformation("WAL segment rotation at {Utilization:P0}, rotating after LSN {LastLsn}",
+                            _segmentManager.ActiveSegmentUtilization, batchHighLsn);
+                        using var rotateScope = TyphonEvent.BeginWalSegmentRotate((int)(_segmentManager.ActiveSegment?.SegmentId ?? -1));
+                        try
+                        {
+                            _segmentManager.RotateSegment(firstLSN: batchHighLsn + 1, prevLastLSN: batchHighLsn);
+                            _lastFooterCrc = 0; // Reset CRC chain for new segment
+                            Logger?.LogInformation("WAL segment rotation complete, new segment {SegmentId}",
+                                _segmentManager.ActiveSegment?.SegmentId ?? -1);
+                        }
+                        catch (Exception rotEx)
+                        {
+                            Logger?.LogError(rotEx, "WAL segment rotation FAILED");
+                            throw; // Let outer catch handle it
+                        }
+                    }
+
+                    // Handle explicit flush request
+                    if (_flushRequested)
+                    {
+                        _flushRequested = false;
+                        PerformFlush();
+                    }
+
+                } // end WalFlush try
+                finally
                 {
-                    _flushRequested = false;
-                    PerformFlush();
+                    flushScope.Dispose();
                 }
             }
 
