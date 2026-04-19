@@ -44,10 +44,10 @@ namespace Typhon.Engine.Profiler;
 internal sealed class TraceRecordRing
 {
     /// <summary>Minimum reservation size — the common header alone. Anything smaller is a programmer error.</summary>
-    public const int MinRecordSize = TraceRecordHeader.CommonHeaderSize;
+    private const int MinRecordSize = TraceRecordHeader.CommonHeaderSize;
 
     /// <summary>Maximum reservation size — u16 size field's usable range minus the wrap sentinel value.</summary>
-    public const int MaxRecordSize = TraceRecordHeader.WrapSentinel - 1;  // 0xFFFE
+    private const int MaxRecordSize = TraceRecordHeader.WrapSentinel - 1;  // 0xFFFE
 
     private readonly byte[] _buffer;
     private readonly int _mask;
@@ -63,7 +63,7 @@ internal sealed class TraceRecordRing
     private long _droppedEvents;
 
     /// <summary>Total bytes the buffer can hold (a power of 2, ≥ 64).</summary>
-    public int Capacity { get; }
+    private int Capacity { get; }
 
     /// <summary>Total records dropped on this buffer due to overflow (single-writer, plain read OK).</summary>
     public long DroppedEvents => _droppedEvents;
@@ -79,6 +79,24 @@ internal sealed class TraceRecordRing
     /// approximation only.
     /// </summary>
     public long BytesPending => _head.Value - _tail.Value;
+
+    /// <summary>Diagnostic: dump the first N bytes at tail position as hex. For investigating drain-stuck states.</summary>
+    public string DumpAtTail(int bytes = 32)
+    {
+        var tail = _tail.Value;
+        var head = _head.Value;
+        var tailOffset = (int)(tail & _mask);
+        var n = Math.Min(bytes, _buffer.Length - tailOffset);
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"tail={tail} head={head} tailOffset={tailOffset} size16@tail={BinaryPrimitives.ReadUInt16LittleEndian(_buffer.AsSpan(tailOffset))} bytes=[");
+        for (int i = 0; i < n; i++)
+        {
+            sb.Append($"{_buffer[tailOffset + i]:X2} ");
+        }
+
+        sb.Append(']');
+        return sb.ToString();
+    }
 
     public TraceRecordRing(int capacity)
     {
@@ -171,12 +189,10 @@ internal sealed class TraceRecordRing
     /// <see cref="TryReserve"/> destination.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Publish()
-    {
+    public void Publish() =>
         // On x64 TSO, this plain 64-bit store is naturally release-ordered relative to the preceding payload writes (all writes complete before
         // any later write is visible). The consumer's plain read of _head sees either the old value or the new value, never a torn 64-bit store.
         _head.Value = _pendingHead;
-    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Consumer API

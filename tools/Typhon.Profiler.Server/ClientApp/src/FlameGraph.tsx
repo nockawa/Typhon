@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'preact/hooks';
 import { fetchFlameGraph, type FlameNode } from './api';
-import { setupCanvas, drawTooltip, BG_COLOR, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT } from './canvasUtils';
+import { setupCanvas, drawTooltip, BG_COLOR, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, SPAN_PALETTE } from './canvasUtils';
 import type { TimeRange } from './uiTypes';
 
 interface FlameGraphProps {
@@ -14,14 +14,24 @@ const FLAME_TOTAL = FLAME_ROW_HEIGHT + FLAME_GAP;
 const MIN_WIDTH_FOR_LABEL = 35;
 const HEADER_HEIGHT = 24;
 
-/** Generate a stable color from a string (method name) */
+/**
+ * Pick a stable color for a flame-graph node from the dedicated <see cref="SPAN_PALETTE"/> (the warm dark-violet → amber ramp used
+ * across all span-like surfaces: flame graph, timeline system chunks, nested span bars). Hashing the method name into the palette
+ * means the same method always renders the same color across sessions — stable diff-ability when comparing two trace runs
+ * side-by-side — and every span-like surface shares one palette so nothing pulls visual weight from the gauge region.
+ *
+ * 8-color ring: coarser than a 360-hue wheel, so unrelated method names occasionally share a palette index. In a flame graph where
+ * depth + width already convey structure, and where the warm ramp gives a consistent visual identity to "this is code running," that
+ * collision rate is a tolerable trade for the section-coloring consistency.
+ */
 function nameToColor(name: string): string {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
     hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
   }
-  const h = ((hash & 0xFFFF) % 360);
-  return `hsl(${h}, 55%, 45%)`;
+  // Force non-negative index — bitwise int can be negative in JS when the top bit is set.
+  const idx = (hash >>> 0) % SPAN_PALETTE.length;
+  return SPAN_PALETTE[idx];
 }
 
 interface LayoutRect {

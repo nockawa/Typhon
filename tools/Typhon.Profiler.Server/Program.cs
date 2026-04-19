@@ -175,14 +175,35 @@ static object[] BuildComponentTypeDtos(IReadOnlyList<ComponentTypeRecord> compon
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok", version = "0.2.0" }));
 
 /// <summary>Upload trace files (multipart form: 'trace' = .typhon-trace, optional 'nettrace' = .nettrace).</summary>
+// Hard upper bound on uploaded trace payloads. A Typhon trace is normally a few MB to a few hundred MB; 8 GB leaves room for
+// very long-running production captures while denying "upload a 1 TB sparse file to fill the disk" style abuse. Enforced BEFORE
+// reading the body — rejecting at the framework layer is preferable to rejecting after we've already begun streaming to disk.
+const long MaxUploadBytes = 8L * 1024 * 1024 * 1024;  // 8 GB
+
 app.MapPost("/api/trace/upload", async (HttpRequest request) =>
 {
+    // Per-file and total-size cap. Check the Content-Length header BEFORE ReadFormAsync — a malicious client can otherwise
+    // stream indefinitely. The ReadForm path has its own form-options limits (ASP.NET Core's MultipartBodyLengthLimit), but the
+    // default is 128 MB and silently truncates without a clean error; an explicit front-line check is clearer and also works
+    // when the client sends no Content-Length (chunked) — in that case we fall back to a per-file stream-length check below.
+    if (request.ContentLength is long declared && declared > MaxUploadBytes)
+    {
+        return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+    }
+
     var form = await request.ReadFormAsync();
 
     var traceFile = form.Files.GetFile("trace");
     if (traceFile == null)
     {
         return Results.BadRequest(new { error = "No .typhon-trace file in upload" });
+    }
+
+    // Per-file size cap too — a request with chunked encoding might slip past the Content-Length check above. IFormFile exposes
+    // the declared payload length after the framework has parsed the multipart headers; reject before opening the disk stream.
+    if (traceFile.Length > MaxUploadBytes || (form.Files.GetFile("nettrace") is { } nf && nf.Length > MaxUploadBytes))
+    {
+        return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
     }
 
     var sessionId = Guid.NewGuid().ToString();
@@ -241,12 +262,13 @@ app.MapPost("/api/trace/upload", async (HttpRequest request) =>
 /// <summary>Load a trace file and return metadata (header + system/archetype/component-type tables).</summary>
 app.MapGet("/api/trace/metadata", (string path) =>
 {
-    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+    var validated = PathGuard.ValidateTracePath(path, ".typhon-trace");
+    if (validated == null)
     {
-        return Results.NotFound(new { error = "Trace file not found", path });
+        return Results.NotFound(new { error = "Trace file not found or invalid path", path });
     }
 
-    using var reader = new TraceFileReader(File.OpenRead(path));
+    using var reader = new TraceFileReader(File.OpenRead(validated));
     var header = reader.ReadHeader();
     var systems = reader.ReadSystemDefinitions();
     var archetypes = reader.ReadArchetypes();
@@ -267,13 +289,14 @@ app.MapGet("/api/trace/metadata", (string path) =>
 /// </summary>
 app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
 {
-    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+    var validated = PathGuard.ValidateTracePath(path, ".typhon-trace");
+    if (validated == null)
     {
-        return Results.NotFound(new { error = "Trace file not found", path });
+        return Results.NotFound(new { error = "Trace file not found or invalid path", path });
     }
 
     // Read source metadata (small, fast — reads only the file's header/tables, not the record stream).
-    using var sourceReader = new TraceFileReader(File.OpenRead(path));
+    using var sourceReader = new TraceFileReader(File.OpenRead(validated));
     var header = sourceReader.ReadHeader();
     var systems = sourceReader.ReadSystemDefinitions();
     var archetypes = sourceReader.ReadArchetypes();
@@ -281,7 +304,7 @@ app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
 
     // Build/hit the sidecar cache. Synchronous for Phase 1 — a cold build for a 158 MB trace takes ~0.3-0.5 s; viewer opens happen infrequently
     // enough that request-thread blocking is acceptable. Phase 2 introduces progressive build + HTTP 202 semantics.
-    var cacheReader = sessions.GetOrBuild(path);
+    var cacheReader = sessions.GetOrBuild(validated);
 
     // Pack tick summaries and system aggregates into simple JSON shapes. Even for 500K ticks the payload stays in the tens of MB range, which
     // the existing compression middleware handles cleanly. For Phase 2 we'll switch this to a binary summary endpoint to avoid per-tick JSON
@@ -329,9 +352,26 @@ app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
         };
     }
 
+    // Full GC-suspension list at open time — lets the client compute a STABLE yMax for the GC pause-per-tick bar chart regardless of
+    // which chunks are currently resident in the LRU cache. Without this, panning into a new region (which triggers chunk loads/evicts)
+    // caused the chart scale to rescale every time a new chunk's suspensions arrived. Computed once per session-slot lifetime via
+    // TraceSessionService.GetOrComputeGcSuspensions; subsequent /open calls reuse the cached list.
+    var suspensionDtos = sessions.GetOrComputeGcSuspensions(validated, header.SamplingSessionStartQpc, header.TimestampFrequency);
+    var suspensions = new object[suspensionDtos.Count];
+    for (var i = 0; i < suspensionDtos.Count; i++)
+    {
+        var s = suspensionDtos[i];
+        suspensions[i] = new { startUs = s.StartUs, durationUs = s.DurationUs, threadSlot = s.ThreadSlot };
+    }
+
     return Results.Ok(new
     {
         status = "ready",
+        // Hex-encoded source fingerprint (SHA-256 of mtime + length + first/last 4 KB). Stable for a given trace file content;
+        // changes if the file is rebuilt. Client uses this as an invalidation key for its OPFS-backed chunk cache — same
+        // fingerprint ⇒ cached chunks still valid; different fingerprint ⇒ cached chunks become orphaned (garbage-collected by
+        // the client's global cleanup sweep).
+        fingerprint = cacheReader.GetSourceFingerprintHex(),
         header = BuildHeaderDto(header),
         systems = BuildSystemDtos(systems),
         archetypes = BuildArchetypeDtos(archetypes),
@@ -350,6 +390,7 @@ app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
         },
         tickSummaries = summaries,
         chunkManifest = manifest,
+        gcSuspensions = suspensions,
     });
 });
 
@@ -361,12 +402,17 @@ app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
 /// </summary>
 app.MapGet("/api/trace/chunk", (string path, int fromTick, int toTick, TraceSessionService sessions) =>
 {
-    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+    // Same threat model as the other endpoints: localhost is reachable by any browser the user visits, and the CORS policy
+    // is wide-open. Without PathGuard here, a malicious page could probe arbitrary paths via this endpoint — the "file is
+    // not a trace" path would still throw inside GetOrBuild, but the thrown error leaks existence + the session dictionary
+    // would accumulate entries keyed on attacker-controlled paths. Extension whitelist + canonicalization prevent both.
+    var validated = PathGuard.ValidateTracePath(path, ".typhon-trace");
+    if (validated == null)
     {
-        return Results.NotFound(new { error = "Trace file not found", path });
+        return Results.NotFound(new { error = "Trace file not found or invalid path", path });
     }
 
-    var cacheReader = sessions.GetOrBuild(path);
+    var cacheReader = sessions.GetOrBuild(validated);
 
     // O(1) lookup via the precomputed FromTick → index map. ToTick is verified against the stored entry after the lookup — manifest entries
     // are 1:1 on FromTick so this is a complete match without a second scan.
@@ -387,7 +433,7 @@ app.MapGet("/api/trace/chunk", (string path, int fromTick, int toTick, TraceSess
     {
         cacheReader.DecompressChunk(entry, uncompressedBuf.AsSpan(0, (int)entry.UncompressedBytes), compressedBuf.AsSpan(0, (int)entry.CacheByteLength));
 
-        var decoder = new RecordDecoder(GetSourceTimestampFrequency(path));
+        var decoder = new RecordDecoder(GetSourceTimestampFrequency(validated));
         // Seed the decoder's tick counter to fromTick - 1 so the first TickStart inside the chunk pushes it to fromTick. Without this, every
         // chunk would start at tick 1 and misreport event tick numbers to the client.
         decoder.SetCurrentTick(fromTick - 1);
@@ -424,12 +470,15 @@ app.MapGet("/api/trace/chunk", (string path, int fromTick, int toTick, TraceSess
 /// </remarks>
 app.MapGet("/api/trace/chunk-binary", (string path, int fromTick, int toTick, HttpContext http, TraceSessionService sessions) =>
 {
-    if (string.IsNullOrEmpty(path) || !File.Exists(path))
+    // PathGuard — see identical block in /api/trace/chunk above. Chunk endpoints previously used a bare File.Exists, which
+    // exposed a file-existence oracle + unbounded session-dictionary growth to any origin calling localhost.
+    var validated = PathGuard.ValidateTracePath(path, ".typhon-trace");
+    if (validated == null)
     {
-        return Results.NotFound(new { error = "Trace file not found", path });
+        return Results.NotFound(new { error = "Trace file not found or invalid path", path });
     }
 
-    var cacheReader = sessions.GetOrBuild(path);
+    var cacheReader = sessions.GetOrBuild(validated);
 
     // O(1) manifest lookup via the precomputed FromTick → index map (same approach as /api/trace/chunk).
     if (!cacheReader.ChunkIndexByFromTick.TryGetValue((uint)fromTick, out var entryIdx))
@@ -442,18 +491,19 @@ app.MapGet("/api/trace/chunk-binary", (string path, int fromTick, int toTick, Ht
         return Results.NotFound(new { error = "Chunk toTick mismatch", fromTick, toTick, expectedToTick = entry.ToTick });
     }
 
-    http.Response.Headers["X-Chunk-From-Tick"] = fromTick.ToString();
-    http.Response.Headers["X-Chunk-To-Tick"] = toTick.ToString();
-    http.Response.Headers["X-Chunk-Event-Count"] = entry.EventCount.ToString();
-    http.Response.Headers["X-Chunk-Uncompressed-Bytes"] = entry.UncompressedBytes.ToString();
+    http.Response.Headers[ChunkBinaryHeaders.FromTick] = fromTick.ToString();
+    http.Response.Headers[ChunkBinaryHeaders.ToTick] = toTick.ToString();
+    http.Response.Headers[ChunkBinaryHeaders.EventCount] = entry.EventCount.ToString();
+    http.Response.Headers[ChunkBinaryHeaders.UncompressedBytes] = entry.UncompressedBytes.ToString();
     // Timestamp frequency is stamped on the session slot by TraceSessionService.GetOrBuild — this read is a dictionary lookup, no file I/O.
     // Fall back to the source-file read only if the cache miss (shouldn't happen since GetOrBuild was called just above).
-    var ts = sessions.GetCachedTimestampFrequency(path);
-    if (ts == 0) ts = GetSourceTimestampFrequency(path);
-    http.Response.Headers["X-Timestamp-Frequency"] = ts.ToString();
-    // Expose the custom headers to CORS — needed because the SPA may be served from a different origin during Vite dev.
-    http.Response.Headers["Access-Control-Expose-Headers"] =
-        "X-Chunk-From-Tick, X-Chunk-To-Tick, X-Chunk-Event-Count, X-Chunk-Uncompressed-Bytes, X-Timestamp-Frequency";
+    var ts = sessions.GetCachedTimestampFrequency(validated);
+    if (ts == 0) ts = GetSourceTimestampFrequency(validated);
+    http.Response.Headers[ChunkBinaryHeaders.TimestampFrequency] = ts.ToString();
+    // Expose the custom headers to CORS — needed because the SPA may be served from a different origin during Vite dev. The string is
+    // derived from the SAME names used in the setters above (see ChunkBinaryHeaders), so renaming or adding a header updates both sides
+    // atomically — no drift between what we send and what we expose.
+    http.Response.Headers["Access-Control-Expose-Headers"] = ChunkBinaryHeaders.ExposedHeadersList;
 
     // Stream the compressed payload directly to the response body from a pooled buffer — no intermediate byte[] allocation. The stream
     // callback runs AFTER headers above are flushed, and owns the ArrayPool rent/return cycle so the buffer isn't released before the write
@@ -554,7 +604,15 @@ app.MapGet("/api/trace/summary", (string path, TraceSessionService sessions) =>
 /// <summary>Build a flame graph from CPU samples in the companion .nettrace file.</summary>
 app.MapGet("/api/trace/flamegraph", (string path, double? fromUs, double? toUs, int? threadId) =>
 {
-    var nettracePath = Path.ChangeExtension(path, ".nettrace");
+    // Validate + canonicalize the user-supplied trace path before deriving the sibling .nettrace path. Without this, a
+    // payload like `path=../../../win.ini` turns into `nettracePath=../../../win.nettrace` and the File.Exists fallback
+    // short-circuits back through user-land — a classic directory-traversal oracle.
+    var validatedTrace = PathGuard.ValidateTracePath(path, ".typhon-trace");
+    if (validatedTrace == null)
+    {
+        return Results.NotFound(new { error = "Trace file not found or invalid path", path });
+    }
+    var nettracePath = Path.ChangeExtension(validatedTrace, ".nettrace");
     if (!File.Exists(nettracePath))
     {
         return Results.NotFound(new { error = "No .nettrace file found (CPU sampling was not enabled)", nettracePath });
@@ -562,7 +620,7 @@ app.MapGet("/api/trace/flamegraph", (string path, double? fromUs, double? toUs, 
 
     try
     {
-        using var traceReader = new TraceFileReader(File.OpenRead(path));
+        using var traceReader = new TraceFileReader(File.OpenRead(validatedTrace));
         var header = traceReader.ReadHeader();
 
         var from = fromUs ?? 0;
@@ -780,6 +838,26 @@ internal sealed class ActionProgress<T> : IProgress<T>
 }
 
 /// <summary>
+/// Single source of truth for the custom response-header names on <c>/api/trace/chunk-binary</c>. Declaring them here lets both the setter
+/// block and the <c>Access-Control-Expose-Headers</c> value be derived from the same list — a future rename or addition only needs one
+/// edit, instead of two locations that could drift (and silently break CORS for the SPA when Vite dev-server runs on a different origin).
+/// </summary>
+internal static class ChunkBinaryHeaders
+{
+    public const string FromTick = "X-Chunk-From-Tick";
+    public const string ToTick = "X-Chunk-To-Tick";
+    public const string EventCount = "X-Chunk-Event-Count";
+    public const string UncompressedBytes = "X-Chunk-Uncompressed-Bytes";
+    public const string TimestampFrequency = "X-Timestamp-Frequency";
+
+    /// <summary>Comma-separated list of every custom header, suitable for <c>Access-Control-Expose-Headers</c>.</summary>
+    public static readonly string ExposedHeadersList = string.Join(", ", new[]
+    {
+        FromTick, ToTick, EventCount, UncompressedBytes, TimestampFrequency,
+    });
+}
+
+/// <summary>
 /// Best-effort file deletion helpers. Used by the upload handler's rollback path — never throw into the caller's exception flow, since a
 /// failed cleanup is strictly less important than surfacing the original upload error.
 /// </summary>
@@ -798,5 +876,71 @@ internal static class FileOps
         {
             // Swallow — cleanup is best-effort. File-locked or permission-denied failures just leave the file for the shutdown sweep.
         }
+    }
+}
+
+/// <summary>
+/// Input-validation helpers for the HTTP surface. Every API endpoint that takes a user-controlled <c>path</c> query string
+/// must route it through <see cref="ValidateTracePath"/> before touching the filesystem — otherwise a malicious client can
+/// read arbitrary files via relative-path traversal (e.g., <c>path=../../etc/passwd</c>).
+/// </summary>
+internal static class PathGuard
+{
+    /// <summary>
+    /// Validates that <paramref name="userPath"/> is a well-formed absolute path pointing at a file with one of the
+    /// <paramref name="allowedExtensions"/>, resolves <c>..</c> segments via <see cref="Path.GetFullPath"/>, and returns the
+    /// canonicalized absolute path. Returns <c>null</c> on any validation failure — callers reply with 400/404 on null.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Threat model:</b> the server runs on localhost but CORS is wide-open, so a malicious webpage the user visits
+    /// can make requests against <c>localhost:5000</c>. Without extension-whitelisting and <c>..</c>-segment resolution,
+    /// <c>/api/trace/metadata?path=../../../secrets.txt</c> would happily read arbitrary files and echo portions back in error
+    /// messages. The extension whitelist is the primary defense — our own event codec will fail on a non-trace file anyway, but
+    /// rejecting at the boundary is simpler + denies any chance of timing-based file-existence oracles.</para>
+    /// </remarks>
+    public static string ValidateTracePath(string userPath, params string[] allowedExtensions)
+    {
+        if (string.IsNullOrWhiteSpace(userPath))
+        {
+            return null;
+        }
+
+        string normalized;
+        try
+        {
+            // GetFullPath resolves `..` segments, normalizes slashes, and throws on invalid chars. Any exception here means
+            // the input isn't a sane filesystem path — reject.
+            normalized = Path.GetFullPath(userPath);
+        }
+        catch
+        {
+            return null;
+        }
+
+        // Extension whitelist — the primary defense. Users can only ever touch files with known profiler extensions,
+        // which eliminates the "read /etc/passwd" style of attack outright.
+        if (allowedExtensions is { Length: > 0 })
+        {
+            bool extensionOk = false;
+            foreach (var ext in allowedExtensions)
+            {
+                if (normalized.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                {
+                    extensionOk = true;
+                    break;
+                }
+            }
+            if (!extensionOk)
+            {
+                return null;
+            }
+        }
+
+        if (!File.Exists(normalized))
+        {
+            return null;
+        }
+
+        return normalized;
     }
 }

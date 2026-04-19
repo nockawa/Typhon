@@ -40,6 +40,27 @@ public enum TraceEventKind : byte
     /// <summary>Generic instant marker. Payload: <c>nameId: i32</c> (interned), <c>payload: i32</c>.</summary>
     Instant = 6,
 
+    /// <summary>
+    /// .NET runtime GC boundary — a garbage collection has started. Payload: <c>u8 generation</c>, <c>u8 reason</c> (<see cref="GcReason"/>),
+    /// <c>u8 type</c> (<see cref="GcType"/>), <c>u32 count</c>. Emitted by the profiler's GC ingestion thread on observing <c>GCStart_V2</c>.
+    /// Only produced when <c>TelemetryConfig.ProfilerGcTracingActive</c> is set at class load.
+    /// </summary>
+    GcStart = 7,
+
+    /// <summary>
+    /// .NET runtime GC boundary — a garbage collection has ended. Payload: <c>u8 generation</c>, <c>u32 count</c>, <c>i64 pauseDurationTicks</c>,
+    /// <c>u64 promotedBytes</c>, five <c>u64</c> per-generation size-after values (Gen0/Gen1/Gen2/LOH/POH), <c>u64 totalCommittedBytes</c>.
+    /// Sizes are snapshotted by the ingestion thread via <see cref="System.GC.GetGCMemoryInfo()"/> on the <c>GCEnd_V1</c> event.
+    /// </summary>
+    GcEnd = 8,
+
+    /// <summary>
+    /// Discrete unmanaged-memory allocation or free event. Every <c>PinnedMemoryBlock</c> construct/dispose emits one of these when
+    /// <c>TelemetryConfig.ProfilerMemoryAllocationsActive</c> is set. Payload: <c>u8 direction</c> (<see cref="MemoryAllocDirection"/>),
+    /// <c>u16 sourceTag</c> (<see cref="MemoryAllocSource"/>), <c>u64 sizeBytes</c>, <c>u64 totalAfterBytes</c>. Wire size: 31 B.
+    /// </summary>
+    MemoryAllocEvent = 9,
+
     // ── Span events (span header extension: 25B + optional 16B trace context, then typed payload) ──
 
     /// <summary>Scheduler chunk executed on a worker. Payload: <c>systemIdx: u16</c>, <c>chunkIdx: u16</c>, <c>totalChunks: u16</c>, <c>entitiesProcessed: i32</c>.</summary>
@@ -158,6 +179,36 @@ public enum TraceEventKind : byte
     /// <summary>Cluster migration between spatial cells. Required: <c>archetypeId: u16</c>, <c>migrationCount: i32</c>.</summary>
     ClusterMigration = 60,
 
+    // ── .NET runtime GC suspension (span) ──
+
+    /// <summary>
+    /// .NET runtime Execution-Engine suspension window. Opened on <c>GCSuspendEEBegin_V1</c> (ETW id 9), closed on <c>GCRestartEEEnd_V1</c> (ETW id 3).
+    /// Payload: <c>u8 reason</c> (<see cref="GcSuspendReason"/>), <c>u8 optMask</c> (reserved).
+    /// <c>ParentSpanId</c> is always 0 (process-level, not caller-attributed). No <see cref="System.Diagnostics.Activity"/> capture.
+    /// </summary>
+    GcSuspension = 75,
+
+    /// <summary>
+    /// Per-tick gauge snapshot — packed bundle of (gaugeId, value) pairs emitted once per tick by the scheduler thread at end-of-tick.
+    /// Instant-style record: no span header extension, no duration semantics. Common header + fixed prefix
+    /// (<c>u32 tickNumber</c>, <c>u16 fieldCount</c>, <c>u32 flags</c>) then repeated
+    /// <c>{u16 gaugeId; u8 valueKind; [4 or 8 B] value}</c> entries. Gated on <c>TelemetryConfig.ProfilerGaugesActive</c>.
+    /// See <see cref="GaugeId"/> for the wire-stable gauge ID registry.
+    /// </summary>
+    /// <remarks>
+    /// Although this kind's numeric value is ≥ 10, it is <b>not</b> a span record. <see cref="TraceEventKindExtensions.IsSpan"/> explicitly
+    /// excludes it so the consumer never tries to read the 25-byte span header extension after the common header.
+    /// </remarks>
+    PerTickSnapshot = 76,
+
+    /// <summary>
+    /// Per-slot thread identity — emitted once when a producer thread claims its slot. Carries the managed thread ID and a UTF-8 thread name
+    /// so the viewer can label lanes with something meaningful ("DagScheduler", "TyphonProfilerConsumer", pool worker name, ...) instead of
+    /// just the numeric slot index. Wire layout after the 12-byte common header: <c>i32 managedThreadId</c>, <c>u16 nameByteCount</c>,
+    /// <c>byte[nameByteCount] nameUtf8</c>. Instant-style (no span-header extension); see <see cref="TraceEventKindExtensions.IsSpan"/>.
+    /// </summary>
+    ThreadInfo = 77,
+
     // ── WAL (span) ──
 
     /// <summary>WAL writer drain-write-signal cycle. Required: <c>batchByteCount: i32</c>, <c>frameCount: i32</c>, <c>highLsn: i64</c>.</summary>
@@ -209,5 +260,10 @@ public static class TraceEventKindExtensions
     /// <c>true</c> when the kind uses the span header extension (25-byte span preamble after the 12-byte common header, plus optional 16-byte trace context).
     /// Instant kinds (&lt; 10) use only the common header + optional tiny payload.
     /// </summary>
-    public static bool IsSpan(this TraceEventKind kind) => (byte)kind >= 10;
+    /// <remarks>
+    /// <see cref="TraceEventKind.PerTickSnapshot"/> is explicitly excluded: its numeric ID is ≥ 10 for category grouping with other metric
+    /// records, but its wire shape is instant (no span header extension). Any future instant-style kind placed above 9 must be added to this
+    /// exclusion — otherwise the consumer will misread the 25 bytes immediately after the common header as span metadata.
+    /// </remarks>
+    public static bool IsSpan(this TraceEventKind kind) => (byte)kind >= 10 && kind != TraceEventKind.PerTickSnapshot && kind != TraceEventKind.ThreadInfo;
 }

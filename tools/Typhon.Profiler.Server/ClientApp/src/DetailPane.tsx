@@ -1,12 +1,48 @@
-import type { ChunkSpan, SpanData } from './traceModel';
+import type { ChunkSpan, SpanData, MarkerSelection } from './traceModel';
 import { TraceEventKind, SpanKindNames, type SystemDef } from './types';
 import { getSystemColor, formatDuration, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, BG_COLOR } from './canvasUtils';
 
 interface DetailPaneProps {
   chunk: ChunkSpan | null;
   span: SpanData | null;
+  marker: MarkerSelection | null;
   systems: SystemDef[];
   onClose: () => void;
+}
+
+/** Human-friendly names for the memory-alloc source tags — mirrors the <c>MemoryAllocSource</c> enum on the engine side. */
+const MEMORY_ALLOC_SOURCE_NAMES: Record<number, string> = {
+  0: 'Unattributed',
+  1: 'WalStaging',
+  2: 'PageCache',
+  3: 'TransientStore',
+  4: 'WalCommitBuffer',
+  5: 'MemoryBlockArray',
+};
+
+/** GcStart <c>reason</c> enum — mirrors CLR's GcReason. */
+const GC_REASON_NAMES: Record<number, string> = {
+  0: 'Alloc Small',
+  1: 'Induced',
+  2: 'Low Memory',
+  3: 'Empty',
+  4: 'Alloc Large',
+  5: 'Out Of Space (Small)',
+  6: 'Out Of Space (Large)',
+  7: 'Induced Not Forced',
+};
+
+const GC_TYPE_NAMES: Record<number, string> = {
+  0: 'Blocking',
+  1: 'Background',
+  2: 'Foreground',
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GiB`;
 }
 
 const SYSTEM_TYPE_NAMES: Record<number, string> = {
@@ -25,7 +61,7 @@ function formatTier(tier: number): string {
   return names.join(' | ') || 'None';
 }
 
-export function DetailPane({ chunk, span, systems, onClose }: DetailPaneProps) {
+export function DetailPane({ chunk, span, marker, systems, onClose }: DetailPaneProps) {
   const fieldStyle = {
     display: 'flex',
     justifyContent: 'space-between',
@@ -187,18 +223,104 @@ export function DetailPane({ chunk, span, systems, onClose }: DetailPaneProps) {
     );
   }
 
-  if (!chunk) {
+  // ── Marker branch ────────────────────────────────────────────────────────────────────────────────────────────────
+  // Memory-alloc events (triangle-up for alloc / triangle-down for free on the Memory track) and GC events (start triangle
+  // / end circle on the GC track). Each kind gets a tailored field list — alloc events need source tag + size + running
+  // total; GC events need generation + reason + pause duration. Same visual chrome as the other branches so the pane
+  // feels consistent across selection types.
+  if (marker) {
+    const isAlloc = marker.kind === 'memory-alloc';
+    const isGc = marker.kind === 'gc';
+    const title = isAlloc
+      ? (marker.event.direction === 0 ? 'Memory Alloc' : 'Memory Free')
+      : (marker.event.kind === TraceEventKind.GcStart ? 'GC Start' : 'GC End');
     return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        color: DIM_TEXT,
-        fontSize: '12px',
-        fontFamily: 'monospace',
-      }}>
-        Select a chunk or span to view details
+      <div style={{ height: '100%', overflow: 'auto', fontFamily: 'monospace', background: HEADER_BG }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '8px 12px', borderBottom: `1px solid ${BORDER_COLOR}`, background: BG_COLOR,
+        }}>
+          <span style={{ color: '#eee', fontWeight: 'bold', fontSize: '13px' }}>{title}</span>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', color: DIM_TEXT, border: 'none', cursor: 'pointer',
+              fontSize: '14px', fontFamily: 'monospace', padding: '0 4px',
+            }}
+          >x</button>
+        </div>
+        <div style={{ padding: '8px 12px' }}>
+          <div style={fieldStyle}><span style={labelStyle}>Tick</span><span style={valueStyle}>{marker.event.tickNumber}</span></div>
+          <div style={fieldStyle}><span style={labelStyle}>Timestamp</span><span style={valueStyle}>{formatDuration(marker.event.timestampUs)}</span></div>
+          {isAlloc && (
+            <>
+              <div style={fieldStyle}><span style={labelStyle}>Direction</span><span style={valueStyle}>{marker.event.direction === 0 ? 'Alloc' : 'Free'}</span></div>
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Source</span>
+                <span style={valueStyle}>{MEMORY_ALLOC_SOURCE_NAMES[marker.event.sourceTag] ?? `Tag(${marker.event.sourceTag})`}</span>
+              </div>
+              <div style={fieldStyle}><span style={labelStyle}>Size</span><span style={valueStyle}>{formatBytes(marker.event.sizeBytes)}</span></div>
+              <div style={fieldStyle}><span style={labelStyle}>Total after</span><span style={valueStyle}>{formatBytes(marker.event.totalAfterBytes)}</span></div>
+              <div style={fieldStyle}><span style={labelStyle}>Thread slot</span><span style={valueStyle}>{marker.event.threadSlot}</span></div>
+            </>
+          )}
+          {isGc && (
+            <>
+              <div style={fieldStyle}><span style={labelStyle}>Generation</span><span style={valueStyle}>Gen{marker.event.generation}</span></div>
+              <div style={fieldStyle}><span style={labelStyle}>GC #</span><span style={valueStyle}>{marker.event.gcCount}</span></div>
+              {marker.event.reason !== undefined && (
+                <div style={fieldStyle}>
+                  <span style={labelStyle}>Reason</span>
+                  <span style={valueStyle}>{GC_REASON_NAMES[marker.event.reason] ?? `Reason(${marker.event.reason})`}</span>
+                </div>
+              )}
+              {marker.event.gcType !== undefined && (
+                <div style={fieldStyle}>
+                  <span style={labelStyle}>Type</span>
+                  <span style={valueStyle}>{GC_TYPE_NAMES[marker.event.gcType] ?? `Type(${marker.event.gcType})`}</span>
+                </div>
+              )}
+              {marker.event.pauseDurationUs !== undefined && (
+                <div style={fieldStyle}><span style={labelStyle}>Pause duration</span><span style={valueStyle}>{formatDuration(marker.event.pauseDurationUs)}</span></div>
+              )}
+              {marker.event.promotedBytes !== undefined && (
+                <div style={fieldStyle}><span style={labelStyle}>Promoted</span><span style={valueStyle}>{formatBytes(marker.event.promotedBytes)}</span></div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!chunk) {
+    // "Nothing selected" branch — still shows a header with a collapse (×) button so the user can always collapse the pane, not just
+    // when something is currently selected. Previously this branch had no close affordance, so once the pane was open with no
+    // selection it was stuck open until the user selected AND dismissed something.
+    return (
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'monospace', background: HEADER_BG }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '8px 12px', borderBottom: `1px solid ${BORDER_COLOR}`, background: BG_COLOR, flexShrink: 0,
+        }}>
+          <span style={{ color: DIM_TEXT, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Details</span>
+          <button
+            onClick={onClose}
+            title="Collapse detail pane"
+            style={{
+              background: 'transparent', color: DIM_TEXT, border: 'none', cursor: 'pointer',
+              fontSize: '14px', fontFamily: 'monospace', padding: '0 4px',
+            }}
+          >x</button>
+        </div>
+        <div style={{
+          flex: 1,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '0 16px',
+          color: DIM_TEXT, fontSize: '12px', textAlign: 'center',
+        }}>
+          Select a chunk, span, or marker to view details
+        </div>
       </div>
     );
   }

@@ -51,8 +51,8 @@ public unsafe class PinnedMemoryBlock : MemoryBlockBase
             ["Address"] = DataAsPointer != null ? $"0x{(long)DataAsPointer:X}" : "(freed)",
         };
 
-    internal PinnedMemoryBlock(MemoryAllocator allocator, int size, int alignment, string resourceId, IResource parent) : 
-        base(allocator, resourceId, parent)
+    internal PinnedMemoryBlock(MemoryAllocator allocator, int size, int alignment, string resourceId, IResource parent, ushort sourceTag = 0) :
+        base(allocator, resourceId, parent, sourceTag)
     {
         DataAsPointer = (byte*)NativeMemory.AlignedAlloc((UIntPtr)size, (UIntPtr)alignment);
         Alignment = alignment;

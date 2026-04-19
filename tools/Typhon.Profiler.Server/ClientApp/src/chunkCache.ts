@@ -10,10 +10,12 @@
  *  - Concurrent in-flight loads are deduped — calling ensureRange again while a chunk is mid-fetch doesn't kick off a duplicate request.
  *  - Eviction never drops a chunk that overlaps the current viewport (pin-on-visible). LRU only evicts off-screen chunks.
  */
-import type { ChunkManifestEntry, TickSummary, TraceEvent, TraceMetadata } from './types';
-import type { TickData } from './traceModel';
+import type { ChunkManifestEntry, GaugeId, SystemDef, TickSummary, TraceEvent, TraceMetadata } from './types';
+import type { GaugeSeries, GcEvent, GcSuspensionEvent, MemoryAllocEventData, TickData } from './traceModel';
+import { aggregateGaugeData } from './traceModel';
 import { fetchChunk, fetchChunkBinary } from './api';
 import { processEventsInWorker, processBinaryInWorker } from './chunkWorkerClient';
+import { OpfsChunkStore } from './opfsChunkStore';
 
 /** One loaded-and-processed chunk, resident in memory. */
 export interface LoadedChunk {
@@ -35,10 +37,47 @@ export interface ChunkCacheState {
   inFlight: Map<number, Promise<LoadedChunk>>;
   accessCounter: number;
   budgetBytes: number;
+  /**
+   * Optional OPFS-backed persistent store. When present, loadChunk first attempts an OPFS hit (survives page reload and LRU
+   * evictions). Missing/disabled → direct server fetch. Writes are fire-and-forget: the UI gets the bytes back immediately,
+   * OPFS persistence happens in the background.
+   */
+  opfsStore: OpfsChunkStore | null;
+  /**
+   * Latch for the "cache stuck over budget" diagnostic. One warning per transition INTO over-budget state, cleared when the
+   * cache drops back under. Scoped to the cache instance so that switching traces (new cache) resets the warning independently
+   * of any previous session's state.
+   */
+  overBudgetWarned: boolean;
+  /**
+   * Chunks that failed to decode, keyed by chunkIdx. Each entry records when the failure happened so we can apply a
+   * retry-after window instead of hammering the server every viewport change. Without this, a permanently-bad chunk (server
+   * bug, cache-format skew, LZ4 corruption that re-persists) would trigger a fresh fetch + decode + reject cycle on EVERY
+   * viewport intersection — surfacing as an error-banner loop the user can't escape.
+   */
+  failedChunks: Map<number, { error: string; failedAt: number }>;
 }
 
-const DEFAULT_BUDGET = 200 * 1024 * 1024;     // 200 MB client-side cache
-const AVG_BYTES_PER_EVENT = 200;              // heuristic — tightens LRU math when chunks vary in event density
+/**
+ * How long a chunk is considered "failed" before ensureRangeLoaded will retry it. Short enough that a transient network
+ * blip self-heals on the next natural viewport change; long enough that a genuinely bad chunk doesn't spam the server or
+ * the error banner.
+ */
+const FAILED_CHUNK_RETRY_AFTER_MS = 30_000;
+
+const DEFAULT_BUDGET = 500 * 1024 * 1024;     // 500 MB client-side in-memory cache (separate from the OPFS persistence layer). Bumped
+                                              // from 200 MB after observing that dense end-of-trace regions (readBurst, heavy allocation
+                                              // aftermath) routinely push a single viewport's visible+prefetch set close to — or past —
+                                              // the old budget. At 500 MB, a typical visible+prefetch window (7 chunks × ~20 MB each)
+                                              // leaves ~2–3× headroom for older chunks to stay warm, cutting re-fetch churn.
+// Per-event heap cost used for LRU accounting. The prior value (200) was a pre-V8-overhead estimate that badly undercounted
+// real resident size: each decoded TraceEvent is a JS object with ~5-10 fields plus a class-shape header (~24 B) + field slots
+// (~8 B each), typically 300-500 B total; span and alloc events carry more. On dense chunks the discrepancy compounded into a
+// real overshoot (e.g., tick 2000's 2M events accounted as 400 MB was closer to 800 MB+ in real heap). Raising the constant
+// to 500 B gets the budget math back inside a safe envelope on realistic workloads. A future refinement: sample decoded-size
+// during the first few chunk loads via the Memory Measurement API (performance.measureUserAgentSpecificMemory) and recalibrate
+// per-session — but that's gated behind cross-origin-isolation, so the constant is the pragmatic default until then.
+const AVG_BYTES_PER_EVENT = 500;
 
 /**
  * Transport selector for chunk loading. `true` uses the binary endpoint (/api/trace/chunk-binary + LZ4 + TS decoder); `false` falls back to
@@ -47,13 +86,16 @@ const AVG_BYTES_PER_EVENT = 200;              // heuristic — tightens LRU math
  */
 const USE_BINARY_CHUNK_TRANSPORT = true;
 
-export function createChunkCache(budgetBytes: number = DEFAULT_BUDGET): ChunkCacheState {
+export function createChunkCache(budgetBytes: number = DEFAULT_BUDGET, opfsStore: OpfsChunkStore | null = null): ChunkCacheState {
   return {
     entries: new Map(),
     totalBytes: 0,
     inFlight: new Map(),
     accessCounter: 0,
     budgetBytes,
+    opfsStore,
+    overBudgetWarned: false,
+    failedChunks: new Map(),
   };
 }
 
@@ -95,10 +137,19 @@ export async function ensureRangeLoaded(
   const allIndices: number[] = [];
   for (let i = prefetchFrom; i <= prefetchTo; i++) allIndices.push(i);
 
-  // Pin set (immune to LRU eviction) is only the VISIBLE range. Prefetched chunks are LRU-evictable if budget pressure hits.
+  // Pin set for the visibleLoadPromises ordering check below — strictly the visible range. Prefetched chunks aren't awaited by
+  // the caller but still land in the cache on completion. The BROADER allIndices set (below) is what eviction uses as its pin
+  // set so that freshly-loaded prefetch chunks aren't immediately evicted by another prefetch chunk that lands a few ms later.
   const pinnedIdxs = new Set(visibleIndices);
+  // Full pin set (visible + prefetch) threaded through to every loadChunk spawned by THIS ensureRangeLoaded call. Used both
+  // by this call's post-await eviction pass AND by each loadChunk's per-completion eviction for late-arriving prefetch
+  // chunks. Passing the set explicitly (rather than reading a shared cache field) makes each loadChunk's eviction semantics
+  // deterministic w.r.t. the viewport that spawned it — no cross-call stomping when two ensureRangeLoaded calls overlap in
+  // time (rapid pan, velocity-biased prefetch landing after the next viewport has already been requested).
+  const allIndicesSet = new Set(allIndices);
   const visibleLoadPromises: Promise<LoadedChunk>[] = [];
 
+  const now = performance.now();
   for (const idx of allIndices) {
     const existing = cache.entries.get(idx);
     if (existing) {
@@ -111,6 +162,14 @@ export async function ensureRangeLoaded(
       if (pinnedIdxs.has(idx)) visibleLoadPromises.push(inFlight);
       continue;
     }
+    // Failed-chunk gate: if this chunk recently failed, don't re-fetch for a while. Visible chunks still produce a rejected
+    // promise so the error banner can (once) tell the user the region is unrenderable; prefetch chunks are silently skipped.
+    // When the retry window elapses the gate opens on its own — one natural viewport change triggers a fresh attempt.
+    const prevFailure = cache.failedChunks.get(idx);
+    if (prevFailure && now - prevFailure.failedAt < FAILED_CHUNK_RETRY_AFTER_MS) {
+      if (pinnedIdxs.has(idx)) visibleLoadPromises.push(Promise.reject(new Error(prevFailure.error)));
+      continue;
+    }
     // Pass the abort signal ONLY to visible-range fetches. Prefetch fetches must NOT be cancellable — they're speculative loads that should
     // complete to populate the cache, so a subsequent wheel event can find the chunk already-loaded. If we aborted prefetches on every
     // viewport change, rapid wheel navigation would cancel every chunk before it finishes, forcing the final stop to refetch from scratch.
@@ -118,7 +177,7 @@ export async function ensureRangeLoaded(
     // resolves from cache (or a reusable inFlight promise), not a cold fetch.
     const isPinned = pinnedIdxs.has(idx);
     const fetchSignal = isPinned ? signal : undefined;
-    const promise = loadChunk(cache, path, metadata, manifest[idx], idx, fetchSignal);
+    const promise = loadChunk(cache, path, metadata, manifest[idx], idx, allIndicesSet, fetchSignal);
     cache.inFlight.set(idx, promise);
     if (isPinned) {
       visibleLoadPromises.push(promise);
@@ -131,8 +190,11 @@ export async function ensureRangeLoaded(
   }
 
   const visible = await Promise.all(visibleLoadPromises);
-  // Post-load eviction: drop chunks not in the full (visible + prefetch) set if we're over budget.
-  evictIfOverBudget(cache, new Set(allIndices));
+  // Post-load eviction: drop chunks not in the full (visible + prefetch) set if we're over budget. Shares the same local
+  // `allIndicesSet` that was threaded through every loadChunk above, so both in-call and per-chunk evictions use IDENTICAL
+  // pin semantics for this viewport — and remain independent of any concurrent ensureRangeLoaded call operating on a different
+  // viewport (no shared cache-level stamp to stomp on).
+  evictIfOverBudget(cache, allIndicesSet);
   return visible.sort((a, b) => a.fromTick - b.fromTick);
 }
 
@@ -152,8 +214,21 @@ export function assembleTickView(cache: ChunkCacheState): TickData[] {
  * across `assembleTickView` and `assembleTickNumbers`), single inner-loop traversal of each chunk's ticks. For a 200 MB cache budget that's
  * ~50 chunks — the savings here aren't huge per call, but the function fires on every chunk load during pan/zoom, so halving the work is
  * worth the few extra lines.
+ *
+ * Also folds gauge snapshots + memory alloc events into cross-tick aggregates via <see cref="aggregateGaugeData"/>. These are returned
+ * alongside the tick arrays so callers can refresh <c>ProcessedTrace.gaugeSeries</c> / <c>gaugeCapacities</c> /
+ * <c>memoryAllocEvents</c> in the same pass rather than walking the cache a second time.
  */
-export function assembleTickViewAndNumbers(cache: ChunkCacheState): { tickData: TickData[]; tickNumbers: number[] } {
+export function assembleTickViewAndNumbers(cache: ChunkCacheState): {
+  tickData: TickData[];
+  tickNumbers: number[];
+  gaugeSeries: Map<GaugeId, GaugeSeries>;
+  gaugeCapacities: Map<GaugeId, number>;
+  memoryAllocEvents: MemoryAllocEventData[];
+  gcEvents: GcEvent[];
+  gcSuspensions: GcSuspensionEvent[];
+  threadNames: Map<number, string>;
+} {
   const chunks = Array.from(cache.entries.values()).sort((a, b) => a.fromTick - b.fromTick);
   const tickData: TickData[] = [];
   const tickNumbers: number[] = [];
@@ -163,7 +238,8 @@ export function assembleTickViewAndNumbers(cache: ChunkCacheState): { tickData: 
       tickNumbers.push(tick.tickNumber);
     }
   }
-  return { tickData, tickNumbers };
+  const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } = aggregateGaugeData(tickData);
+  return { tickData, tickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames };
 }
 
 /**
@@ -224,6 +300,7 @@ async function loadChunk(
   metadata: TraceMetadata,
   entry: ChunkManifestEntry,
   chunkIdx: number,
+  pinnedIdxs: Set<number>,
   signal?: AbortSignal,
 ): Promise<LoadedChunk> {
   try {
@@ -231,24 +308,39 @@ async function loadChunk(
     let byteSize: number;
 
     if (USE_BINARY_CHUNK_TRANSPORT) {
-      // Binary path: fetch raw LZ4 bytes + metadata headers, transfer the ArrayBuffer into the Worker (zero-copy), and let it decompress,
-      // decode, and build TickData in one hop. The main thread is idle for the whole CPU-heavy portion — only the fetch lands here.
-      const response = await fetchChunkBinary(path, entry, signal);
-      const ticksPerUs = response.timestampFrequency / 1_000_000;
-      // The ArrayBuffer becomes detached in the caller's frame after postMessage's transfer list kicks in — assigning to `.buffer` of a
-      // Uint8Array is a read, not a copy, so we pass the underlying buffer directly.
-      tickData = await processBinaryInWorker(
-        // `fetch().arrayBuffer()` always returns a real ArrayBuffer (never SharedArrayBuffer). TS types the Uint8Array.buffer as
-        // ArrayBufferLike to cover the shared case too — narrow it here. Safe because api.fetchChunkBinary ALWAYS originates from arrayBuffer().
-        response.compressed.buffer as ArrayBuffer,
-        response.uncompressedBytes,
-        entry.fromTick,
-        ticksPerUs,
-        metadata.systems,
-      );
-      // Byte-size estimate: compressed wire is what the cache "costs" in flight. Decompressed + TickData structures are derived; using
-      // eventCount × AVG_BYTES_PER_EVENT overestimates but keeps the LRU math comparable to the JSON path's accounting.
-      byteSize = response.eventCount * AVG_BYTES_PER_EVENT;
+      // OPFS-first path. Try the persistent store before hitting the network. On-disk layout prepends a 4-byte little-endian uint
+      // carrying `uncompressedBytes` (the only per-chunk decode metadata NOT available from the client-side manifest entry).
+      // `timestampFrequency` is trace-global and read from metadata.header.
+      const ticksPerUs = metadata.header.timestampFrequency / 1_000_000;
+      const opfsBytes = await cache.opfsStore?.get(chunkIdx) ?? null;
+      let opfsDecoded: { tickData: TickData[]; byteSize: number } | null = null;
+      if (opfsBytes !== null && opfsBytes.byteLength >= 4) {
+        // Try decoding what's on disk. A corrupt file (torn write from a prior crash, OPFS bug, disk error) will manifest as an
+        // LZ4 size-prefix mismatch or a binary-decoder throw — both caught here. On failure we REMOVE the bad entry and fall
+        // through to a server re-fetch. Without this, every viewport intersecting the bad chunk permanently fails, because
+        // the OPFS hit keeps winning and keeps throwing.
+        try {
+          const dv = new DataView(opfsBytes, 0, 4);
+          const uncompressedBytes = dv.getUint32(0, true);
+          const compressed = opfsBytes.slice(4);  // structured clone, transferable to worker
+          const decoded = await processBinaryInWorker(
+            compressed, uncompressedBytes, entry.fromTick, ticksPerUs, metadata.systems,
+          );
+          opfsDecoded = { tickData: decoded, byteSize: entry.eventCount * AVG_BYTES_PER_EVENT };
+        } catch (err) {
+          console.warn(`[chunkCache] OPFS chunk ${chunkIdx} decode failed, evicting and re-fetching from server:`, err);
+          try { await cache.opfsStore?.remove(chunkIdx); } catch { /* best-effort cleanup */ }
+        }
+      }
+
+      if (opfsDecoded !== null) {
+        tickData = opfsDecoded.tickData;
+        byteSize = opfsDecoded.byteSize;
+      } else {
+        const fetched = await fetchPersistAndDecode(cache, path, entry, chunkIdx, ticksPerUs, metadata.systems, signal);
+        tickData = fetched.tickData;
+        byteSize = fetched.byteSize;
+      }
     } else {
       // Legacy JSON path — server decodes, emits JSON, client runs through the Worker on already-parsed events.
       const response = await fetchChunk(path, entry, signal);
@@ -266,10 +358,72 @@ async function loadChunk(
     };
     cache.entries.set(chunkIdx, loaded);
     cache.totalBytes += byteSize;
+    // Successful decode clears any prior failure record for this chunk. A transient error (network blip, server restart
+    // mid-request) would otherwise leave a stale entry in failedChunks that suppresses future retries for the retry-after
+    // window even though the chunk is demonstrably fine now.
+    cache.failedChunks.delete(chunkIdx);
+    // Per-chunk budget check. ensureRangeLoaded's post-await eviction only fires once per call and covers visible chunks that
+    // completed before the Promise.all resolved. Prefetch chunks (fired off but not awaited) land asynchronously after that
+    // sweep — without THIS check, each late completion bumps totalBytes with no compensation.
+    //
+    // `pinnedIdxs` is the SAME Set instance that the spawning ensureRangeLoaded call passes to every loadChunk AND to its own
+    // post-await eviction. So when this late prefetch completion runs its eviction pass, it protects EXACTLY the viewport that
+    // requested it — not "whatever the latest viewport happens to be" (which would stomp on an older, still-in-progress call
+    // whose visible chunks haven't resolved yet).
+    evictIfOverBudget(cache, pinnedIdxs);
     return loaded;
+  } catch (err) {
+    // Record the failure so ensureRangeLoaded's failedChunks gate suppresses retries for FAILED_CHUNK_RETRY_AFTER_MS. DON'T
+    // record AbortError — a viewport-change cancellation isn't a decode problem; a future viewport intersecting this chunk
+    // should retry immediately without a cooldown.
+    const isAbort = err !== null && typeof err === 'object' && 'name' in err && (err as { name: string }).name === 'AbortError';
+    if (!isAbort) {
+      const msg = err instanceof Error ? err.message : String(err);
+      cache.failedChunks.set(chunkIdx, { error: msg, failedAt: performance.now() });
+    }
+    throw err;
   } finally {
     cache.inFlight.delete(chunkIdx);
   }
+}
+
+/**
+ * Server-fetch + OPFS-persist + Worker-decode helper. Shared between the cold-miss path and the OPFS-corruption recovery path in
+ * {@link loadChunk}. Extracted so the two branches are guaranteed to persist and decode identically — a subtle divergence here
+ * (e.g., "recovery path skips OPFS re-persist") would recreate the very corruption case we're recovering from.
+ *
+ * Note on transfer semantics: <paramref name="signal"/>'s abort only cancels the network fetch; the worker decode still runs to
+ * completion (Worker has no interrupt primitive). Caller must check `signal.aborted` AFTER this resolves if they want to skip
+ * committing a chunk that arrived late.
+ */
+async function fetchPersistAndDecode(
+  cache: ChunkCacheState,
+  path: string,
+  entry: ChunkManifestEntry,
+  chunkIdx: number,
+  ticksPerUs: number,
+  systems: SystemDef[],
+  signal: AbortSignal | undefined,
+): Promise<{ tickData: TickData[]; byteSize: number }> {
+  const response = await fetchChunkBinary(path, entry, signal);
+  const compressedBuffer = response.compressed.buffer as ArrayBuffer;
+  const uncompressedBytes = response.uncompressedBytes;
+
+  // Persist to OPFS BEFORE we hand the ArrayBuffer to the worker (postMessage transfers ownership — the buffer becomes
+  // detached in this frame afterwards). We copy the bytes by slicing first, then transfer the original to the worker.
+  // The persisted layout is [u32 uncompressedBytes | compressed bytes]. Fire-and-forget; don't await — keeps the UI path
+  // unblocked by disk I/O.
+  if (cache.opfsStore !== null) {
+    const persistCopy = new ArrayBuffer(4 + compressedBuffer.byteLength);
+    new DataView(persistCopy).setUint32(0, uncompressedBytes, true);
+    new Uint8Array(persistCopy, 4).set(new Uint8Array(compressedBuffer));
+    void cache.opfsStore.put(chunkIdx, persistCopy);
+  }
+
+  const tickData = await processBinaryInWorker(
+    compressedBuffer, uncompressedBytes, entry.fromTick, ticksPerUs, systems,
+  );
+  return { tickData, byteSize: response.eventCount * AVG_BYTES_PER_EVENT };
 }
 
 /** Find all manifest indices whose [fromTick, toTick) range overlaps the requested [fromTick, toTick). */
@@ -303,5 +457,23 @@ function evictIfOverBudget(cache: ChunkCacheState, pinnedIdxs: Set<number>): voi
     if (cache.totalBytes <= cache.budgetBytes) break;
     cache.entries.delete(victim.chunkIdx);
     cache.totalBytes -= victim.byteSize;
+  }
+  // Diagnostic: if we evicted every candidate and the cache is STILL over budget, the remaining overshoot is all in pinned
+  // chunks (current viewport's visible + prefetch). There's nothing correctness-preserving we can do — evicting a pinned
+  // chunk would produce a visible pending-pattern gap RIGHT where the user is looking. Log once per "stuck over budget"
+  // transition so a dev looking at the console understands why `ram:X/Y` shows X > Y. Throttled by a module-level flag to
+  // avoid console spam across repeated evictions while stuck.
+  if (cache.totalBytes > cache.budgetBytes && !cache.overBudgetWarned) {
+    cache.overBudgetWarned = true;
+    const pinned = cache.entries.size - candidates.length + (candidates.length - (candidates.filter(c => !cache.entries.has(c.chunkIdx)).length));
+    console.warn(
+      `[chunkCache] cache stuck over budget: ${(cache.totalBytes / (1024 * 1024)).toFixed(0)} MB used, ` +
+      `${(cache.budgetBytes / (1024 * 1024)).toFixed(0)} MB budget, ${pinned} chunks pinned. ` +
+      `This means the current viewport's visible+prefetch set alone exceeds the budget. ` +
+      `Consider increasing DEFAULT_BUDGET or reducing prefetch horizon near dense regions.`
+    );
+  } else if (cache.totalBytes <= cache.budgetBytes && cache.overBudgetWarned) {
+    // Reset the latch once we're back under budget, so a future stuck-state gets its own warning.
+    cache.overBudgetWarned = false;
   }
 }

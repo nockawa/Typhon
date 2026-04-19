@@ -81,8 +81,13 @@ public static class TraceFileCacheBuilder
         var systemAggregates = new Dictionary<int, (uint InvocationCount, double TotalDurationUs)>();
         var chunkManifest = new List<ChunkManifestEntry>(capacity: 256);
 
-        // Per-tick accumulators. `tickActive` is false until the first TickStart; early instant events that precede any tick are skipped.
+        // Per-tick accumulators. `tickActive` is false until the first TickStart; early instant events that precede any tick are
+        // buffered into <c>preTickBuffer</c> and prepended to the first chunk when TickStart arrives — see the pre-tick handling
+        // inside the record loop. Dropping them (previous behavior) lost engine-startup MemoryAllocEvents that are useful to see
+        // correlated with the first-tick workload.
         var tickActive = false;
+        var preTickBuffer = new MemoryStream(capacity: 4096);
+        uint preTickEventCount = 0;
         uint currentTickNumber = 0;
         long currentTickFirstTs = 0;
         long currentTickLastTs = 0;
@@ -165,11 +170,30 @@ public static class TraceFileCacheBuilder
                     if (chunkFromTick == 0)
                     {
                         chunkFromTick = nextTickNumber;
+                        // Drain any pre-first-tick records (e.g., engine-startup MemoryAllocEvents) into the first chunk's byte stream.
+                        // They land BEFORE the TickStart record that's about to be written, so the client decoder's running tick counter
+                        // (initialized at firstTick - 1) tags them with tickNumber = firstTick - 1 — a synthetic "pre-tick" bucket that
+                        // keeps the events visible without displacing the real tick accounting.
+                        if (preTickBuffer.Length > 0)
+                        {
+                            chunkBuffer.Write(preTickBuffer.GetBuffer(), 0, (int)preTickBuffer.Length);
+                            chunkEventCount += preTickEventCount;
+                            globalTotalEvents += preTickEventCount;
+                            preTickBuffer.SetLength(0);
+                            preTickBuffer.Position = 0;
+                            preTickEventCount = 0;
+                        }
                     }
                     else
                     {
                         var ticksInChunk = nextTickNumber - chunkFromTick;
-                        if (ticksInChunk >= TraceFileCacheConstants.TickCap || chunkBuffer.Length >= TraceFileCacheConstants.ByteCap)
+                        // Close-predicate: ANY of three caps firing at a tick boundary flushes the chunk. EventCap is the new dense-region
+                        // guard — ByteCap alone was insufficient for records whose compression ratio is high (many small, repetitive
+                        // records can pack into few megabytes while still being expensive to DECODE per-record). EventCap bounds the
+                        // decode cost directly rather than indirectly via the encoded byte count.
+                        if (ticksInChunk >= TraceFileCacheConstants.TickCap
+                            || chunkBuffer.Length >= TraceFileCacheConstants.ByteCap
+                            || chunkEventCount >= TraceFileCacheConstants.EventCap)
                         {
                             FlushChunk(writer, chunkBuffer, chunkManifest, chunkFromTick, nextTickNumber, chunkEventCount);
                             // Clear open kickoffs: their byte offsets pointed into the chunk that's now LZ4-compressed on disk, so they can't be
@@ -248,6 +272,18 @@ public static class TraceFileCacheBuilder
                     }
                     chunkBuffer.Write(span.Slice(pos, size));
                     chunkEventCount++;
+                }
+                else if (kind == TraceEventKind.MemoryAllocEvent || kind == TraceEventKind.GcStart || kind == TraceEventKind.GcEnd
+                    || kind == TraceEventKind.GcSuspension || kind == TraceEventKind.ThreadInfo)
+                {
+                    // Pre-first-tick engine-state events (memory allocations during engine init, early-GC events before the first tick fires,
+                    // and ThreadInfo records emitted at slot claim — which happens as soon as a thread first emits any event, always before
+                    // the scheduler has started a tick) are buffered rather than dropped. They get prepended to the first chunk when TickStart
+                    // arrives. The client-side decoder tags them with tickNumber = firstTick - 1 (a synthetic pre-tick bucket) via its running
+                    // tick counter. Span records (kickoffs / completions) are still skipped pre-tick — they need a tick context to make sense
+                    // in the fold logic.
+                    preTickBuffer.Write(span.Slice(pos, size));
+                    preTickEventCount++;
                 }
 
                 // Decode SchedulerChunk for per-system metrics. These are the only records needed for the overview — other span kinds (Transaction,
@@ -408,7 +444,11 @@ public static class TraceFileCacheBuilder
         uint toTick,
         uint eventCount)
     {
-        if (chunkBuffer.Length == 0)
+        // Skip flush for empty OR zero-event chunks. The old check only looked at byte length; a small amount of noise bytes
+        // (e.g., a malformed size prefix that didn't advance our event counter) could still make it through as a manifest
+        // entry with UncompressedBytes > 0 but EventCount == 0 — a degenerate entry the viewer would surface as "empty
+        // chunk at ticks X..Y" with nothing visible. Both conditions must be true for a real flush.
+        if (chunkBuffer.Length == 0 || eventCount == 0)
         {
             return;
         }
@@ -433,8 +473,20 @@ public static class TraceFileCacheBuilder
         chunkBuffer.Position = 0;
     }
 
-    /// <summary>Closes out the current tick by appending a <see cref="TickSummary"/> and updating global maxima.</summary>
-    private static void FinalizeTick(
+    /// <summary>
+    /// Closes out the current tick by appending a <see cref="TickSummary"/> and updating global maxima. Returns <c>false</c> and skips the
+    /// append when the tick is structurally malformed (see validation below) — callers can use the return value for diagnostics.
+    /// </summary>
+    /// <remarks>
+    /// <b>Validation:</b> a tick whose <c>firstTs</c> is zero, or is earlier than the previous tick's <c>firstTs</c>, is rejected. Both conditions
+    /// signify a missing or corrupt TickStart record — most commonly caused by the producer-drain race at profiler shutdown where a TickStart
+    /// record's timestamp field is read stale. Letting such a tick through poisons the summary: <c>StartUs=0</c> combined with a real <c>lastTs</c>
+    /// yields a tick whose reported span covers the entire trace, which breaks the viewer's <c>viewRangeToTickRange</c> binary search (it assumes
+    /// a monotone-startUs array) and leaves <c>trace.ticks</c> empty even though the chunk manifest is valid. Dropping malformed ticks is
+    /// strictly better than keeping them — they have no useful data anyway (the zero <c>firstTs</c> means the per-tick event stream belongs to
+    /// whichever prior tick was last valid, not to this bogus tick number).
+    /// </remarks>
+    private static bool FinalizeTick(
         List<TickSummary> tickSummaries,
         uint tickNumber,
         long firstTs,
@@ -446,6 +498,23 @@ public static class TraceFileCacheBuilder
         ref double globalMaxTickDurationUs,
         ref double globalMaxSystemDurationUs)
     {
+        // Drop ticks with missing/corrupt TickStart timestamps. See remarks above for rationale.
+        if (firstTs <= 0)
+        {
+            return false;
+        }
+        if (tickSummaries.Count > 0)
+        {
+            // Convert prior tick's StartUs back to a timestamp-tick comparable to firstTs. A strictly-less check rather than <= because two
+            // ticks occasionally share the same wall-clock tick on very fast runs (Stopwatch resolution is ~100ns on Windows) and the viewer
+            // tolerates equal startUs values.
+            var prevFirstTs = (long)(tickSummaries[^1].StartUs * ticksPerUs);
+            if (firstTs < prevFirstTs)
+            {
+                return false;
+            }
+        }
+
         var durationUs = (lastTs - firstTs) / ticksPerUs;
         if (durationUs < 0) durationUs = 0;
         var maxSysUs = maxSystemDurationTicks / ticksPerUs;
@@ -469,6 +538,7 @@ public static class TraceFileCacheBuilder
         {
             globalMaxSystemDurationUs = maxSysUs;
         }
+        return true;
     }
 
     /// <summary>High-level summary of a cache-build pass. Useful for logging and telemetry.</summary>

@@ -53,6 +53,42 @@ partial class BlobArch : Archetype<BlobArch>
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// Transient-mode twin of <see cref="Blob"/>. Same 112-byte payload so the page-allocation cadence is directly comparable
+// with the Versioned path (identical stride → identical chunks-per-page). The difference is storage routing:
+//   • Versioned Blob  → PersistentStore, page cache, WAL, checkpoint — goes through the full durability pipeline.
+//   • Transient Blob  → heap-backed TransientStore via IMemoryAllocator.AllocatePinned — no cache, no WAL, no checkpoint.
+// Exists to drive the TransientStore gauge in the viewer (BytesUsed = Σ PageCount × PageSize across all live stores).
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+[Component("IOProfile.TransientBlob", 1, StorageMode = StorageMode.Transient)]
+[StructLayout(LayoutKind.Sequential)]
+public struct TransientBlob
+{
+    public int Id;
+    public float F00, F01, F02, F03, F04, F05, F06, F07, F08, F09, F10, F11, F12;
+    public float G00, G01, G02, G03, G04, G05, G06, G07, G08, G09, G10, G11, G12;
+
+    public static TransientBlob New(int id)
+    {
+        return new TransientBlob
+        {
+            Id = id,
+            F00 = id * 0.1f, F01 = id * 0.2f, F02 = id * 0.3f, F03 = id * 0.4f, F04 = id * 0.5f, F05 = id * 0.6f,
+            F06 = id * 0.7f, F07 = id * 0.8f, F08 = id * 0.9f, F09 = id * 1.0f, F10 = id * 1.1f, F11 = id * 1.2f,
+            F12 = id * 1.3f,
+            G00 = id * 2.1f, G01 = id * 2.2f, G02 = id * 2.3f, G03 = id * 2.4f, G04 = id * 2.5f, G05 = id * 2.6f,
+            G06 = id * 2.7f, G07 = id * 2.8f, G08 = id * 2.9f, G09 = id * 3.0f, G10 = id * 3.1f, G11 = id * 3.2f,
+            G12 = id * 3.3f,
+        };
+    }
+}
+
+[Archetype(101)]
+partial class TransientBlobArch : Archetype<TransientBlobArch>
+{
+    public static readonly Comp<TransientBlob> Data = Register<TransientBlob>();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // Config file shape — System.Text.Json deserializes directly into these records. Fields starting with underscore in
 // the JSON (_doc, _comment, etc.) are ignored because they have no matching property — JsonSerializerOptions with
 // case-insensitive matching keeps things forgiving.
@@ -99,6 +135,12 @@ public static class Program
 {
     public static int Main(string[] args)
     {
+        // Name the main thread so the profiler's ThreadInfo records (emitted when this thread first claims its slot inside the engine)
+        // carry something meaningful instead of an empty string. The viewer then renders "Slot 0 — IOProfileRunner.Main" on the main
+        // lane; without this the main lane falls back to the slot-only label because Thread.CurrentThread.Name is null on the default
+        // main thread. Must be set BEFORE any engine code runs that would claim a slot.
+        System.Threading.Thread.CurrentThread.Name = "IOProfileRunner.Main";
+
         var configPath = args.Length > 0 ? args[0] : "ioprofile.json";
         if (!File.Exists(configPath))
         {
@@ -179,6 +221,15 @@ public static class Program
                 {
                     opt.Wal = null;
                 }
+
+                // PagesPerBlock bump is a DELIBERATE workaround for a latent engine bug around TransientStore's
+                // `_pageAddresses` array growth. The default 32 makes the initial `_pageAddresses` capacity = 32 × 4 = 128. Once
+                // the live page count crosses 128 (≈9K component chunks at 112-byte stride), the array must grow — but because
+                // TransientStore is a mutable struct and ChunkAccessor holds a COPY of the struct, the accessor's copy still
+                // points to the pre-growth array and subsequent chunk reads dereference a null / stale pointer (NullRef in Memmove).
+                // Bumping to 256 raises initial capacity to 1024 pages, which safely contains our ~12K-entity transient workload
+                // (≈170 pages) without ever triggering the array-reallocation path.
+                opt.Transient.PagesPerBlock = 256;
             });
 
         using var sp = services.BuildServiceProvider();
@@ -195,7 +246,9 @@ public static class Program
         var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
 
         Archetype<BlobArch>.Touch();
+        Archetype<TransientBlobArch>.Touch();
         dbe.RegisterComponentFromAccessor<Blob>();
+        dbe.RegisterComponentFromAccessor<TransientBlob>();
         dbe.InitializeArchetypes();
 
         // ── Attach FileExporter + start profiler BEFORE the workload so every stage is captured ────────────────────
@@ -239,6 +292,20 @@ public static class Program
         TyphonProfiler.DetachExporter(exporter);
 
         Console.WriteLine($"Total dropped (producer ring overflow): {TyphonProfiler.TotalDroppedEvents}");
+        // Drop-path diagnostics for TickStart (Item 10 investigation — catches the "48/49 TickStart" case):
+        //   NoSlot = registry full at GetOrAssignSlot. Should be zero; non-zero means >256 threads tried to claim concurrently.
+        //   RingFull = producer ring full at TryReserve. Usually benign unless a single TickStart is missing — if RingFull==1 and the
+        //              trace has N-1 TickStarts for N emitted ticks, this counter pinpoints the loss.
+        Console.WriteLine($"TickStart dropped (no slot): {TyphonEvent.TickStartDroppedNoSlot}");
+        Console.WriteLine($"TickStart dropped (ring full): {TyphonEvent.TickStartDroppedRingFull}");
+        // Exporter-queue drops — consumer produced batches faster than the file writer could drain them. Non-zero means records made
+        // it past the producer ring but got dropped by drop-newest when enqueuing to the FileExporter (the "48/49 PerTickSnapshot" case).
+        Console.WriteLine($"Exporter batches dropped (queue full): {TyphonProfiler.TotalDroppedExporterBatches}");
+        Console.WriteLine($"Consumer fanned out:   {TyphonProfiler.TotalBatchesFannedOut} batches / {TyphonProfiler.TotalRecordsFannedOut} records");
+        Console.WriteLine($"FileExporter processed: {TyphonProfiler.FirstExporterBatchesProcessed} batches / {TyphonProfiler.FirstExporterRecordsProcessed} records");
+        Console.WriteLine($"FinalDrain: {TyphonProfiler.FinalDrainPasses} passes ({TyphonProfiler.FinalDrainZeroProgressPasses} zero-progress), {TyphonProfiler.FinalDrainPendingBytes} bytes stranded");
+        Console.WriteLine($"Slots @ stop: {TyphonProfiler.SlotStateDump}");
+        Console.WriteLine($"Snapshot published: {TyphonEvent.SnapshotPublished}  skipped: inactive={TyphonEvent.SnapshotSkippedGaugesInactive} noSlot={TyphonEvent.SnapshotSkippedNoSlot} nullRing={TyphonEvent.SnapshotSkippedNullRing} ringFull={TyphonEvent.SnapshotSkippedRingFull}");
         Console.WriteLine();
 
         // ── Readback histogram ─────────────────────────────────────────────────────────────────────────────────────
@@ -253,6 +320,23 @@ public static class Program
     // Config loading — case-insensitive + allow trailing commas + ignore comments so the JSON stays forgiving
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Canonical list of supported workload stage names. Entries in <c>workload.stages</c> of the JSON config not listed here
+    /// are typos or stale references from earlier versions — we log them loudly so the user knows their "stage" did nothing.
+    /// Keep in sync with the <c>TryStage(…, "name", …)</c> call sites in <see cref="RunWorkload"/>.
+    /// </summary>
+    private static readonly HashSet<string> s_knownStageNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "spawnBurst",
+        "checkpointAfterSpawn",
+        "spawnCheckpointLoop",
+        "gcChurn",
+        "txFlood",
+        "transientChurn",
+        "readBurst",
+        "finalCheckpoint",
+    };
+
     private static IOProfileConfig LoadConfig(string path)
     {
         var opts = new JsonSerializerOptions
@@ -263,7 +347,24 @@ public static class Program
         };
         var json = File.ReadAllText(path);
         var cfg = JsonSerializer.Deserialize<IOProfileConfig>(json, opts);
-        return cfg ?? throw new InvalidDataException("Config file parsed as null");
+        if (cfg == null)
+        {
+            throw new InvalidDataException("Config file parsed as null");
+        }
+        // Surface unknown stage names loudly — otherwise a typo (e.g. "spawnBust" instead of "spawnBurst") silently expands to
+        // "stage not found, skip" and the user wonders why their config change had no effect. We don't throw (forward-compat
+        // with newer configs read by older runner builds), just warn on stderr so the signal is visible in CI logs too.
+        if (cfg.Workload?.Stages != null)
+        {
+            foreach (var key in cfg.Workload.Stages.Keys)
+            {
+                if (!s_knownStageNames.Contains(key))
+                {
+                    Console.Error.WriteLine($"  [warn] workload.stages.{key} is not a known stage name — typo? (known: {string.Join(", ", s_knownStageNames)})");
+                }
+            }
+        }
+        return cfg;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -369,9 +470,14 @@ public static class Program
     {
         var stages = workload.Stages ?? new Dictionary<string, StageConfig>();
         var tickNumber = 0;
+        // Track whether the first gauge snapshot has been emitted. Fixed-at-init capacity gauges (PageCacheTotalPages etc.) are only
+        // included in the first snapshot of the session; GaugeSnapshotEmitter flips this flag the first time it runs.
+        bool firstGaugeSnapshotEmitted = false;
 
         // Each RunTick call produces one visible tick in the viewer: emits TickStart, runs the action, emits TickEnd. Tick numbers are
-        // assigned monotonically so the viewer's tick axis renders them in order.
+        // assigned monotonically so the viewer's tick axis renders them in order. Because this runner bypasses TyphonRuntime (and
+        // therefore DagScheduler.GaugeSnapshotCallback), we invoke GaugeSnapshotEmitter directly after TickEnd — the same work
+        // TyphonRuntime.EmitGaugeSnapshotFromScheduler does when it's wired. No-op when ProfilerGaugesActive is false.
         void RunTick(Action action)
         {
             tickNumber++;
@@ -379,6 +485,7 @@ public static class Program
             TyphonEvent.EmitTickStart(Stopwatch.GetTimestamp());
             action();
             TyphonEvent.EmitTickEnd(Stopwatch.GetTimestamp(), overloadLevel: 0, tickMultiplier: 1);
+            GaugeSnapshotEmitter.EmitSnapshot((uint)tickNumber, dbe, ref firstGaugeSnapshotEmitted);
         }
 
         if (TryStage(stages, "spawnBurst", out var spawnBurst))
@@ -405,6 +512,73 @@ public static class Program
             }
             sw.Stop();
             Console.WriteLine($"  [ok]   spawnCheckpointLoop: {iterations} × {perIter:N0} spawn+checkpoint cycles in {sw.Elapsed.TotalMilliseconds:F1} ms ({iterations} ticks)");
+        }
+
+        if (TryStage(stages, "gcChurn", out var churn))
+        {
+            // One tick per churn iteration — each iteration allocates a fresh Hashtable + LOH arrays, measures GC movement, and lets the
+            // previous tick's allocations age into Gen1/Gen2 before the NEXT tick triggers another wave. This produces a visible sawtooth
+            // on the heap-composition stacked area in the Memory group: Gen0 spikes mid-tick, Gen1/Gen2 drift upward as promotions
+            // accumulate, LOH jumps on the 85KB-plus allocations. Without a per-tick split the whole thing would collapse to one wide tick.
+            var churnIters = churn.Iterations > 0 ? churn.Iterations : 25;
+            var itemsPerIter = churn.EntitiesPerIteration > 0 ? churn.EntitiesPerIteration : 40_000;
+            var sw = Stopwatch.StartNew();
+            for (var iter = 0; iter < churnIters; iter++)
+            {
+                var capturedIter = iter;
+                RunTick(() => GcChurn(capturedIter, itemsPerIter));
+            }
+            sw.Stop();
+            Console.WriteLine($"  [ok]   gcChurn: {churnIters} iterations × {itemsPerIter:N0} items in {sw.Elapsed.TotalMilliseconds:F1} ms");
+        }
+
+        if (TryStage(stages, "txFlood", out var txFlood))
+        {
+            // Many small transactions per tick, designed to make the Tx+UoW gauge's per-tick commit/created rate lines visibly
+            // plateau during this stage. Each inner transaction spawns a single entity and commits — so a single tick produces
+            // `commitsPerTick` ΔTxChainCommitTotal, plainly readable on the gauge's delta-rate overlay.
+            //
+            // Note on the "active" signal: `TxChainActiveCount` is sampled at snapshot time (end of tick), by which point every
+            // inner QuickTransaction has committed + disposed. The active-count area chart on the Tx+UoW renderer therefore
+            // stays at 0 for this stage too — that's a runner limitation, not a gauge-emitter problem. Real apps that carry
+            // long-lived transactions across scheduler ticks will exercise the area chart.
+            var floodIters = txFlood.Iterations > 0 ? txFlood.Iterations : 10;
+            var commitsPerTick = txFlood.EntitiesPerIteration > 0 ? txFlood.EntitiesPerIteration : 50;
+            var sw = Stopwatch.StartNew();
+            int totalCommits = 0;
+            for (var iter = 0; iter < floodIters; iter++)
+            {
+                var capturedIter = iter;
+                var capturedCommits = commitsPerTick;
+                RunTick(() => TxFloodIteration(dbe, capturedCommits, capturedIter));
+                totalCommits += commitsPerTick;
+            }
+            sw.Stop();
+            Console.WriteLine($"  [ok]   txFlood: {floodIters} × {commitsPerTick:N0} commits/tick = {totalCommits:N0} commits in {sw.Elapsed.TotalMilliseconds:F1} ms ({floodIters} ticks)");
+        }
+
+        if (TryStage(stages, "transientChurn", out var transient))
+        {
+            // Iteratively spawn Transient-mode entities one tick at a time. TransientStore allocates heap pages on demand; pages are
+            // never freed until the store is disposed, so this stage produces a monotonically climbing Transient Store gauge that
+            // flattens as the chunk pool has spare capacity. One tick per iteration so each allocation wave is visible as its own
+            // step in the viewer instead of collapsing into a single wide tick.
+            //
+            // NOTE: the per-tick spawn count is kept well under the threshold that would trigger TransientStore's `_pageAddresses`
+            // array reallocation (see the PagesPerBlock=256 workaround in the DI setup). Crossing that boundary currently crashes
+            // with NullRef in Memmove because ChunkAccessor caches a struct-copy of the underlying store.
+            var transientIters = transient.Iterations > 0 ? transient.Iterations : 8;
+            var perTick = transient.EntitiesPerIteration > 0 ? transient.EntitiesPerIteration : 1_500;
+            var sw = Stopwatch.StartNew();
+            int transientSpawned = 0;
+            for (var iter = 0; iter < transientIters; iter++)
+            {
+                var capturedIter = iter;
+                RunTick(() => TransientSpawnIteration(dbe, perTick, capturedIter));
+                transientSpawned += perTick;
+            }
+            sw.Stop();
+            Console.WriteLine($"  [ok]   transientChurn: {transientIters} × {perTick:N0} transient spawns = {transientSpawned:N0} entities in {sw.Elapsed.TotalMilliseconds:F1} ms ({transientIters} ticks)");
         }
 
         if (TryStage(stages, "readBurst", out var read))
@@ -464,6 +638,40 @@ public static class Program
     }
 
     /// <summary>
+    /// One iteration of the tx-flood stage. Runs <paramref name="commitsPerTick"/> independent <see cref="DatabaseEngine.CreateQuickTransaction"/>
+    /// cycles within a single tick — each one spawns a single Versioned entity and commits. Designed to drive the Tx+UoW gauge's
+    /// per-tick commit/created rate lines to a dramatic plateau so the renderer's overlay lines are clearly visible. The entity
+    /// IDs offset by a big constant to keep them visually distinguishable from other stages in the detail pane.
+    /// </summary>
+    private static void TxFloodIteration(DatabaseEngine dbe, int commitsPerTick, int iter)
+    {
+        for (int i = 0; i < commitsPerTick; i++)
+        {
+            using var tx = dbe.CreateQuickTransaction();
+            var blob = Blob.New(iter * commitsPerTick + i + 9_000_000);
+            tx.Spawn<BlobArch>(BlobArch.Blob.Set(in blob));
+            tx.Commit();
+        }
+    }
+
+    /// <summary>
+    /// One iteration of the transient-churn stage. Spawns <paramref name="perTick"/> entities into the Transient-mode archetype, which
+    /// routes allocations through <see cref="TransientStore"/> (heap-backed, no page cache, no WAL). Since TransientStore never frees
+    /// pages until disposal, each iteration grows the aggregated <c>TransientStoreBytesUsed</c> gauge until the chunk pool has spare
+    /// capacity. No checkpoint here — transient data isn't persisted, so ForceCheckpoint would be a no-op for this archetype.
+    /// </summary>
+    private static void TransientSpawnIteration(DatabaseEngine dbe, int perTick, int iter)
+    {
+        using var tx = dbe.CreateQuickTransaction();
+        for (int i = 0; i < perTick; i++)
+        {
+            var blob = TransientBlob.New(iter * perTick + i + 5_000_000);
+            tx.Spawn<TransientBlobArch>(TransientBlobArch.Data.Set(in blob));
+        }
+        tx.Commit();
+    }
+
+    /// <summary>
     /// One iteration of the spawn+checkpoint loop. Called once per tick so each iteration shows up as its own bar in the viewer rather than all
     /// iterations compressing into a single tick. The iteration index is used to offset the spawned blob IDs so records from different ticks are
     /// trivially distinguishable in the detail pane.
@@ -480,6 +688,74 @@ public static class Program
             tx.Commit();
         }
         dbe.ForceCheckpoint();
+    }
+
+    /// <summary>
+    /// Deliberately-ugly managed-memory churn stage. Spins up <see cref="System.Collections.Hashtable"/> (non-generic, so every int key and
+    /// value pair boxes to two heap objects), fills it with random entries, periodically allocates LOH-sized byte arrays, and synthesises
+    /// enough short-lived strings to keep Gen0 hot. Designed to make the profiler's GC gauges (Gen0/Gen1/Gen2/LOH/POH + committed bytes)
+    /// visibly oscillate rather than reading as flat lines. Does NOT interact with the Typhon engine — purely a managed-heap stress test
+    /// for gauge-signal validation.
+    /// </summary>
+    /// <param name="iteration">The current churn iteration (0-based). Used to seed a deterministic PRNG so runs are reproducible.</param>
+    /// <param name="itemsPerIteration">How many Hashtable entries to insert this iteration. ~40K items creates ~10 MB of Gen0 pressure per tick via boxing alone.</param>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void GcChurn(int iteration, int itemsPerIteration)
+    {
+        // ReSharper disable CollectionNeverQueried.Local — the entire point is to allocate; nothing reads these collections back.
+
+        var rng = new Random(0x5EED + iteration);
+
+        // Non-generic Hashtable — each int key and int value boxes to a heap object. At 40K entries that's ~80K small objects per tick,
+        // ~1.3 MB of boxing overhead before the Hashtable's own bucket array is counted.
+        var ht = new System.Collections.Hashtable(capacity: itemsPerIteration);
+        for (int j = 0; j < itemsPerIteration; j++)
+        {
+            ht[j] = rng.Next();  // both key and value box
+        }
+
+        // Short-lived string churn — each string is an independent heap object, forcing Gen0 through its collection cycle fast.
+        // 5000 × 64-byte strings ≈ 320 KB of transient Gen0, most of which dies before the next tick.
+        string[] strings = new string[5000];
+        for (int j = 0; j < strings.Length; j++)
+        {
+            strings[j] = new string('x', 64 + (j & 31));
+        }
+
+        // LOH allocation — arrays ≥ 85_000 bytes go to the Large Object Heap. One 128 KB array per iteration plus a mid-range 40 KB one
+        // keeps the LOH gauge moving without blowing RAM over a 25-iteration run (25 × ~170 KB = ~4.3 MB peak LOH footprint, trivially
+        // collected on Gen2).
+        byte[] loh = new byte[128 * 1024];
+        for (int j = 0; j < loh.Length; j += 4096)
+        {
+            loh[j] = (byte)j;  // touch pages so the OS actually commits them (otherwise the allocation is virtual-only)
+        }
+
+        byte[] small = new byte[40 * 1024];
+        for (int j = 0; j < small.Length; j += 1024) small[j] = 1;
+
+        // Dictionary<object, object> — another boxing path, this time with reference-type semantics. Keeps the allocator busy in a
+        // different code path than Hashtable.
+        var d = new Dictionary<object, object>();
+        for (int j = 0; j < itemsPerIteration / 4; j++)
+        {
+            d[j] = (long)j * 17;  // both box
+        }
+
+        // Occasional forced collection to make gen promotions visible in the trace — every 5th iteration we nudge the GC so the
+        // viewer's heap-composition stacked area shows an actual staircase rather than monotone growth. Real apps never need this;
+        // for a gauge demo it makes the signal self-explanatory.
+        if (iteration % 5 == 0)
+        {
+            GC.Collect(generation: 1, mode: GCCollectionMode.Default, blocking: false);
+        }
+
+        // Prevent the JIT from eliding any of the above as dead stores. These references escape via a side-effecting GC.KeepAlive.
+        GC.KeepAlive(ht);
+        GC.KeepAlive(strings);
+        GC.KeepAlive(loh);
+        GC.KeepAlive(small);
+        GC.KeepAlive(d);
     }
 
     private static void ReadBurst(DatabaseEngine dbe, StageConfig cfg)
@@ -558,6 +834,7 @@ public static class Program
 
             var kindCounts = new SortedDictionary<TraceEventKind, int>();
             var threadSlotCounts = new SortedDictionary<int, int>();
+            var threadNames = new SortedDictionary<int, string>();
             int total = 0;
             int blocks = 0;
 
@@ -581,6 +858,19 @@ public static class Program
                     threadSlotCounts.TryGetValue(threadSlot, out var sc);
                     threadSlotCounts[threadSlot] = sc + 1;
 
+                    // Decode ThreadInfo inline so we can surface the captured names in the summary — this is the single source of truth
+                    // for "what does lane N show up as in the viewer?" Useful for eyeballing whether thread naming is wired up correctly.
+                    if (kind == TraceEventKind.ThreadInfo && recSize >= TraceRecordHeader.CommonHeaderSize + 6)
+                    {
+                        var payload = record[TraceRecordHeader.CommonHeaderSize..];
+                        var nameByteCount = BinaryPrimitives.ReadUInt16LittleEndian(payload[4..]);
+                        if (6 + nameByteCount <= payload.Length)
+                        {
+                            var name = nameByteCount > 0 ? System.Text.Encoding.UTF8.GetString(payload.Slice(6, nameByteCount)) : "(unnamed)";
+                            threadNames[threadSlot] = name;
+                        }
+                    }
+
                     pos += recSize;
                 }
             }
@@ -588,6 +878,14 @@ public static class Program
             Console.WriteLine($"  blocks:       {blocks}");
             Console.WriteLine($"  records:      {total:N0}");
             Console.WriteLine($"  thread slots: {string.Join(", ", threadSlotCounts.Select(kv => $"slot{kv.Key}={kv.Value}"))}");
+            if (threadNames.Count > 0)
+            {
+                Console.WriteLine($"  thread names:");
+                foreach (var kv in threadNames)
+                {
+                    Console.WriteLine($"    slot{kv.Key}: {kv.Value}");
+                }
+            }
             Console.WriteLine($"  kinds:");
             foreach (var kv in kindCounts)
             {

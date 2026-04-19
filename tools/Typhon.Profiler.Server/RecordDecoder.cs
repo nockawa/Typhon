@@ -147,6 +147,23 @@ public sealed class RecordDecoder
 
     private LiveTraceEvent DecodeInstant(TraceEventKind kind, ReadOnlySpan<byte> record)
     {
+        // MemoryAllocEvent (kind 9) and PerTickSnapshot (kind 76) carry typed payloads that don't fit the InstantEventCodec shape — route them to
+        // their own decoders first. InstantEventCodec.Decode assumes the small (common header + up to 2 payload bytes) instant layout. Same
+        // story for GcStart (kind 7) / GcEnd (kind 8) — they have their own GcInstantEventCodec.
+        switch (kind)
+        {
+            case TraceEventKind.MemoryAllocEvent:
+                return DecodeMemoryAllocEvent(record);
+            case TraceEventKind.PerTickSnapshot:
+                return DecodePerTickSnapshot(record);
+            case TraceEventKind.GcStart:
+                return DecodeGcStart(record);
+            case TraceEventKind.GcEnd:
+                return DecodeGcEnd(record);
+            case TraceEventKind.ThreadInfo:
+                return DecodeThreadInfo(record);
+        }
+
         var data = InstantEventCodec.Decode(record);
         var timestampUs = data.Timestamp / _ticksPerUs;
 
@@ -194,6 +211,127 @@ public sealed class RecordDecoder
                 SkipReason = data.P2,
             },
             _ => null,
+        };
+    }
+
+    private LiveTraceEvent DecodeGcStart(ReadOnlySpan<byte> record)
+    {
+        var data = GcInstantEventCodec.DecodeGcStart(record);
+        return new LiveTraceEvent
+        {
+            Kind = (int)TraceEventKind.GcStart,
+            ThreadSlot = data.ThreadSlot,
+            TickNumber = _currentTick,
+            TimestampUs = data.Timestamp / _ticksPerUs,
+            Generation = data.Generation,
+            GcReason = (int)data.Reason,
+            GcType = (int)data.Type,
+            GcCount = data.Count,
+        };
+    }
+
+    private LiveTraceEvent DecodeGcEnd(ReadOnlySpan<byte> record)
+    {
+        var data = GcInstantEventCodec.DecodeGcEnd(record);
+        return new LiveTraceEvent
+        {
+            Kind = (int)TraceEventKind.GcEnd,
+            ThreadSlot = data.ThreadSlot,
+            TickNumber = _currentTick,
+            TimestampUs = data.Timestamp / _ticksPerUs,
+            Generation = data.Generation,
+            GcCount = data.Count,
+            GcPauseDurationUs = data.PauseDurationTicks / _ticksPerUs,
+            GcPromotedBytes = data.PromotedBytes,
+        };
+    }
+
+    private LiveTraceEvent DecodeThreadInfo(ReadOnlySpan<byte> record)
+    {
+        // Layout: common header (12) + i32 managedThreadId + u16 nameByteCount + byte[nameByteCount] name.
+        TraceRecordHeader.ReadCommonHeader(record, out _, out _, out var threadSlot, out var timestamp);
+        var p = record[TraceRecordHeader.CommonHeaderSize..];
+        var managedThreadId = BinaryPrimitives.ReadInt32LittleEndian(p);
+        var nameByteCount = BinaryPrimitives.ReadUInt16LittleEndian(p[4..]);
+        // Bounds check: a malformed or truncated trace can advertise a nameByteCount greater than what's actually present in
+        // the record. Without this guard, p.Slice(6, nameByteCount) throws ArgumentOutOfRangeException and tears down the
+        // whole block decode. Treat short records as "no name" — the viewer already falls back to the slot index.
+        // Also apply a sanity cap (4 KB) — nothing legitimate has a 64 KB thread name; oversized values signal corrupt wire data.
+        string name = null;
+        if (nameByteCount > 0 && nameByteCount <= 4096 && p.Length >= 6 + nameByteCount)
+        {
+            // ExceptionFallback turns invalid UTF-8 bytes into an exception instead of silently producing U+FFFD replacements,
+            // letting us distinguish "thread name has weird unicode" from "wire bytes are corrupt."
+            try
+            {
+                var nameSlice = p.Slice(6, nameByteCount);
+                name = System.Text.Encoding.UTF8.GetString(nameSlice);
+            }
+            catch (System.Text.DecoderFallbackException)
+            {
+                // Leave name = null on bad bytes. The viewer will fall back to the slot index display.
+                name = null;
+            }
+        }
+
+        return new LiveTraceEvent
+        {
+            Kind = (int)TraceEventKind.ThreadInfo,
+            ThreadSlot = threadSlot,
+            TickNumber = _currentTick,
+            TimestampUs = timestamp / _ticksPerUs,
+            ManagedThreadId = managedThreadId,
+            ThreadName = name,
+        };
+    }
+
+    private LiveTraceEvent DecodeMemoryAllocEvent(ReadOnlySpan<byte> record)
+    {
+        var data = MemoryAllocEventCodec.DecodeMemoryAllocEvent(record);
+        return new LiveTraceEvent
+        {
+            Kind = (int)TraceEventKind.MemoryAllocEvent,
+            ThreadSlot = data.ThreadSlot,
+            TickNumber = _currentTick,
+            TimestampUs = data.Timestamp / _ticksPerUs,
+            Direction = (int)data.Direction,
+            SourceTag = data.SourceTag,
+            SizeBytes = data.SizeBytes,
+            TotalAfterBytes = data.TotalAfterBytes,
+        };
+    }
+
+    private LiveTraceEvent DecodePerTickSnapshot(ReadOnlySpan<byte> record)
+    {
+        var data = PerTickSnapshotEventCodec.DecodePerTickSnapshot(record);
+
+        // Re-key the codec's GaugeValue[] into a DTO-friendly Dictionary<int, double>. The wire preserves valueKind per entry, but the client maps
+        // gauge-id to display format via its own GaugeId registry — one id always means one kind, so we don't need to ship the kind in the DTO.
+        // i64 signed values travel through as double (sufficient precision up to 2^53 for the gauge ranges we emit in MVP).
+        var gauges = new System.Collections.Generic.Dictionary<int, double>(data.Values.Length);
+        for (var i = 0; i < data.Values.Length; i++)
+        {
+            var v = data.Values[i];
+            double value = v.Kind switch
+            {
+                GaugeValueKind.I64Signed => unchecked((long)v.RawValue),
+                GaugeValueKind.U32Count or GaugeValueKind.U32PercentHundredths => (uint)v.RawValue,
+                _ => v.RawValue,  // U64Bytes
+            };
+            gauges[(int)v.Id] = value;
+        }
+
+        // PerTickSnapshot's payload carries the scheduler's tickNumber, which is authoritative (the decoder's _currentTick counter may be ahead if
+        // the snapshot arrives between TickEnd and the next TickStart, but during normal emit they match). Use the record's value when populating
+        // the DTO so the client doesn't need to know about decoder-state quirks.
+        return new LiveTraceEvent
+        {
+            Kind = (int)TraceEventKind.PerTickSnapshot,
+            ThreadSlot = data.ThreadSlot,
+            TickNumber = (int)data.TickNumber,
+            TimestampUs = data.Timestamp / _ticksPerUs,
+            Flags = data.Flags,
+            Gauges = gauges,
         };
     }
 

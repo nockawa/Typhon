@@ -23,6 +23,19 @@ namespace Typhon.Profiler;
 public sealed class TraceFileCacheReader : IDisposable
 {
     private readonly Stream _stream;
+    /// <summary>
+    /// <see cref="Microsoft.Win32.SafeHandles.SafeFileHandle"/> extracted once at construction when the backing stream is a <see cref="FileStream"/>.
+    /// Lets <see cref="ReadChunkRaw"/> and <see cref="DecompressChunk"/> use <see cref="RandomAccess.Read"/> for thread-safe, stateless, offset-based reads —
+    /// the shared-stream seek+read pattern they previously used was a classic race condition that corrupted compressed bytes when multiple chunk requests were
+    /// in flight simultaneously (e.g., distant range-select triggering N parallel cache misses). Null when the stream isn't a <see cref="FileStream"/> — the
+    /// lock-based fallback kicks in.
+    /// </summary>
+    private readonly Microsoft.Win32.SafeHandles.SafeFileHandle _fileHandle;
+    /// <summary>
+    /// Serializes chunk reads when <see cref="_fileHandle"/> is null (non-<see cref="FileStream"/> backings — unit tests that pass a
+    /// <see cref="MemoryStream"/>, for example). Unused in production since the FileStream path uses <see cref="RandomAccess"/>.
+    /// </summary>
+    private readonly object _readFallbackLock = new();
     private readonly Dictionary<CacheSectionId, SectionTableEntry> _sectionsByid = new();
     private readonly List<TickIndexEntry> _tickIndex = new();
     private readonly List<TickSummary> _tickSummaries = new();
@@ -44,6 +57,9 @@ public sealed class TraceFileCacheReader : IDisposable
         {
             throw new ArgumentException("TraceFileCacheReader requires a seekable stream.", nameof(stream));
         }
+        // Snapshot the SafeFileHandle once so the hot path in ReadChunkRaw/DecompressChunk doesn't pay a virtual-dispatch + type-check on
+        // every chunk request. Non-FileStream callers (unit tests) see a null handle and fall through to the lock-based path.
+        _fileHandle = (_stream as FileStream)?.SafeFileHandle;
 
         ReadHeader();
         ReadSectionTable();
@@ -52,6 +68,24 @@ public sealed class TraceFileCacheReader : IDisposable
 
     /// <summary>The cache file's header. Contains version, fingerprint, and section-table location.</summary>
     public ref readonly CacheHeader Header => ref _header;
+
+    /// <summary>
+    /// Returns <see cref="CacheHeader.SourceFingerprint"/> as a 64-char uppercase hex string. Useful for IDs that need to cross a process boundary (e.g.,
+    /// /api/trace/open responses: the client uses this string as an invalidation key for its OPFS chunk cache — source file changes produce a different
+    /// fingerprint, old cached chunks become unreachable).
+    /// </summary>
+    public string GetSourceFingerprintHex()
+    {
+        Span<byte> fp = stackalloc byte[32];
+        unsafe
+        {
+            fixed (byte* src = _header.SourceFingerprint)
+            {
+                new ReadOnlySpan<byte>(src, 32).CopyTo(fp);
+            }
+        }
+        return Convert.ToHexString(fp);
+    }
 
     public IReadOnlyList<TickIndexEntry> TickIndex => _tickIndex;
     public IReadOnlyList<TickSummary> TickSummaries => _tickSummaries;
@@ -74,8 +108,41 @@ public sealed class TraceFileCacheReader : IDisposable
         {
             throw new ArgumentException($"Destination too small: need {entry.CacheByteLength}, got {compressedDestination.Length}.", nameof(compressedDestination));
         }
-        _stream.Position = entry.CacheByteOffset;
-        _stream.ReadExactly(compressedDestination[..(int)entry.CacheByteLength]);
+        // Thread-safety: the minimal API endpoints serve concurrent /chunk-binary requests out of a SHARED reader instance (one per trace
+        // file). The earlier seek+read pattern would interleave — thread A seeks to offset_A, thread B seeks to offset_B before A's
+        // ReadExactly, then A reads from offset_B (B's bytes into A's buffer). Manifested on the client as seemingly random LZ4 decode
+        // errors ("offset=0 is reserved", "match points before output start") when the user triggered many simultaneous chunk loads —
+        // e.g., a distant range-select that cache-missed N chunks at once. RandomAccess.Read is kernel-level stateless (pread syscall)
+        // and natively concurrent-safe; no user-space lock needed.
+        var dst = compressedDestination[..(int)entry.CacheByteLength];
+        if (_fileHandle is not null)
+        {
+            ReadAtExact(_fileHandle, dst, (long)entry.CacheByteOffset);
+        }
+        else
+        {
+            lock (_readFallbackLock)
+            {
+                _stream.Position = entry.CacheByteOffset;
+                _stream.ReadExactly(dst);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Loop around <see cref="RandomAccess.Read"/> to guarantee the whole buffer is filled. A single call can return fewer bytes than
+    /// requested on some stream-like backings; mirroring <see cref="Stream.ReadExactly"/> here means callers always get a complete
+    /// compressed payload or an exception (never a silent short read that later fails LZ4 decode with a misleading error).
+    /// </summary>
+    private static void ReadAtExact(Microsoft.Win32.SafeHandles.SafeFileHandle handle, Span<byte> destination, long offset)
+    {
+        while (destination.Length > 0)
+        {
+            var n = RandomAccess.Read(handle, destination, offset);
+            if (n == 0) throw new EndOfStreamException("Unexpected end of cache file during chunk read.");
+            destination = destination[n..];
+            offset += n;
+        }
     }
 
     /// <summary>
@@ -95,9 +162,21 @@ public sealed class TraceFileCacheReader : IDisposable
             throw new ArgumentException($"Compressed scratch too small: need {entry.CacheByteLength}, got {compressedScratch.Length}.", nameof(compressedScratch));
         }
 
-        _stream.Position = entry.CacheByteOffset;
+        // Same thread-safety concern as ReadChunkRaw — see the detailed comment there. RandomAccess.Read is stateless, pread-based, and concurrency-safe; fall
+        // back to the lock path only when the backing stream isn't a FileStream.
         var compressed = compressedScratch[..(int)entry.CacheByteLength];
-        _stream.ReadExactly(compressed);
+        if (_fileHandle is not null)
+        {
+            ReadAtExact(_fileHandle, compressed, (long)entry.CacheByteOffset);
+        }
+        else
+        {
+            lock (_readFallbackLock)
+            {
+                _stream.Position = entry.CacheByteOffset;
+                _stream.ReadExactly(compressed);
+            }
+        }
 
         var decoded = LZ4Codec.Decode(compressed, uncompressedDestination[..(int)entry.UncompressedBytes]);
         if (decoded != (int)entry.UncompressedBytes)

@@ -55,14 +55,14 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     // Func<Task<int>, object, int> rather than Action<Task<int>, object> because the wrapping continuation must preserve the int result
     // (the byte count from RandomAccess.ReadAsync) so callers awaiting the returned ValueTask<int> get the original value. Returning
     // task.Result re-throws any exception the read faulted with, propagating faults through the wrapper transparently.
-    private static readonly Func<Task<int>, object, int> s_readCompletionHandler = static (task, stateObj) =>
+    private static readonly Func<Task<int>, object, int> SReadCompletionHandler = static (task, stateObj) =>
     {
         var state = (PageCacheReadCompletionState)stateObj;
         TyphonEvent.EmitPageCacheDiskReadCompleted(state.SpanId, state.BeginTs, state.FilePageIndex, Stopwatch.GetTimestamp());
         return task.Result;
     };
 
-    private static readonly Action<Task, object> s_writeCompletionHandler = static (task, stateObj) =>
+    private static readonly Action<Task, object> SWriteCompletionHandler = static (_, stateObj) =>
     {
         var state = (PageCacheWriteCompletionState)stateObj;
         TyphonEvent.EmitPageCacheDiskWriteCompleted(state.SpanId, state.BeginTs, state.FilePageIndex, Stopwatch.GetTimestamp());
@@ -157,6 +157,79 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     private Metrics _metrics;
 
     internal Metrics GetMetrics() => _metrics;
+
+    /// <summary>
+    /// Produce a mutually-exclusive bucket classification of the page cache for the profiler's per-tick gauge snapshot.
+    /// Called from <c>DagScheduler</c>'s end-of-tick hook when <c>TelemetryConfig.ProfilerGaugesActive</c> is <c>true</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Single linear pass over <see cref="_memPagesInfo"/> — O(MemPagesCount). At the default 256-page cache this is a few microseconds; at a 64K-page cache
+    /// it runs in a fraction of a millisecond, well within the tick budget. Zero allocations (returns a struct by value). Branches ordered by expected
+    /// frequency: Free → Idle-clean → Idle-dirty → Exclusive/Allocating.
+    /// </para>
+    /// <para>
+    /// Uses plain (non-volatile) reads on purpose — snapshots have sampling semantics and microsecond-scale staleness on concurrent state transitions is
+    /// acceptable for visualization. Invariant that matters: every page contributes to exactly one of the four buckets, so the stacked-area viewer never
+    /// double-counts. The epoch/IO overlay counts are tracked separately and may add on top of the bucket totals.
+    /// </para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal PageCacheGaugeSnapshot GetGaugeSnapshot()
+    {
+        int free = 0;
+        int cleanUsed = 0;
+        int dirtyUsed = 0;
+        int exclusive = 0;
+        int epochProtected = 0;
+        int pendingIoReads = 0;
+
+        var minActive = EpochManager?.MinActiveEpoch ?? long.MaxValue;
+        var pages = _memPagesInfo;
+        if (pages == null)
+        {
+            return default;
+        }
+
+        for (var i = 0; i < pages.Length; i++)
+        {
+            var pi = pages[i];
+            // Mutually-exclusive bucket classification — first match wins.
+            switch (pi.PageState)
+            {
+                case PageState.Free:
+                    free++;
+                    break;
+                case PageState.Idle:
+                    if (pi.DirtyCounter > 0)
+                    {
+                        dirtyUsed++;
+                    }
+                    else
+                    {
+                        cleanUsed++;
+                    }
+                    break;
+                case PageState.Exclusive:
+                case PageState.Allocating:
+                    exclusive++;
+                    break;
+            }
+
+            // Overlay counts — independent of bucket, so a dirty page may also be epoch-protected.
+            if (pi.AccessEpoch >= minActive)
+            {
+                epochProtected++;
+            }
+            var ioTask = pi.IOReadTask;
+            if (ioTask != null && !ioTask.IsCompleted)
+            {
+                pendingIoReads++;
+            }
+        }
+
+        return new PageCacheGaugeSnapshot(pages.Length, free, cleanUsed, dirtyUsed, exclusive, epochProtected, pendingIoReads);
+    }
 
     #endregion
 
@@ -677,9 +750,8 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 if (diskReadScope.SpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted))
                 {
                     var state = new PageCacheReadCompletionState(diskReadScope.SpanId, diskReadScope.StartTimestamp, filePageIndex);
-                    var wrapped = readTask.AsTask().ContinueWith(
-                        s_readCompletionHandler, state,
-                        CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                    var wrapped = readTask.AsTask().ContinueWith(SReadCompletionHandler, state, CancellationToken.None, 
+                        TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                     pi.SetIOReadTask(new ValueTask<int>(wrapped));
                 }
                 else
@@ -1769,9 +1841,8 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         if (writeSpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskWriteCompleted))
         {
             var state = new PageCacheWriteCompletionState(writeSpanId, writeBeginTs, filePageIndex);
-            return new ValueTask(writeTask.AsTask().ContinueWith(
-                s_writeCompletionHandler, state,
-                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default));
+            return new ValueTask(writeTask.AsTask().ContinueWith(SWriteCompletionHandler, state, CancellationToken.None, 
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default));
         }
 
         return writeTask;

@@ -112,6 +112,18 @@ internal unsafe class UowRegistry : IDisposable
     /// <summary>Number of voided entries (crash recovery).</summary>
     internal int VoidEntryCount => _voidEntryCount;
 
+    /// <summary>
+    /// Cumulative count of UoW slots allocated since engine start. Monotonic. Backs the profiler's per-tick "UoW created" gauge —
+    /// viewer derives the per-tick delta by subtracting consecutive snapshots.
+    /// </summary>
+    internal long CreatedTotal => _createdTotal;
+
+    /// <summary>Cumulative count of UoW slots committed (via <see cref="RecordCommit"/>) since engine start.</summary>
+    internal long CommittedTotal => _committedTotal;
+
+    private long _createdTotal;
+    private long _committedTotal;
+
     /// <summary>Maximum number of concurrent UoW IDs (hard limit from 15-bit ID space).</summary>
     public int MaxConcurrentUoWs => MaxUowId;
 
@@ -221,6 +233,8 @@ internal unsafe class UowRegistry : IDisposable
             InitializeEntry(slotIndex, externalCs);
 
             Interlocked.Increment(ref _activeCount);
+            // Cumulative allocation counter — monotonic. Profiler per-tick gauges derive the "created this tick" delta from this value.
+            Interlocked.Increment(ref _createdTotal);
             return slotIndex;
         }
 
@@ -333,6 +347,9 @@ internal unsafe class UowRegistry : IDisposable
         var wordIndex = uowId >> 6;
         var bitMask = 1UL << (uowId & 63);
         Interlocked.Or(ref _committedBitmap[wordIndex], bitMask);
+
+        // Cumulative commit counter for the profiler's per-tick gauge derivation.
+        Interlocked.Increment(ref _committedTotal);
     }
 
     // ═══════════════════════════════════════════════════════════════

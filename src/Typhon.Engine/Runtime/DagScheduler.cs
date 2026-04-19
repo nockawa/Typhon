@@ -126,6 +126,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     internal delegate void EnrichTelemetryDelegate(ref TickTelemetry telemetry);
 
+    /// <summary>
+    /// Optional callback invoked after <c>TickEnd</c> is emitted on the scheduler thread. Intended use: collect per-tick gauge values
+    /// (memory, page cache, WAL, tx) and push a <see cref="TraceEventKind.PerTickSnapshot"/> record. Called from the scheduler's own
+    /// <see cref="ThreadSlot"/> so the snapshot co-locates with the <c>TickStart</c>/<c>TickEnd</c> pair in the trace file.
+    /// </summary>
+    /// <remarks>
+    /// Wired by <see cref="TyphonRuntime"/> only when <see cref="TelemetryConfig.ProfilerGaugesActive"/> is <c>true</c> — when the gate is
+    /// off the callback is never set, so even the delegate invocation is skipped.
+    /// </remarks>
+    internal Action<DagScheduler> GaugeSnapshotCallback;
+
     /// <summary>Called when overload level transitions to <see cref="OverloadLevel.PlayerShedding"/>.</summary>
     internal Action OnCriticalOverloadCallback;
 
@@ -462,6 +473,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var tickEndTimestamp = Stopwatch.GetTimestamp();
         InspectorTickEnd(_currentTickNumber, tickEndTimestamp);
 
+        // 5b. Profiler gauge snapshot (post-TickEnd so the snapshot record lands immediately after the TickEnd marker in the ring).
+        //     Callback is null unless TyphonRuntime has wired it up under ProfilerGaugesActive, so the null check is the only cost when off.
+        GaugeSnapshotCallback?.Invoke(this);
+
         // 6. Record telemetry
         //    Note: _nextTickTimestamp is updated by GetNextTick() which the base timer loop
         //    calls immediately after this method returns. Workers briefly see a stale value
@@ -643,6 +658,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         var tickEndTimestamp = Stopwatch.GetTimestamp();
         InspectorTickEnd(_currentTickNumber, tickEndTimestamp);
+
+        // Profiler gauge snapshot (post-TickEnd). Same contract as the multi-threaded path.
+        GaugeSnapshotCallback?.Invoke(this);
+
         ComputeAndRecordTelemetry(tickStartTimestamp, tickEndTimestamp);
     }
 

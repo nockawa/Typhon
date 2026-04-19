@@ -46,7 +46,10 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     public TcpExporter(int port, IResource parent) : base("TcpExporter", ResourceType.Service, parent ?? throw new ArgumentNullException(nameof(parent)))
     {
         _port = port;
-        Queue = new ExporterQueue(boundedCapacity: 4);
+        // Match <see cref="FileExporter"/>'s capacity — 64 gives the socket-send path ~16 MB of slack, enough to absorb a single// gcChurn-class burst
+        // without drop-newest firing. Previously 4, which was too tight for any workload with multi-tick-spanning// I/O pressure. See FileExporter ctor for
+        // why not 256.
+        Queue = new ExporterQueue(boundedCapacity: 64);
     }
 
     /// <inheritdoc />
@@ -81,7 +84,10 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     public void ProcessBatch(TraceRecordBatch batch)
     {
         var client = _client;
-        if (client == null || batch.PayloadBytes == 0) return;
+        if (client == null || batch.PayloadBytes == 0)
+        {
+            return;
+        }
 
         // Frame layout: [5B envelope][12B block header][LZ4-compressed records]
         var fb = _frameBuffer.AsSpan();
@@ -112,7 +118,12 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
         }
 
         _shutdown = true;
-        try { _listener?.Stop(); } catch { }
+        try { _listener?.Stop(); }
+        catch
+        {
+            // ignored
+        }
+
         _acceptThread?.Join(500);
     }
 
@@ -122,7 +133,11 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
 
         if (disposing)
@@ -131,40 +146,59 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
             var client = Interlocked.Exchange(ref _client, null);
             if (client != null)
             {
-                try { client.Shutdown(SocketShutdown.Both); } catch { }
-                try { client.Close(); } catch { }
+                try { client.Shutdown(SocketShutdown.Both); }
+                catch
+                {
+                    // ignored
+                }
+
+                try { client.Close(); }
+                catch
+                {
+                    // ignored
+                }
             }
-            try { _listener?.Stop(); } catch { }
+            try { _listener?.Stop(); }
+            catch
+            {
+                // ignored
+            }
+
             _acceptThread?.Join(2000);
-            try { Queue?.Dispose(); } catch { }
+            try { Queue?.Dispose(); }
+            catch
+            {
+                // ignored
+            }
         }
         base.Dispose(disposing);
     }
 
-    private bool TrySendAll(Socket client, byte[] buffer, int offset, int length)
+    private void TrySendAll(Socket client, byte[] buffer, int offset, int length)
     {
         try
         {
             var sent = client.Send(buffer, offset, length, SocketFlags.None, out var error);
-            if (error == SocketError.Success && sent == length) return true;
+            if (error == SocketError.Success && sent == length)
+            {
+                return;
+            }
+
             if (error == SocketError.WouldBlock)
             {
                 Interlocked.Increment(ref _droppedFrames);
-                return false;
+                return;
             }
             Interlocked.Increment(ref _droppedFrames);
             DisposeClient(client);
-            return false;
         }
         catch (SocketException)
         {
             DisposeClient(client);
-            return false;
         }
         catch (ObjectDisposedException)
         {
             _client = null;
-            return false;
         }
     }
 
@@ -172,7 +206,11 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     {
         if (Interlocked.CompareExchange(ref _client, null, expected) == expected)
         {
-            try { expected.Close(); } catch { }
+            try { expected.Close(); }
+            catch
+            {
+                // ignored
+            }
         }
     }
 
@@ -193,7 +231,12 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
             if (_client != null)
             {
-                try { socket.Close(); } catch { }
+                try { socket.Close(); }
+                catch
+                {
+                    // ignored
+                }
+
                 continue;
             }
 
@@ -211,7 +254,11 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
             }
             catch (SocketException)
             {
-                try { socket.Close(); } catch { }
+                try { socket.Close(); }
+                catch
+                {
+                    // ignored
+                }
             }
         }
     }
@@ -254,10 +301,16 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
             bw.Write(sys.TierFilter);
 
             bw.Write((byte)sys.Predecessors.Length);
-            foreach (var pred in sys.Predecessors) bw.Write(pred);
+            foreach (var pred in sys.Predecessors)
+            {
+                bw.Write(pred);
+            }
 
             bw.Write((byte)sys.Successors.Length);
-            foreach (var succ in sys.Successors) bw.Write(succ);
+            foreach (var succ in sys.Successors)
+            {
+                bw.Write(succ);
+            }
         }
 
         // Archetype table

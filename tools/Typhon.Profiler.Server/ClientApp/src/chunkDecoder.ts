@@ -65,8 +65,12 @@ export function decodeChunkBinary(bytes: Uint8Array, firstTick: number, ticksPer
     const kind = kindByte as TraceEventKind;
     let evt: TraceEvent | null;
 
-    if (kindByte < 10) {
-      evt = decodeInstant(reader, pos, kind, threadSlot, currentTick, timestampUs);
+    // PerTickSnapshot (kind 76) and ThreadInfo (kind 77) are numerically in the span range but have INSTANT wire shape — no span header
+    // extension after the common header. Route them to the instant branch explicitly; otherwise readSpanHeader would read 25 bytes of
+    // payload as span metadata and mis-align every subsequent record in the chunk. Mirrors the server's IsSpan() carve-out — any future
+    // instant-style kind with numeric value ≥ 10 must be added to this list AND to TraceEventKindExtensions.IsSpan on the C# side.
+    if (kindByte < 10 || kind === TraceEventKind.PerTickSnapshot || kind === TraceEventKind.ThreadInfo) {
+      evt = decodeInstant(reader, pos, kind, threadSlot, currentTick, timestampUs, ticksPerUs);
     } else {
       evt = decodeSpan(reader, pos, kind, threadSlot, currentTick, timestampUs, ticksPerUs);
     }
@@ -92,6 +96,7 @@ function decodeInstant(
   threadSlot: number,
   tickNumber: number,
   timestampUs: number,
+  ticksPerUs: number,
 ): TraceEvent | null {
   const payloadOffset = pos + COMMON_HEADER_SIZE;
 
@@ -131,9 +136,189 @@ function decodeInstant(
       // Generic instant — i32 nameId + i32 payload in wire. Not surfaced on the server's JSON DTO; mirror that by returning header only.
       return { kind, threadSlot, tickNumber, timestampUs };
 
+    case TraceEventKind.MemoryAllocEvent:
+      return decodeMemoryAllocEvent(reader, pos, threadSlot, tickNumber, timestampUs);
+
+    case TraceEventKind.PerTickSnapshot:
+      return decodePerTickSnapshot(reader, pos, threadSlot, timestampUs);
+
+    case TraceEventKind.GcStart:
+      return decodeGcStart(reader, pos, threadSlot, tickNumber, timestampUs);
+
+    case TraceEventKind.GcEnd:
+      return decodeGcEnd(reader, pos, threadSlot, tickNumber, timestampUs, ticksPerUs);
+
+    case TraceEventKind.ThreadInfo:
+      return decodeThreadInfo(reader, pos, threadSlot, tickNumber, timestampUs);
+
     default:
       return null;
   }
+}
+
+/**
+ * Shared TextDecoder for UTF-8 name payloads (ThreadInfo, and any future variable-length-string kinds). Reusing the instance avoids
+ * per-record allocation; it's safe for arbitrary byte counts.
+ */
+const utf8Decoder = new TextDecoder('utf-8');
+
+/**
+ * Decode a ThreadInfo (kind 77) record. Wire: <c>i32 managedThreadId, u16 nameByteCount, byte[nameByteCount] nameUtf8</c> after the
+ * common header.
+ */
+function decodeThreadInfo(
+  reader: BinaryReader,
+  pos: number,
+  threadSlot: number,
+  tickNumber: number,
+  timestampUs: number,
+): TraceEvent {
+  const o = pos + COMMON_HEADER_SIZE;
+  const managedThreadId = reader.readI32(o);
+  const nameByteCount = reader.readU16(o + 4);
+  const threadName = nameByteCount > 0 ? reader.readUtf8(o + 6, nameByteCount, utf8Decoder) : undefined;
+  return {
+    kind: TraceEventKind.ThreadInfo,
+    threadSlot,
+    tickNumber,
+    timestampUs,
+    managedThreadId,
+    threadName,
+  };
+}
+
+/**
+ * Decode a GcStart (kind 7) record. Wire: <c>u8 generation, u8 reason, u8 type, u32 count</c> after the common header.
+ */
+function decodeGcStart(
+  reader: BinaryReader,
+  pos: number,
+  threadSlot: number,
+  tickNumber: number,
+  timestampUs: number,
+): TraceEvent {
+  const o = pos + COMMON_HEADER_SIZE;
+  return {
+    kind: TraceEventKind.GcStart,
+    threadSlot,
+    tickNumber,
+    timestampUs,
+    generation: reader.readU8(o),
+    gcReason: reader.readU8(o + 1),
+    gcType: reader.readU8(o + 2),
+    gcCount: reader.readU32(o + 3),
+  };
+}
+
+/**
+ * Decode a GcEnd (kind 8) record. Wire: <c>u8 generation, u32 count, i64 pauseDurationTicks, u64 promotedBytes</c>, then five u64
+ * per-gen sizes + u64 committed — those last six are already materialised via the per-tick gauge snapshot so we don't re-emit them
+ * here. Only the pause duration and promoted bytes are unique to the GcEnd record.
+ */
+function decodeGcEnd(
+  reader: BinaryReader,
+  pos: number,
+  threadSlot: number,
+  tickNumber: number,
+  timestampUs: number,
+  ticksPerUs: number,
+): TraceEvent {
+  const o = pos + COMMON_HEADER_SIZE;
+  return {
+    kind: TraceEventKind.GcEnd,
+    threadSlot,
+    tickNumber,
+    timestampUs,
+    generation: reader.readU8(o),
+    gcCount: reader.readU32(o + 1),
+    gcPauseDurationUs: reader.readI64AsNumber(o + 5) / ticksPerUs,
+    gcPromotedBytes: reader.readI64AsNumber(o + 13),
+  };
+}
+
+/**
+ * Decode a <c>MemoryAllocEvent</c> record (kind 9). Wire layout after the 12-byte common header:
+ * <c>u8 direction, u16 sourceTag, u64 sizeBytes, u64 totalAfterBytes</c>. Mirrors the server's <c>DecodeMemoryAllocEvent</c>.
+ */
+function decodeMemoryAllocEvent(
+  reader: BinaryReader,
+  pos: number,
+  threadSlot: number,
+  tickNumber: number,
+  timestampUs: number,
+): TraceEvent {
+  const payloadOffset = pos + COMMON_HEADER_SIZE;
+  return {
+    kind: TraceEventKind.MemoryAllocEvent,
+    threadSlot,
+    tickNumber,
+    timestampUs,
+    direction: reader.readU8(payloadOffset),
+    sourceTag: reader.readU16(payloadOffset + 1),
+    // sizeBytes / totalAfterBytes are u64 on the wire. Using readI64AsNumber is safe here because realistic allocation sizes and running
+    // totals live well below 2^53 (we'd need a petabyte of RAM to overflow). If that assumption ever breaks, switch to a u64-as-double
+    // helper that masks the sign bit.
+    sizeBytes: reader.readI64AsNumber(payloadOffset + 3),
+    totalAfterBytes: reader.readI64AsNumber(payloadOffset + 11),
+  };
+}
+
+/**
+ * Decode a <c>PerTickSnapshot</c> record (kind 76). Wire layout after the 12-byte common header:
+ * <c>u32 tickNumber, u16 fieldCount, u32 flags, then repeated {u16 id, u8 valueKind, [4|8] bytes value}</c>. The record's embedded
+ * tickNumber is authoritative (from the scheduler's CurrentTickNumber at emit) — the caller's <c>currentTick</c> counter may lag or
+ * lead by a tick depending on where the snapshot landed relative to the TickStart/TickEnd markers, so we use the payload's value.
+ */
+function decodePerTickSnapshot(
+  reader: BinaryReader,
+  pos: number,
+  threadSlot: number,
+  timestampUs: number,
+): TraceEvent {
+  const prefixOffset = pos + COMMON_HEADER_SIZE;
+  const tickNumber = reader.readU32(prefixOffset);
+  const fieldCount = reader.readU16(prefixOffset + 4);
+  const flags = reader.readU32(prefixOffset + 6);
+
+  const gauges: Record<number, number> = {};
+  let offset = prefixOffset + 10;
+  for (let i = 0; i < fieldCount; i++) {
+    const id = reader.readU16(offset);
+    const valueKind = reader.readU8(offset + 2);
+    offset += 3;
+
+    // valueKind dispatch — matches GaugeValueKind on the server. Sizes must stay in sync with the codec.
+    let value: number;
+    switch (valueKind) {
+      case 0: // U32Count
+      case 3: // U32PercentHundredths
+        value = reader.readU32(offset);
+        offset += 4;
+        break;
+      case 1: // U64Bytes — safe as number up to 2^53 (petabyte scale)
+        value = reader.readI64AsNumber(offset);
+        offset += 8;
+        break;
+      case 2: // I64Signed — read as signed; sign is preserved by readI64AsNumber
+        value = reader.readI64AsNumber(offset);
+        offset += 8;
+        break;
+      default:
+        // Unknown value kind — stop walking this snapshot to avoid reading past the record. The partial gauges we've already collected stay in the DTO.
+        return { kind: TraceEventKind.PerTickSnapshot, threadSlot, tickNumber, timestampUs, flags, gauges };
+    }
+
+    gauges[id] = value;
+  }
+
+  return {
+    kind: TraceEventKind.PerTickSnapshot,
+    threadSlot,
+    tickNumber,
+    timestampUs,
+    flags,
+    gauges,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════

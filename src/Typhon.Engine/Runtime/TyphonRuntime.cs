@@ -23,7 +23,7 @@ namespace Typhon.Engine;
 /// </para>
 /// </remarks>
 [PublicAPI]
-public sealed class TyphonRuntime : IDisposable
+public sealed partial class TyphonRuntime : IDisposable
 {
     private readonly RuntimeOptions _options;
     private readonly ILogger _logger;
@@ -207,6 +207,13 @@ public sealed class TyphonRuntime : IDisposable
                 t.SubscriptionOverflowCount = _subscriptionOutputPhase.LastOverflowCount;
             }
         };
+
+        // Wire profiler gauge snapshot — only when gauges are enabled, so the callback pointer stays null otherwise and the scheduler's
+        // null-check is the only cost. See TyphonRuntime.GaugeSnapshot.cs for the collection + emit implementation.
+        if (TelemetryConfig.ProfilerGaugesActive)
+        {
+            Scheduler.GaugeSnapshotCallback = EmitGaugeSnapshotFromScheduler;
+        }
 
         Scheduler.OnCriticalOverloadCallback = () => OnCriticalOverload?.Invoke(this);
     }

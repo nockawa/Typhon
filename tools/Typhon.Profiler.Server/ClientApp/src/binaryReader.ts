@@ -69,4 +69,14 @@ export class BinaryReader {
     const high = BigInt(this.view.getInt32(offset + 4, true));
     return ((high << 32n) | low).toString();
   }
+
+  /**
+   * Decode a UTF-8 byte slice starting at <paramref name="offset"/> with <paramref name="byteLength"/> bytes. Uses a caller-provided
+   * <see cref="TextDecoder"/> so the hot path can reuse a single instance across calls. Returns the empty string if byteLength is 0.
+   */
+  readUtf8(offset: number, byteLength: number, decoder: TextDecoder): string {
+    if (byteLength <= 0) return '';
+    const bytes = new Uint8Array(this.view.buffer, this.view.byteOffset + offset, byteLength);
+    return decoder.decode(bytes);
+  }
 }

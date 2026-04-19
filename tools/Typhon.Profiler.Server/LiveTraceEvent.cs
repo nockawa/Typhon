@@ -109,4 +109,26 @@ public sealed class LiveTraceEvent
     public int? EntityCount { get; init; }
     public int? MutationCount { get; init; }
     public int? SamplingInterval { get; init; }
+
+    // Memory allocation (kind 9 — instant)
+    public int? Direction { get; init; }       // 0 = alloc, 1 = free (MemoryAllocDirection)
+    public int? SourceTag { get; init; }        // u16 interned tag (MemoryAllocSource)
+    public double? SizeBytes { get; init; }     // bytes for this alloc/free
+    public double? TotalAfterBytes { get; init; }  // running total after this op
+
+    // Per-tick gauge snapshot (kind 76 — instant-ish, tick-boundaried). Keys are GaugeId as u16 → double values. Fields absent for non-snapshot records.
+    public uint? Flags { get; init; }
+    public System.Collections.Generic.Dictionary<int, double> Gauges { get; init; }
+
+    // GC events (kinds 7, 8 — instant). Triangle markers on the GC gauge track, colored by generation.
+    public int? Generation { get; init; }
+    public int? GcReason { get; init; }
+    public int? GcType { get; init; }
+    public uint? GcCount { get; init; }
+    public double? GcPauseDurationUs { get; init; }
+    public double? GcPromotedBytes { get; init; }
+
+    // Thread info (kind 77 — instant). Emitted once when a thread claims its slot; the viewer aggregates these into a slot→name map for lane labels.
+    public int? ManagedThreadId { get; init; }
+    public string ThreadName { get; init; }
 }

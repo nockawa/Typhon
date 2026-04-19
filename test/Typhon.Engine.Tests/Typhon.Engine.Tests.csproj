@@ -39,6 +39,18 @@
         <ProjectReference Include="..\..\src\Typhon.Profiler\Typhon.Profiler.csproj" />
     </ItemGroup>
 
+    <!-- Pull in the profiler server's RecordDecoder + LiveTraceEvent as compile items so tests can exercise the match-arm dispatch without
+         forcing the Web SDK + ASP.NET framework reference chain that a <ProjectReference> to Typhon.Profiler.Server would drag in. The
+         source files have no ASP.NET dependencies — they only reference Typhon.Engine.Profiler types. -->
+    <ItemGroup>
+        <Compile Include="..\..\tools\Typhon.Profiler.Server\RecordDecoder.cs">
+            <Link>Profiler\Server\RecordDecoder.cs</Link>
+        </Compile>
+        <Compile Include="..\..\tools\Typhon.Profiler.Server\LiveTraceEvent.cs">
+            <Link>Profiler\Server\LiveTraceEvent.cs</Link>
+        </Compile>
+    </ItemGroup>
+
     <ItemGroup>
         <!-- Test-only telemetry config: enables ProfilerActive so producer tests can exercise the on-path -->
         <Content Include="typhon.telemetry.json">

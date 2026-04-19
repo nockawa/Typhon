@@ -234,6 +234,45 @@ public static class TelemetryConfig
     /// </remarks>
     public static readonly bool ProfilerActive;
 
+    /// <summary>
+    /// Whether opt-in .NET runtime GC-event tracing is requested by configuration. Raw flag — use <see cref="ProfilerGcTracingActive"/>
+    /// for the combined gate that also requires the global and profiler master switches.
+    /// </summary>
+    public static readonly bool ProfilerGcTracingEnabled;
+
+    /// <summary>
+    /// Combined flag: true only if <see cref="Enabled"/>, <see cref="ProfilerEnabled"/>, AND <see cref="ProfilerGcTracingEnabled"/> are all set.
+    /// Read once by <c>TyphonProfiler.Start</c> to decide whether to subscribe the <see cref="System.Diagnostics.Tracing.EventListener"/> and
+    /// spin up the GC ingestion thread. When <c>false</c>, none of the GC-tracing machinery is constructed.
+    /// </summary>
+    public static readonly bool ProfilerGcTracingActive;
+
+    /// <summary>
+    /// Whether opt-in per-allocation tracking is requested by configuration. Raw flag — use <see cref="ProfilerMemoryAllocationsActive"/>
+    /// for the combined gate.
+    /// </summary>
+    public static readonly bool ProfilerMemoryAllocationsEnabled;
+
+    /// <summary>
+    /// Combined flag: true only if <see cref="Enabled"/>, <see cref="ProfilerEnabled"/>, AND <see cref="ProfilerMemoryAllocationsEnabled"/> are set.
+    /// Gates emission of <c>TraceEventKind.MemoryAllocEvent</c> from <c>PinnedMemoryBlock</c> construct/dispose. When <c>false</c>, the JIT
+    /// folds the emission branch into dead code on Tier 1 compilation — zero cost at the call site.
+    /// </summary>
+    public static readonly bool ProfilerMemoryAllocationsActive;
+
+    /// <summary>
+    /// Whether opt-in per-tick gauge snapshots are requested by configuration. Raw flag — use <see cref="ProfilerGaugesActive"/> for the
+    /// combined gate.
+    /// </summary>
+    public static readonly bool ProfilerGaugesEnabled;
+
+    /// <summary>
+    /// Combined flag: true only if <see cref="Enabled"/>, <see cref="ProfilerEnabled"/>, AND <see cref="ProfilerGaugesEnabled"/> are set.
+    /// Gates emission of <c>TraceEventKind.PerTickSnapshot</c> from the scheduler's end-of-tick telemetry phase and all gauge-reading work
+    /// (page cache bucketing walk, GC memory-info sampling, counter reads). When <c>false</c>, the entire chain is dead code at Tier 1.
+    /// </summary>
+    public static readonly bool ProfilerGaugesActive;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // CONFIGURATION SOURCE TRACKING (for diagnostics)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -306,6 +345,21 @@ public static class TelemetryConfig
         var profilerSection = section.GetSection("Profiler");
         ProfilerEnabled = profilerSection.GetValue("Enabled", false);
         ProfilerActive = Enabled && ProfilerEnabled;
+
+        // Profiler — opt-in GC event tracing (.NET runtime GC events → typed-event pipeline)
+        var gcTracingSection = profilerSection.GetSection("GcTracing");
+        ProfilerGcTracingEnabled = gcTracingSection.GetValue("Enabled", false);
+        ProfilerGcTracingActive = ProfilerActive && ProfilerGcTracingEnabled;
+
+        // Profiler — opt-in per-allocation tracking (PinnedMemoryBlock alloc/free → MemoryAllocEvent)
+        var memAllocSection = profilerSection.GetSection("MemoryAllocations");
+        ProfilerMemoryAllocationsEnabled = memAllocSection.GetValue("Enabled", false);
+        ProfilerMemoryAllocationsActive = ProfilerActive && ProfilerMemoryAllocationsEnabled;
+
+        // Profiler — opt-in per-tick gauge snapshots (scheduler end-of-tick → PerTickSnapshot)
+        var gaugesSection = profilerSection.GetSection("Gauges");
+        ProfilerGaugesEnabled = gaugesSection.GetValue("Enabled", false);
+        ProfilerGaugesActive = ProfilerActive && ProfilerGaugesEnabled;
     }
 
     private static (IConfiguration config, string loadedPath) BuildConfiguration()
@@ -394,7 +448,9 @@ public static class TelemetryConfig
              WorkerUtilization={SchedulerTrackWorkerUtilization}, StragglerGap={SchedulerTrackStragglerGap}
 
            Profiler: Active={ProfilerActive}
-             Enabled={ProfilerEnabled}
+             Enabled={ProfilerEnabled}, GcTracing={ProfilerGcTracingEnabled} (Active={ProfilerGcTracingActive}),
+             MemoryAllocations={ProfilerMemoryAllocationsEnabled} (Active={ProfilerMemoryAllocationsActive}),
+             Gauges={ProfilerGaugesEnabled} (Active={ProfilerGaugesActive})
          """;
 
     /// <summary>
@@ -435,7 +491,20 @@ public static class TelemetryConfig
 
         if (ProfilerActive)
         {
-            active.Add("Profiler");
+            var suffix = new System.Collections.Generic.List<string>();
+            if (ProfilerGcTracingActive)
+            {
+                suffix.Add("GcTracing");
+            }
+            if (ProfilerMemoryAllocationsActive)
+            {
+                suffix.Add("MemoryAllocations");
+            }
+            if (ProfilerGaugesActive)
+            {
+                suffix.Add("Gauges");
+            }
+            active.Add(suffix.Count > 0 ? $"Profiler+{string.Join("+", suffix)}" : "Profiler");
         }
 
         return active.Count > 0 ? $"Telemetry: Enabled [{string.Join(", ", active)}]" : "Telemetry: Enabled (no components active)";

@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Typhon.Engine.Profiler;
 
@@ -29,8 +30,8 @@ namespace Typhon.Engine.Profiler;
 public static class TyphonEvent
 {
     /// <summary>Innermost open Typhon span on this thread. Captured in the <c>Begin*</c> factories as the new span's <c>ParentSpanId</c>.</summary>
-    [ThreadStatic]
-    internal static ulong CurrentOpenSpanId;
+    [ThreadStatic] 
+    private static ulong CurrentOpenSpanId;
 
     /// <summary>Per-thread opt-out flag for <see cref="Activity.Current"/> capture.</summary>
     [ThreadStatic]
@@ -1033,6 +1034,21 @@ public static class TyphonEvent
         slot.Buffer.Publish();
     }
 
+    /// <summary>
+    /// Diagnostic counters for <see cref="EmitTickStart"/> drop paths. Incremented on every path that would silently discard a
+    /// TickStart record — slot unavailable (registry full), ring reserve failure (buffer full). Inspected post-mortem via
+    /// <see cref="TickStartDroppedNoSlot"/> / <see cref="TickStartDroppedRingFull"/>. Non-zero values in either counter on a run
+    /// that emitted N ticks but has N-1 TickStart records in the trace directly identify where the loss happened.
+    /// </summary>
+    private static long STickStartDroppedNoSlot;
+    private static long STickStartDroppedRingFull;
+
+    /// <summary>Count of TickStart emissions dropped because the thread could not claim a slot (registry full).</summary>
+    public static long TickStartDroppedNoSlot => STickStartDroppedNoSlot;
+
+    /// <summary>Count of TickStart emissions dropped because the producer ring was full at reserve time.</summary>
+    public static long TickStartDroppedRingFull => STickStartDroppedRingFull;
+
     /// <summary>Scheduler-internal: emit an instant <see cref="TraceEventKind.TickStart"/> marker.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void EmitTickStart(long timestamp)
@@ -1045,12 +1061,14 @@ public static class TyphonEvent
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
         if (slotIdx < 0)
         {
+            Interlocked.Increment(ref STickStartDroppedNoSlot);
             return;
         }
 
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
         if (!ring.TryReserve(TraceRecordHeader.CommonHeaderSize, out var dst))
         {
+            Interlocked.Increment(ref STickStartDroppedRingFull);
             return;
         }
 
@@ -1161,6 +1179,236 @@ public static class TyphonEvent
         InstantEventCodec.WriteSystemReady(dst, (byte)slotIdx, timestamp, systemIdx, predecessorCount, out _);
         ring.Publish();
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // GC-ingestion-internal emit helpers (called only by GcIngestionThread —
+    // slot is owned by the caller, not looked up per call)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// GC-ingestion-internal: emit a <see cref="TraceEventKind.GcStart"/> instant record. The caller's <paramref name="slot"/> must be the
+    /// ingestion thread's own claimed slot — preserving the per-slot SPSC invariant without any locking on the ring itself.
+    /// </summary>
+    /// <remarks>
+    /// Does not participate in the <c>CurrentOpenSpanId</c> parent-linking scheme — GC events are process-level and independent of any ambient
+    /// Typhon span. Does not read <c>Activity.Current</c> either.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void EmitGcStart(byte slot, long timestamp, byte generation, byte reason, byte type, uint count)
+    {
+        if (!TelemetryConfig.ProfilerActive)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slot).Buffer;
+        if (ring == null || !ring.TryReserve(GcInstantEventCodec.GcStartSize, out var dst))
+        {
+            return;
+        }
+        GcInstantEventCodec.WriteGcStart(dst, slot, timestamp, generation, (GcReason)reason, (GcType)type, count, out _);
+        ring.Publish();
+    }
+
+    /// <summary>
+    /// GC-ingestion-internal: emit a <see cref="TraceEventKind.GcEnd"/> instant record carrying the per-gen heap-size snapshot produced by
+    /// <see cref="GC.GetGCMemoryInfo()"/> on the caller side.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void EmitGcEnd(byte slot, long timestamp,
+        byte generation, uint count, long pauseDurationTicks, ulong promotedBytes,
+        ulong gen0SizeAfter, ulong gen1SizeAfter, ulong gen2SizeAfter, ulong lohSizeAfter, ulong pohSizeAfter,
+        ulong totalCommittedBytes)
+    {
+        if (!TelemetryConfig.ProfilerActive)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slot).Buffer;
+        if (ring == null || !ring.TryReserve(GcInstantEventCodec.GcEndSize, out var dst))
+        {
+            return;
+        }
+        GcInstantEventCodec.WriteGcEnd(dst, slot, timestamp, generation, count, pauseDurationTicks, promotedBytes,
+            gen0SizeAfter, gen1SizeAfter, gen2SizeAfter, lohSizeAfter, pohSizeAfter, totalCommittedBytes, out _);
+        ring.Publish();
+    }
+
+    /// <summary>
+    /// GC-ingestion-internal: emit a <see cref="TraceEventKind.GcSuspension"/> span covering the window from <c>GCSuspendEEBegin</c> to
+    /// <c>GCRestartEEEnd</c>. SpanId is allocated from the ingestion thread's slot generator; <c>ParentSpanId = 0</c> (process-level).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void EmitGcSuspension(byte slot, long startTimestamp, long endTimestamp, byte reason)
+    {
+        if (!TelemetryConfig.ProfilerActive)
+        {
+            return;
+        }
+        var threadSlot = ThreadSlotRegistry.GetSlot(slot);
+        var ring = threadSlot.Buffer;
+        if (ring == null || !ring.TryReserve(GcSuspensionEventCodec.Size, out var dst))
+        {
+            return;
+        }
+        var spanId = SpanIdGenerator.NextId(slot, threadSlot);
+        GcSuspensionEventCodec.Write(dst, slot, startTimestamp, endTimestamp, spanId, parentSpanId: 0, (GcSuspendReason)reason, out _);
+        ring.Publish();
+    }
+
+    /// <summary>
+    /// Emit a <see cref="TraceEventKind.ThreadInfo"/> instant record carrying the slot's managed thread ID and UTF-8 name. Called once by
+    /// <c>ThreadSlotRegistry.AssignClaim</c> from the claiming thread immediately after the claim completes, so the record lands in that
+    /// thread's own slot (single-producer invariant preserved). The viewer uses these records to label lanes with real thread names.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void EmitThreadInfo(byte slot, int managedThreadId, string name)
+    {
+        if (!TelemetryConfig.ProfilerActive)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slot).Buffer;
+        if (ring == null)
+        {
+            return;
+        }
+
+        // Encode the name to a stack buffer sized for typical thread-name lengths (e.g., "TyphonProfilerConsumer" = 22 B). If the name
+        // somehow exceeds 256 B, fall back to ArrayPool — still no GC pressure on the hot path that matters (this is slot claim, not span).
+        ReadOnlySpan<char> nameSpan = name ?? string.Empty;
+        Span<byte> nameBuf = stackalloc byte[256];
+        int byteCount;
+        if (System.Text.Encoding.UTF8.GetByteCount(nameSpan) <= nameBuf.Length)
+        {
+            byteCount = System.Text.Encoding.UTF8.GetBytes(nameSpan, nameBuf);
+            EmitThreadInfoCore(ring, slot, managedThreadId, nameBuf[..byteCount]);
+        }
+        else
+        {
+            var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(System.Text.Encoding.UTF8.GetMaxByteCount(nameSpan.Length));
+            try
+            {
+                byteCount = System.Text.Encoding.UTF8.GetBytes(nameSpan, rented);
+                EmitThreadInfoCore(ring, slot, managedThreadId, rented.AsSpan(0, byteCount));
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EmitThreadInfoCore(TraceRecordRing ring, byte slot, int managedThreadId, ReadOnlySpan<byte> nameUtf8)
+    {
+        var size = ThreadInfoEventCodec.ComputeSize(nameUtf8.Length);
+        if (!ring.TryReserve(size, out var dst))
+        {
+            return;
+        }
+        ThreadInfoEventCodec.WriteThreadInfo(dst, slot, Stopwatch.GetTimestamp(), managedThreadId, nameUtf8, out _);
+        ring.Publish();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Memory allocation / gauge snapshot — called from MemoryAllocator and DagScheduler
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Emit a <see cref="TraceEventKind.MemoryAllocEvent"/> instant record. Called from <c>MemoryAllocator.AllocatePinned</c> /
+    /// <c>AllocateArray</c> (direction=<see cref="MemoryAllocDirection.Alloc"/>) and <c>MemoryAllocator.Remove</c>
+    /// (direction=<see cref="MemoryAllocDirection.Free"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Gated on <see cref="TelemetryConfig.ProfilerMemoryAllocationsActive"/> (separate knob from the master profiler gate) so operators can run
+    /// the profiler for span tracing without paying per-alloc event cost. The first line's <c>if (!active) return</c> dead-code-eliminates
+    /// in Tier 1 JIT when the flag is off.
+    /// </para>
+    /// <para>
+    /// Runs on whichever thread allocates/frees — claims that thread's own ring slot, preserving the per-slot SPSC invariant.
+    /// </para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitMemoryAlloc(MemoryAllocDirection direction, ushort sourceTag, ulong sizeBytes, ulong totalAfterBytes)
+    {
+        if (!TelemetryConfig.ProfilerMemoryAllocationsActive)
+        {
+            return;
+        }
+
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(MemoryAllocEventCodec.EventSize, out var dst))
+        {
+            return;
+        }
+
+        MemoryAllocEventCodec.WriteMemoryAllocEvent(dst, (byte)slotIdx, Stopwatch.GetTimestamp(),
+            direction, sourceTag, sizeBytes, totalAfterBytes, out _);
+        ring.Publish();
+    }
+
+    /// <summary>
+    /// Emit a <see cref="TraceEventKind.PerTickSnapshot"/> record carrying the caller-collected gauge values. Intended single caller:
+    /// <c>DagScheduler</c> at end-of-tick, running on the scheduler thread.
+    /// </summary>
+    /// <remarks>
+    /// Gated on <see cref="TelemetryConfig.ProfilerGaugesActive"/>. The caller is expected to prepare <paramref name="values"/> as a
+    /// <c>stackalloc</c> buffer — no allocation on the hot path. Snapshot size is variable; the codec computes total wire size from the
+    /// value list before claiming ring space.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitPerTickSnapshot(uint tickNumber, long timestamp, uint flags, ReadOnlySpan<GaugeValue> values)
+    {
+        if (!TelemetryConfig.ProfilerGaugesActive)
+        {
+            Interlocked.Increment(ref SSnapshotSkippedGaugesInactive);
+            return;
+        }
+
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            Interlocked.Increment(ref SSnapshotSkippedNoSlot);
+            return;
+        }
+
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null)
+        {
+            Interlocked.Increment(ref SSnapshotSkippedNullRing);
+            return;
+        }
+
+        var size = PerTickSnapshotEventCodec.ComputeSize(values);
+        if (!ring.TryReserve(size, out var dst))
+        {
+            Interlocked.Increment(ref SSnapshotSkippedRingFull);
+            return;
+        }
+
+        PerTickSnapshotEventCodec.WritePerTickSnapshot(dst, (byte)slotIdx, timestamp, tickNumber, flags, values, out _);
+        ring.Publish();
+        Interlocked.Increment(ref SSnapshotPublished);
+    }
+
+    private static long SSnapshotPublished;
+    private static long SSnapshotSkippedGaugesInactive;
+    private static long SSnapshotSkippedNoSlot;
+    private static long SSnapshotSkippedNullRing;
+    private static long SSnapshotSkippedRingFull;
+
+    public static long SnapshotPublished => SSnapshotPublished;
+    public static long SnapshotSkippedGaugesInactive => SSnapshotSkippedGaugesInactive;
+    public static long SnapshotSkippedNoSlot => SSnapshotSkippedNoSlot;
+    public static long SnapshotSkippedNullRing => SSnapshotSkippedNullRing;
+    public static long SnapshotSkippedRingFull => SSnapshotSkippedRingFull;
 
     /// <summary>Scheduler-internal: emit a <see cref="TraceEventKind.SystemSkipped"/> marker.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

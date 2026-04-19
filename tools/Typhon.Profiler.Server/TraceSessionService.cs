@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using Typhon.Profiler;
 
@@ -51,16 +52,23 @@ public sealed class TraceSessionService
         var slot = _sessions.GetOrAdd(sourcePath, _ => new SessionSlot());
 
         // Double-checked open — fast path reads the already-built reader; slow path locks + builds.
-        if (slot.Reader != null && IsFreshFast(slot, sourcePath))
+        //
+        // Capture `slot.Reader` into a local before the check-and-use pattern. Without this, a concurrent <see cref="Invalidate"/>
+        // call could null out `slot.Reader` between the null-check and the return, handing the caller either null or a
+        // just-disposed reader. Capturing once makes the fast path atomic from the perspective of a single caller.
+        var fastReader = slot.Reader;
+        if (fastReader != null && IsFreshFast(slot, sourcePath))
         {
-            return slot.Reader;
+            return fastReader;
         }
 
         lock (slot.Lock)
         {
-            if (slot.Reader != null && IsFreshFast(slot, sourcePath))
+            // Re-check under the lock — same capture pattern, now protected against Invalidate for the duration of this call.
+            var slowReader = slot.Reader;
+            if (slowReader != null && IsFreshFast(slot, sourcePath))
             {
-                return slot.Reader;
+                return slowReader;
             }
 
             // Dispose any stale reader before rebuilding.
@@ -128,6 +136,7 @@ public sealed class TraceSessionService
             {
                 slot.Reader?.Dispose();
                 slot.Reader = null;
+                slot.CachedGcSuspensions = null;
             }
         }
     }
@@ -190,6 +199,97 @@ public sealed class TraceSessionService
         }
     }
 
+    /// <summary>
+    /// Return the full list of GC-suspension records for a trace, computed once per session and cached. Used by /api/trace/open to hand
+    /// the client a complete, stable suspension list at open time — so the client's per-tick pause-time bar chart uses a yMax that
+    /// doesn't fluctuate as individual chunks are loaded and LRU-evicted. Each record's start/duration is converted to microseconds
+    /// relative to <paramref name="baselineQpc"/> using <paramref name="timestampFrequency"/> (ticks-per-second).
+    /// </summary>
+    public IReadOnlyList<GcSuspensionDto> GetOrComputeGcSuspensions(string sourcePath, long baselineQpc, long timestampFrequency)
+    {
+        if (!_sessions.TryGetValue(sourcePath, out var slot)) return Array.Empty<GcSuspensionDto>();
+        // Fast path — double-checked: unlock read, lock only on cache miss. Same pattern as GetOrBuild.
+        var fast = slot.CachedGcSuspensions;
+        if (fast != null) return fast;
+        lock (slot.Lock)
+        {
+            var slow = slot.CachedGcSuspensions;
+            if (slow != null) return slow;
+            var reader = slot.Reader;
+            if (reader == null || timestampFrequency <= 0) return Array.Empty<GcSuspensionDto>();
+
+            var result = new List<GcSuspensionDto>();
+            // ArrayPool rental for decompression scratch — chunks are bounded at TraceFileCacheConstants.ByteCap = 1 MiB compressed,
+            // and the uncompressed is a small multiple. Take the largest cache entry's uncompressed bytes as the scratch size.
+            var maxCompressed = 0;
+            var maxUncompressed = 0;
+            foreach (var entry in reader.ChunkManifest)
+            {
+                if ((int)entry.CacheByteLength > maxCompressed) maxCompressed = (int)entry.CacheByteLength;
+                if ((int)entry.UncompressedBytes > maxUncompressed) maxUncompressed = (int)entry.UncompressedBytes;
+            }
+            if (maxUncompressed == 0) return Array.Empty<GcSuspensionDto>();
+
+            var compressedScratch = System.Buffers.ArrayPool<byte>.Shared.Rent(maxCompressed);
+            var uncompressedScratch = System.Buffers.ArrayPool<byte>.Shared.Rent(maxUncompressed);
+            try
+            {
+                foreach (var entry in reader.ChunkManifest)
+                {
+                    var compSpan = compressedScratch.AsSpan(0, (int)entry.CacheByteLength);
+                    var uncompSpan = uncompressedScratch.AsSpan(0, (int)entry.UncompressedBytes);
+                    reader.DecompressChunk(entry, uncompSpan, compSpan);
+                    WalkRecordsForSuspensions(uncompSpan, baselineQpc, timestampFrequency, result);
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(compressedScratch);
+                System.Buffers.ArrayPool<byte>.Shared.Return(uncompressedScratch);
+            }
+
+            // Sort by startUs — client's per-tick bucketing walk assumes sorted input. In practice suspensions are already roughly
+            // sorted because chunks are emitted in tick order, but an explicit sort is cheap and defensive.
+            result.Sort((a, b) => a.StartUs.CompareTo(b.StartUs));
+            slot.CachedGcSuspensions = result;
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Walk a decompressed chunk's record stream, decoding only <see cref="Typhon.Engine.Profiler.TraceEventKind.GcSuspension"/> records
+    /// and appending each to <paramref name="sink"/>. All other record kinds are skipped via the u16 size prefix — no per-record full
+    /// decode needed.
+    /// </summary>
+    private static void WalkRecordsForSuspensions(
+        ReadOnlySpan<byte> records,
+        long baselineQpc,
+        long timestampFrequency,
+        List<GcSuspensionDto> sink)
+    {
+        var pos = 0;
+        while (pos + 3 <= records.Length)
+        {
+            var size = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(records[pos..]);
+            if (size == 0 || size == 0xFFFF) break;  // empty slot / wrap sentinel — shouldn't happen in cache but defensive
+            if (pos + size > records.Length) break;
+            var kind = (Typhon.Engine.Profiler.TraceEventKind)records[pos + 2];
+            if (kind == Typhon.Engine.Profiler.TraceEventKind.GcSuspension)
+            {
+                var data = Typhon.Engine.Profiler.GcSuspensionEventCodec.Decode(records.Slice(pos, size));
+                // Convert Stopwatch ticks → µs. Multiply before divide to preserve precision against QPC frequencies that don't evenly
+                // divide 1e6 (most desktop CPUs report 10_000_000 which divides cleanly, but guard anyway).
+                var startUs = (data.StartTimestamp - baselineQpc) * 1_000_000L / timestampFrequency;
+                var durationUs = data.DurationTicks * 1_000_000L / timestampFrequency;
+                sink.Add(new GcSuspensionDto(startUs, durationUs, data.ThreadSlot));
+            }
+            pos += size;
+        }
+    }
+
+    /// <summary>Serializable DTO for one GC-suspension event. Used only for /api/trace/open's gcSuspensions payload.</summary>
+    public readonly record struct GcSuspensionDto(long StartUs, long DurationUs, byte ThreadSlot);
+
     private sealed class SessionSlot
     {
         public readonly object Lock = new();
@@ -200,5 +300,10 @@ public sealed class TraceSessionService
         public long CachedSourceMTimeTicks;
         /// <summary>Source file's TimestampFrequency — cached so /api/trace/chunk-binary doesn't re-open the source per request.</summary>
         public long CachedTimestampFrequency;
+        /// <summary>
+        /// Full suspension list for this trace, computed once per session and handed to clients via /api/trace/open. Null until first
+        /// /open call that triggers the computation. Nulled out alongside Reader when <see cref="Invalidate"/> fires.
+        /// </summary>
+        public IReadOnlyList<GcSuspensionDto> CachedGcSuspensions;
     }
 }

@@ -3,7 +3,16 @@
     "Telemetry": {
       "Enabled": true,
       "Profiler": {
-        "Enabled": true
+        "Enabled": true,
+        "GcTracing": {
+          "Enabled": true
+        },
+        "MemoryAllocations": {
+          "Enabled": true
+        },
+        "Gauges": {
+          "Enabled": true
+        }
       }
     }
   }

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'preact/hooks';
-import type { ProcessedTrace, ChunkSpan, SpanData } from './traceModel';
+import type { ProcessedTrace, ChunkSpan, SpanData, MarkerSelection } from './traceModel';
 import type { TimeRange } from './uiTypes';
 import type { NavHistory } from './useNavHistory';
 import { GraphArea } from './GraphArea';
@@ -15,14 +15,23 @@ interface WorkspaceProps {
   onChunkSelect: (chunk: ChunkSpan | null) => void;
   selectedSpan: SpanData | null;
   onSpanSelect: (span: SpanData | null) => void;
+  selectedMarker: MarkerSelection | null;
+  onMarkerSelect: (marker: MarkerSelection | null) => void;
   navHistory: NavHistory;
+  /** View-menu toggles — passed through verbatim to <see cref="GraphArea"/>. */
+  gaugeRegionVisible: boolean;
+  legendsVisible: boolean;
+  /** Gutter-width callback forwarded to <see cref="GraphArea"/>. Lets the App align sibling canvases (TickTimeline "?" glyph). */
+  onGutterWidthChange?: (gutterWidth: number) => void;
+  /** Chunk-cache ref forwarded to <see cref="GraphArea"/> so the debug line can report live RAM + OPFS usage. */
+  chunkCacheRef?: { current: import('./chunkCache').ChunkCacheState | null };
 }
 
 const MIN_DETAIL_WIDTH = 200;
 const MAX_DETAIL_WIDTH = 600;
 const DEFAULT_DETAIL_WIDTH = 280;
 
-export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, selectedChunk, onChunkSelect, selectedSpan, onSpanSelect, navHistory }: WorkspaceProps) {
+export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, selectedChunk, onChunkSelect, selectedSpan, onSpanSelect, selectedMarker, onMarkerSelect, navHistory, gaugeRegionVisible, legendsVisible, onGutterWidthChange, chunkCacheRef }: WorkspaceProps) {
   const [detailOpen, setDetailOpen] = useState(true);
   const [detailWidth, setDetailWidth] = useState(DEFAULT_DETAIL_WIDTH);
   const isDraggingRef = useRef(false);
@@ -56,13 +65,14 @@ export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, sele
     setDetailOpen(false);
     onChunkSelect(null);
     onSpanSelect(null);
-  }, [onChunkSelect, onSpanSelect]);
+    onMarkerSelect(null);
+  }, [onChunkSelect, onSpanSelect, onMarkerSelect]);
 
   useEffect(() => {
-    if ((selectedChunk || selectedSpan) && !detailOpen) {
+    if ((selectedChunk || selectedSpan || selectedMarker) && !detailOpen) {
       setDetailOpen(true);
     }
-  }, [selectedChunk, selectedSpan, detailOpen]);
+  }, [selectedChunk, selectedSpan, selectedMarker, detailOpen]);
 
   return (
     <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -76,7 +86,12 @@ export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, sele
           onChunkSelect={onChunkSelect}
           selectedSpan={selectedSpan}
           onSpanSelect={onSpanSelect}
+          onMarkerSelect={onMarkerSelect}
           navHistory={navHistory}
+          gaugeRegionVisible={gaugeRegionVisible}
+          legendsVisible={legendsVisible}
+          onGutterWidthChange={onGutterWidthChange}
+          chunkCacheRef={chunkCacheRef}
         />
       </div>
 
@@ -95,6 +110,7 @@ export function Workspace({ trace, tracePath, viewRange, onViewRangeChange, sele
             <DetailPane
               chunk={selectedChunk}
               span={selectedSpan}
+              marker={selectedMarker}
               systems={trace.metadata.systems}
               onClose={handleClose}
             />

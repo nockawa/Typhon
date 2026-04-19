@@ -2,6 +2,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 
 namespace Typhon.Engine.Profiler;
 
@@ -53,6 +54,14 @@ internal sealed class ProfilerConsumerThread : HighResolutionTimerServiceBase
     private readonly List<IProfilerExporter> _exporters;
     private long _nextTick;
     private bool _selfOptOutDone;
+    private long _batchesFannedOut;
+    private long _recordsFannedOut;
+
+    /// <summary>Diagnostic: total batches FanOut has produced (each batch is enqueued to every exporter's queue).</summary>
+    public long BatchesFannedOut => _batchesFannedOut;
+
+    /// <summary>Diagnostic: total records written into batches so far.</summary>
+    public long RecordsFannedOut => _recordsFannedOut;
 
     /// <summary>The exporter list this consumer fans out to. Mutated only at <c>TyphonProfiler.Start/Stop</c>, so iteration is lock-free.</summary>
     public List<IProfilerExporter> Exporters => _exporters;
@@ -235,6 +244,8 @@ internal sealed class ProfilerConsumerThread : HighResolutionTimerServiceBase
 
     private void FanOut(TraceRecordBatch batch, int exporterCount)
     {
+        Interlocked.Increment(ref _batchesFannedOut);
+        Interlocked.Add(ref _recordsFannedOut, batch.Count);
         for (var e = 0; e < exporterCount; e++)
         {
             _exporters[e].Queue.TryEnqueue(batch);
@@ -251,13 +262,112 @@ internal sealed class ProfilerConsumerThread : HighResolutionTimerServiceBase
     /// Final-drain hook called by <c>TyphonProfiler.Stop</c> after <see cref="StopTimer"/>. Drains any remaining records and completes each
     /// exporter queue so the exporter threads' foreach loops terminate.
     /// </summary>
+    /// <remarks>
+    /// <b>Why a loop:</b> a single <see cref="DrainAndFanOut"/> pass drains as many records as fit in <c>_mergeScratch</c> (typ. 500 KB). On
+    /// shutdown from a bursty workload (e.g., checkpoint-after-spawn) a single slot can hold more than that — the tail stays in the ring and is
+    /// lost when <see cref="Dispose"/> tears the slots down. Looping until every producer ring reports <c>IsEmpty</c> (bounded by a large safety
+    /// cap to prevent runaway if a producer somehow writes after <c>GcTracingHost.Dispose</c> + <c>StopTimer</c>) captures the full tail.
+    /// </remarks>
     internal void FinalDrainAndComplete()
     {
-        DrainAndFanOut();
+        const int maxDrainPasses = 256;
+        int passes = 0;
+        long prevPendingBytes = CountPendingBytesAcrossSlots();
+        long zeroProgressPasses = 0;
+
+        for (var pass = 0; pass < maxDrainPasses; pass++)
+        {
+            DrainAndFanOut();
+            passes++;
+            if (AllSlotsEmpty())
+            {
+                break;
+            }
+            var curPendingBytes = CountPendingBytesAcrossSlots();
+            if (curPendingBytes >= prevPendingBytes)
+            {
+                zeroProgressPasses++;
+            }
+            prevPendingBytes = curPendingBytes;
+        }
+        FinalDrainPasses = passes;
+        FinalDrainZeroProgressPasses = zeroProgressPasses;
+        FinalDrainPendingBytes = CountPendingBytesAcrossSlots();
+
         foreach (var exporter in _exporters)
         {
             exporter.Queue.CompleteAdding();
         }
+    }
+
+    public long FinalDrainPasses { get; private set; }
+
+    public long FinalDrainZeroProgressPasses { get; private set; }
+
+    public long FinalDrainPendingBytes { get; private set; }
+
+    private static long CountPendingBytesAcrossSlots()
+    {
+        long total = 0;
+        var scanLimit = ThreadSlotRegistry.HighWaterMark;
+        for (var i = 0; i < scanLimit; i++)
+        {
+            var state = ThreadSlotRegistry.GetSlotState(i);
+            if (state != (int)SlotState.Active && state != (int)SlotState.Retiring)
+            {
+                continue;
+            }
+            var buffer = ThreadSlotRegistry.GetSlot(i).Buffer;
+            if (buffer != null)
+            {
+                total += buffer.BytesPending;
+            }
+        }
+        return total;
+    }
+
+    /// <summary>Diagnostic: dump per-slot state + pending bytes. Called at shutdown when FinalDrain couldn't empty the rings.</summary>
+    public static string DumpSlotStates()
+    {
+        var sb = new System.Text.StringBuilder();
+        var hwm = ThreadSlotRegistry.HighWaterMark;
+        sb.Append($"HWM={hwm}");
+        for (var i = 0; i < hwm; i++)
+        {
+            var state = ThreadSlotRegistry.GetSlotState(i);
+            var buffer = ThreadSlotRegistry.GetSlot(i).Buffer;
+            var pending = buffer?.BytesPending ?? 0;
+            var stateName = state switch { 0 => "Free", 1 => "Active", 2 => "Retiring", _ => state.ToString() };
+            sb.Append($" [slot{i}:{stateName} pending={pending}");
+            if (buffer != null && pending > 0)
+            {
+                sb.Append($" {buffer.DumpAtTail(24)}");
+            }
+            sb.Append(']');
+        }
+        return sb.ToString();
+    }
+
+
+    /// <summary>Returns <c>true</c> iff every active/retiring slot's ring has no pending records.</summary>
+    private static bool AllSlotsEmpty()
+    {
+        var scanLimit = ThreadSlotRegistry.HighWaterMark;
+        for (var i = 0; i < scanLimit; i++)
+        {
+            var state = ThreadSlotRegistry.GetSlotState(i);
+            if (state != (int)SlotState.Active && state != (int)SlotState.Retiring)
+            {
+                continue;
+            }
+            var slot = ThreadSlotRegistry.GetSlot(i);
+            var buffer = slot.Buffer;
+            if (buffer != null && !buffer.IsEmpty)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
 }

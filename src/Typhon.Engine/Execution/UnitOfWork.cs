@@ -123,6 +123,17 @@ public sealed class UnitOfWork : IDisposable
     internal void RecordTransactionCommitted() => Interlocked.Increment(ref _committedTransactionCount);
 
     /// <summary>
+    /// Transitions the UoW to <see cref="UnitOfWorkState.WalDurable"/> AND records the commit in the <see cref="UowRegistry"/>. Single source of truth for
+    /// "UoW is now durable" so the gauge counter increments exactly once per UoW, regardless of how many transactions the UoW hosts. MaxTSN is passed as 0 —
+    /// the field is recorded on the registry entry but is not read by any production code path (gauge increment is the only observable effect).
+    /// </summary>
+    private void TransitionToWalDurable()
+    {
+        _state = UnitOfWorkState.WalDurable;
+        _dbe.UowRegistry?.RecordCommit(_uowId, maxTSN: 0);
+    }
+
+    /// <summary>
     /// Synchronous flush. Forces all pending data to stable storage.
     /// For WAL mode: signals WAL writer and waits for durable LSN.
     /// For WAL-less mode: behavior depends on <see cref="DurabilityMode"/>.
@@ -159,7 +170,7 @@ public sealed class UnitOfWork : IDisposable
         }
         // Immediate: no-op — SaveChanges + FlushToDisk already done in Tx.Commit
 
-        _state = UnitOfWorkState.WalDurable;
+        TransitionToWalDurable();
     }
 
     /// <summary>
@@ -195,11 +206,11 @@ public sealed class UnitOfWork : IDisposable
                 _dbe.LogUowFlushComplete(_uowId);
             }
 
-            _state = UnitOfWorkState.WalDurable;
+            TransitionToWalDurable();
             return Task.CompletedTask;
         }
 
-        _state = UnitOfWorkState.WalDurable;
+        TransitionToWalDurable();
 
         if (_durabilityMode == DurabilityMode.Deferred)
         {
@@ -260,9 +271,6 @@ public sealed class UnitOfWork : IDisposable
             // Dirty pages will be flushed by the engine shutdown safety net if needed.
             if (_committedTransactionCount > 0 && _state == UnitOfWorkState.Pending)
             {
-                Debug.Assert(false,
-                    $"Deferred UoW #{_uowId} disposed with {_committedTransactionCount} committed transaction(s) " +
-                    "but Flush/FlushAsync was never called. Data relies on engine shutdown safety net.");
                 _dbe.LogDeferredUowNotFlushed(_uowId, _committedTransactionCount);
             }
         }

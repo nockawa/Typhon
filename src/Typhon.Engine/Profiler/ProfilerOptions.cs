@@ -20,9 +20,10 @@ public sealed class ProfilerOptions
     public int PerExporterChannelDepth { get; set; } = 4;
 
     /// <summary>
-    /// Capacity of the consumer's per-pass merge scratch buffer in <b>bytes</b>. Drains from all slots accumulate here before sorting and slicing
-    /// into <see cref="TraceRecordBatch"/>es. Default: 512 KB — large enough that one drain pass can produce 2+ full batches from a burst of ~15k
-    /// records while keeping the whole scratch in L2 cache on a typical CPU.
+    /// Capacity of the consumer's per-pass merge scratch buffer in <b>bytes</b>. Drains from all slots accumulate here before sorting and slicing into
+    /// <see cref="TraceRecordBatch"/>es. Default: 4 MB — sized so a single drain pass can absorb a heavy burst (tens of thousands of records from a gcChurn-class
+    /// workload) without leaving bytes in the producer rings for a subsequent pass. Trades a modest L2 cache miss (a 4 MB buffer spills out of L2 on most CPUs)
+    /// for drastically reduced drain-cycle coupling — under the observability "better to over-buffer than drop" priority, this is the right trade.
     /// </summary>
     public int MergeBufferBytes { get; set; } = 512 * 1024;
 

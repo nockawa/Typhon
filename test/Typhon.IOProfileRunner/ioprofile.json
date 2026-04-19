@@ -1,68 +1,76 @@
 {
-  "_doc": "IO Profile Runner config. Controls workload size, database tuning, and which profiler kinds are opted in. Any 'profile.*' key absent or false leaves that kind at its default suppression state (most PageCache kinds ship suppressed).",
+  "_doc": "IO Profile Runner config — tuned for CLEAN gauge traces: (a) opt OUT of the async-completion kinds that flood the ring during readBurst, (b) longer workload for a richer time axis, (c) new gcChurn stage spins up Hashtables + LOH allocations so the GC gauges actually show activity.",
 
   "output": {
-    "_doc": "Where the .typhon-trace file is written. Relative paths resolve against the process CWD at launch.",
     "tracePath": "ioprofile.typhon-trace",
     "workingDirectory": "ioprofile-data"
   },
 
   "database": {
-    "_doc": "Tune the page cache smaller than the live set so the workload generates evictions and real async DiskRead/DiskWrite activity. But keep it larger than any single transaction's working set — otherwise reads fill the cache with epoch-protected pages and hit backpressure timeouts. 16 MB = 2048 pages, comfortably holds the read burst's per-tx batches and still forces eviction across passes.",
-    "cacheSizeMB": 16,
+    "_doc": "Larger cache than before (32 MB = 4096 pages at 8 KB/page) to reduce cache-miss pressure during readBurst so fewer completion records get generated in the first place.",
+    "cacheSizeMB": 32,
     "walEnabled": true
   },
 
   "workload": {
-    "_doc": "Workload steps. Each stage can be toggled individually; set 'enabled: false' to skip. Stages run in the order listed below.",
     "stages": {
       "spawnBurst": {
         "enabled": true,
-        "entityCount": 10000,
-        "batchSize": 500,
-        "_comment": "Spawns entityCount entities in batches of batchSize. Each batch is one Transaction.Commit, driving WAL writes and dirty-page accumulation."
+        "entityCount": 5000,
+        "batchSize": 500
       },
       "checkpointAfterSpawn": {
-        "enabled": true,
-        "_comment": "Forces a checkpoint after the spawn burst. Exercises PageCacheFlush + async DiskWrite + FlushCompleted on a large dirty set in one hit."
+        "enabled": true
       },
       "spawnCheckpointLoop": {
         "enabled": true,
-        "iterations": 16,
-        "entitiesPerIteration": 5000,
-        "_comment": "Alternating spawn + checkpoint loop — simulates steady-state checkpoint cadence under sustained writes. Each iteration emits its own tick in the viewer (1+1+16+1+1 = 20 visible ticks end-to-end with default stage set)."
+        "iterations": 20,
+        "entitiesPerIteration": 2000,
+        "_comment": "20 iterations × 2K entities = 40K more entities, 20 ticks of mixed spawn+checkpoint activity"
+      },
+      "txFlood": {
+        "enabled": true,
+        "iterations": 12,
+        "entitiesPerIteration": 50,
+        "_comment": "12 ticks × 50 independent commits per tick = 600 commits. Each inner transaction opens, spawns one entity, commits, disposes — drives the Tx+UoW gauge's per-tick commit/created delta lines to a visibly-tall plateau across these ticks. Active-count area stays 0 (transactions close within the tick) — exercising the active signal requires a production-style workload with long-lived background transactions."
+      },
+      "gcChurn": {
+        "enabled": true,
+        "iterations": 25,
+        "entitiesPerIteration": 40000,
+        "_comment": "25 ticks of heavy managed-heap allocation — Hashtable fills (boxed int keys + int values), LOH arrays, short-lived strings. Drives Gen0/Gen1/Gen2/LOH gauge values visibly up and triggers real GC collections so GcStart/GcEnd + GcSuspension records appear."
+      },
+      "transientChurn": {
+        "enabled": true,
+        "iterations": 8,
+        "entitiesPerIteration": 1500,
+        "_comment": "8 × 1500 = 12,000 transient spawns across 8 ticks. At 112-byte stride / 71 chunks per 8 KB page, that's ~170 pages total — comfortably below the 1024-page cap raised via TransientOptions.PagesPerBlock=256. The gauge climbs in 8 visible steps and then flattens as the index-segment pool warms up."
       },
       "readBurst": {
         "enabled": true,
-        "passes": 3,
-        "_comment": "Reads every entity N times. With a small cache most reads fall through to DiskRead, giving per-page tail latency data."
+        "passes": 1,
+        "_comment": "Trimmed from 3 → 1 pass. With completion suppression below, the ring won't flood, but fewer passes still keeps the read cost bounded."
       },
       "finalCheckpoint": {
-        "enabled": true,
-        "_comment": "One last checkpoint to drain any remaining dirty pages before trace capture ends."
+        "enabled": true
       }
     }
   },
 
   "profile": {
-    "_doc": "Per-kind opt-in. 'true' calls TyphonEvent.UnsuppressKind. Any kind NOT listed or 'false' keeps its shipped default (PageCache.* default-suppressed; everything else default-open).",
+    "_doc": "Opt-in set narrowed: we keep the SYNCHRONOUS kickoff spans (they're low-volume and useful) but DROP the async completion kinds because their count exploded during readBurst (160K+ completion records → ring overflow → dropped tail ticks). The kickoffs alone give us per-page latency via their durationTicks. Async-tail tracking can be re-enabled for targeted read-latency investigations by flipping the three completion flags back to true.",
 
-    "_pageCacheKickoff": "Kickoff spans — synchronous head of each PageCache operation",
     "pageCacheFetch": true,
     "pageCacheDiskRead": true,
     "pageCacheDiskWrite": true,
     "pageCacheAllocatePage": true,
     "pageCacheFlush": true,
-
-    "_pageCacheMarkers": "Zero-duration markers emitted inside PageCache operations",
     "pageEvicted": true,
 
-    "_pageCacheAsyncCompletions": "Completion events emitted from thread-pool continuations — paired with kickoff spans by SpanId, give full async tail latency",
-    "pageCacheDiskReadCompleted": true,
-    "pageCacheDiskWriteCompleted": true,
-    "pageCacheFlushCompleted": true,
+    "pageCacheDiskReadCompleted": false,
+    "pageCacheDiskWriteCompleted": false,
+    "pageCacheFlushCompleted": false,
 
-    "_engineSpans": "Engine-side spans (default-open — listing 'false' will SUPPRESS them for a clean IO-only trace)",
     "transactionCommit": true,
     "transactionCommitComponent": true,
     "ecsSpawn": true,

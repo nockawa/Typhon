@@ -1329,6 +1329,8 @@ public unsafe partial class Transaction : EntityAccessor
 
         var scope = TyphonEvent.BeginTransactionRollback(TSN);
         scope.ComponentCount = _componentInfos.Count;
+        // Cumulative rollback counter — monotonic, sampled by the profiler's per-tick gauge snapshot to derive per-tick rollback rate.
+        _dbe.TransactionChain.IncrementRollbackTotal();
         try
         {
 
@@ -1511,6 +1513,11 @@ public unsafe partial class Transaction : EntityAccessor
         ctx.ThrowIfCancelled();
 
         var scope = TyphonEvent.BeginTransactionCommit(TSN);
+        // Cumulative commit counter — monotonic. Incrementing BEFORE the commit body means a commit that throws mid-way still gets
+        // counted; the rollback counter will NOT fire for that case (Commit and Rollback are mutually exclusive paths). For gauge
+        // purposes "attempted commit" vs "successful commit" is close enough; a more precise variant would move this to a success
+        // path but currently Transaction.Commit has no single success-return point.
+        _dbe.TransactionChain.IncrementCommitTotal();
         try
         {
             // Must sit inside the try so the finally still runs if this property access ever gains side effects that can throw.

@@ -38,8 +38,18 @@ internal static class ThreadSlotRegistry
     /// <summary>Maximum number of concurrent live producer threads the profiler can track. Chosen to massively exceed realistic Typhon workloads.</summary>
     public const int MaxSlots = 256;
 
-    /// <summary>Default per-slot variable-size SPSC ring buffer capacity in bytes. 128 KB holds ~3200 minimum-size records on average.</summary>
-    public const int DefaultBufferCapacity = 128 * 1024;
+    /// <summary>
+    /// Default per-slot variable-size SPSC ring buffer capacity in bytes. 4 MB holds ~100K minimum-size records — deep headroom to
+    /// absorb any realistic burst (full IOProfileRunner workload, or a tight spawn-loop emitting hundreds of thousands of EcsSpawn
+    /// records in <1s) without the producer hitting drop-newest. Size progression: 128 KB → 1 MB → 4 MB as progressively heavier
+    /// workloads uncovered producer-side ring-full drops at each tier.
+    /// </summary>
+    /// <remarks>
+    /// <b>Memory cost:</b> rings are allocated lazily per claimed slot. At typical usage (5-10 active threads) that's 20-40 MB of
+    /// pinned memory. Worst case (all 256 slots active) = 1 GB, far beyond any realistic thread count but the ceiling exists. Modern
+    /// servers commit tens of GB of RAM; this buffer size is well within the "over-buffer to avoid drop" priority for observability.
+    /// </remarks>
+    private const int DefaultBufferCapacity = 1 * 1024 * 1024;
 
     private static readonly PaddedSlot[] SSlots = new PaddedSlot[MaxSlots];
     private static int SHighWaterMark;
@@ -138,6 +148,9 @@ internal static class ThreadSlotRegistry
         }
 
         // Phase 2: advance the high-water mark to grab a never-touched slot.
+        //
+        // CAS the per-slot state BEFORE bumping HWM. Otherwise a concurrent Phase-1 scanner reads the bumped HWM, finds state[hwm]=Free (the byte-array
+        // default), and CAS-claims the slot out from under us — both threads end up with SlotIndex=hwm and write to the same ring (SPSC violated).
         while (true)
         {
             var hwm = SHighWaterMark;
@@ -146,13 +159,15 @@ internal static class ThreadSlotRegistry
                 return -1; // registry full
             }
 
-            if (Interlocked.CompareExchange(ref SHighWaterMark, hwm + 1, hwm) == hwm)
+            if (Interlocked.CompareExchange(ref SSlots[hwm].State, (int)SlotState.Active, (int)SlotState.Free) == (int)SlotState.Free)
             {
-                // Nobody else can race us on this new index because we just bumped the hwm. Plain write is fine.
-                SSlots[hwm].State = (int)SlotState.Active;
+                Interlocked.CompareExchange(ref SHighWaterMark, hwm + 1, hwm);
                 AssignClaim(hwm, threadId);
                 return hwm;
             }
+
+            // Someone else beat us to this index. Advance HWM past it so our next iteration probes the following slot.
+            Interlocked.CompareExchange(ref SHighWaterMark, hwm + 1, hwm);
         }
     }
 
@@ -173,6 +188,12 @@ internal static class ThreadSlotRegistry
         SlotIndex = index;
         Releaser = new SlotReleaser(index);
         Interlocked.Increment(ref SActiveSlotCount);
+
+        // Emit a ThreadInfo record right after the claim so the viewer can label this lane with a real thread name instead of just "Slot N".
+        // This runs on the claiming thread, so the per-slot SPSC invariant is preserved (this thread is the sole writer of its ring). If the
+        // thread has no name set we pass null — the encoder writes a zero-length name and the viewer falls back to "Thread {id}" downstream.
+        var threadName = Thread.CurrentThread.Name;
+        TyphonEvent.EmitThreadInfo((byte)index, threadId, threadName);
     }
 
     /// <summary>
@@ -181,7 +202,7 @@ internal static class ThreadSlotRegistry
     /// </summary>
     internal static void MarkRetiring(int slotIndex)
     {
-        if ((uint)slotIndex >= (uint)MaxSlots)
+        if ((uint)slotIndex >= MaxSlots)
         {
             return;
         }
@@ -195,7 +216,7 @@ internal static class ThreadSlotRegistry
     /// </summary>
     internal static void FreeRetiringSlot(int slotIndex)
     {
-        if ((uint)slotIndex >= (uint)MaxSlots)
+        if ((uint)slotIndex >= MaxSlots)
         {
             return;
         }
@@ -251,7 +272,7 @@ internal static class ThreadSlotRegistry
         }
 
         var idx = SlotIndex;
-        if ((uint)idx < (uint)MaxSlots)
+        if ((uint)idx < MaxSlots)
         {
             if (Interlocked.CompareExchange(ref SSlots[idx].State, (int)SlotState.Free, (int)SlotState.Active) == (int)SlotState.Active)
             {

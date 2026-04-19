@@ -4,7 +4,29 @@ import {
   type SystemDef,
   type TraceMetadata,
   SpanKindNames,
+  type GaugeId,
+  FIXED_AT_INIT_GAUGES,
 } from './types';
+
+/**
+ * Counts malformed ticks (seen events but no TickStart) per page-load and routes warnings to the console with a cap so a
+ * catastrophically broken trace can't spam the console. Reset on a new trace load via <see cref="resetMalformedTickCounter"/>.
+ */
+let _malformedTickCount = 0;
+const _MALFORMED_TICK_LOG_CAP = 5;
+function warnMalformedTick(tickNumber: number): void {
+  _malformedTickCount++;
+  if (_malformedTickCount <= _MALFORMED_TICK_LOG_CAP) {
+    console.warn(`[trace] malformed tick ${tickNumber}: no TickStart/TickEnd observed — reset to (0, 0). Possible producer-ring overflow or truncated trace.`);
+    if (_malformedTickCount === _MALFORMED_TICK_LOG_CAP) {
+      console.warn(`[trace] ${_MALFORMED_TICK_LOG_CAP} malformed ticks logged — further warnings suppressed for this session.`);
+    }
+  }
+}
+/** Called from the trace-load path (<see cref="processTrace"/>) to reset the per-session counter so each trace open gets its own log budget. */
+export function resetMalformedTickCounter(): void {
+  _malformedTickCount = 0;
+}
 
 /** A chunk span: one rectangle in the Gantt chart */
 export interface ChunkSpan {
@@ -36,6 +58,87 @@ export interface SkipEvent {
   reason: number;
   reasonName: string;
   timestampUs: number;
+}
+
+/**
+ * One (gaugeId → value) observation at a tick boundary. Produced from a <c>PerTickSnapshot</c> record — the wire format packs multiple
+ * gauges into a single record, but the viewer thinks in per-gauge time series, so this interface represents one sample of one series.
+ */
+export interface GaugeSample {
+  tickNumber: number;
+  timestampUs: number;
+  value: number;
+}
+
+/**
+ * One time series of a single gauge across ticks. Samples are inserted in tick-order during chunk processing and stay sorted; the
+ * viewer binary-searches by timestamp to find the first visible sample in the viewport.
+ */
+export interface GaugeSeries {
+  id: GaugeId;
+  samples: GaugeSample[];
+}
+
+/**
+ * Packed snapshot at a single tick — all gauge values emitted by the scheduler at that tick boundary. Duplicates the information in
+ * <c>GaugeSeries[]</c> but indexed by tick rather than by gauge, which is the shape a few viewer paths want (hover tooltips show
+ * "every value at tick N" rather than "value of gauge X over time").
+ */
+export interface GaugeSnapshot {
+  tickNumber: number;
+  timestampUs: number;
+  values: Map<GaugeId, number>;
+}
+
+/**
+ * One discrete unmanaged allocation or free event, as emitted by <c>PinnedMemoryBlock</c> ctor/dispose via
+ * <c>TyphonEvent.EmitMemoryAlloc</c>. Rendered by the viewer as a triangle marker on the memory track (up = alloc, down = free),
+ * colour-coded by <c>sourceTag</c>.
+ */
+export interface MemoryAllocEventData {
+  tickNumber: number;
+  timestampUs: number;
+  threadSlot: number;
+  direction: number;       // 0 = alloc, 1 = free (MemoryAllocDirection)
+  sourceTag: number;        // u16 interned tag (MemoryAllocSource)
+  sizeBytes: number;
+  totalAfterBytes: number;
+}
+
+/**
+ * One .NET runtime GC-boundary event: either a GcStart (kind 7) or GcEnd (kind 8). Rendered as a triangle marker on the GC gauge
+ * track, colour-coded by generation. The <c>durationUs</c> is populated only for GcEnd (carries the GC pause duration).
+ */
+export interface GcEvent {
+  kind: TraceEventKind.GcStart | TraceEventKind.GcEnd;
+  tickNumber: number;
+  timestampUs: number;
+  generation: number;
+  gcCount: number;
+  reason?: number;         // GcStart only — GcReason enum value
+  gcType?: number;         // GcStart only — GcType enum value
+  pauseDurationUs?: number; // GcEnd only
+  promotedBytes?: number;   // GcEnd only
+}
+
+/**
+ * A user-clicked marker on a gauge track — either a memory allocation event or a GC boundary. Discriminated-union rather than a
+ * flat struct because the two marker kinds carry disjoint fields and the detail pane renders them with different layouts.
+ * Threaded through App → Workspace → GraphArea (selection source) and App → Workspace → DetailPane (render).
+ */
+export type MarkerSelection =
+  | { kind: 'memory-alloc'; event: MemoryAllocEventData }
+  | { kind: 'gc'; event: GcEvent };
+
+/**
+ * One GC suspension window (kind 75). Rendered as a red/orange vertical bar on the GC gauge track spanning the EE-suspension
+ * duration. These are the "stop-the-world" pauses that directly impact tick latency.
+ */
+export interface GcSuspensionEvent {
+  tickNumber: number;
+  startUs: number;
+  durationUs: number;
+  threadSlot: number;
 }
 
 /**
@@ -149,6 +252,34 @@ export interface TickData {
   checkpointCyclesEndMax: Float64Array;
   /** Per-system aggregate duration in µs (for heat map) */
   systemDurations: Map<number, number>;
+  /**
+   * Gauge snapshot for this tick — at most one per tick (emitted by the scheduler at end-of-tick). May be undefined if the tick
+   * predates the first snapshot, or if gauge emission is disabled (<c>ProfilerGaugesActive == false</c>).
+   */
+  gaugeSnapshot?: GaugeSnapshot;
+  /**
+   * Discrete memory alloc/free events that landed in this tick. Ordered by timestamp. Unbounded in principle (a tick can allocate
+   * thousands of small blocks) but in practice driven by subsystems' alloc patterns — typically sparse.
+   */
+  memoryAllocEvents: MemoryAllocEventData[];
+  /** GcStart + GcEnd instant events in this tick. Triangle markers on the GC gauge track, colour-coded by generation. */
+  gcEvents: GcEvent[];
+  /** GcSuspension spans that started (or ended) inside this tick. Drawn as red/orange vertical bars on the GC gauge track. */
+  gcSuspensions: GcSuspensionEvent[];
+  /**
+   * ThreadInfo instant events observed in this tick — one per slot claim. Cross-tick aggregation folds these into
+   * <c>TraceMetadata.threadNames</c> in <see cref="aggregateGaugeData"/>. Typically emitted once per thread at first emission,
+   * so this is usually empty after the initial slot claims.
+   */
+  threadInfos: ThreadInfoEvent[];
+}
+
+/** One ThreadInfo record (kind 77) — slot ownership metadata emitted when a producer thread claims its slot. */
+export interface ThreadInfoEvent {
+  threadSlot: number;
+  managedThreadId: number;
+  name: string;
+  timestampUs: number;
 }
 
 /** Processed trace ready for rendering */
@@ -174,6 +305,28 @@ export interface ProcessedTrace {
    * live-mode traces (no cache in that path yet).
    */
   summary?: import('./types').TickSummary[];
+  /**
+   * Per-gauge time series across the currently-loaded ticks. Rebuilt from <c>TickData.gaugeSnapshot</c> entries when the cache is
+   * reassembled (<see cref="chunkCache.ts#assembleTickViewAndNumbers"/>). Sparse: only gauges that were actually observed in at
+   * least one loaded tick have an entry.
+   */
+  gaugeSeries?: Map<GaugeId, GaugeSeries>;
+  /**
+   * Fixed-at-init gauge values (<see cref="FIXED_AT_INIT_GAUGES"/>) cached from the first snapshot that carried them. These are
+   * capacities — <c>PageCacheTotalPages</c>, <c>TransientStoreMaxBytes</c>, <c>WalCommitBufferCapacityBytes</c>,
+   * <c>WalStagingPoolCapacity</c>. The scheduler emits them only in the first snapshot of a session; the viewer caches them here
+   * so reference-line overlays can keep drawing the ceiling on every subsequent tick.
+   */
+  gaugeCapacities?: Map<GaugeId, number>;
+  /**
+   * Flat, chronologically-sorted list of <c>MemoryAllocEvent</c> records across the currently-loaded ticks. Denormalized from
+   * per-tick arrays to make viewport-range filtering a single binary search.
+   */
+  memoryAllocEvents?: MemoryAllocEventData[];
+  /** Flat list of GcStart + GcEnd events across loaded ticks — markers on the GC gauge track. */
+  gcEvents?: GcEvent[];
+  /** Flat list of GcSuspension bars across loaded ticks. */
+  gcSuspensions?: GcSuspensionEvent[];
 }
 
 const PHASE_NAMES: Record<number, string> = {
@@ -215,6 +368,8 @@ function generateSystemColors(count: number): string[] {
 
 /** Process raw records into renderable tick structures */
 export function processTrace(metadata: TraceMetadata, events: TraceEvent[]): ProcessedTrace {
+  // Reset the per-session malformed-tick counter so each trace open gets its own log budget.
+  resetMalformedTickCounter();
   const systems = metadata.systems;
   const systemColors = generateSystemColors(systems.length);
 
@@ -253,10 +408,29 @@ export function processTrace(metadata: TraceMetadata, events: TraceEvent[]): Pro
   const globalEndUs = ticks.length > 0 ? ticks[ticks.length - 1].endUs : 0;
 
   const sortedDurations = ticks.map(t => t.durationUs).sort((a, b) => a - b);
+  // Percentile-of-N with small N is statistically meaningless — `Math.floor(1 * 0.95) = 0` returns the 0th percentile, which is
+  // the MIN, not the 95th. For the tick-timeline height scaling we want "worst of the observed few" as the ceiling, so fall
+  // back to the max when the sample size is below the sanity threshold (20 was the agent's suggestion; that's roughly where
+  // a floor(N*0.95) starts landing on a meaningful index). For the common case (hundreds+ of ticks) this is a no-op.
   const p95Idx = Math.floor(sortedDurations.length * 0.95);
-  const p95TickDurationUs = sortedDurations.length > 0
-    ? sortedDurations[Math.min(p95Idx, sortedDurations.length - 1)]
-    : 0;
+  const p95TickDurationUs = sortedDurations.length === 0
+    ? 0
+    : sortedDurations.length < 20
+      ? sortedDurations[sortedDurations.length - 1]  // fall back to max on tiny samples
+      : sortedDurations[Math.min(p95Idx, sortedDurations.length - 1)];
+
+  const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } = aggregateGaugeData(ticks);
+
+  // Fold the aggregated slot→name map into metadata so lane labels ("DagScheduler", "TyphonProfilerGcIngest", ...) can render. Mutating
+  // `metadata` here is safe: the caller passes a fresh instance per processTrace call, and threadNames is additive-only.
+  if (threadNames.size > 0) {
+    const existing = metadata.threadNames ?? {};
+    const merged: Record<number, string> = { ...existing };
+    for (const [slot, name] of threadNames) {
+      merged[slot] = name;
+    }
+    metadata.threadNames = merged;
+  }
 
   return {
     metadata,
@@ -267,7 +441,12 @@ export function processTrace(metadata: TraceMetadata, events: TraceEvent[]): Pro
     maxSystemDurationUs,
     maxTickDurationUs,
     p95TickDurationUs,
-    systemColors
+    systemColors,
+    gaugeSeries,
+    gaugeCapacities,
+    memoryAllocEvents,
+    gcEvents,
+    gcSuspensions,
   };
 }
 
@@ -295,6 +474,11 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
   const skips: SkipEvent[] = [];
   const spans: SpanData[] = [];
   const systemDurations = new Map<number, number>();
+  const memoryAllocEvents: MemoryAllocEventData[] = [];
+  const gcEvents: GcEvent[] = [];
+  const gcSuspensions: GcSuspensionEvent[] = [];
+  const threadInfos: ThreadInfoEvent[] = [];
+  let gaugeSnapshot: GaugeSnapshot | undefined;
 
   // Phases are still emitted as Start/End instant pairs — keep a short-lived map to pair them up.
   const openPhases = new Map<number, TraceEvent>();
@@ -363,6 +547,84 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
         break;
       }
 
+      case TraceEventKind.GcStart: {
+        if (evt.generation !== undefined && evt.gcCount !== undefined) {
+          gcEvents.push({
+            kind: TraceEventKind.GcStart,
+            tickNumber: evt.tickNumber,
+            timestampUs: evt.timestampUs,
+            generation: evt.generation,
+            gcCount: evt.gcCount,
+            reason: evt.gcReason,
+            gcType: evt.gcType,
+          });
+        }
+        break;
+      }
+
+      case TraceEventKind.GcEnd: {
+        if (evt.generation !== undefined && evt.gcCount !== undefined) {
+          gcEvents.push({
+            kind: TraceEventKind.GcEnd,
+            tickNumber: evt.tickNumber,
+            timestampUs: evt.timestampUs,
+            generation: evt.generation,
+            gcCount: evt.gcCount,
+            pauseDurationUs: evt.gcPauseDurationUs,
+            promotedBytes: evt.gcPromotedBytes,
+          });
+        }
+        break;
+      }
+
+      case TraceEventKind.MemoryAllocEvent: {
+        // Discrete alloc/free event. Appended in arrival order — inherits the overall event sort so the per-tick list stays sorted by timestamp.
+        if (evt.direction !== undefined && evt.sizeBytes !== undefined && evt.totalAfterBytes !== undefined) {
+          memoryAllocEvents.push({
+            tickNumber: evt.tickNumber,
+            timestampUs: evt.timestampUs,
+            threadSlot: evt.threadSlot,
+            direction: evt.direction,
+            sourceTag: evt.sourceTag ?? 0,
+            sizeBytes: evt.sizeBytes,
+            totalAfterBytes: evt.totalAfterBytes,
+          });
+        }
+        break;
+      }
+
+      case TraceEventKind.ThreadInfo: {
+        // ThreadInfo lands in the ring as soon as a thread claims its slot. We pass the record through here so the cross-tick
+        // aggregation in aggregateGaugeData can fold it into metadata.threadNames. A slot without a set Thread.Name arrives with
+        // an empty/undefined name — skip those so the viewer can fall back to "Slot {n}" rather than showing a blank label.
+        if (evt.threadName && evt.threadName.length > 0) {
+          threadInfos.push({
+            threadSlot: evt.threadSlot,
+            managedThreadId: evt.managedThreadId ?? 0,
+            name: evt.threadName,
+            timestampUs: evt.timestampUs,
+          });
+        }
+        break;
+      }
+
+      case TraceEventKind.PerTickSnapshot: {
+        // At most one snapshot per tick (the scheduler emits exactly one at end-of-tick). If multiple arrive — e.g., if a future phase adds
+        // mid-tick snapshots — we keep the last one; the viewer renders one sample per tick regardless.
+        if (evt.gauges !== undefined) {
+          const values = new Map<GaugeId, number>();
+          for (const [key, val] of Object.entries(evt.gauges)) {
+            values.set(Number(key) as GaugeId, val);
+          }
+          gaugeSnapshot = {
+            tickNumber: evt.tickNumber,
+            timestampUs: evt.timestampUs,
+            values,
+          };
+        }
+        break;
+      }
+
       case TraceEventKind.SchedulerChunk: {
         // Single-record span: timestampUs is the start, durationUs is the full width. No pairing.
         const sysIdx = evt.systemIndex ?? 0;
@@ -390,6 +652,18 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
         // Every other span kind (≥ 10) is surfaced as a generic SpanData entry — spans already carry duration directly.
         if (evt.kind >= 10 && evt.durationUs !== undefined) {
           const duration = evt.durationUs;
+
+          // GC suspension spans — collect into the dedicated gcSuspensions array so renderGcGroup can draw vertical "stop-the-world"
+          // bars on the GC gauge track. Still falls through to the generic span-push below so it ALSO shows up in the slot lane
+          // where the GC ingestion thread lives (useful for cross-referencing which thread drove the pause).
+          if (evt.kind === TraceEventKind.GcSuspension) {
+            gcSuspensions.push({
+              tickNumber: evt.tickNumber,
+              startUs: evt.timestampUs,
+              durationUs: duration,
+              threadSlot: evt.threadSlot,
+            });
+          }
 
           // Async-completion fold path: if this is one of the three *Completed kinds, try to rewrite an existing kickoff span
           // with the full async duration. If the kickoff hasn't been seen yet (sort ties flipped the order), stash the duration
@@ -467,7 +741,21 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
     }
   }
 
-  if (startUs === Infinity) startUs = 0;
+  // Malformed-tick guard: if neither a TickStart nor a TickEnd was observed for this tick (e.g., producer-ring overflow or
+  // interrupted trace), startUs stays at Infinity and endUs at -Infinity. Reset to a benign (0, 0) so later viewport math
+  // doesn't propagate NaN, but surface it via a console.warn so the user sees their trace has malformed regions instead of
+  // silently treating them as zero-duration spans at time 0. First N such ticks are logged with their tick number; beyond
+  // that a single summary warning fires so a catastrophically broken trace doesn't spam the console.
+  //
+  // Exception: tickNumber === 0 is the PRE-TICK bucket, not a real tick. Typhon ticks are 1-based; the chunk decoder seeds
+  // currentTick = firstTick - 1 (= 0 for the first chunk), and events emitted before the first TickStart — which v6 of the
+  // cache builder deliberately prepends to the first chunk's byte stream (MemoryAllocEvent, GcStart, GcEnd, GcSuspension) —
+  // get tagged with 0. Those events correctly flow into gcEvents / memoryAllocEvents etc. via aggregateGaugeData; the warning
+  // was a false positive. Suppress it and still set startUs/endUs to 0 so downstream math stays safe.
+  if (startUs === Infinity) {
+    if (tickNumber > 0) warnMalformedTick(tickNumber);
+    startUs = 0;
+  }
   if (endUs === -Infinity) endUs = startUs;
 
   // Sort spans by (startUs, kind, spanId) so the render loop iterates in a canonical order and binary-searching for the first
@@ -675,8 +963,88 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
     walFlushes, walFlushesEndMax,
     walWaits, walWaitsEndMax,
     checkpointCycles, checkpointCyclesEndMax,
-    systemDurations
+    systemDurations,
+    gaugeSnapshot,
+    memoryAllocEvents,
+    gcEvents,
+    gcSuspensions,
+    threadInfos,
   };
+}
+
+/**
+ * Walk a sorted-by-tick list of <c>TickData</c> and fold their gauge snapshots + memory alloc events into cross-tick series / caches /
+ * flat arrays. Intended single caller: <c>assembleTickViewAndNumbers</c> in <c>chunkCache.ts</c> after LRU reassembly. Computes
+ * everything in one pass — no per-gauge filter scans — so cost is O(ticks + total gauge values + total alloc events).
+ */
+export function aggregateGaugeData(ticks: TickData[]): {
+  gaugeSeries: Map<GaugeId, GaugeSeries>;
+  gaugeCapacities: Map<GaugeId, number>;
+  memoryAllocEvents: MemoryAllocEventData[];
+  gcEvents: GcEvent[];
+  gcSuspensions: GcSuspensionEvent[];
+  /** Slot → thread name map, folded from <see cref="ThreadInfoEvent"/>s across all ticks. First name wins for a given slot. */
+  threadNames: Map<number, string>;
+} {
+  const gaugeSeries = new Map<GaugeId, GaugeSeries>();
+  const gaugeCapacities = new Map<GaugeId, number>();
+  const memoryAllocEvents: MemoryAllocEventData[] = [];
+  const gcEvents: GcEvent[] = [];
+  const gcSuspensions: GcSuspensionEvent[] = [];
+  const threadNames = new Map<number, string>();
+
+  for (const tick of ticks) {
+    if (tick.gaugeSnapshot !== undefined) {
+      for (const [id, value] of tick.gaugeSnapshot.values) {
+        // Fixed-at-init gauges (capacities) are only emitted in the first snapshot of a session. Cache them separately; the viewer
+        // uses these for reference-line overlays (dashed ceilings on commit buffer / staging pool / page cache / transient store).
+        if (FIXED_AT_INIT_GAUGES.has(id) && !gaugeCapacities.has(id)) {
+          gaugeCapacities.set(id, value);
+          continue;
+        }
+        let series = gaugeSeries.get(id);
+        if (series === undefined) {
+          series = { id, samples: [] };
+          gaugeSeries.set(id, series);
+        }
+        series.samples.push({
+          tickNumber: tick.gaugeSnapshot.tickNumber,
+          timestampUs: tick.gaugeSnapshot.timestampUs,
+          value,
+        });
+      }
+    }
+  }
+
+  // memoryAllocEvents + gcEvents + gcSuspensions pass — kept in a second loop for readability; the per-tick arrays are tick-sorted
+  // already, and concatenation across tick-sorted array preserves total order.
+  for (const tick of ticks) {
+    if (tick.memoryAllocEvents.length > 0) {
+      for (const e of tick.memoryAllocEvents) {
+        memoryAllocEvents.push(e);
+      }
+    }
+    if (tick.gcEvents.length > 0) {
+      for (const e of tick.gcEvents) {
+        gcEvents.push(e);
+      }
+    }
+    if (tick.gcSuspensions.length > 0) {
+      for (const s of tick.gcSuspensions) {
+        gcSuspensions.push(s);
+      }
+    }
+    // Fold ThreadInfo records into the slot→name map. First observation wins for a slot — re-claims under the same slot are
+    // rare (thread death + reclaim) and carry the SAME thread's name until the new claim's ThreadInfo record arrives, at which
+    // point we honour the later name too.
+    if (tick.threadInfos.length > 0) {
+      for (const info of tick.threadInfos) {
+        threadNames.set(info.threadSlot, info.name);
+      }
+    }
+  }
+
+  return { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames };
 }
 
 /** Maximum ticks to keep in memory during live streaming (~50s at 60Hz). */
@@ -693,7 +1061,12 @@ export function createEmptyTrace(metadata: TraceMetadata): ProcessedTrace {
     maxSystemDurationUs: 0,
     maxTickDurationUs: 0,
     p95TickDurationUs: 0,
-    systemColors: generateSystemColors(metadata.systems.length)
+    systemColors: generateSystemColors(metadata.systems.length),
+    gaugeSeries: new Map(),
+    gaugeCapacities: new Map(),
+    memoryAllocEvents: [],
+    gcEvents: [],
+    gcSuspensions: [],
   };
 }
 
@@ -728,11 +1101,26 @@ export function processTickAndAppend(
   if (ticks.length % 100 === 0 && ticks.length > 0) {
     const sorted = ticks.map(t => t.durationUs).sort((a, b) => a - b);
     const idx = Math.floor(sorted.length * 0.95);
-    p95TickDurationUs = sorted[Math.min(idx, sorted.length - 1)];
+    // Same small-sample guard as the offline processTrace path: fall back to the max when N < 20 so a couple-tick live session
+    // doesn't produce a p95 pinned at the MIN (which would clip the tick-timeline's bar-height scaling).
+    p95TickDurationUs = sorted.length < 20
+      ? sorted[sorted.length - 1]
+      : sorted[Math.min(idx, sorted.length - 1)];
   }
+
+  // Rebuild gauge aggregates from the (possibly-trimmed) ticks array. A single linear pass — cheap at MAX_LIVE_TICKS = 3000.
+  // Live mode slides a window over the trace, so incrementally patching the existing series would require equally-paced removes on the
+  // left side; a full rebuild is simpler, O(loaded ticks), and matches the chunk-path's refresh model.
+  const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } = aggregateGaugeData(ticks);
+
+  // Merge thread names into metadata — live mode sees new slot claims arrive as the session runs.
+  const mergedMetadata = threadNames.size > 0
+    ? { ...trace.metadata, threadNames: { ...(trace.metadata.threadNames ?? {}), ...Object.fromEntries(threadNames) } }
+    : trace.metadata;
 
   return {
     ...trace,
+    metadata: mergedMetadata,
     ticks,
     tickNumbers,
     globalStartUs: ticks[0]?.startUs ?? 0,
@@ -740,5 +1128,10 @@ export function processTickAndAppend(
     maxTickDurationUs: Math.max(trace.maxTickDurationUs, tickData.durationUs),
     maxSystemDurationUs,
     p95TickDurationUs,
+    gaugeSeries,
+    gaugeCapacities,
+    memoryAllocEvents,
+    gcEvents,
+    gcSuspensions,
   };
 }

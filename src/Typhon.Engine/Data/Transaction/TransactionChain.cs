@@ -15,9 +15,9 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
     private Transaction _tail;
     private long _minTSN;
 
-    internal Transaction Head => Volatile.Read(ref _head);
-    internal Transaction Tail => Volatile.Read(ref _tail);
-    internal long MinTSN => Volatile.Read(ref _minTSN);
+    internal Transaction Head => _head;
+    internal Transaction Tail => _tail;
+    internal long MinTSN => _minTSN;
     internal long NextFreeId => _nextFreeId;
 
     /// <summary>
@@ -27,6 +27,39 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
     /// Maintained via atomic increment/decrement in PushHead/Remove for O(1) access.
     /// </remarks>
     internal int ActiveCount => _activeCount;
+
+    /// <summary>
+    /// Count of idle <see cref="Transaction"/> instances currently pooled for reuse. Backs the profiler's <c>TxChainPoolSize</c> gauge.
+    /// <see cref="ConcurrentQueue{T}.Count"/> is O(n) — fine at the bounded <see cref="PoolMaxSize"/> = 16.
+    /// </summary>
+    internal int PoolCount => _pool.Count;
+
+    /// <summary>
+    /// Cumulative count of transactions successfully committed since engine start. Monotonic. Incremented from
+    /// <see cref="Transaction.Commit"/> via <see cref="IncrementCommitTotal"/>. The profiler emits this as a gauge; the viewer derives
+    /// per-tick throughput by subtracting consecutive snapshots.
+    /// </summary>
+    internal long CommitTotal => _commitTotal;
+
+    /// <summary>Cumulative count of transactions rolled back since engine start. Monotonic. Same per-tick-delta derivation on the viewer.</summary>
+    internal long RollbackTotal => _rollbackTotal;
+
+    /// <summary>
+    /// Cumulative count of transactions created (via <see cref="CreateTransaction"/>) since engine start. Monotonic. Lets the viewer
+    /// derive per-tick "transactions started" throughput by subtracting consecutive snapshots — the symmetric counterpart to
+    /// <see cref="CommitTotal"/> / <see cref="RollbackTotal"/>.
+    /// </summary>
+    internal long CreatedTotal => _createdTotal;
+
+    private long _commitTotal;
+    private long _rollbackTotal;
+    private long _createdTotal;
+
+    /// <summary>Called from <see cref="Transaction.Commit"/> to bump the cumulative commit counter. Lock-free, atomic.</summary>
+    internal void IncrementCommitTotal() => Interlocked.Increment(ref _commitTotal);
+
+    /// <summary>Called from <see cref="Transaction.Rollback"/> to bump the cumulative rollback counter.</summary>
+    internal void IncrementRollbackTotal() => Interlocked.Increment(ref _rollbackTotal);
 
     private AccessControl _control;
     private readonly ConcurrentQueue<Transaction> _pool;
@@ -196,6 +229,11 @@ internal class TransactionChain : ResourceNode, IDebugPropertiesProvider
         }
 
         t.Init(dbe, Interlocked.Increment(ref _nextFreeId), uow, readOnly);
+
+        // Gauge: cumulative "transactions created" counter. Single convergence point — every call path (UnitOfWork.CreateTransaction,
+        // DatabaseEngine.CreateQuickTransaction, DatabaseEngine.CreateReadOnlyTransaction) funnels through this method, so one
+        // increment here counts every transaction exactly once. Pooled (dequeued) and newly-allocated paths both pass through.
+        Interlocked.Increment(ref _createdTotal);
 
         // Are we getting short on Ids? The max is 1 << 47
         if (_nextFreeId > (1L << 46))

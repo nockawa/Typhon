@@ -1,14 +1,18 @@
 import { useState, useCallback, useRef, useEffect } from 'preact/hooks';
 import { uploadTrace, openTrace, subscribeBuildProgress, type BuildProgress } from './api';
-import { processTrace, createEmptyTrace, processTickAndAppend, type ProcessedTrace, type ChunkSpan, type SpanData } from './traceModel';
+import { processTrace, createEmptyTrace, processTickAndAppend, type ProcessedTrace, type ChunkSpan, type SpanData, type MarkerSelection } from './traceModel';
 import type { TimeRange } from './uiTypes';
 import type { TraceEvent, TraceMetadata, ChunkManifestEntry } from './types';
 import { MenuBar } from './MenuBar';
 import { TickTimeline } from './TickTimeline';
 import { Workspace } from './Workspace';
-import { DIM_TEXT } from './canvasUtils';
+import { DIM_TEXT, SPAN_PALETTE } from './canvasUtils';
 import { connectLive } from './liveSource';
 import { useNavHistory } from './useNavHistory';
+import {
+  loadPersistedGaugeRegionVisible, persistGaugeRegionVisible,
+  loadPersistedLegendsVisible, persistLegendsVisible,
+} from './gaugeRegion';
 import {
   createChunkCache,
   ensureRangeLoaded,
@@ -17,6 +21,7 @@ import {
   DEFAULT_PREFETCH_CHUNKS,
   type ChunkCacheState,
 } from './chunkCache';
+import { OpfsChunkStore } from './opfsChunkStore';
 
 /** Buffered tick data waiting to be processed into the trace. */
 interface BufferedTick {
@@ -69,6 +74,7 @@ export function App() {
   const [viewRange, setViewRange] = useState<TimeRange>({ startUs: 0, endUs: 0 });
   const [selectedChunk, setSelectedChunk] = useState<ChunkSpan | null>(null);
   const [selectedSpan, setSelectedSpan] = useState<SpanData | null>(null);
+  const [selectedMarker, setSelectedMarker] = useState<MarkerSelection | null>(null);
   const navHistory = useNavHistory();
 
   // Live mode state
@@ -78,10 +84,56 @@ export function App() {
   const traceRef = useRef<ProcessedTrace | null>(null);
   const flushIntervalRef = useRef<number>(0);
 
+  // View toggles — owned by App so both the <b>View</b> menu and the global keyboard shortcuts share one source of truth and flip
+  // the same state. Persisted to localStorage via the helpers in <see cref="gaugeRegion.ts"/>.
+  const [gaugeRegionVisible, setGaugeRegionVisible] = useState<boolean>(() => loadPersistedGaugeRegionVisible());
+  const [legendsVisible, setLegendsVisible] = useState<boolean>(() => loadPersistedLegendsVisible());
+  // Gutter width measured by <see cref="GraphArea"/>. Lifted to App so sibling <see cref="TickTimeline"/> can align its "?" help glyph with
+  // the gutter's right-edge X. 80 matches <c>MIN_GUTTER_WIDTH</c> — safe fallback until the first render measures the real width.
+  const [gutterWidth, setGutterWidth] = useState<number>(80);
+  useEffect(() => { persistGaugeRegionVisible(gaugeRegionVisible); }, [gaugeRegionVisible]);
+  useEffect(() => { persistLegendsVisible(legendsVisible); }, [legendsVisible]);
+  const toggleGaugeRegion = useCallback(() => setGaugeRegionVisible(v => !v), []);
+  const toggleLegends = useCallback(() => setLegendsVisible(v => !v), []);
+
+  // 'g' / 'l' keyboard shortcuts — global listener, same guard pattern as before: skip when focus is inside an editable element,
+  // Global OPFS cleanup — runs once on app mount. Enumerates every trace directory under typhon-chunks/*, sums per-trace sizes,
+  // and deletes oldest-accessed trace directories until total disk usage is under the global cap. Background task; failures are
+  // silent (see OpfsChunkStore.globalCleanup).
+  useEffect(() => {
+    // Fire-and-forget; no deps → runs once. Failure to clean up is not user-visible and doesn't block any functionality.
+    void OpfsChunkStore.globalCleanup();
+  }, []);
+
+  // skip when any modifier is held (Ctrl+L is a browser-reserved bind — if we stole it the URL bar would fight us).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return;
+      }
+      if (e.key === 'g' || e.key === 'G') { e.preventDefault(); toggleGaugeRegion(); }
+      else if (e.key === 'l' || e.key === 'L') { e.preventDefault(); toggleLegends(); }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [toggleGaugeRegion, toggleLegends]);
+
   // Phase 2b: chunked-file state. Lives in refs — mutated during viewport loads without triggering re-renders on every chunk.
   const chunkCacheRef = useRef<ChunkCacheState | null>(null);
   const chunkManifestRef = useRef<ChunkManifestEntry[] | null>(null);
   const metadataRef = useRef<TraceMetadata | null>(null);
+  /**
+   * Monotonic counter bumped at the start of every trace-open handler (file upload or open-by-path). Each handler captures
+   * its own epoch locally and verifies the epoch is still current before committing any shared state (refs or `setLoaded`).
+   * Protects against the two-handler race where a user clicks File→Open A and then File→Open B before A finishes: without
+   * this gate, A's `await` could resolve AFTER B has already written refs + setLoaded, causing A's stale values to overwrite
+   * B's fresh ones. The viewport effect would then trigger with A's refs but B's tracePath and fetch chunks from the wrong
+   * cache.
+   */
+  const loadEpochRef = useRef<number>(0);
   // Velocity tracking for directional prefetch. Records the last viewport shift so we can measure ticks-per-second over a
   // short window and bias prefetch toward the leading edge when the user is panning fast. Stationary → symmetric default.
   const lastViewportShiftRef = useRef<{ fromTick: number; toTick: number; at: number } | null>(null);
@@ -104,11 +156,18 @@ export function App() {
       setIsLive(false);
     }
 
+    // Claim a fresh epoch before any await. Captures the value locally so we can detect if another open-handler has
+    // started since — see `isStaleEpoch` calls below. Two concurrent handlers' local `myEpoch` values will differ; the
+    // later one wins, the earlier one becomes a no-op from its first stale check onward.
+    const myEpoch = ++loadEpochRef.current;
+    const isStaleEpoch = () => loadEpochRef.current !== myEpoch;
+
     setLoading(true);
     setError(null);
     setBuildProgress(null);
     try {
       const result = await uploadTrace(files);
+      if (isStaleEpoch()) return;
       // Subscribe to build-progress BEFORE calling open — open blocks until the cache is built, so if we wait to subscribe we'd miss the
       // progress stream entirely. If the cache is already fresh (re-opening a recently-uploaded trace), the build-progress feed sends `done`
       // immediately and resolves without any progress ticks. Errors here surface the same way as open errors.
@@ -117,10 +176,12 @@ export function App() {
         BUILD_PROGRESS_TIMEOUT_MS,
         'Build progress feed timed out — the server may be stuck.',
       );
+      if (isStaleEpoch()) return;
       setBuildProgress(null);
       // Phase 2b: open returns metadata + summary + chunk manifest. No detail events are loaded here — the viewport effect below handles that
       // lazily based on the visible tick range. First-paint is therefore O(summary size), not O(full trace) — indifferent to trace file size.
       const opened = await openTrace(result.path);
+      if (isStaleEpoch()) return;
 
       // Build an empty-but-metadata-rich trace. Ticks populate on demand as the viewport effect fires. globalStart/End/max/p95 come from the
       // server-computed metrics so the timeline can render the full file shape without any detail chunks loaded.
@@ -131,9 +192,27 @@ export function App() {
       processed.maxTickDurationUs = opened.globalMetrics.maxTickDurationUs;
       processed.maxSystemDurationUs = opened.globalMetrics.maxSystemDurationUs;
       processed.p95TickDurationUs = opened.globalMetrics.p95TickDurationUs;
+      // Full GC-suspension list — stable for the trace's lifetime, NOT derived from per-chunk decoding. Lets the GC renderer compute
+      // a yMax that doesn't fluctuate as chunks get loaded/evicted. Server wire-format omits tickNumber (unused downstream); we fill
+      // it with 0 to satisfy the GcSuspensionEvent shape without a second round-trip.
+      processed.gcSuspensions = (opened.gcSuspensions ?? []).map(s => ({
+        tickNumber: 0,
+        startUs: s.startUs,
+        durationUs: s.durationUs,
+        threadSlot: s.threadSlot,
+      }));
+
+      // OPFS-backed persistent chunk store keyed by source fingerprint. init() is idempotent; it sets up (or reuses) a subdirectory
+      // under typhon-chunks/{fingerprint}/. On subsequent opens of the same trace, chunks fetched in a prior session are read from
+      // OPFS instead of round-tripping the server.
+      const opfsStore = new OpfsChunkStore();
+      await opfsStore.init(opened.fingerprint);
+      if (isStaleEpoch()) return;
 
       // Initialize chunk cache and associated refs. Replaced on every new file open so stale chunks from a previous trace don't linger.
-      chunkCacheRef.current = createChunkCache();
+      // All ref writes and the setLoaded are guarded by the epoch check above — if another handler claimed a later epoch while we
+      // were awaiting, we return BEFORE touching any shared state, so the other handler's refs and trace stay authoritative.
+      chunkCacheRef.current = createChunkCache(undefined, opfsStore);
       chunkManifestRef.current = opened.chunkManifest;
       metadataRef.current = result.metadata;
 
@@ -143,7 +222,12 @@ export function App() {
         tracePath: result.path,
         fileName: traceFile?.name ?? files[0].name,
       });
+      // Clear ALL selection refs on trace load, not just chunks. Span/marker refs would otherwise keep pointing at objects
+      // from the previous trace — the detail pane would render fields from a trace that's no longer loaded, and the next
+      // click anywhere would appear to "unselect" phantom state. Three nulls mirror the three selection kinds.
       setSelectedChunk(null);
+      setSelectedSpan(null);
+      setSelectedMarker(null);
 
       // Initial viewport: first tick's absolute range from the summary. Setting this triggers the viewport effect, which fetches the first
       // chunk and populates trace.ticks.
@@ -154,10 +238,14 @@ export function App() {
         navHistory.push(initialRange);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to load trace');
+      if (!isStaleEpoch()) setError(e instanceof Error ? e.message : 'Failed to load trace');
     } finally {
-      setLoading(false);
-      setBuildProgress(null);
+      // Only toggle the global loading/build-progress UI if we're still the current handler. Otherwise a stale handler's
+      // finally would set loading=false and clobber a fresh handler that has already set loading=true.
+      if (!isStaleEpoch()) {
+        setLoading(false);
+        setBuildProgress(null);
+      }
     }
   }, []);
 
@@ -174,6 +262,10 @@ export function App() {
       setIsLive(false);
     }
 
+    // Epoch claim — mirror the pattern in handleFileSelected. See the detailed comment there.
+    const myEpoch = ++loadEpochRef.current;
+    const isStaleEpoch = () => loadEpochRef.current !== myEpoch;
+
     setLoading(true);
     setError(null);
     setBuildProgress(null);
@@ -183,8 +275,10 @@ export function App() {
         BUILD_PROGRESS_TIMEOUT_MS,
         'Build progress feed timed out — the server may be stuck.',
       );
+      if (isStaleEpoch()) return;
       setBuildProgress(null);
       const opened = await openTrace(path);
+      if (isStaleEpoch()) return;
 
       const metadata: TraceMetadata = {
         header: opened.header,
@@ -200,8 +294,18 @@ export function App() {
       processed.maxTickDurationUs = opened.globalMetrics.maxTickDurationUs;
       processed.maxSystemDurationUs = opened.globalMetrics.maxSystemDurationUs;
       processed.p95TickDurationUs = opened.globalMetrics.p95TickDurationUs;
+      // See identical block in handleFileSelected — full GC-suspension list at open time for stable GC chart yMax across chunk churn.
+      processed.gcSuspensions = (opened.gcSuspensions ?? []).map(s => ({
+        tickNumber: 0,
+        startUs: s.startUs,
+        durationUs: s.durationUs,
+        threadSlot: s.threadSlot,
+      }));
 
-      chunkCacheRef.current = createChunkCache();
+      const opfsStore = new OpfsChunkStore();
+      await opfsStore.init(opened.fingerprint);
+      if (isStaleEpoch()) return;
+      chunkCacheRef.current = createChunkCache(undefined, opfsStore);
       chunkManifestRef.current = opened.chunkManifest;
       metadataRef.current = metadata;
 
@@ -213,7 +317,10 @@ export function App() {
         tracePath: path,
         fileName,
       });
+      // Clear ALL selection refs on trace load — see parallel comment in handleFileSelected.
       setSelectedChunk(null);
+      setSelectedSpan(null);
+      setSelectedMarker(null);
 
       if (opened.tickSummaries.length > 0) {
         const first = opened.tickSummaries[0];
@@ -222,10 +329,13 @@ export function App() {
         navHistory.push(initialRange);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to open trace');
+      if (!isStaleEpoch()) setError(e instanceof Error ? e.message : 'Failed to open trace');
     } finally {
-      setLoading(false);
-      setBuildProgress(null);
+      // See handleFileSelected's finally for rationale — guard the global loading/progress toggles against a stale handler.
+      if (!isStaleEpoch()) {
+        setLoading(false);
+        setBuildProgress(null);
+      }
     }
   }, []);
 
@@ -275,13 +385,39 @@ export function App() {
     ensureRangeLoaded(cache, path, metadata, manifest, tickRange.fromTick, tickRange.toTick, prefetchBefore, prefetchAfter, controller.signal)
       .then(() => {
         if (controller.signal.aborted) return;
-        // Single traversal of the cache entries for both arrays — halves the per-chunk-load sort + iteration cost.
-        const { tickData: newTicks, tickNumbers: newTickNumbers } = assembleTickViewAndNumbers(cache);
+        // Single traversal of the cache entries for tick arrays + gauge aggregates — halves the per-chunk-load sort + iteration cost.
+        const { tickData: newTicks, tickNumbers: newTickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } =
+          assembleTickViewAndNumbers(cache);
+
+        // Merge thread names into metadata. threadNames accumulates monotonically: a ThreadInfo record for slot N only arrives once
+        // (at slot claim), so re-running aggregation over a superset of cached ticks never SHRINKS the map. Keep the existing entries
+        // on metadata (they may come from earlier chunks no longer in the LRU window) and union in the freshly-aggregated names.
+        if (threadNames.size > 0 && metadata) {
+          const merged: Record<number, string> = { ...(metadata.threadNames ?? {}) };
+          for (const [slot, name] of threadNames) {
+            merged[slot] = name;
+          }
+          metadata.threadNames = merged;
+        }
+
         setLoaded(prev => {
           if (!prev.trace) return prev;
           return {
             ...prev,
-            trace: { ...prev.trace, ticks: newTicks, tickNumbers: newTickNumbers },
+            trace: {
+              ...prev.trace,
+              ticks: newTicks,
+              tickNumbers: newTickNumbers,
+              gaugeSeries,
+              gaugeCapacities,
+              memoryAllocEvents,
+              gcEvents,
+              // gcSuspensions intentionally NOT overwritten here — it's seeded from the /open response with the FULL list (not derived from
+              // the resident chunks) and must remain stable across chunk load/evict cycles. Overwriting with the per-chunk-aggregated list
+              // would recreate the yMax-rescaling bug the server-side full-list change was meant to fix.
+              // Re-reference metadata so the render sees the updated threadNames. Shallow clone — only the threadNames field changed.
+              metadata: metadata ? { ...metadata } : prev.trace.metadata,
+            },
           };
         });
       })
@@ -416,8 +552,51 @@ export function App() {
     };
   }, []);
 
+  // Error-pill lifecycle. The MenuBar now hosts errors inline (next to the ◀▶ nav buttons). We auto-dismiss on a length-scaled timer so
+  // trivial errors ("Disconnected") don't linger and long errors ("Failed to parse chunk… [200 char stack]") stay long enough to read.
+  //   Formula: max(5 s, min(15 s, 5 s + length × 40 ms))
+  //   ≈ average adult reading speed of 5 chars/sec + a 5 s minimum floor and 15 s ceiling.
+  // The × button on the pill bypasses the timer for impatient users.
+  const handleDismissError = useCallback(() => setError(null), []);
+  useEffect(() => {
+    if (!error) return;
+    const durationMs = Math.max(5000, Math.min(15000, 5000 + error.length * 40));
+    const id = window.setTimeout(() => setError(null), durationMs);
+    return () => window.clearTimeout(id);
+  }, [error]);
+
   const handleViewRangeChange = useCallback((range: TimeRange) => {
     followRef.current = false;
+
+    // Clamp the requested range into trace bounds before committing. Without this, rapid shift+wheel or middle-drag pans can push
+    // offsetX arbitrarily far outside [0, traceEnd] — at which point no tick overlaps the viewport, some downstream render path
+    // (gauge binary searches, pending-chunk overlay, etc.) hits an assumption that "at least one tick is visible" and throws,
+    // clearing the whole canvas (the "blank span area including gutter" bug reported on pan-left-past-the-end). Clamping here
+    // keeps the viewport window's WIDTH intact and slides its position back into bounds — matches the UX of every timeline
+    // viewer (Chrome DevTools, Perfetto, SpeedScope): you hit an invisible "wall" at each end instead of pan-to-emptiness.
+    //
+    // Semantics:
+    //   - Empty trace (no summary) → pass through unchanged (nothing to clamp against).
+    //   - Range wider than the whole trace → show the full trace [0, traceEnd].
+    //   - Range past left edge (startUs < 0) → snap startUs = 0, keep width.
+    //   - Range past right edge (endUs > traceEnd) → snap endUs = traceEnd, keep width.
+    const summary = loaded.trace?.summary;
+    if (summary && summary.length > 0) {
+      const traceStartUs = summary[0].startUs;
+      const traceLast = summary[summary.length - 1];
+      const traceEndUs = traceLast.startUs + traceLast.durationUs;
+      const width = range.endUs - range.startUs;
+      if (width > 0) {
+        if (width >= traceEndUs - traceStartUs) {
+          range = { startUs: traceStartUs, endUs: traceEndUs };
+        } else if (range.startUs < traceStartUs) {
+          range = { startUs: traceStartUs, endUs: traceStartUs + width };
+        } else if (range.endUs > traceEndUs) {
+          range = { startUs: traceEndUs - width, endUs: traceEndUs };
+        }
+      }
+    }
+
     setViewRange(range);
     setSelectedChunk(null);
 
@@ -426,7 +605,7 @@ export function App() {
     navDebounceRef.current = window.setTimeout(() => {
       navHistory.push(range);
     }, 500);
-  }, [navHistory]);
+  }, [navHistory, loaded.trace]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -441,34 +620,14 @@ export function App() {
         onLiveDisconnect={handleLiveDisconnect}
         navHistory={navHistory}
         onViewRangeChange={handleViewRangeChange}
+        gaugeRegionVisible={gaugeRegionVisible}
+        legendsVisible={legendsVisible}
+        onToggleGauges={toggleGaugeRegion}
+        onToggleLegends={toggleLegends}
+        error={error}
+        onErrorDismiss={handleDismissError}
+        chunksLoading={isLoadingChunks && !loading && !!trace}
       />
-
-      {error && (
-        <div style={{
-          padding: '6px 16px',
-          background: '#5c1a1a',
-          color: '#ff6b6b',
-          fontSize: '12px',
-          fontFamily: 'monospace',
-          flexShrink: 0,
-        }}>
-          {error}
-        </div>
-      )}
-
-      {isLoadingChunks && !loading && trace && (
-        <div style={{
-          padding: '4px 16px',
-          background: '#1a2a3c',
-          color: '#7bb3e0',
-          fontSize: '11px',
-          fontFamily: 'monospace',
-          flexShrink: 0,
-          opacity: 0.85,
-        }}>
-          ⟳ Loading trace detail…
-        </div>
-      )}
 
       {buildProgress && loading && (
         <BuildProgressOverlay progress={buildProgress} />
@@ -481,6 +640,8 @@ export function App() {
             viewRange={viewRange}
             onViewRangeChange={handleViewRangeChange}
             isLive={isLive}
+            gutterWidth={gutterWidth}
+            legendsVisible={legendsVisible}
           />
           <Workspace
             trace={trace}
@@ -491,7 +652,13 @@ export function App() {
             onChunkSelect={setSelectedChunk}
             selectedSpan={selectedSpan}
             onSpanSelect={setSelectedSpan}
+            selectedMarker={selectedMarker}
+            onMarkerSelect={setSelectedMarker}
             navHistory={navHistory}
+            gaugeRegionVisible={gaugeRegionVisible}
+            legendsVisible={legendsVisible}
+            onGutterWidthChange={setGutterWidth}
+            chunkCacheRef={chunkCacheRef}
           />
         </>
       ) : (
@@ -505,7 +672,7 @@ export function App() {
           color: DIM_TEXT,
           fontFamily: 'monospace',
         }}>
-          <div style={{ fontSize: '24px', color: '#e94560' }}>Typhon Profiler</div>
+          <div style={{ fontSize: '24px', color: SPAN_PALETTE[7] }}>Typhon Profiler</div>
           <div style={{ fontSize: '13px' }}>File &gt; Load to open a .typhon-trace file</div>
           <div style={{ fontSize: '13px' }}>File &gt; Connect Live for real-time streaming</div>
         </div>
@@ -533,20 +700,20 @@ function BuildProgressOverlay({ progress }: { progress: BuildProgress }) {
       gap: '14px',
       color: DIM_TEXT,
       fontFamily: 'monospace',
-      background: '#0a0e1a',
+      background: '#101012',
     }}>
-      <div style={{ fontSize: '16px', color: '#7bb3e0' }}>Building sidecar cache…</div>
+      <div style={{ fontSize: '16px', color: '#a8aab0' }}>Building sidecar cache…</div>
       <div style={{
         width: '320px',
         height: '6px',
-        background: '#1a2540',
+        background: '#242428',
         borderRadius: '3px',
         overflow: 'hidden',
       }}>
         <div style={{
           width: `${pct.toFixed(1)}%`,
           height: '100%',
-          background: 'linear-gradient(90deg, #4a7ab8 0%, #7bb3e0 100%)',
+          background: 'linear-gradient(90deg, #6a6b72 0%, #a5a6ac 100%)',
           transition: 'width 120ms ease-out',
         }} />
       </div>

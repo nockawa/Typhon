@@ -260,6 +260,20 @@ public static class TraceFileCacheConstants
     public const int ByteCap = 1 * 1024 * 1024;
 
     /// <summary>
+    /// Maximum events per chunk — closes a chunk at the next tick boundary when the running event count reaches this threshold.
+    /// Complements <see cref="ByteCap"/> for regions where records are small and numerous (dense allocation bursts, high-frequency
+    /// scheduler chunks, etc.): byte-cap alone could let tens of thousands of small records pile into one chunk that decodes slowly
+    /// and dominates the client-side LRU budget. Splitting on event count instead caps the per-chunk decode cost at a bounded
+    /// number of record decodes, regardless of their compressed byte ratio.
+    ///
+    /// 50 000 chosen empirically: at ~300 bytes average decoded per event (span + alloc mix), this is ~15 MB of resident heap per
+    /// chunk — comfortable against the client's 500 MB LRU budget (30+ chunks headroom) and decodes in roughly 100-200 ms on a modern
+    /// CPU. Does NOT split a single tick across chunks (the cap only fires AT tick boundaries), so a pathological single-tick
+    /// outlier with millions of events still produces one giant chunk — that case needs a separate intra-tick-split refactor.
+    /// </summary>
+    public const int EventCap = 50_000;
+
+    /// <summary>
     /// Current chunker policy version. Incremented when <see cref="TickCap"/>, <see cref="ByteCap"/>, or the fold logic changes in a way that
     /// invalidates existing caches. Readers that see a different value must rebuild the cache.
     /// v2: added <c>TickSummary.StartUs</c>.
@@ -268,8 +282,16 @@ public static class TraceFileCacheConstants
     ///     TickEnd don't bloat the summary and cause adjacent ticks to appear overlapping in the viewer's selection math.
     /// v5: also stopped extending lastTs inside the fold path itself — there was a second duration-extension site that v4 missed. With this,
     ///     tick durations are purely wall-clock TickStart→TickEnd, regardless of whether fold fires within the chunk.
+    /// v6: pre-first-tick events (MemoryAllocEvent, GcStart, GcEnd, GcSuspension) are buffered and prepended to the first chunk's byte
+    ///     stream instead of being silently dropped. Old caches built with v5 are missing engine-startup memory events that land before
+    ///     the first TickStart — readers that see v5 must rebuild against a v6 builder to surface them.
+    /// v7: added <c>TraceEventKind.ThreadInfo</c> (kind 77). Emitted at slot claim — typically pre-first-tick — and added to the pre-tick
+    ///     buffer path. Old v6 caches don't surface thread names; readers must rebuild against v7 to populate lane labels.
+    /// v8: added <see cref="EventCap"/> as a chunk-close trigger. Caches built with v7 are structurally valid but may contain a few
+    ///     over-large chunks in dense multi-tick regions; readers that see v7 rebuild against v8 to get the tighter event-count-based
+    ///     splitting, which shrinks the worst-case per-chunk decode + deserialize cost.
     /// </summary>
-    public const ushort CurrentChunkerVersion = 5;
+    public const ushort CurrentChunkerVersion = 8;
 
     /// <summary>Sidecar file extension, appended to the source path (e.g., <c>foo.typhon-trace</c> → <c>foo.typhon-trace-cache</c>).</summary>
     public const string CacheFileExtension = "-cache";

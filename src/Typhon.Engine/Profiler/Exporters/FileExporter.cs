@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler.Exporters;
@@ -25,11 +26,19 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
     private FileStream _stream;
     private TraceFileWriter _writer;
     private bool _disposed;
+    private long _batchesProcessed;
+    private long _recordsProcessed;
+
+    /// <summary>Diagnostic: how many batches this exporter has written so far.</summary>
+    public long BatchesProcessed => _batchesProcessed;
+
+    /// <summary>Diagnostic: total records written (sum of each batch's Count).</summary>
+    public long RecordsProcessed => _recordsProcessed;
 
     public FileExporter(string filePath, IResource parent) : base("FileExporter", ResourceType.Service, parent ?? throw new ArgumentNullException(nameof(parent)))
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
-        Queue = new ExporterQueue(boundedCapacity: 4);
+        Queue = new ExporterQueue(boundedCapacity: 64);
     }
 
     /// <inheritdoc />
@@ -78,6 +87,8 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
         }
 
         _writer.WriteRecords(batch.Payload.AsSpan(0, batch.PayloadBytes), batch.Count);
+        Interlocked.Increment(ref _batchesProcessed);
+        Interlocked.Add(ref _recordsProcessed, batch.Count);
     }
 
     /// <inheritdoc />

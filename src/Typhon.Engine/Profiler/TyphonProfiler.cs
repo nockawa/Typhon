@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using Typhon.Engine.Profiler.Gc;
 
 namespace Typhon.Engine.Profiler;
 
@@ -37,6 +38,7 @@ public static class TyphonProfiler
     private static ProfilerConsumerThread Consumer;
     private static Thread[] ExporterThreads;
     private static CancellationTokenSource ExporterCts;
+    private static GcTracingHost GcTracing;
     private static bool Running;
 
     /// <summary>True while the profiler consumer thread is running.</summary>
@@ -119,7 +121,6 @@ public static class TyphonProfiler
             for (var i = 0; i < exporterSnapshot.Count; i++)
             {
                 var exporter = exporterSnapshot[i];
-                var threadIndex = i;
                 ExporterThreads[i] = new Thread(() => ExporterConsumeLoop(exporter, ExporterCts.Token))
                 {
                     IsBackground = true,
@@ -131,6 +132,13 @@ public static class TyphonProfiler
             // Build and start the consumer drain thread. HighResolutionTimerServiceBase.Start spawns the timer thread.
             Consumer = new ProfilerConsumerThread(parent, options, exporterSnapshot);
             Consumer.Start();
+
+            // Opt-in .NET runtime GC tracing. The host is only constructed when configuration explicitly enabled it — no cost otherwise.
+            if (TelemetryConfig.ProfilerGcTracingActive)
+            {
+                GcTracing = new GcTracingHost();
+                GcTracing.Start();
+            }
 
             Running = true;
         }
@@ -146,6 +154,7 @@ public static class TyphonProfiler
         Thread[] exporterThreadsToJoin;
         CancellationTokenSource ctsToCancel;
         List<IProfilerExporter> exportersToFlush;
+        GcTracingHost gcTracingToDispose;
 
         lock (LifecycleLock)
         {
@@ -158,12 +167,18 @@ public static class TyphonProfiler
             exporterThreadsToJoin = ExporterThreads;
             ctsToCancel = ExporterCts;
             exportersToFlush = consumerToTearDown.Exporters;
+            gcTracingToDispose = GcTracing;
 
             Consumer = null;
             ExporterThreads = null;
             ExporterCts = null;
+            GcTracing = null;
             Running = false;
         }
+
+        // Detach GC tracing first so the CLR stops delivering events before we start tearing down the consumer side.
+        // Stop() drains the ingestion thread's final records into the ring so the consumer's FinalDrainAndComplete picks them up.
+        gcTracingToDispose?.Dispose();
 
         // ── Tear-down outside the lock so blocked operations don't deadlock with future Start/Stop callers ──
 
@@ -174,6 +189,20 @@ public static class TyphonProfiler
 
         // 2. Final drain + signal exporter queues to complete.
         consumerToTearDown.FinalDrainAndComplete();
+
+        // Snapshot the exporter-queue drop count now, while the exporter list is still accessible.
+        long exporterDrops = 0;
+        foreach (var exporter in exportersToFlush)
+        {
+            exporterDrops += exporter.Queue.DroppedBatches;
+        }
+        STotalDroppedExporterBatches = exporterDrops;
+        TotalBatchesFannedOut = consumerToTearDown.BatchesFannedOut;
+        TotalRecordsFannedOut = consumerToTearDown.RecordsFannedOut;
+        FinalDrainPasses = consumerToTearDown.FinalDrainPasses;
+        FinalDrainZeroProgressPasses = consumerToTearDown.FinalDrainZeroProgressPasses;
+        FinalDrainPendingBytes = consumerToTearDown.FinalDrainPendingBytes;
+        SSlotStateDump = ProfilerConsumerThread.DumpSlotStates();
 
         // 3. Now dispose the consumer — timer is already stopped, so Dispose just runs the managed-resource cleanup + resource-tree deregistration.
         consumerToTearDown.Dispose();
@@ -190,6 +219,18 @@ public static class TyphonProfiler
         }
 
         ctsToCancel.Dispose();
+
+        // Snapshot the first FileExporter's processed counters — captures how many batches/records actually made it to disk.
+        // Compare against <see cref="TotalBatchesFannedOut"/> to see if records were lost between fan-out and file-write.
+        foreach (var exporter in exportersToFlush)
+        {
+            if (exporter is Exporters.FileExporter fe)
+            {
+                FirstExporterBatchesProcessed = fe.BatchesProcessed;
+                FirstExporterRecordsProcessed = fe.RecordsProcessed;
+                break;
+            }
+        }
 
         // 4. Flush + dispose each exporter on the calling thread.
         foreach (var exporter in exportersToFlush)
@@ -236,6 +277,31 @@ public static class TyphonProfiler
 
     /// <summary>Total events dropped across all slots due to ring-buffer overflow.</summary>
     public static long TotalDroppedEvents => TyphonEvent.TotalDroppedEvents;
+
+    /// <summary>
+    /// Snapshot of total exporter-queue drops captured at <see cref="Stop"/> time (before the exporter list is cleared). Non-zero
+    /// means the consumer produced batches faster than the exporter could drain them — events made it past the producer ring but
+    /// didn't reach the sink (file / TCP wire). Distinct from <see cref="TotalDroppedEvents"/> which is producer-side ring overflow.
+    /// Read AFTER <see cref="Stop"/> for post-mortem diagnostics.
+    /// </summary>
+    public static long TotalDroppedExporterBatches => STotalDroppedExporterBatches;
+    private static long STotalDroppedExporterBatches;
+
+    /// <summary>Diagnostic: batches/records the consumer fanned out (snapshot at Stop).</summary>
+    public static long TotalBatchesFannedOut { get; private set; }
+    public static long TotalRecordsFannedOut { get; private set; }
+
+    /// <summary>Diagnostic: batches/records the FIRST attached exporter actually processed (snapshot at Stop).</summary>
+    public static long FirstExporterBatchesProcessed { get; private set; }
+    public static long FirstExporterRecordsProcessed { get; private set; }
+
+    /// <summary>Diagnostic: how many final-drain passes ran before the consumer's <c>AllSlotsEmpty</c> returned true.</summary>
+    public static long FinalDrainPasses { get; private set; }
+    public static long FinalDrainZeroProgressPasses { get; private set; }
+    public static long FinalDrainPendingBytes { get; private set; }
+
+    public static string SlotStateDump => SSlotStateDump ?? "(not captured)";
+    private static string SSlotStateDump;
 
     /// <summary>Number of slots currently claimed.</summary>
     public static int ActiveSlotCount => TyphonEvent.ActiveSlotCount;

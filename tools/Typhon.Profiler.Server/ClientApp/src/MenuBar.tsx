@@ -19,32 +19,59 @@ interface MenuBarProps {
   onLiveDisconnect: () => void;
   navHistory: NavHistory;
   onViewRangeChange: (range: TimeRange) => void;
+  /** View-menu state (owned by App). Drawn as checkmark indicators next to each item. */
+  gaugeRegionVisible: boolean;
+  legendsVisible: boolean;
+  /** View-menu callbacks — identical flips to the 'g' / 'l' keyboard shortcuts; both paths land on the same state. */
+  onToggleGauges: () => void;
+  onToggleLegends: () => void;
+  /**
+   * Inline error message shown next to the nav buttons. When non-null, renders as a dismissible pill inside the MenuBar (instead of the
+   * old full-width red strip that shifted the whole viewport down by a row). Null clears it. Auto-dismiss timing is driven from App.tsx
+   * so the MenuBar stays presentational.
+   */
+  error?: string | null;
+  /** Called when the user clicks the error pill's × button to dismiss manually. */
+  onErrorDismiss?: () => void;
+  /**
+   * When true, shows a dim "⟳ Loading trace detail…" pill in the same zone as the error pill. Independent from <c>error</c> — both pills
+   * can be visible simultaneously when a chunk fetch fails but others are still queued. Replaces the old full-width strip that used to
+   * sit on its own row below the MenuBar.
+   */
+  chunksLoading?: boolean;
 }
 
-export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOpenByPath, onLiveConnect, onLiveDisconnect, navHistory, onViewRangeChange }: MenuBarProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
+export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOpenByPath, onLiveConnect, onLiveDisconnect, navHistory, onViewRangeChange, gaugeRegionVisible, legendsVisible, onToggleGauges, onToggleLegends, error, onErrorDismiss, chunksLoading }: MenuBarProps) {
+  // Two independent menus — File and View — each with its own open-state so they don't fight over the same "one menu open at a time"
+  // invariant. Clicking one closes the other explicitly before opening itself.
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const menuOpen = fileMenuOpen || viewMenuOpen;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close menu on click outside
+  // Close menus on click outside
   useEffect(() => {
     if (!menuOpen) return;
     const handler = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
+        setFileMenuOpen(false);
+        setViewMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [menuOpen]);
 
+  const closeMenus = () => { setFileMenuOpen(false); setViewMenuOpen(false); };
+
   const handleLoad = () => {
-    setMenuOpen(false);
+    closeMenus();
     fileInputRef.current?.click();
   };
 
   const handleOpenByPath = () => {
-    setMenuOpen(false);
+    closeMenus();
     // Browsers can't give JS access to a file's full filesystem path (sandbox), so prompt the user for it directly. Use the last-used path
     // as the default so re-opening the same file is one click + Enter. Local-only dev tool; prompt UX is acceptable here.
     const remembered = window.localStorage.getItem('typhon-profiler.lastOpenPath') ?? '';
@@ -76,12 +103,14 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOp
       fontFamily: 'monospace',
       userSelect: 'none',
     }}>
-      {/* Menu items */}
-      <div ref={menuRef} style={{ position: 'relative' }}>
+      {/* Menu items — File + View share a single wrapper for the "click-outside closes" listener. Each menu gets its OWN relative
+           positioning container so its dropdown anchors to its own button instead of fighting over the shared wrapper's origin. */}
+      <div ref={menuRef} style={{ display: 'flex', alignItems: 'center' }}>
+      <div style={{ position: 'relative' }}>
         <button
-          onClick={() => setMenuOpen(!menuOpen)}
+          onClick={() => { setViewMenuOpen(false); setFileMenuOpen(!fileMenuOpen); }}
           style={{
-            background: menuOpen ? BORDER_COLOR : 'transparent',
+            background: fileMenuOpen ? BORDER_COLOR : 'transparent',
             color: TEXT_COLOR,
             border: 'none',
             padding: '4px 10px',
@@ -94,7 +123,7 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOp
           File
         </button>
 
-        {menuOpen && (
+        {fileMenuOpen && (
           <div style={{
             position: 'absolute',
             top: '100%',
@@ -102,7 +131,7 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOp
             background: HEADER_BG,
             border: `1px solid ${BORDER_COLOR}`,
             borderRadius: '2px',
-            minWidth: '140px',
+            minWidth: '175px',   // was 140 — +25% per request
             zIndex: 1000,
             boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
           }}>
@@ -148,7 +177,7 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOp
             <div style={{ height: '1px', background: BORDER_COLOR, margin: '2px 8px' }} />
             {!isLive ? (
               <button
-                onClick={() => { setMenuOpen(false); onLiveConnect(); }}
+                onClick={() => { closeMenus(); onLiveConnect(); }}
                 style={{
                   display: 'block',
                   width: '100%',
@@ -168,7 +197,7 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOp
               </button>
             ) : (
               <button
-                onClick={() => { setMenuOpen(false); onLiveDisconnect(); }}
+                onClick={() => { closeMenus(); onLiveDisconnect(); }}
                 style={{
                   display: 'block',
                   width: '100%',
@@ -189,6 +218,72 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOp
             )}
           </div>
         )}
+      </div>
+
+      {/* View menu — two toggle items mirroring the 'g' and 'l' keyboard shortcuts. Current state shows as a ✓ checkmark so the
+           user can tell at a glance which layers are currently visible. */}
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => { setFileMenuOpen(false); setViewMenuOpen(!viewMenuOpen); }}
+          style={{
+            background: viewMenuOpen ? BORDER_COLOR : 'transparent',
+            color: TEXT_COLOR,
+            border: 'none',
+            padding: '4px 10px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontFamily: 'monospace',
+            borderRadius: '2px',
+          }}
+        >
+          View
+        </button>
+
+        {viewMenuOpen && (
+          <div style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            background: HEADER_BG,
+            border: `1px solid ${BORDER_COLOR}`,
+            borderRadius: '2px',
+            minWidth: '180px',
+            zIndex: 1000,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+          }}>
+            <button
+              onClick={() => { closeMenus(); onToggleGauges(); }}
+              style={{
+                display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                background: 'transparent', color: TEXT_COLOR, border: 'none',
+                padding: '6px 12px 6px 16px', cursor: 'pointer',
+                fontSize: '12px', fontFamily: 'monospace', textAlign: 'left',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = BORDER_COLOR)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              title="Toggle the entire gauge region (all groups: Memory, Page Cache, GC, WAL, …). Keyboard: g"
+            >
+              <span>{gaugeRegionVisible ? '✓' : '\u00a0'} Show gauges</span>
+              <span style={{ color: DIM_TEXT, marginLeft: '8px' }}>g</span>
+            </button>
+            <button
+              onClick={() => { closeMenus(); onToggleLegends(); }}
+              style={{
+                display: 'flex', width: '100%', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                background: 'transparent', color: TEXT_COLOR, border: 'none',
+                padding: '6px 12px 6px 16px', cursor: 'pointer',
+                fontSize: '12px', fontFamily: 'monospace', textAlign: 'left',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = BORDER_COLOR)}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+              title="Toggle per-track inline legends (Gen0/Gen1/… color swatches). Keyboard: l"
+            >
+              <span>{legendsVisible ? '✓' : '\u00a0'} Show legends</span>
+              <span style={{ color: DIM_TEXT, marginLeft: '8px' }}>l</span>
+            </button>
+          </div>
+        )}
+      </div>
       </div>
 
       {/* Nav undo/redo buttons — these call onViewRangeChange directly which snaps the viewport. The animated transition
@@ -214,6 +309,73 @@ export function MenuBar({ trace, fileName, loading, isLive, onFileSelected, onOp
           padding: '2px 6px', opacity: navHistory.canRedo ? 1 : 0.4,
         }}
       >▶</button>
+
+      {/* Inline error pill. Sits immediately right of the ◀▶ nav buttons so errors land next to the navigation state the user was just
+          interacting with, instead of pushing the whole viewport down by a row (the previous behavior). The × button dismisses manually;
+          App.tsx also auto-dismisses on a length-scaled timer. */}
+      {error && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginLeft: '12px',
+            padding: '3px 10px',
+            background: '#5c1a1a',
+            color: '#ff6b6b',
+            fontSize: '12px',
+            fontFamily: 'monospace',
+            borderRadius: '3px',
+            border: `1px solid #7a2a2a`,
+            // Long error messages would push the nav buttons off-screen; cap the pill width and let overflow ellipsize.
+            maxWidth: '50%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={error}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{error}</span>
+          {onErrorDismiss && (
+            <button
+              onClick={onErrorDismiss}
+              title="Dismiss"
+              style={{
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: '#ff6b6b', fontSize: '14px', fontFamily: 'monospace',
+                padding: '0 2px', lineHeight: 1,
+              }}
+            >×</button>
+          )}
+        </div>
+      )}
+
+      {/* Loading-detail pill. Shown whenever chunk loading is in progress AFTER the initial trace open (i.e. the main overlay has
+          finished but more chunks are being fetched in the background). Rendered as a separate pill from the error so the two can coexist
+          when, say, one chunk fetch fails while others are still queued. The spin animation makes "activity in progress" unambiguous
+          without needing a second visual dimension (color alone is too easy to miss peripherally). */}
+      {chunksLoading && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            marginLeft: '12px',
+            padding: '3px 10px',
+            background: '#2a2b30',
+            color: '#a8aab0',
+            fontSize: '11px',
+            fontFamily: 'monospace',
+            borderRadius: '3px',
+            border: `1px solid ${BORDER_COLOR}`,
+          }}
+        >
+          <span style={{ display: 'inline-block', animation: 'menubar-spin 1s linear infinite' }}>⟳</span>
+          Loading trace detail…
+          <style>{`@keyframes menubar-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
