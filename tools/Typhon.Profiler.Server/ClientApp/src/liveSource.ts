@@ -4,7 +4,7 @@ import type { TraceMetadata, TraceEvent, TickSource } from './types';
  * Live streaming source. Implements the {@link TickSource} interface so both file-based and
  * live data sources share the same shape for consumers that don't care which one is active.
  *
- * Unlike {@link FileTickSource}, the live source buffers ticks as they arrive and <code>getEvents</code>
+ * Unlike {@link FileTickSource}, the live source buffers ticks as they arrive and `getEvents`
  * returns only the ticks currently in that in-memory buffer. Older ticks may have been evicted.
  */
 export class LiveTickSource implements TickSource {
@@ -15,7 +15,7 @@ export class LiveTickSource implements TickSource {
     this.metadata = metadata;
   }
 
-  /** Add a tick's events to the in-memory buffer. */
+  /** Add a tick's records to the in-memory buffer. */
   pushTick(tickNumber: number, events: TraceEvent[]): void {
     this._buffer.set(tickNumber, events);
   }
@@ -42,10 +42,10 @@ export class LiveTickSource implements TickSource {
 
 /** Callbacks for live streaming events from the SSE connection. */
 export interface LiveCallbacks {
-  /** Called when the server sends session metadata (header + systems + span names). */
-  onMetadata: (metadata: TraceMetadata, spanNames: Record<number, string>) => void;
+  /** Called when the server sends session metadata (header + systems + archetypes + componentTypes). */
+  onMetadata: (metadata: TraceMetadata) => void;
   /** Called for each tick batch received. */
-  onTick: (tickNumber: number, events: TraceEvent[], newSpanNames?: Record<number, string>) => void;
+  onTick: (tickNumber: number, events: TraceEvent[]) => void;
   /** Called when the SSE connection is lost. */
   onDisconnect: () => void;
   /** Called on connection errors. */
@@ -56,14 +56,6 @@ export interface LiveCallbacks {
 interface LiveTickBatch {
   tickNumber: number;
   events: TraceEvent[];
-  newSpanNames?: Record<number, string>;
-}
-
-/** Metadata event from the SSE stream. */
-interface LiveMetadataEvent {
-  header: TraceMetadata['header'];
-  systems: TraceMetadata['systems'];
-  spanNames?: Record<number, string>;
 }
 
 /**
@@ -75,12 +67,8 @@ export function connectLive(callbacks: LiveCallbacks): EventSource {
 
   es.addEventListener('metadata', (e: MessageEvent) => {
     try {
-      const data = JSON.parse(e.data) as LiveMetadataEvent;
-      const metadata: TraceMetadata = {
-        header: data.header,
-        systems: data.systems,
-      };
-      callbacks.onMetadata(metadata, data.spanNames ?? {});
+      const metadata = JSON.parse(e.data) as TraceMetadata;
+      callbacks.onMetadata(metadata);
     } catch (err) {
       callbacks.onError(`Failed to parse metadata: ${err}`);
     }
@@ -89,9 +77,7 @@ export function connectLive(callbacks: LiveCallbacks): EventSource {
   es.addEventListener('tick', (e: MessageEvent) => {
     try {
       const batch = JSON.parse(e.data) as LiveTickBatch;
-      // Span names (if any) are attached to the first batch of each engine flush, so they
-      // arrive with — or before — the events that reference them. No sentinel needed.
-      callbacks.onTick(batch.tickNumber, batch.events, batch.newSpanNames ?? undefined);
+      callbacks.onTick(batch.tickNumber, batch.events);
     } catch (err) {
       callbacks.onError(`Failed to parse tick data: ${err}`);
     }
@@ -102,10 +88,16 @@ export function connectLive(callbacks: LiveCallbacks): EventSource {
   });
 
   es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED) {
+    // Close the EventSource explicitly on any error. EventSource's default behavior is to auto-retry every ~3 s after a connection loss —
+    // that retry loop produces a stuttering error banner and hammers the server if the failure is persistent (e.g., server stopped, route
+    // misconfigured). We'd rather surface the error once, stop the connection, and let the user manually reconnect. For genuinely transient
+    // network blips the user sees one disconnect event + re-clicks Connect Live; that's the accepted cost.
+    const wasClosed = es.readyState === EventSource.CLOSED;
+    es.close();
+    if (wasClosed) {
       callbacks.onDisconnect();
     } else {
-      callbacks.onError('SSE connection error (will retry automatically)');
+      callbacks.onError('SSE connection error');
     }
   };
 

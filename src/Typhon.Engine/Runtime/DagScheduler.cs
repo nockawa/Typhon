@@ -5,6 +5,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -101,9 +102,6 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private readonly long[] _workerActiveTicks;
     private readonly long[] _workerIdleTicks;
 
-    // Deep trace inspector (optional, guarded by TelemetryConfig.SchedulerDeepTrace)
-    private IRuntimeInspector _inspector;
-
     // ═══════════════════════════════════════════════════════════════
     // Tick lifecycle hooks (set by TyphonRuntime)
     // ═══════════════════════════════════════════════════════════════
@@ -127,6 +125,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     internal EnrichTelemetryDelegate TelemetryEnrichCallback;
 
     internal delegate void EnrichTelemetryDelegate(ref TickTelemetry telemetry);
+
+    /// <summary>
+    /// Optional callback invoked after <c>TickEnd</c> is emitted on the scheduler thread. Intended use: collect per-tick gauge values
+    /// (memory, page cache, WAL, tx) and push a <see cref="TraceEventKind.PerTickSnapshot"/> record. Called from the scheduler's own
+    /// <see cref="ThreadSlot"/> so the snapshot co-locates with the <c>TickStart</c>/<c>TickEnd</c> pair in the trace file.
+    /// </summary>
+    /// <remarks>
+    /// Wired by <see cref="TyphonRuntime"/> only when <see cref="TelemetryConfig.ProfilerGaugesActive"/> is <c>true</c> — when the gate is
+    /// off the callback is never set, so even the delegate invocation is skipped.
+    /// </remarks>
+    internal Action<DagScheduler> GaugeSnapshotCallback;
 
     /// <summary>Called when overload level transitions to <see cref="OverloadLevel.PlayerShedding"/>.</summary>
     internal Action OnCriticalOverloadCallback;
@@ -321,7 +330,6 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     public void Shutdown()
     {
         LogShutdownRequested();
-        InspectorShutdown();
 
         // Signal workers to exit
         _workerShutdown = 1;
@@ -393,6 +401,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         // 1. Reset per-system state
         ResetTickState();
 
+        // Publish the current tick number to this (timer) thread's TLS so every TyphonEvent emit on this thread — TickStart/TickEnd/SystemReady/
+        // SystemSkipped/Phase — tags its TraceEvent with the right TickNumber. Workers do the same in WorkerLoop when they wake for a new tick.
+        TyphonEvent.CurrentTickNumber = (int)_currentTickNumber;
+
         // 2. Tick start hook (TyphonRuntime creates UoW)
         TickStartCallback?.Invoke(this);
         InspectorTickStart(_currentTickNumber, tickStartTimestamp);
@@ -461,6 +473,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var tickEndTimestamp = Stopwatch.GetTimestamp();
         InspectorTickEnd(_currentTickNumber, tickEndTimestamp);
 
+        // 5b. Profiler gauge snapshot (post-TickEnd so the snapshot record lands immediately after the TickEnd marker in the ring).
+        //     Callback is null unless TyphonRuntime has wired it up under ProfilerGaugesActive, so the null check is the only cost when off.
+        GaugeSnapshotCallback?.Invoke(this);
+
         // 6. Record telemetry
         //    Note: _nextTickTimestamp is updated by GetNextTick() which the base timer loop
         //    calls immediately after this method returns. Workers briefly see a stale value
@@ -486,6 +502,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         {
             queue.Reset();
         }
+
+        // Publish current tick number to TLS for profiler emits on this (timer) thread. See ExecuteTickMultiThreaded for rationale.
+        TyphonEvent.CurrentTickNumber = (int)_currentTickNumber;
 
         // Tick start hook
         TickStartCallback?.Invoke(this);
@@ -639,6 +658,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         var tickEndTimestamp = Stopwatch.GetTimestamp();
         InspectorTickEnd(_currentTickNumber, tickEndTimestamp);
+
+        // Profiler gauge snapshot (post-TickEnd). Same contract as the multi-threaded path.
+        GaugeSnapshotCallback?.Invoke(this);
+
         ComputeAndRecordTelemetry(tickStartTimestamp, tickEndTimestamp);
     }
 
@@ -650,6 +673,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     {
         Thread.CurrentThread.Priority = ThreadPriority.AboveNormal;
         LogWorkerStarted(workerId);
+
+        // Worker threads have no meaningful outer Activity — opt out of Activity.Current capture once so every subsequent BeginSpan skips
+        // the AsyncLocal read (~5–9 ns saved per span on the dominant producer).
+        TyphonEvent.SuppressActivityContextOnThisThread();
 
         var lastGen = _tickGeneration;
 
@@ -674,6 +701,11 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             lastGen = _tickGeneration;
+
+            // Publish the current scheduler tick number to this worker's TLS so every TyphonEvent emit below (ChunkStart/ChunkEnd and any
+            // BeginSpan calls from inside a system body) tags its TraceEvent with the right TickNumber. Without this, worker-emitted events land
+            // in "tick 0" and the viewer collapses every chunk into a single tick group.
+            TyphonEvent.CurrentTickNumber = (int)_currentTickNumber;
 
             // ═══ Within-tick: find and process work ═══
             var trackUtilization = TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackWorkerUtilization;
@@ -794,7 +826,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
-        InspectorChunkStart(sysIdx, 0, workerId, workStart, 1);
+        InspectorChunkStart(sysIdx, 0, workStart, 1);
 
         var success = true;
         try
@@ -814,7 +846,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             SystemEndCallback?.Invoke(sysIdx, success);
 
             var workEnd = Stopwatch.GetTimestamp();
-            InspectorChunkEnd(sysIdx, 0, workerId, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
+            InspectorChunkEnd(sysIdx, 0, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
             if (trackUtilization)
             {
                 _workerActiveTicks[workerId] += workEnd - workStart;
@@ -852,7 +884,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workStart = Stopwatch.GetTimestamp();
-            InspectorChunkStart(sysIdx, chunk, workerId, workStart, sys.TotalChunks);
+            InspectorChunkStart(sysIdx, chunk, workStart, sys.TotalChunks);
             try
             {
                 sys.PipelineChunkAction(chunk, sys.TotalChunks);
@@ -865,7 +897,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workEnd = Stopwatch.GetTimestamp();
-            InspectorChunkEnd(sysIdx, chunk, workerId, workEnd, 0);
+            InspectorChunkEnd(sysIdx, chunk, workEnd, 0);
 
             if (trackUtilization)
             {
@@ -914,7 +946,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workStart = Stopwatch.GetTimestamp();
-            InspectorChunkStart(sysIdx, chunk, workerId, workStart, sys.TotalChunks);
+            InspectorChunkStart(sysIdx, chunk, workStart, sys.TotalChunks);
             try
             {
                 ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, sys.TotalChunks, workerId);
@@ -927,7 +959,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
 
             var workEnd = Stopwatch.GetTimestamp();
-            InspectorChunkEnd(sysIdx, chunk, workerId, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
+            InspectorChunkEnd(sysIdx, chunk, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
 
             if (trackUtilization)
             {
@@ -1066,7 +1098,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
-        InspectorChunkStart(sysIdx, 0, workerId, workStart, 1);
+        InspectorChunkStart(sysIdx, 0, workStart, 1);
 
         var success = true;
         try
@@ -1085,7 +1117,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             SystemEndCallback?.Invoke(sysIdx, success);
 
             var workEnd = Stopwatch.GetTimestamp();
-            InspectorChunkEnd(sysIdx, 0, workerId, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
+            InspectorChunkEnd(sysIdx, 0, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
             if (trackUtilization)
             {
                 _workerActiveTicks[workerId] += workEnd - workStart;

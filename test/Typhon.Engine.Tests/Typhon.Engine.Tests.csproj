@@ -39,6 +39,29 @@
         <ProjectReference Include="..\..\src\Typhon.Profiler\Typhon.Profiler.csproj" />
     </ItemGroup>
 
+    <!-- Pull in the profiler server's RecordDecoder + LiveTraceEvent + TraceFileCacheBuilder as compile items so tests can exercise the
+         match-arm dispatch and chunk-build logic without forcing the Web SDK + ASP.NET framework reference chain that a <ProjectReference>
+         to Typhon.Profiler.Server would drag in. The source files have no ASP.NET dependencies — they only reference Typhon.Engine.Profiler
+         and Typhon.Profiler types. -->
+    <ItemGroup>
+        <Compile Include="..\..\tools\Typhon.Profiler.Server\RecordDecoder.cs">
+            <Link>Profiler\Server\RecordDecoder.cs</Link>
+        </Compile>
+        <Compile Include="..\..\tools\Typhon.Profiler.Server\LiveTraceEvent.cs">
+            <Link>Profiler\Server\LiveTraceEvent.cs</Link>
+        </Compile>
+        <Compile Include="..\..\tools\Typhon.Profiler.Server\TraceFileCacheBuilder.cs">
+            <Link>Profiler\Server\TraceFileCacheBuilder.cs</Link>
+        </Compile>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Test-only telemetry config: enables ProfilerActive so producer tests can exercise the on-path -->
+        <Content Include="typhon.telemetry.json">
+            <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
     <ItemGroup>
         <!-- Reference the Roslyn analyzer for ChunkAccessor enforcement -->
         <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj" ReferenceOutputAssembly="false" OutputItemType="Analyzer" />

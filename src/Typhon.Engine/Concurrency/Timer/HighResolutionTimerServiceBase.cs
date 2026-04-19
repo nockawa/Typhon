@@ -173,7 +173,24 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
     }
 
     /// <summary>
-    /// Stops the timer thread and disposes managed resources. Follows the standard <see cref="ResourceNode"/> disposal pattern.
+    /// Stops the timer loop thread <i>without</i> running <see cref="Dispose(bool)"/>. After this returns, the derived class is guaranteed that no
+    /// further <see cref="ExecuteCallbacks"/> invocation will occur and the instance is still fully usable — callers can safely read managed fields,
+    /// run a final drain pass, complete queues, etc. Must be followed by <see cref="IDisposable.Dispose"/> to release resource-tree membership.
+    /// </summary>
+    /// <remarks>
+    /// Exists because the profiler's shutdown sequence needs a hard boundary between "timer has stopped" and "object has been disposed": the
+    /// consumer's final drain touches the same <c>_mergeScratch</c> / <c>_offsets</c> fields the timer loop was using, so we must guarantee the
+    /// timer thread is gone before the final drain runs, yet the consumer still needs a live object to drain with.
+    /// </remarks>
+    protected void StopTimerThread()
+    {
+        _shutdown = true;
+        _thread?.Join(TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>
+    /// Stops the timer thread and disposes managed resources. Follows the standard <see cref="ResourceNode"/> disposal pattern. Idempotent with
+    /// <see cref="StopTimerThread"/> — calling this after the timer has already been stopped just runs the managed-resource cleanup.
     /// </summary>
     protected override void Dispose(bool disposing)
     {
@@ -184,8 +201,7 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
 
         if (disposing)
         {
-            _shutdown = true;
-            _thread?.Join(TimeSpan.FromSeconds(2));
+            StopTimerThread();
         }
 
         base.Dispose(disposing);

@@ -22,7 +22,7 @@ namespace Typhon.Engine;
 /// </para>
 /// </remarks>
 [PublicAPI]
-internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, IDebugPropertiesProvider, IDisposable
+internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, IDebugPropertiesProvider
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Constants
@@ -68,7 +68,6 @@ internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, ID
     // ═══════════════════════════════════════════════════════════════════════
 
     private long _totalRents;
-    private long _peakConcurrentRents;
     private int _currentRents;
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -131,6 +130,12 @@ internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, ID
 
     /// <summary>Number of buffers currently rented.</summary>
     public int CurrentRents => _currentRents;
+
+    /// <summary>Peak concurrent rents observed since process start (reset via <see cref="ResetPeaks"/>). Exposed for the gauge subsystem.</summary>
+    public long PeakRents { get; private set; }
+
+    /// <summary>Cumulative total rent count since process start. Monotonic. Viewer derives per-tick rent rate as Δ/Δt.</summary>
+    public long TotalRents => _totalRents;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Rent / Return
@@ -227,9 +232,9 @@ internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, ID
     private void UpdatePeakConcurrent(int current)
     {
         // Simple racy max — acceptable for diagnostics
-        if (current > _peakConcurrentRents)
+        if (current > PeakRents)
         {
-            _peakConcurrentRents = current;
+            PeakRents = current;
         }
     }
 
@@ -245,7 +250,7 @@ internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, ID
     }
 
     /// <inheritdoc />
-    public void ResetPeaks() => _peakConcurrentRents = _currentRents;
+    public void ResetPeaks() => PeakRents = _currentRents;
 
     // ═══════════════════════════════════════════════════════════════════════
     // IDebugPropertiesProvider
@@ -259,7 +264,7 @@ internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, ID
             ["Pool.BufferSize"] = BufferSize,
             ["Pool.TotalBytes"] = (long)_poolCapacity * BufferSize,
             ["Rents.Current"] = _currentRents,
-            ["Rents.Peak"] = _peakConcurrentRents,
+            ["Rents.Peak"] = PeakRents,
             ["Rents.Total"] = _totalRents,
             ["IsDisposed"] = _disposed != 0,
         };

@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Reflection;
 using System.Linq.Expressions;
+using Typhon.Engine.Profiler;
 using Typhon.Schema.Definition;
 
 [assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
@@ -20,6 +21,7 @@ using Typhon.Schema.Definition;
 [assembly: InternalsVisibleTo("tsh")]
 [assembly: InternalsVisibleTo("AntHill")]
 [assembly: InternalsVisibleTo("AntHill.ProfileRunner")]
+[assembly: InternalsVisibleTo("Typhon.IOProfileRunner")]
 
 namespace Typhon.Engine;
 
@@ -206,16 +208,20 @@ public class DatabaseEngineOptions
 public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropertiesProvider
 {
     private readonly DatabaseEngineOptions      _options;
-    private readonly ILogger<DatabaseEngine>    _log;
-    internal ILogger<DatabaseEngine>            Logger => _log;
-    private readonly IMemoryAllocator           _memoryAllocator;
-    internal IMemoryAllocator                   MemoryAllocator => _memoryAllocator;
-    internal TransientOptions                   TransientOptions => _options.Transient;
+
     private readonly IWalFileIO                 _walFileIO;
     private readonly IResource                  _durabilityNode;
     private WalRecoveryResult                   _lastRecoveryResult;
+    internal TransientOptions                   TransientOptions => _options.Transient;
     internal WalRecoveryResult                  LastRecoveryResult => _lastRecoveryResult;
-    private StagingBufferPool                   _stagingBufferPool;
+
+    // ReSharper disable once ConvertToAutoProperty MUST KEEP _logger for SourceGen to generate the log properly
+    internal ILogger<DatabaseEngine> Logger => _logger;
+
+    internal IMemoryAllocator                   MemoryAllocator { get; }
+
+    /// <summary>Shared WAL staging buffer pool — exposed to the profiler's gauge emitter. Null when WAL is disabled. Do not keep references across engine lifecycle boundaries.</summary>
+    internal StagingBufferPool StagingBufferPool { get; private set; }
 
     // Bootstrap dictionary keys (engine layer)
     // ReSharper disable InconsistentNaming
@@ -330,6 +336,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     private readonly List<EcsCleanupEntry> _ecsCleanupQueue = [];
     private readonly Lock _ecsCleanupLock = new();
+    private readonly ILogger<DatabaseEngine> _logger;
 
     /// <summary>Enqueue an ECS entity for deferred cleanup (LinearHash removal + chunk freeing).</summary>
     internal void EnqueueEcsCleanup(EntityId id, ArchetypeMetadata meta, long diedTSN)
@@ -476,17 +483,17 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         MMF = mmf;
         EpochManager = epochManager;
         Watchdog = watchdog;
-        _log = log;
+        _logger = log;
         _options = options;
-        _memoryAllocator = memoryAllocator;
+        MemoryAllocator = memoryAllocator;
         _walFileIO = walFileIO;
         _durabilityNode = resourceRegistry.Durability;
         TimeoutOptions.Current = _options.Timeouts;
         _componentCollectionSegmentByStride = new ConcurrentDictionary<int, ChunkBasedSegment<PersistentStore>>();
         _componentCollectionVSBSByType = new ConcurrentDictionary<Type, VariableSizedBufferSegmentBase<PersistentStore>>();
         TransactionChain = new TransactionChain(_options.Resources.MaxActiveTransactions, this);
-        DeferredCleanupManager = new DeferredCleanupManager(_options.DeferredCleanup, _log);
-        EnabledBitsOverrides = new EnabledBitsOverrides(_log);
+        DeferredCleanupManager = new DeferredCleanupManager(_options.DeferredCleanup, Logger);
+        EnabledBitsOverrides = new EnabledBitsOverrides(Logger);
 
         DBD = new DatabaseDefinitions();
         ConstructComponentStore();
@@ -521,29 +528,29 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             StatisticsWorker?.Dispose();
             StatisticsWorker = null;
 
-            _log?.LogInformation("Engine disposing: CheckpointManager");
+            Logger?.LogInformation("Engine disposing: CheckpointManager");
             // Checkpoint must dispose first: runs final cycle, writes pages + advances LSN before WAL shuts down
             CheckpointManager?.Dispose();
             CheckpointManager = null;
 
             // Dispose staging pool after checkpoint manager (checkpoint may use it during final cycle)
-            _stagingBufferPool?.Dispose();
-            _stagingBufferPool = null;
+            StagingBufferPool?.Dispose();
+            StagingBufferPool = null;
 
-            _log?.LogInformation("Engine disposing: PersistArchetypeState");
+            Logger?.LogInformation("Engine disposing: PersistArchetypeState");
             // Persist EntityMap SPIs and NextEntityKey counters so reopen can load EntityMaps directly
             PersistArchetypeState();
 
-            _log?.LogInformation("Engine disposing: PersistEngineState");
+            Logger?.LogInformation("Engine disposing: PersistEngineState");
             // Persist final TSN counter and flush all dirty pages to disk. This ensures:
             // 1. TSN counter survives restart (MVCC visibility)
             // 2. All committed transaction data is on disk even without WAL/checkpoint
             PersistEngineState();
 
-            _log?.LogInformation("Engine disposing: WalManager");
+            Logger?.LogInformation("Engine disposing: WalManager");
             WalManager?.Dispose();
             WalManager = null;
-            _log?.LogInformation("Engine disposing: TransactionChain + cleanup");
+            Logger?.LogInformation("Engine disposing: TransactionChain + cleanup");
             TransactionChain.Dispose();
             UowRegistry?.Dispose();
             MMF.Dispose();
@@ -561,13 +568,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         var commitBufferCapacity = _options.Resources.WalRingBufferSizeBytes / 2;
-        WalManager = new WalManager(walOptions, _memoryAllocator, _walFileIO, _durabilityNode, commitBufferCapacity);
+        WalManager = new WalManager(walOptions, MemoryAllocator, _walFileIO, _durabilityNode, commitBufferCapacity);
 
         // Determine continuation point from recovery or fresh start
         var lastLSN = _lastRecoveryResult.LastValidLSN;
         var lastSegmentId = 0L; // Segment continuity is handled by WalSegmentManager scanning existing files
         WalManager.Initialize(lastSegmentId, lastLSN > 0 ? lastLSN + 1 : 1);
-        WalManager.Logger = _log;
+        WalManager.Logger = Logger;
         WalManager.Start();
     }
 
@@ -585,7 +592,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             initialCheckpointLsn = MMF.Bootstrap.GetLong(ManagedPagedMMF.BK_CheckpointLSN);
         }
 
-        _stagingBufferPool = new StagingBufferPool(_memoryAllocator, _durabilityNode);
+        StagingBufferPool = new StagingBufferPool(MemoryAllocator, _durabilityNode);
 
         // Enable FPI capture — creates FpiBitmap internally using cache page count
         MMF.EnableFpiCapture(WalManager, _options.Wal?.EnableFpiCompression ?? false);
@@ -593,7 +600,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // Activate CRC verification mode — recovery is complete, so OnLoad checks are now safe
         MMF.SetPageChecksumVerification(_options.Resources.PageChecksumVerification);
 
-        CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, _stagingBufferPool, _durabilityNode,
+        CheckpointManager = new CheckpointManager(MMF, UowRegistry, WalManager, _options.Resources, EpochManager, StagingBufferPool, _durabilityNode,
             initialCheckpointLsn, () => _lastTickFenceLSN);
         CheckpointManager.Start();
 
@@ -618,6 +625,61 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// Returns all registered ComponentTables. Used by <see cref="StatisticsWorker"/> to iterate tables.
     /// </summary>
     internal IEnumerable<ComponentTable> GetAllComponentTables() => _componentTableByType.Values;
+
+    /// <summary>
+    /// Sum of pinned-heap bytes currently held by every live <see cref="TransientStore"/> in this engine. Transient storage is distributed across several
+    /// per-table and per-cluster stores (each <see cref="ComponentTable"/> with <see cref="StorageMode.Transient"/> owns three stores — component +
+    /// default-index + string64-index — and each cluster-eligible <see cref="ArchetypeClusterState"/> owns one cluster store). This accessor walks every
+    /// registered ComponentTable and every archetype's cluster state, reads the live <c>PageCount</c> off each segment's own store copy, and returns the total
+    /// in bytes.
+    /// </summary>
+    /// <remarks>
+    /// Consumed by <see cref="Profiler.GaugeSnapshotEmitter"/> once per scheduler tick; cost is O(ComponentTables + Archetypes).
+    /// Reads are non-synchronized — the returned value is best-effort and can lag by a tick's worth of allocations. That's
+    /// acceptable for an observability gauge but unsafe to use for allocation decisions.
+    /// </remarks>
+    internal long GetTransientBytesTotal()
+    {
+        long pageCount = 0;
+
+        if (_componentTableByType != null)
+        {
+            foreach (var table in _componentTableByType.Values)
+            {
+                if (table.StorageMode != StorageMode.Transient)
+                {
+                    continue;
+                }
+                if (table.TransientComponentSegment != null)
+                {
+                    pageCount += table.TransientComponentSegment.Store.PageCount;
+                }
+                if (table.TransientDefaultIndexSegment != null)
+                {
+                    pageCount += table.TransientDefaultIndexSegment.Store.PageCount;
+                }
+                if (table.TransientString64IndexSegment != null)
+                {
+                    pageCount += table.TransientString64IndexSegment.Store.PageCount;
+                }
+            }
+        }
+
+        if (_archetypeStates != null)
+        {
+            for (int i = 0; i < _archetypeStates.Length; i++)
+            {
+                var state = _archetypeStates[i];
+                var clusterState = state?.ClusterState;
+                if (clusterState?.TransientSegment != null)
+                {
+                    pageCount += clusterState.TransientSegment.Store.PageCount;
+                }
+            }
+        }
+
+        return pageCount * PagedMMF.PageSize;
+    }
 
     /// <summary>
     /// Serializes dirty SingleVersion component data to WAL at tick boundary. One TickFence chunk per SV ComponentTable.
@@ -1370,16 +1432,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         long startTimestamp = Stopwatch.GetTimestamp();
 
-        // Manual-dispose span pattern: null init + conditional start + null-conditional dispose lets the JIT
-        // eliminate the span branch entirely when TelemetryConfig.SpatialActive is false. See MEMORY.md
-        // "Span Instrumentation" notes.
-        Activity migrationActivity = null;
-        if (TelemetryConfig.SpatialActive)
-        {
-            migrationActivity = TyphonActivitySource.StartActivity("Cluster.Migration");
-            migrationActivity?.SetTag("typhon.archetype.id", (int)archetypeId);
-            migrationActivity?.SetTag("typhon.migration.count", count);
-        }
+        using var migrationScope = TyphonEvent.BeginClusterMigration(archetypeId, count);
 
         var grid = _spatialGrid;
         var layout = clusterState.Layout;
@@ -1661,7 +1714,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 clusterAccessor.Dispose();
             }
             changeSet.SaveChanges();
-            migrationActivity?.Dispose();
 
             // Reset queue for next tick BEFORE any re-throw path can escape. Leaving entries in the queue after a mid-batch exception would cause the next
             // tick's ExecuteMigrations to re-attempt already-applied migrations, double-allocating destination slots and orphaning source clusters.
@@ -1681,7 +1733,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // blow past cell boundaries en masse. 1K per tick is an arbitrary absolute threshold; revisit once AntHill provides realistic rates.
         if (TelemetryConfig.SpatialActive && count >= 1000)
         {
-            SpatialMaintainer.LogHighMigrationRate(_log, count, archetypeId, durationMs);
+            SpatialMaintainer.LogHighMigrationRate(Logger, count, archetypeId, durationMs);
         }
     }
 
@@ -2034,7 +2086,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             double escapeRate = (double)escapeCount / dirtyCount;
             if (escapeRate > 0.10)
             {
-                SpatialMaintainer.LogHighEscapeRate(_log, table.Definition.Name, escapeRate, escapeCount, dirtyCount);
+                SpatialMaintainer.LogHighEscapeRate(Logger, table.Definition.Name, escapeRate, escapeCount, dirtyCount);
             }
         }
     }
@@ -2145,7 +2197,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             cs.SaveChanges();
 
-            UowRegistry = new UowRegistry(segment, MMF, EpochManager, _memoryAllocator, this);
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager, MemoryAllocator, this);
             UowRegistry.Initialize();
         }
         else
@@ -2154,7 +2206,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             var spi = MMF.Bootstrap.GetInt(BK_UowRegistrySPI);
             var checkpointLSN = MMF.Bootstrap.GetLong(ManagedPagedMMF.BK_CheckpointLSN);
             var segment = MMF.GetSegment(spi);
-            UowRegistry = new UowRegistry(segment, MMF, EpochManager, _memoryAllocator, this);
+            UowRegistry = new UowRegistry(segment, MMF, EpochManager, MemoryAllocator, this);
 
             var walDir = _options.Wal?.WalDirectory;
             if (walDir != null && _walFileIO != null && System.IO.Directory.Exists(walDir) && System.IO.Directory.GetFiles(walDir, "*.wal").Length > 0)
@@ -2530,7 +2582,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         var dirtyPages = MMF.CollectDirtyMemPageIndices();
         if (dirtyPages.Length > 0)
         {
-            _log?.LogWarning("Engine shutdown: flushing {Count} dirty page(s) to disk", dirtyPages.Length);
+            Logger?.LogWarning("Engine shutdown: flushing {Count} dirty page(s) to disk", dirtyPages.Length);
             foreach (var idx in dirtyPages)
             {
                 cs.AddByMemPageIndex(idx);
@@ -2786,12 +2838,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         throw new SchemaValidationException(diff);
                     }
 
-                    _log?.LogInformation(
+                    Logger?.LogInformation(
                         "Breaking schema change for '{Name}': {Summary}. Migration chain registered ({StepCount} step(s))",
                         schemaName, diff.Summary, chain.Value.StepCount);
 
                     migrationResult = SchemaEvolutionEngine.MigrateWithFunction(
-                        MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, chain.Value, _log, RaiseMigrationProgress);
+                        MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, chain.Value, Logger, RaiseMigrationProgress);
                 }
 
                 if (!diff.IsIdentical)
@@ -2799,16 +2851,16 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     switch (diff.Level)
                     {
                         case CompatibilityLevel.CompatibleWidening:
-                            _log?.LogWarning("Schema widening for '{Name}': {Summary}", schemaName, diff.Summary);
+                            Logger?.LogWarning("Schema widening for '{Name}': {Summary}", schemaName, diff.Summary);
                             break;
                         case CompatibilityLevel.Breaking:
                             // Already handled above via migration function
                             break;
                         case >= CompatibilityLevel.Compatible:
-                            _log?.LogInformation("Schema evolution for '{Name}': {Summary}", schemaName, diff.Summary);
+                            Logger?.LogInformation("Schema evolution for '{Name}': {Summary}", schemaName, diff.Summary);
                             break;
                         case CompatibilityLevel.InformationOnly:
-                            _log?.LogInformation("Schema renames for '{Name}': {Summary}", schemaName, diff.Summary);
+                            Logger?.LogInformation("Schema renames for '{Name}': {Summary}", schemaName, diff.Summary);
                             break;
                     }
 
@@ -2820,7 +2872,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
                         if (SchemaEvolutionEngine.NeedsMigration(diff, oldStride, newStride))
                         {
-                            migrationResult = SchemaEvolutionEngine.Migrate(MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, _log,
+                            migrationResult = SchemaEvolutionEngine.Migrate(MMF, EpochManager, diff, persistedFields, persisted.Comp, definition, Logger,
                                 RaiseMigrationProgress);
                         }
                     }

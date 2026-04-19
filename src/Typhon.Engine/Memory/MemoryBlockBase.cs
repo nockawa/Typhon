@@ -15,6 +15,12 @@ public abstract class MemoryBlockBase : MemoryManager<byte>, IMemoryResource, ID
     public abstract Span<byte> DataAsSpan { get; }
     public abstract Memory<byte> DataAsMemory { get; }
 
+    /// <summary>
+    /// Interned call-site tag (see <see cref="Profiler.MemoryAllocSource"/>). Stored so the symmetric free-side
+    /// <see cref="Profiler.TraceEventKind.MemoryAllocEvent"/> can carry the same tag as its alloc pair. <c>0</c> means unattributed.
+    /// </summary>
+    public ushort SourceTag { get; }
+
     protected override void Dispose(bool disposing)
     {
         Allocator.Remove(this);
@@ -26,7 +32,7 @@ public abstract class MemoryBlockBase : MemoryManager<byte>, IMemoryResource, ID
         Dispose(true);
         GC.SuppressFinalize(this);
     }
-    
+
     public string Id { get; }
     public ResourceType Type => ResourceType.Memory;
     public IResource Parent { get; }
@@ -39,11 +45,12 @@ public abstract class MemoryBlockBase : MemoryManager<byte>, IMemoryResource, ID
     /// <inheritdoc />
     public abstract IReadOnlyDictionary<string, object> GetDebugProperties();
 
-    protected MemoryBlockBase(MemoryAllocator allocator, string id, IResource parent)
+    protected MemoryBlockBase(MemoryAllocator allocator, string id, IResource parent, ushort sourceTag = 0)
     {
         Allocator = allocator ?? throw new ArgumentNullException(nameof(allocator), "Memory allocator cannot be null");
         Parent = parent ?? throw new ArgumentNullException(nameof(parent), "Parent resource cannot be null. Resources must have an explicit parent.");
         Id = id ?? throw new ArgumentNullException(nameof(id), "Resource ID cannot be null");
+        SourceTag = sourceTag;
         CreatedAt = DateTime.UtcNow;
         Owner = Parent.Owner;
         Parent.RegisterChild(this);

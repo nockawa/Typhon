@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -141,19 +142,18 @@ public unsafe partial class Transaction
         Debug.Assert(_dbe._archetypeStates[meta.ArchetypeId]?.EntityMap != null,
             $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
 
-        Activity activity = null;
-        if (TelemetryConfig.EcsActive)
+        var scope = TyphonEvent.BeginEcsSpawn(meta.ArchetypeId);
+        try
         {
-            activity = TyphonActivitySource.StartActivity("ECS.Spawn");
-            activity?.SetTag(TyphonSpanAttributes.EcsArchetype, typeof(TArch).Name);
+            scope.Tsn = TSN;
+            var id = SpawnInternal(meta, values);
+            scope.EntityId = id.RawValue;
+            return id;
         }
-
-        var id = SpawnInternal(meta, values);
-
-        activity?.SetTag(TyphonSpanAttributes.EntityId, (long)id.RawValue);
-        activity?.Dispose();
-
-        return id;
+        finally
+        {
+            scope.Dispose();
+        }
     }
 
     /// <summary>
@@ -561,23 +561,23 @@ public unsafe partial class Transaction
 
         Debug.Assert(!id.IsNull, "Cannot destroy null entity");
 
-        Activity activity = null;
-        if (TelemetryConfig.EcsActive)
+        var scope = TyphonEvent.BeginEcsDestroy(id.RawValue);
+        try
         {
-            activity = TyphonActivitySource.StartActivity("ECS.Destroy");
-            activity?.SetTag(TyphonSpanAttributes.EntityId, (long)id.RawValue);
-        }
+            scope.Tsn = TSN;
 
-        int cascadeCount = 0;
-        DestroyInternal(id, 0, ref cascadeCount);
+            int cascadeCount = 0;
+            DestroyInternal(id, 0, ref cascadeCount);
 
-        if (activity != null)
-        {
+            // Only carry CascadeCount when the cascade actually extended beyond the root entity — saves 4 B per record on the common case.
             if (cascadeCount > 1)
             {
-                activity.SetTag(TyphonSpanAttributes.EcsCascadeCount, cascadeCount - 1);
+                scope.CascadeCount = cascadeCount;
             }
-            activity.Dispose();
+        }
+        finally
+        {
+            scope.Dispose();
         }
     }
 

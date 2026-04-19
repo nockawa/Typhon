@@ -1,0 +1,56 @@
+{
+  "_doc": "Minimal smoke-test config designed to exercise the intra-tick chunk-split path (cache v8). spawnBurst with 200_000 entities in a single tick produces ~200K EcsSpawn events + transaction/page-cache chains within that one tick — well past the IntraTickEventCap threshold of 100_000, forcing the builder's mid-tick flush logic to fire at least once (probably 2-3 times). The resulting cache sidecar will contain multiple chunks sharing the same [fromTick, toTick) range, with FlagIsContinuation set on all but the first. Loading this trace in the viewer exercises the client-side merge (mergeTickData + assembleTickViewAndNumbers' merged-tick detection loop) on a real workload — if any of that machinery is broken, it shows up here first. Use: dotnet run -c Release -- ioprofile-split-test.json.",
+
+  "output": {
+    "tracePath": "ioprofile-split-test.typhon-trace",
+    "workingDirectory": "ioprofile-data"
+  },
+
+  "database": {
+    "_doc": "128 MB cache — same as the 2k variant. 200K Versioned entities at ~112 B each = ~22 MB of live component data, plus revision chains + index pages; comfortably under 128 MB so no backpressure stalls fire.",
+    "cacheSizeMB": 128,
+    "walEnabled": true
+  },
+
+  "workload": {
+    "_doc": "Three stages: 5-tick ramp-up via spawnCheckpointLoop (gets a few clean ticks on the wire for comparison), one giant tick via spawnBurst (the intra-tick-split trigger), a terminal checkpoint. Total ~8 ticks — tiny trace file, fast to generate and load.",
+    "stages": {
+      "spawnCheckpointLoop": {
+        "enabled": true,
+        "iterations": 5,
+        "entitiesPerIteration": 100,
+        "_comment": "5 tiny normal ticks before the big one. Lets the viewer see 'normal' tick density adjacent to the split tick, for visual side-by-side comparison."
+      },
+      "spawnBurst": {
+        "enabled": true,
+        "entityCount": 200000,
+        "batchSize": 500,
+        "_comment": "200K entities in ONE tick via 400 batched commits. Expected event output in this tick: ~200K EcsSpawn + ~400 TransactionCommit + ~400 TransactionPersist + BTreeInsert × (200K entities × 1-2 indexes) + PageCache events as the versioned storage allocates pages. Easily > 100_000 events — at least 2 intra-tick splits expected. This IS the whole point of the config."
+      },
+      "finalCheckpoint": {
+        "enabled": true
+      }
+    }
+  },
+
+  "profile": {
+    "_doc": "Same opt-in set as the 2k variant so record shapes + fold behaviour match.",
+
+    "pageCacheFetch": true,
+    "pageCacheDiskRead": true,
+    "pageCacheDiskWrite": true,
+    "pageCacheAllocatePage": true,
+    "pageCacheFlush": true,
+    "pageEvicted": true,
+
+    "pageCacheDiskReadCompleted": false,
+    "pageCacheDiskWriteCompleted": false,
+    "pageCacheFlushCompleted": false,
+
+    "transactionCommit": true,
+    "transactionCommitComponent": true,
+    "ecsSpawn": true,
+    "btreeInsert": true,
+    "btreeDelete": true
+  }
+}

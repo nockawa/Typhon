@@ -1,10 +1,10 @@
 using JetBrains.Annotations;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
 /// <summary>
-/// Identifies a phase within a tick's lifecycle, used by <see cref="IRuntimeInspector"/>
-/// to report phase transitions.
+/// Identifies a phase within a tick's lifecycle. Surfaced as <see cref="TraceEventKind.PhaseStart"/>/<c>PhaseEnd</c> events by the profiler.
 /// </summary>
 [PublicAPI]
 public enum TickPhase : byte

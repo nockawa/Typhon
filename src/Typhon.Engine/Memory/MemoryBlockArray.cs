@@ -12,8 +12,8 @@ public class MemoryBlockArray : MemoryBlockBase
     private int _pinCount;
     private GCHandle _handle;
     public byte[] DataAsArray { get; private set; }
-    internal MemoryBlockArray(MemoryAllocator allocator, byte[] block, string resourceId, IResource parent) : 
-        base(allocator, resourceId ?? Guid.NewGuid().ToString(), parent)
+    internal MemoryBlockArray(MemoryAllocator allocator, byte[] block, string resourceId, IResource parent, ushort sourceTag = 0) :
+        base(allocator, resourceId ?? Guid.NewGuid().ToString(), parent, sourceTag)
     {
         DataAsArray = block;
     }

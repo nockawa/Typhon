@@ -2,6 +2,7 @@
 
 using System;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -144,6 +145,7 @@ internal sealed class StatisticsWorker : ResourceNode
                 try
                 {
                     int pageInterval = ComputeSamplingInterval(ct, _options.SamplingMinEntities);
+                    using var rebuildScope = TyphonEvent.BeginStatisticsRebuild(ct.EstimatedEntityCount, ct.MutationsSinceRebuild, pageInterval);
                     StatisticsRebuilder.RebuildAll(ct, _epochManager, pageInterval);
 
                     // Reset counter after successful rebuild — if rebuild fails, mutations are preserved for retry

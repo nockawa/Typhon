@@ -64,6 +64,9 @@ public class ResourceRegistry : IResourceRegistry
     /// <inheritdoc />
     public IResource Runtime { get; }
 
+    /// <inheritdoc />
+    public IResource Profiler { get; }
+
     /// <summary>
     /// Creates a new resource registry with the standard subsystem tree.
     /// </summary>
@@ -87,6 +90,9 @@ public class ResourceRegistry : IResourceRegistry
 
         // Runtime subsystem
         Runtime = new ResourceNode("Runtime", ResourceType.Node, Root);
+
+        // Profiler subsystem (Tracy-style capture pipeline — #243)
+        Profiler = new ResourceNode("Profiler", ResourceType.Node, Root);
     }
 
     /// <inheritdoc />
@@ -99,6 +105,7 @@ public class ResourceRegistry : IResourceRegistry
         ResourceSubsystem.Synchronization => Synchronization,
         ResourceSubsystem.Timer => Timer,
         ResourceSubsystem.Runtime => Runtime,
+        ResourceSubsystem.Profiler => Profiler,
         _ => throw new ArgumentOutOfRangeException(nameof(subsystem), subsystem, "Unknown subsystem")
     };
 

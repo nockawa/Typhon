@@ -159,6 +159,20 @@ public sealed unsafe class WalCommitBuffer : IDisposable
     /// <summary>Current tail position (producer write head).</summary>
     internal long TailPosition => Interlocked.Read(ref _tailPosition);
 
+    /// <summary>
+    /// Bytes currently queued in the active buffer awaiting drain — the producer-visible fill level. Computed as <c>TailPosition - DrainPosition</c>, clamped
+    /// at 0 to guard against any transient under-run from out-of-order reads of the two counters (both are read atomically, but not atomically as a pair).
+    /// Exposed for the gauge subsystem; non-transactional sampling semantics — microsecond staleness is acceptable for visualization.
+    /// </summary>
+    public long UsedBytes
+    {
+        get
+        {
+            var used = TailPosition - _drainPosition;
+            return used > 0 ? used : 0;
+        }
+    }
+
     /// <summary>Current swap state (0=Normal, 1=Requested, 2=Draining).</summary>
     internal int SwapState => _swapState;
 

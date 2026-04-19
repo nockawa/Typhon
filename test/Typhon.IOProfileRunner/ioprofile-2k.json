@@ -1,0 +1,82 @@
+{
+  "_doc": "2000-tick variant of the IO Profile Runner config. Tuned to produce a long trace with moderate per-tick activity: no single tick dominates, but every tick has visible signals on at least one gauge or event track. Use with: dotnet run -c Release -- ioprofile-2k.json. Output lands at ioprofile-2k.typhon-trace alongside the default-variant trace so both can be compared side-by-side.",
+
+  "output": {
+    "tracePath": "ioprofile-2k.typhon-trace",
+    "workingDirectory": "ioprofile-data"
+  },
+
+  "database": {
+    "_doc": "128 MB cache — 4× the default variant. Rationale: at 32 MB (4096 × 8 KB pages) the spawnCheckpointLoop stage's ~250K Versioned entities would fill every slot dirty+epoch-protected and the engine would enter backpressure waits (observed: 3×5s waits between gcChurn and txFlood in earlier runs), pushing total runtime past a reasonable cap. 128 MB (16K pages) gives the workload enough headroom to run without stalling — cache churn is still plentiful (visible Disk Read/Write + PageEvicted activity throughout), just not pathologically starved.",
+    "cacheSizeMB": 128,
+    "walEnabled": true
+  },
+
+  "workload": {
+    "_doc": "Stage budget — total ~2001 ticks: 1 + 1 + 500 + 500 + 500 + 497 + 1 + 1 = 2001. Each non-one-shot stage runs one iteration per tick, producing a steady signal rather than bursts.",
+    "stages": {
+      "spawnBurst": {
+        "enabled": true,
+        "entityCount": 5000,
+        "batchSize": 500,
+        "_comment": "One-shot warm-up: 5K entities in the first tick. Seeds the page cache and creates a clear initial spike on every track."
+      },
+      "checkpointAfterSpawn": {
+        "enabled": true
+      },
+      "spawnCheckpointLoop": {
+        "enabled": true,
+        "iterations": 500,
+        "entitiesPerIteration": 500,
+        "_comment": "500 iterations × 500 entities = 250K Versioned entities across 500 ticks. Per-tick cost ~9 ms. Produces sustained checkpoint + commit activity on the Transactions / Checkpoint mini-rows and keeps the PageCache Dirty bucket oscillating as checkpoints drain each tick's writes."
+      },
+      "txFlood": {
+        "enabled": true,
+        "iterations": 500,
+        "entitiesPerIteration": 50,
+        "_comment": "500 ticks × 50 independent commits per tick = 25K commits. Drives the Tx+UoW gauge's per-tick commit/created rate lines to a sustained plateau visible across the middle third of the trace."
+      },
+      "gcChurn": {
+        "enabled": true,
+        "iterations": 500,
+        "entitiesPerIteration": 8000,
+        "_comment": "500 ticks × 8K Hashtable entries per tick. Tuned DOWN from the default variant's 40K — 500 ticks of even moderate pressure is plenty to show periodic Gen1/Gen2 collections without making any single tick's duration dominate the tick timeline."
+      },
+      "transientChurn": {
+        "enabled": true,
+        "iterations": 497,
+        "entitiesPerIteration": 80,
+        "_comment": "497 × 80 = ~40K transient spawns across 497 ticks → ~560 component-segment pages, comfortably under the 1024-page ceiling imposed by the PagesPerBlock=256 workaround for Issue #244. The Transient Store gauge climbs monotonically through this stage and then flattens."
+      },
+      "readBurst": {
+        "enabled": true,
+        "passes": 1,
+        "_comment": "Single one-shot read pass at the end of the workload."
+      },
+      "finalCheckpoint": {
+        "enabled": true
+      }
+    }
+  },
+
+  "profile": {
+    "_doc": "Identical to the default variant's opt-in set.",
+
+    "pageCacheFetch": true,
+    "pageCacheDiskRead": true,
+    "pageCacheDiskWrite": true,
+    "pageCacheAllocatePage": true,
+    "pageCacheFlush": true,
+    "pageEvicted": true,
+
+    "pageCacheDiskReadCompleted": false,
+    "pageCacheDiskWriteCompleted": false,
+    "pageCacheFlushCompleted": false,
+
+    "transactionCommit": true,
+    "transactionCommitComponent": true,
+    "ecsSpawn": true,
+    "btreeInsert": true,
+    "btreeDelete": true
+  }
+}

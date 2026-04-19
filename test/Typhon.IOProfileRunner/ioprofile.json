@@ -1,0 +1,80 @@
+{
+  "_doc": "IO Profile Runner config — tuned for CLEAN gauge traces: (a) opt OUT of the async-completion kinds that flood the ring during readBurst, (b) longer workload for a richer time axis, (c) new gcChurn stage spins up Hashtables + LOH allocations so the GC gauges actually show activity.",
+
+  "output": {
+    "tracePath": "ioprofile.typhon-trace",
+    "workingDirectory": "ioprofile-data"
+  },
+
+  "database": {
+    "_doc": "Larger cache than before (32 MB = 4096 pages at 8 KB/page) to reduce cache-miss pressure during readBurst so fewer completion records get generated in the first place.",
+    "cacheSizeMB": 32,
+    "walEnabled": true
+  },
+
+  "workload": {
+    "stages": {
+      "spawnBurst": {
+        "enabled": true,
+        "entityCount": 5000,
+        "batchSize": 500
+      },
+      "checkpointAfterSpawn": {
+        "enabled": true
+      },
+      "spawnCheckpointLoop": {
+        "enabled": true,
+        "iterations": 20,
+        "entitiesPerIteration": 2000,
+        "_comment": "20 iterations × 2K entities = 40K more entities, 20 ticks of mixed spawn+checkpoint activity"
+      },
+      "txFlood": {
+        "enabled": true,
+        "iterations": 12,
+        "entitiesPerIteration": 50,
+        "_comment": "12 ticks × 50 independent commits per tick = 600 commits. Each inner transaction opens, spawns one entity, commits, disposes — drives the Tx+UoW gauge's per-tick commit/created delta lines to a visibly-tall plateau across these ticks. Active-count area stays 0 (transactions close within the tick) — exercising the active signal requires a production-style workload with long-lived background transactions."
+      },
+      "gcChurn": {
+        "enabled": true,
+        "iterations": 25,
+        "entitiesPerIteration": 40000,
+        "_comment": "25 ticks of heavy managed-heap allocation — Hashtable fills (boxed int keys + int values), LOH arrays, short-lived strings. Drives Gen0/Gen1/Gen2/LOH gauge values visibly up and triggers real GC collections so GcStart/GcEnd + GcSuspension records appear."
+      },
+      "transientChurn": {
+        "enabled": true,
+        "iterations": 8,
+        "entitiesPerIteration": 1500,
+        "_comment": "8 × 1500 = 12,000 transient spawns across 8 ticks. At 112-byte stride / 71 chunks per 8 KB page, that's ~170 pages total — comfortably below the 1024-page cap raised via TransientOptions.PagesPerBlock=256. The gauge climbs in 8 visible steps and then flattens as the index-segment pool warms up."
+      },
+      "readBurst": {
+        "enabled": true,
+        "passes": 1,
+        "_comment": "Trimmed from 3 → 1 pass. With completion suppression below, the ring won't flood, but fewer passes still keeps the read cost bounded."
+      },
+      "finalCheckpoint": {
+        "enabled": true
+      }
+    }
+  },
+
+  "profile": {
+    "_doc": "Opt-in set narrowed: we keep the SYNCHRONOUS kickoff spans (they're low-volume and useful) but DROP the async completion kinds because their count exploded during readBurst (160K+ completion records → ring overflow → dropped tail ticks). The kickoffs alone give us per-page latency via their durationTicks. Async-tail tracking can be re-enabled for targeted read-latency investigations by flipping the three completion flags back to true.",
+
+    "pageCacheFetch": true,
+    "pageCacheDiskRead": true,
+    "pageCacheDiskWrite": true,
+    "pageCacheAllocatePage": true,
+    "pageCacheFlush": true,
+    "pageEvicted": true,
+
+    "pageCacheDiskReadCompleted": false,
+    "pageCacheDiskWriteCompleted": false,
+    "pageCacheFlushCompleted": false,
+
+    "transactionCommit": true,
+    "transactionCommitComponent": true,
+    "ecsSpawn": true,
+    "btreeInsert": true,
+    "btreeDelete": true
+  }
+}

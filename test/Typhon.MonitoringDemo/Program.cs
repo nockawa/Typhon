@@ -7,7 +7,6 @@ using OpenTelemetry.Trace;
 using Spectre.Console;
 using System.Diagnostics;
 using Typhon.Engine;
-using Typhon.MonitoringDemo;
 using Typhon.MonitoringDemo.Scenarios;
 
 namespace Typhon.MonitoringDemo;
@@ -64,24 +63,16 @@ internal static class Program
         AnsiConsole.MarkupLine($"[grey]TracerProvider:[/] {(tracerProvider != null ? "[green]Registered[/]" : "[red]NOT FOUND[/]")}");
         AnsiConsole.MarkupLine($"[grey]ActivitySource HasListeners:[/] {(TyphonActivitySource.Instance.HasListeners() ? "[green]Yes[/]" : "[red]No[/]")}");
 
-        // Send a test trace and flush immediately
-        using (var testActivity = TyphonActivitySource.StartActivity("Diagnostic.Startup"))
-        {
-            testActivity?.SetTag("test.type", "startup");
-            AnsiConsole.MarkupLine($"[grey]Test Activity:[/] {(testActivity != null ? $"[green]Created (TraceId: {testActivity.TraceId})[/]" : "[red]NULL[/]")}");
-        }
+        // Test span removed — typed-event profiler uses a distinct API (no dynamic string spans yet)
+        AnsiConsole.MarkupLine("[grey]Test Span:[/] [yellow]Skipped (Phase 4 migration)[/]");
         var flushResult = tracerProvider?.ForceFlush(5000) ?? false;
         AnsiConsole.MarkupLine($"[grey]ForceFlush:[/] {(flushResult ? "[green]Success[/]" : "[red]Failed[/]")}");
         AnsiConsole.WriteLine();
 
         var typhonContext = host.Services.GetRequiredService<TyphonContext>();
 
-        // Initialize the database (wrap in span so initialization I/O has a parent)
-        using (var initActivity = TyphonActivitySource.StartActivity("Database.Initialize", System.Diagnostics.ActivityKind.Internal))
-        {
-            initActivity?.SetTag("database.name", "TyphonMonitoringDemo");
-            typhonContext.Initialize();
-        }
+        // Initialize the database — span wrapper removed in Phase 4 migration
+        typhonContext.Initialize();
 
         // Get available scenario factories
         var scenarioFactories = ScenarioRegistry.GetScenarioFactories();
@@ -305,17 +296,8 @@ internal static class Program
                 // Run the scenario with tracing
                 try
                 {
-                    using var activity = TyphonActivitySource.StartActivity($"Scenario.{scenario.Name}");
-                    activity?.SetTag("scenario.name", scenario.Name);
-                    activity?.SetTag("scenario.duration_seconds", config.DurationSeconds);
-                    activity?.SetTag("scenario.target_ops_per_second", config.TargetOpsPerSecond);
-                    activity?.SetTag("scenario.worker_count", config.WorkerCount);
-
+                    // NOTE: no Typhon span here — SpanScope is a ref struct that cannot cross the await below. Scenario timings come from stats/metrics instead.
                     await scenario.RunAsync(typhonContext, config, stats, cts.Token);
-
-                    activity?.SetTag("scenario.total_operations", stats.TotalOperations);
-                    activity?.SetTag("scenario.successful_operations", stats.SuccessfulOperations);
-                    activity?.SetTag("scenario.failed_operations", stats.FailedOperations);
                 }
                 catch (OperationCanceledException)
                 {

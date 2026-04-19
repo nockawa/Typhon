@@ -1,7 +1,9 @@
 using System;
+using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine;
@@ -643,99 +645,166 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
         byte* oldAddr = accessor.GetChunkAddress(oldChunkId, true);
         SpinUntilWriteLock(ref GetHeader(oldAddr).OlcVersion);
 
-        // Single-pass: classify entries into keep/move buffers while walking the chain.
-        // Upper-bound: 8 chunks worth of entries covers all realistic chains (primary + 7 overflow).
-        int maxEntries = _bucketCapacity * 8;
+        // ── Pass 1: count chain length and total entries ─────────────────────────────────────────
+        // Caller-level serialization: linear-hash's split path ensures only one thread is running ExecuteSplit for this bucket at
+        // a time, and no other writer is touching the bucket's chain while the split is in progress. The WriteLock on the primary
+        // chunk is the local manifestation of that invariant — the chain is guaranteed quiescent for the duration of the walk.
+        // Two passes (count → allocate-exact → classify) are cheap relative to the bucket's write cost. Previously the code guessed
+        // an 8-chunk upper bound; that was insufficient for workloads where linear-hash splits lag relative to a hot bucket's growth
+        // (bucket keeps accumulating overflow chunks until the algorithm round-robins to split it), and the fixed cap threw
+        // InvalidOperationException with "move buffer overflow (72 >= 72)" mid-commit, corrupting the txn.
+        int totalEntries = 0;
+        int overflowChainLength = 0;   // count of OVERFLOW chunks (excluding the primary)
+        {
+            int countWalkId = oldChunkId;
+            while (countWalkId != -1)
+            {
+                byte* countAddr = accessor.GetChunkAddress(countWalkId);
+                ref readonly var countHeader = ref GetHeader(countAddr);
+                totalEntries += countHeader.EntryCount;
+                if (countWalkId != oldChunkId) overflowChainLength++;
+                countWalkId = countHeader.OverflowChunkId;
+            }
+        }
+
         int entrySize = sizeof(TKey) + _valueSize;
-        byte* keepBuf = stackalloc byte[maxEntries * entrySize];
-        byte* moveBuf = stackalloc byte[maxEntries * entrySize];
-        TKey* keepKeys = (TKey*)keepBuf;
-        byte* keepValues = keepBuf + maxEntries * sizeof(TKey);
-        TKey* moveKeys = (TKey*)moveBuf;
-        byte* moveValues = moveBuf + maxEntries * sizeof(TKey);
-        int keepCount = 0, moveCount = 0;
+        // StackEntryThreshold bounds the stackalloc fast path: at 72 entries × typical 12-16 B/entry × 2 buffers = ~2 KB. Safe
+        // on every call stack we'd realistically see. Chains beyond this spill to ArrayPool rental (pinned) — rare enough that
+        // the pool-rent overhead doesn't matter.
+        const int StackEntryThreshold = 72;
 
-        Span<int> overflowIds = stackalloc int[8];
-        int overflowCount = 0;
-
-        int walkId = oldChunkId;
-        while (walkId != -1)
+        byte* keepBuf;
+        byte* moveBuf;
+        int bufCapacity;   // entries per buffer — determines the keys/values offset split
+        byte[] rentedKeep = null;
+        byte[] rentedMove = null;
+        GCHandle keepHandle = default;
+        GCHandle moveHandle = default;
+        try
         {
-            byte* wAddr = accessor.GetChunkAddress(walkId);
-            ref readonly var wHeader = ref GetHeader(wAddr);
-            TKey* wKeys = KeysPtr(wAddr);
-            int count = wHeader.EntryCount;
-            int nextId = wHeader.OverflowChunkId;
-
-            for (int i = 0; i < count; i++)
+            if (totalEntries <= StackEntryThreshold)
             {
-                TKey key = wKeys[i];
-                uint hash = ComputeHash(key);
-                int targetBucket = (int)(hash & (uint)(newMod - 1));
-
-                if (targetBucket == oldBucketId)
-                {
-                    if (keepCount >= maxEntries)
-                    {
-                        throw new InvalidOperationException($"ExecuteSplit: keep buffer overflow ({keepCount} >= {maxEntries}). Overflow chain exceeds expected capacity.");
-                    }
-                    keepKeys[keepCount] = key;
-                    Unsafe.CopyBlock(keepValues + keepCount * _valueSize, ValueAt(wAddr, i), (uint)_valueSize);
-                    keepCount++;
-                }
-                else
-                {
-                    if (moveCount >= maxEntries)
-                    {
-                        throw new InvalidOperationException($"ExecuteSplit: move buffer overflow ({moveCount} >= {maxEntries}). Overflow chain exceeds expected capacity.");
-                    }
-                    moveKeys[moveCount] = key;
-                    Unsafe.CopyBlock(moveValues + moveCount * _valueSize, ValueAt(wAddr, i), (uint)_valueSize);
-                    moveCount++;
-                }
+                bufCapacity = StackEntryThreshold;
+                byte* k = stackalloc byte[StackEntryThreshold * entrySize];
+                byte* m = stackalloc byte[StackEntryThreshold * entrySize];
+                keepBuf = k;
+                moveBuf = m;
+            }
+            else
+            {
+                bufCapacity = totalEntries;
+                int bufBytes = totalEntries * entrySize;
+                rentedKeep = ArrayPool<byte>.Shared.Rent(bufBytes);
+                rentedMove = ArrayPool<byte>.Shared.Rent(bufBytes);
+                // Pin the rented arrays so the byte* pointers stay valid across the classify loop. GCHandle.Free in finally
+                // releases the pinning; the arrays return to the pool in the same finally.
+                keepHandle = GCHandle.Alloc(rentedKeep, GCHandleType.Pinned);
+                moveHandle = GCHandle.Alloc(rentedMove, GCHandleType.Pinned);
+                keepBuf = (byte*)keepHandle.AddrOfPinnedObject();
+                moveBuf = (byte*)moveHandle.AddrOfPinnedObject();
             }
 
-            if (walkId != oldChunkId)
+            TKey* keepKeys = (TKey*)keepBuf;
+            byte* keepValues = keepBuf + bufCapacity * sizeof(TKey);
+            TKey* moveKeys = (TKey*)moveBuf;
+            byte* moveValues = moveBuf + bufCapacity * sizeof(TKey);
+            int keepCount = 0, moveCount = 0;
+
+            // Overflow IDs: sized to the exact chain length from pass 1. Stack-alloc the common case; rent for deep chains.
+            // OverflowStackCap is one slot larger than the gate's upper bound (< 32) so even a chain that exactly hits the gate
+            // has one cushion slot — protects against a future edit that accidentally raises the gate without resizing the buffer.
+            // The rented-array branch slices to exactly overflowChainLength so AsSpan's length equals the pass-1 count — makes
+            // the "overflowCount == overflowChainLength at end of pass 2" invariant visible at the span level.
+            int[] rentedOverflowIds = null;
+            const int OverflowStackCap = 33;
+            Span<int> overflowIds = overflowChainLength < 32
+                ? stackalloc int[OverflowStackCap]
+                : (rentedOverflowIds = ArrayPool<int>.Shared.Rent(overflowChainLength)).AsSpan(0, overflowChainLength);
+            int overflowCount = 0;
+
+            try
             {
-                if (overflowCount < overflowIds.Length)
+                // ── Pass 2: classify entries into keep/move buffers ────────────────────────────
+                int walkId = oldChunkId;
+                while (walkId != -1)
                 {
-                    overflowIds[overflowCount] = walkId;
+                    byte* wAddr = accessor.GetChunkAddress(walkId);
+                    ref readonly var wHeader = ref GetHeader(wAddr);
+                    TKey* wKeys = KeysPtr(wAddr);
+                    int count = wHeader.EntryCount;
+                    int nextId = wHeader.OverflowChunkId;
+
+                    for (int i = 0; i < count; i++)
+                    {
+                        TKey key = wKeys[i];
+                        uint hash = ComputeHash(key);
+                        int targetBucket = (int)(hash & (uint)(newMod - 1));
+
+                        if (targetBucket == oldBucketId)
+                        {
+                            keepKeys[keepCount] = key;
+                            Unsafe.CopyBlock(keepValues + keepCount * _valueSize, ValueAt(wAddr, i), (uint)_valueSize);
+                            keepCount++;
+                        }
+                        else
+                        {
+                            moveKeys[moveCount] = key;
+                            Unsafe.CopyBlock(moveValues + moveCount * _valueSize, ValueAt(wAddr, i), (uint)_valueSize);
+                            moveCount++;
+                        }
+                    }
+
+                    if (walkId != oldChunkId)
+                    {
+                        overflowIds[overflowCount] = walkId;
+                        overflowCount++;
+                    }
+
+                    walkId = nextId;
                 }
-                overflowCount++;
+
+                // Rewrite old bucket
+                RewriteBucket(oldChunkId, keepKeys, keepValues, keepCount, ref accessor, changeSet);
+
+                // Allocate and write new bucket
+                int newChunkId = Segment.AllocateChunk(true, changeSet);
+                WriteBucket(newChunkId, moveKeys, moveValues, moveCount, ref accessor, changeSet);
+
+                EnsureDirectoryCapacity(newBucketId, ref accessor, changeSet);
+                SetBucketChunkId(newBucketId, newChunkId, ref accessor);
+
+                // Free ALL overflow chunks — overflowIds is now sized to the real chain length from pass 1, so no excess leaks
+                // into the free-list like before. Previously the array was capped at 8 and any overflow past that leaked chunks.
+                for (int i = 0; i < overflowCount; i++)
+                {
+                    Segment.FreeChunk(overflowIds[i]);
+                }
+
+                int newNext = next + 1;
+                int newLevel = level;
+                if (newNext >= mod)
+                {
+                    newNext = 0;
+                    newLevel = level + 1;
+                }
+                PackedMeta = PackMeta(newLevel, newNext, bucketCount + 1);
+                FlushMetaToChunk(ref accessor);
+
+                byte* unlockAddr = accessor.GetChunkAddress(oldChunkId, true);
+                new OlcLatch(ref GetHeader(unlockAddr).OlcVersion).WriteUnlock();
             }
-
-            walkId = nextId;
+            finally
+            {
+                if (rentedOverflowIds != null) ArrayPool<int>.Shared.Return(rentedOverflowIds);
+            }
         }
-
-        // Rewrite old bucket
-        RewriteBucket(oldChunkId, keepKeys, keepValues, keepCount, ref accessor, changeSet);
-
-        // Allocate and write new bucket
-        int newChunkId = Segment.AllocateChunk(true, changeSet);
-        WriteBucket(newChunkId, moveKeys, moveValues, moveCount, ref accessor, changeSet);
-
-        EnsureDirectoryCapacity(newBucketId, ref accessor, changeSet);
-        SetBucketChunkId(newBucketId, newChunkId, ref accessor);
-
-        // Free overflow chunks (up to what we tracked; excess overflows are rare)
-        int freeCount = Math.Min(overflowCount, overflowIds.Length);
-        for (int i = 0; i < freeCount; i++)
+        finally
         {
-            Segment.FreeChunk(overflowIds[i]);
+            if (keepHandle.IsAllocated) keepHandle.Free();
+            if (moveHandle.IsAllocated) moveHandle.Free();
+            if (rentedKeep != null) ArrayPool<byte>.Shared.Return(rentedKeep);
+            if (rentedMove != null) ArrayPool<byte>.Shared.Return(rentedMove);
         }
-
-        int newNext = next + 1;
-        int newLevel = level;
-        if (newNext >= mod)
-        {
-            newNext = 0;
-            newLevel = level + 1;
-        }
-        PackedMeta = PackMeta(newLevel, newNext, bucketCount + 1);
-        FlushMetaToChunk(ref accessor);
-
-        byte* unlockAddr = accessor.GetChunkAddress(oldChunkId, true);
-        new OlcLatch(ref GetHeader(unlockAddr).OlcVersion).WriteUnlock();
     }
 
     private void RewriteBucket(int chunkId, TKey* keys, byte* values, int entryCount, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)

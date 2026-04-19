@@ -290,3 +290,4 @@ nul
 /coverage/reports/latest.md
 /test/AntHill/godot/godot.exe
 /test/AntHill/godot/godot_console.exe
+/test/Typhon.IOProfileRunner/ioprofile-data/

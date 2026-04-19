@@ -1,11 +1,48 @@
-import type { ChunkSpan } from './traceModel';
-import type { SystemDef } from './types';
-import { getSystemColor, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, BG_COLOR } from './canvasUtils';
+import type { ChunkSpan, SpanData, MarkerSelection } from './traceModel';
+import { TraceEventKind, SpanKindNames, type SystemDef } from './types';
+import { getSystemColor, formatDuration, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, BG_COLOR } from './canvasUtils';
 
 interface DetailPaneProps {
   chunk: ChunkSpan | null;
+  span: SpanData | null;
+  marker: MarkerSelection | null;
   systems: SystemDef[];
   onClose: () => void;
+}
+
+/** Human-friendly names for the memory-alloc source tags — mirrors the <c>MemoryAllocSource</c> enum on the engine side. */
+const MEMORY_ALLOC_SOURCE_NAMES: Record<number, string> = {
+  0: 'Unattributed',
+  1: 'WalStaging',
+  2: 'PageCache',
+  3: 'TransientStore',
+  4: 'WalCommitBuffer',
+  5: 'MemoryBlockArray',
+};
+
+/** GcStart <c>reason</c> enum — mirrors CLR's GcReason. */
+const GC_REASON_NAMES: Record<number, string> = {
+  0: 'Alloc Small',
+  1: 'Induced',
+  2: 'Low Memory',
+  3: 'Empty',
+  4: 'Alloc Large',
+  5: 'Out Of Space (Small)',
+  6: 'Out Of Space (Large)',
+  7: 'Induced Not Forced',
+};
+
+const GC_TYPE_NAMES: Record<number, string> = {
+  0: 'Blocking',
+  1: 'Background',
+  2: 'Foreground',
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GiB`;
 }
 
 const SYSTEM_TYPE_NAMES: Record<number, string> = {
@@ -24,7 +61,7 @@ function formatTier(tier: number): string {
   return names.join(' | ') || 'None';
 }
 
-export function DetailPane({ chunk, systems, onClose }: DetailPaneProps) {
+export function DetailPane({ chunk, span, marker, systems, onClose }: DetailPaneProps) {
   const fieldStyle = {
     display: 'flex',
     justifyContent: 'space-between',
@@ -35,19 +72,255 @@ export function DetailPane({ chunk, systems, onClose }: DetailPaneProps) {
 
   const labelStyle = { color: DIM_TEXT };
   const valueStyle = { color: TEXT_COLOR, textAlign: 'right' as const };
+  const sectionLabelStyle = {
+    color: DIM_TEXT,
+    marginTop: '12px',
+    marginBottom: '4px',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '1px',
+    fontSize: '10px',
+  };
+
+  // ── Span branch ───────────────────────────────────────────────────────────────────────────────────────────────────
+  // OTel spans and chunks are handled in parallel branches rather than a union type: chunks have DAG context and entity
+  // counts, spans have parent/trace linkage and depth. When both `chunk` and `span` are set (shouldn't happen — the
+  // click handler clears the other on select) the span wins because the user's most recent interaction was a span click.
+  if (span) {
+    const kindName = SpanKindNames[span.kind] ?? `Kind(${span.kind})`;
+    const spanColor = '#eee';
+    return (
+      <div style={{ height: '100%', overflow: 'auto', fontFamily: 'monospace', background: HEADER_BG }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '8px 12px', borderBottom: `1px solid ${BORDER_COLOR}`, background: BG_COLOR,
+        }}>
+          <span style={{ color: spanColor, fontWeight: 'bold', fontSize: '13px' }}>{span.name || kindName}</span>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', color: DIM_TEXT, border: 'none', cursor: 'pointer',
+              fontSize: '14px', fontFamily: 'monospace', padding: '0 4px',
+            }}
+          >x</button>
+        </div>
+
+        <div style={{ padding: '8px 12px' }}>
+          <div style={fieldStyle}><span style={labelStyle}>Kind</span><span style={valueStyle}>{kindName}</span></div>
+          <div style={fieldStyle}><span style={labelStyle}>Depth</span><span style={valueStyle}>{span.depth ?? 0}</span></div>
+          <div style={fieldStyle}><span style={labelStyle}>Thread slot</span><span style={valueStyle}>{span.threadSlot}</span></div>
+          <div style={fieldStyle}><span style={labelStyle}>Start</span><span style={valueStyle}>{formatDuration(span.startUs)}</span></div>
+          <div style={fieldStyle}><span style={labelStyle}>Duration</span><span style={valueStyle}>{formatDuration(span.durationUs)}</span></div>
+          {span.kickoffDurationUs !== undefined && (
+            <div style={fieldStyle}>
+              <span style={labelStyle}>Kickoff</span>
+              <span style={valueStyle}>{formatDuration(span.kickoffDurationUs)} (async tail: {formatDuration(span.durationUs - span.kickoffDurationUs)})</span>
+            </div>
+          )}
+
+          <div style={sectionLabelStyle}>Linkage</div>
+          <div style={fieldStyle}><span style={labelStyle}>SpanId</span><span style={{ ...valueStyle, fontSize: '10px' }}>{span.spanId ?? '(none)'}</span></div>
+          <div style={fieldStyle}><span style={labelStyle}>Parent</span><span style={{ ...valueStyle, fontSize: '10px' }}>{span.parentSpanId ?? '(none)'}</span></div>
+          {(span.traceIdHi || span.traceIdLo) && (
+            <>
+              <div style={fieldStyle}><span style={labelStyle}>TraceIdHi</span><span style={{ ...valueStyle, fontSize: '10px' }}>{span.traceIdHi}</span></div>
+              <div style={fieldStyle}><span style={labelStyle}>TraceIdLo</span><span style={{ ...valueStyle, fontSize: '10px' }}>{span.traceIdLo}</span></div>
+            </>
+          )}
+
+          {/* Kind-specific fields from the raw event DTO */}
+          {span.rawEvent && (() => {
+            const evt = span.rawEvent;
+            const F = (label: string, value: string | number | boolean | undefined | null) =>
+              value !== undefined && value !== null
+                ? <div style={fieldStyle}><span style={labelStyle}>{label}</span><span style={valueStyle}>{String(value)}</span></div>
+                : null;
+            const k = span.kind;
+
+            // Only render the section if there are kind-specific fields to show.
+            const fields: any[] = [];
+
+            // Transaction kinds
+            if (k === TraceEventKind.TransactionCommit || k === TraceEventKind.TransactionRollback) {
+              if (evt.tsn != null) fields.push(F('TSN', evt.tsn)!);
+              if (evt.componentCount != null) fields.push(F('Components', evt.componentCount)!);
+              if (evt.conflictDetected != null) fields.push(F('Conflict', evt.conflictDetected ? 'Yes' : 'No')!);
+            } else if (k === TraceEventKind.TransactionCommitComponent) {
+              if (evt.tsn != null) fields.push(F('TSN', evt.tsn)!);
+              if (evt.componentTypeId != null) fields.push(F('ComponentTypeId', evt.componentTypeId)!);
+            } else if (k === TraceEventKind.TransactionPersist) {
+              if (evt.tsn != null) fields.push(F('TSN', evt.tsn)!);
+              if (evt.walLsn != null) fields.push(F('WAL LSN', evt.walLsn)!);
+            }
+            // ECS kinds
+            else if (k === TraceEventKind.EcsSpawn) {
+              if (evt.archetypeId != null) fields.push(F('ArchetypeId', evt.archetypeId)!);
+              if (evt.entityId != null) fields.push(F('EntityId', evt.entityId)!);
+              if (evt.tsn != null) fields.push(F('TSN', evt.tsn)!);
+            } else if (k === TraceEventKind.EcsDestroy) {
+              if (evt.entityId != null) fields.push(F('EntityId', evt.entityId)!);
+              if (evt.cascadeCount != null) fields.push(F('Cascades', evt.cascadeCount)!);
+              if (evt.tsn != null) fields.push(F('TSN', evt.tsn)!);
+            } else if (k === TraceEventKind.EcsQueryExecute || k === TraceEventKind.EcsQueryCount || k === TraceEventKind.EcsQueryAny) {
+              if (evt.scanMode != null) fields.push(F('ScanMode', ['Empty','Broad','Targeted','TargetedCluster','Spatial'][evt.scanMode] ?? evt.scanMode)!);
+              if (evt.resultCount != null) fields.push(F('Results', evt.resultCount)!);
+              if (evt.found != null) fields.push(F('Found', evt.found ? 'Yes' : 'No')!);
+            } else if (k === TraceEventKind.EcsViewRefresh) {
+              if (evt.mode != null) fields.push(F('Mode', ['Pull','Incremental','Overflow'][evt.mode] ?? evt.mode)!);
+              if (evt.resultCount != null) fields.push(F('Results', evt.resultCount)!);
+              if (evt.deltaCount != null) fields.push(F('Deltas', evt.deltaCount)!);
+            }
+            // PageCache kinds
+            else if (k >= TraceEventKind.PageCacheFetch && k <= TraceEventKind.PageCacheFlushCompleted) {
+              if (evt.filePageIndex != null) fields.push(F('FilePageIndex', evt.filePageIndex)!);
+              if (evt.pageCount != null) fields.push(F('PageCount', evt.pageCount)!);
+            } else if (k === TraceEventKind.PageCacheBackpressure) {
+              if (evt.retryCount != null) fields.push(F('RetryCount', evt.retryCount)!);
+              if (evt.dirtyCount != null) fields.push(F('DirtyPages', evt.dirtyCount)!);
+              if (evt.epochCount != null) fields.push(F('EpochProtected', evt.epochCount)!);
+            }
+            // WAL kinds
+            else if (k === TraceEventKind.WalFlush) {
+              if (evt.batchByteCount != null) fields.push(F('BatchBytes', evt.batchByteCount)!);
+              if (evt.frameCount != null) fields.push(F('Frames', evt.frameCount)!);
+              if (evt.highLsn != null) fields.push(F('HighLSN', evt.highLsn)!);
+            } else if (k === TraceEventKind.WalSegmentRotate) {
+              if (evt.newSegmentIndex != null) fields.push(F('NewSegment', evt.newSegmentIndex)!);
+            } else if (k === TraceEventKind.WalWait) {
+              if (evt.targetLsn != null) fields.push(F('TargetLSN', evt.targetLsn)!);
+            }
+            // Checkpoint kinds
+            else if (k === TraceEventKind.CheckpointCycle) {
+              if (evt.targetLsn != null) fields.push(F('TargetLSN', evt.targetLsn)!);
+              if (evt.reason != null) fields.push(F('Reason', ['Periodic','Forced','Shutdown'][evt.reason] ?? evt.reason)!);
+              if (evt.dirtyPageCount != null) fields.push(F('DirtyPages', evt.dirtyPageCount)!);
+            } else if (k === TraceEventKind.CheckpointWrite) {
+              if (evt.writtenCount != null) fields.push(F('Written', evt.writtenCount)!);
+            } else if (k === TraceEventKind.CheckpointTransition) {
+              if (evt.transitionedCount != null) fields.push(F('Transitioned', evt.transitionedCount)!);
+            } else if (k === TraceEventKind.CheckpointRecycle) {
+              if (evt.recycledCount != null) fields.push(F('Recycled', evt.recycledCount)!);
+            }
+            // Statistics
+            else if (k === TraceEventKind.StatisticsRebuild) {
+              if (evt.entityCount != null) fields.push(F('Entities', evt.entityCount)!);
+              if (evt.mutationCount != null) fields.push(F('Mutations', evt.mutationCount)!);
+              if (evt.samplingInterval != null) fields.push(F('SamplingInterval', evt.samplingInterval)!);
+            }
+            // Cluster migration
+            else if (k === TraceEventKind.ClusterMigration) {
+              if (evt.archetypeId != null) fields.push(F('ArchetypeId', evt.archetypeId)!);
+              if (evt.migrationCount != null) fields.push(F('Migrations', evt.migrationCount)!);
+            }
+
+            if (fields.length === 0) return null;
+            return <>
+              <div style={sectionLabelStyle}>Payload</div>
+              {fields}
+            </>;
+          })()}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Marker branch ────────────────────────────────────────────────────────────────────────────────────────────────
+  // Memory-alloc events (triangle-up for alloc / triangle-down for free on the Memory track) and GC events (start triangle
+  // / end circle on the GC track). Each kind gets a tailored field list — alloc events need source tag + size + running
+  // total; GC events need generation + reason + pause duration. Same visual chrome as the other branches so the pane
+  // feels consistent across selection types.
+  if (marker) {
+    const isAlloc = marker.kind === 'memory-alloc';
+    const isGc = marker.kind === 'gc';
+    const title = isAlloc
+      ? (marker.event.direction === 0 ? 'Memory Alloc' : 'Memory Free')
+      : (marker.event.kind === TraceEventKind.GcStart ? 'GC Start' : 'GC End');
+    return (
+      <div style={{ height: '100%', overflow: 'auto', fontFamily: 'monospace', background: HEADER_BG }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '8px 12px', borderBottom: `1px solid ${BORDER_COLOR}`, background: BG_COLOR,
+        }}>
+          <span style={{ color: '#eee', fontWeight: 'bold', fontSize: '13px' }}>{title}</span>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent', color: DIM_TEXT, border: 'none', cursor: 'pointer',
+              fontSize: '14px', fontFamily: 'monospace', padding: '0 4px',
+            }}
+          >x</button>
+        </div>
+        <div style={{ padding: '8px 12px' }}>
+          <div style={fieldStyle}><span style={labelStyle}>Tick</span><span style={valueStyle}>{marker.event.tickNumber}</span></div>
+          <div style={fieldStyle}><span style={labelStyle}>Timestamp</span><span style={valueStyle}>{formatDuration(marker.event.timestampUs)}</span></div>
+          {isAlloc && (
+            <>
+              <div style={fieldStyle}><span style={labelStyle}>Direction</span><span style={valueStyle}>{marker.event.direction === 0 ? 'Alloc' : 'Free'}</span></div>
+              <div style={fieldStyle}>
+                <span style={labelStyle}>Source</span>
+                <span style={valueStyle}>{MEMORY_ALLOC_SOURCE_NAMES[marker.event.sourceTag] ?? `Tag(${marker.event.sourceTag})`}</span>
+              </div>
+              <div style={fieldStyle}><span style={labelStyle}>Size</span><span style={valueStyle}>{formatBytes(marker.event.sizeBytes)}</span></div>
+              <div style={fieldStyle}><span style={labelStyle}>Total after</span><span style={valueStyle}>{formatBytes(marker.event.totalAfterBytes)}</span></div>
+              <div style={fieldStyle}><span style={labelStyle}>Thread slot</span><span style={valueStyle}>{marker.event.threadSlot}</span></div>
+            </>
+          )}
+          {isGc && (
+            <>
+              <div style={fieldStyle}><span style={labelStyle}>Generation</span><span style={valueStyle}>Gen{marker.event.generation}</span></div>
+              <div style={fieldStyle}><span style={labelStyle}>GC #</span><span style={valueStyle}>{marker.event.gcCount}</span></div>
+              {marker.event.reason !== undefined && (
+                <div style={fieldStyle}>
+                  <span style={labelStyle}>Reason</span>
+                  <span style={valueStyle}>{GC_REASON_NAMES[marker.event.reason] ?? `Reason(${marker.event.reason})`}</span>
+                </div>
+              )}
+              {marker.event.gcType !== undefined && (
+                <div style={fieldStyle}>
+                  <span style={labelStyle}>Type</span>
+                  <span style={valueStyle}>{GC_TYPE_NAMES[marker.event.gcType] ?? `Type(${marker.event.gcType})`}</span>
+                </div>
+              )}
+              {marker.event.pauseDurationUs !== undefined && (
+                <div style={fieldStyle}><span style={labelStyle}>Pause duration</span><span style={valueStyle}>{formatDuration(marker.event.pauseDurationUs)}</span></div>
+              )}
+              {marker.event.promotedBytes !== undefined && (
+                <div style={fieldStyle}><span style={labelStyle}>Promoted</span><span style={valueStyle}>{formatBytes(marker.event.promotedBytes)}</span></div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (!chunk) {
+    // "Nothing selected" branch — still shows a header with a collapse (×) button so the user can always collapse the pane, not just
+    // when something is currently selected. Previously this branch had no close affordance, so once the pane was open with no
+    // selection it was stuck open until the user selected AND dismissed something.
     return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        color: DIM_TEXT,
-        fontSize: '12px',
-        fontFamily: 'monospace',
-      }}>
-        Select a chunk to view details
+      <div style={{ height: '100%', display: 'flex', flexDirection: 'column', fontFamily: 'monospace', background: HEADER_BG }}>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '8px 12px', borderBottom: `1px solid ${BORDER_COLOR}`, background: BG_COLOR, flexShrink: 0,
+        }}>
+          <span style={{ color: DIM_TEXT, fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Details</span>
+          <button
+            onClick={onClose}
+            title="Collapse detail pane"
+            style={{
+              background: 'transparent', color: DIM_TEXT, border: 'none', cursor: 'pointer',
+              fontSize: '14px', fontFamily: 'monospace', padding: '0 4px',
+            }}
+          >x</button>
+        </div>
+        <div style={{
+          flex: 1,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '0 16px',
+          color: DIM_TEXT, fontSize: '12px', textAlign: 'center',
+        }}>
+          Select a chunk, span, or marker to view details
+        </div>
       </div>
     );
   }
@@ -99,8 +372,8 @@ export function DetailPane({ chunk, systems, onClose }: DetailPaneProps) {
           <span style={valueStyle}>{fullTypeName}</span>
         </div>
         <div style={fieldStyle}>
-          <span style={labelStyle}>Worker</span>
-          <span style={valueStyle}>{chunk.workerId}</span>
+          <span style={labelStyle}>Thread slot</span>
+          <span style={valueStyle}>{chunk.threadSlot}</span>
         </div>
         {chunk.isParallel && (
           <div style={fieldStyle}>
@@ -110,7 +383,7 @@ export function DetailPane({ chunk, systems, onClose }: DetailPaneProps) {
         )}
         <div style={fieldStyle}>
           <span style={labelStyle}>Duration</span>
-          <span style={valueStyle}>{chunk.durationUs.toFixed(1)} us</span>
+          <span style={valueStyle}>{formatDuration(chunk.durationUs)}</span>
         </div>
         <div style={fieldStyle}>
           <span style={labelStyle}>Entities</span>
@@ -122,16 +395,7 @@ export function DetailPane({ chunk, systems, onClose }: DetailPaneProps) {
         </div>
 
         {/* DAG section */}
-        <div style={{
-          color: DIM_TEXT,
-          marginTop: '12px',
-          marginBottom: '4px',
-          textTransform: 'uppercase',
-          letterSpacing: '1px',
-          fontSize: '10px',
-        }}>
-          DAG
-        </div>
+        <div style={sectionLabelStyle}>DAG</div>
         <div style={fieldStyle}>
           <span style={labelStyle}>Predecessors</span>
           <span style={valueStyle}>

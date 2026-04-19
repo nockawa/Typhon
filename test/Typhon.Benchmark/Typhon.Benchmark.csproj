@@ -51,5 +51,10 @@
     <None Remove="QueryViewBench_12772.bin" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="typhon.telemetry.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 
 </Project>
