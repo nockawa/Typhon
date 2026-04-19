@@ -13,10 +13,11 @@
  * Why this lives off the main thread: processTickEvents alone is 5-20 ms per dense tick; add decompression + binary decode on top and you've
  * got 30-80 ms of pure CPU per chunk. Without the worker those milliseconds hit canvas redraws + input dispatch, visible as jank during pan.
  */
-import { processTickEvents, type TickData } from './traceModel';
+import { type TickData } from './traceModel';
 import type { TraceEvent, SystemDef } from './types';
 import { decompressLz4Block } from './lz4Block';
 import { decodeChunkBinary } from './chunkDecoder';
+import { buildTickDataFromEvents } from './tickBuilder';
 
 interface ProcessJsonRequest {
   type: 'process';
@@ -34,6 +35,8 @@ interface ProcessBinaryRequest {
   fromTick: number;
   ticksPerUs: number;
   systems: SystemDef[];
+  /** True for continuation chunks (intra-tick split, cache v8+) — decoder seeds tick counter at fromTick directly. */
+  isContinuation: boolean;
 }
 
 type WorkerRequest = ProcessJsonRequest | ProcessBinaryRequest;
@@ -62,14 +65,18 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
   try {
     let tickData: TickData[];
     if (msg.type === 'process') {
-      tickData = buildTickDataFromEvents(msg.events, msg.systems);
+      tickData = buildTickDataFromEvents(msg.events, msg.systems, /*continuationTickNumber=*/-1);
     } else {
       // Binary path: decompress → decode → group + derive per-tick shapes. ArrayBuffer was transferred into the worker and is now owned here,
       // so the Uint8Array view is safe to use without copying.
       const compressed = new Uint8Array(msg.compressed);
       const raw = decompressLz4Block(compressed, msg.uncompressedBytes);
-      const events = decodeChunkBinary(raw, msg.fromTick, msg.ticksPerUs);
-      tickData = buildTickDataFromEvents(events, msg.systems);
+      const events = decodeChunkBinary(raw, msg.fromTick, msg.ticksPerUs, msg.isContinuation);
+      // For continuation chunks, the FIRST tick (fromTick) is a tick-continuation — processTickEvents must skip the
+      // "malformed: no TickStart" warning. Any subsequent ticks in the same chunk begin with their own TickStart, so they
+      // are structurally normal. Encode "no continuation" as tickNumber=-1 so the callee can compare without Option types.
+      const continuationTickNumber = msg.isContinuation ? msg.fromTick : -1;
+      tickData = buildTickDataFromEvents(events, msg.systems, continuationTickNumber);
     }
     ctx.postMessage({ type: 'processed', requestId: msg.requestId, tickData });
   } catch (err) {
@@ -78,21 +85,3 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
   }
 };
 
-function buildTickDataFromEvents(events: TraceEvent[], systems: SystemDef[]): TickData[] {
-  if (events.length === 0) return [];
-  const byTick = new Map<number, TraceEvent[]>();
-  for (const evt of events) {
-    let bucket = byTick.get(evt.tickNumber);
-    if (!bucket) {
-      bucket = [];
-      byTick.set(evt.tickNumber, bucket);
-    }
-    bucket.push(evt);
-  }
-  const result: TickData[] = [];
-  for (const [tickNumber, bucket] of byTick) {
-    result.push(processTickEvents(tickNumber, bucket, systems));
-  }
-  result.sort((a, b) => a.tickNumber - b.tickNumber);
-  return result;
-}

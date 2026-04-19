@@ -1487,12 +1487,25 @@ export function GraphArea({ trace, tracePath, viewRange, onViewRangeChange, sele
           const row = rows[r];
           const rowY = ty + r * MRH;
 
-          // Label pill
-          const lw = ctx.measureText(row.label).width + labelPad * 2;
-          ctx.fillStyle = 'rgba(30, 32, 36, 0.85)';
-          ctx.fillRect(GUTTER_WIDTH + 2, rowY + 1, lw, MRH - 1);
+          // Label pill — matches the drawInlineLegend pattern used by the gauge-track legends above: translucent-black backdrop,
+          // color swatch on the left, white text to the right. Same visual language across the whole left-column label gutter
+          // of the graph area. The swatch carries the per-row color identity (swatch hue = bar hue on the same row); the white
+          // text just has to READ, which it now does cleanly at 9 px against the rgba(0,0,0,0.35) backdrop.
+          const swatchSize = 7;
+          const swatchToText = 3;
+          const labelTextWidth = ctx.measureText(row.label).width;
+          const pillWidth = labelPad + swatchSize + swatchToText + labelTextWidth + labelPad;
+
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+          ctx.fillRect(GUTTER_WIDTH + 2, rowY + 1, pillWidth, MRH - 1);
+
+          const swatchX = GUTTER_WIDTH + 2 + labelPad;
+          const swatchY = rowY + 1 + Math.floor((MRH - 1 - swatchSize) / 2);
           ctx.fillStyle = row.labelColor;
-          ctx.fillText(row.label, GUTTER_WIDTH + 2 + labelPad, rowY + MRH - 2);
+          ctx.fillRect(swatchX, swatchY, swatchSize, swatchSize);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(row.label, swatchX + swatchSize + swatchToText, rowY + MRH - 2);
 
           // Draw bars — colorFn hoisted out of the tick loop to avoid closure allocation per tick.
           const colorFn = (_: SpanData) => row.barColor;

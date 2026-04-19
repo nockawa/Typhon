@@ -1,4 +1,4 @@
-import type { TraceMetadata, TraceEvent, OpenTraceResponse, ChunkResponse, ChunkManifestEntry } from './types';
+import type { TraceMetadata, TraceEvent, OpenTraceResponse, ChunkResponse } from './types';
 
 const BASE = '/api';
 
@@ -69,21 +69,17 @@ export function subscribeBuildProgress(path: string, onProgress: (p: BuildProgre
 }
 
 /**
- * Fetch one chunk's events by tick range. The range must match a manifest entry exactly (client derives these from
- * <see cref="OpenTraceResponse.chunkManifest"/>). Pass <paramref name="signal"/> to abort in-flight fetches on viewport change.
+ * Fetch one chunk's events by manifest index. `chunkIdx` must match the position of the entry in
+ * <see cref="OpenTraceResponse.chunkManifest"/>. Pass <paramref name="signal"/> to abort in-flight fetches on viewport change.
  */
 export async function fetchChunk(
   path: string,
-  entry: ChunkManifestEntry,
+  chunkIdx: number,
   signal?: AbortSignal,
 ): Promise<ChunkResponse> {
-  const params = new URLSearchParams({
-    path,
-    fromTick: String(entry.fromTick),
-    toTick: String(entry.toTick),
-  });
+  const params = new URLSearchParams({ path, chunkIdx: String(chunkIdx) });
   const res = await fetch(`${BASE}/trace/chunk?${params}`, { signal });
-  if (!res.ok) throw new Error(`Failed to load chunk [${entry.fromTick},${entry.toTick}): ${res.statusText}`);
+  if (!res.ok) throw new Error(`Failed to load chunk #${chunkIdx}: ${res.statusText}`);
   return res.json();
 }
 
@@ -93,6 +89,12 @@ export interface BinaryChunkResponse {
   toTick: number;
   eventCount: number;
   uncompressedBytes: number;
+  /**
+   * True iff this chunk is a mid-tick continuation (intra-tick split, cache v8+). Parsed from the
+   * `X-Chunk-Is-Continuation` response header. Consumers MUST honour this when seeding the tick counter in the decoder —
+   * normal chunks seed at `fromTick - 1`; continuation chunks seed at `fromTick` directly.
+   */
+  isContinuation: boolean;
   /** Source trace's timestamp frequency (ticks per second). Clients divide timestamps by (freq / 1e6) to get microseconds. */
   timestampFrequency: number;
   /** Raw LZ4-block-compressed record bytes. Client must decompress via lz4Block.decompressLz4Block. */
@@ -105,16 +107,12 @@ export interface BinaryChunkResponse {
  */
 export async function fetchChunkBinary(
   path: string,
-  entry: ChunkManifestEntry,
+  chunkIdx: number,
   signal?: AbortSignal,
 ): Promise<BinaryChunkResponse> {
-  const params = new URLSearchParams({
-    path,
-    fromTick: String(entry.fromTick),
-    toTick: String(entry.toTick),
-  });
+  const params = new URLSearchParams({ path, chunkIdx: String(chunkIdx) });
   const res = await fetch(`${BASE}/trace/chunk-binary?${params}`, { signal });
-  if (!res.ok) throw new Error(`Failed to load binary chunk [${entry.fromTick},${entry.toTick}): ${res.statusText}`);
+  if (!res.ok) throw new Error(`Failed to load binary chunk #${chunkIdx}: ${res.statusText}`);
 
   // Parse integer metadata from response headers. All mandatory — missing any means the server and client are out of sync on the protocol
   // shape, which would silently corrupt decoding if we defaulted to 0. Throw loudly instead.
@@ -131,6 +129,9 @@ export async function fetchChunkBinary(
   const eventCount = headerInt('X-Chunk-Event-Count');
   const uncompressedBytes = headerInt('X-Chunk-Uncompressed-Bytes');
   const timestampFrequency = headerInt('X-Timestamp-Frequency');
+  // X-Chunk-Is-Continuation is a 0/1 flag. Parse strictly — treat any non-"1" value as false so a future extension that
+  // sends multi-bit flag strings doesn't silently interpret them as "true."
+  const isContinuation = res.headers.get('X-Chunk-Is-Continuation') === '1';
   const buffer = await res.arrayBuffer();
 
   return {
@@ -138,6 +139,7 @@ export async function fetchChunkBinary(
     toTick,
     eventCount,
     uncompressedBytes,
+    isContinuation,
     timestampFrequency,
     compressed: new Uint8Array(buffer),
   };

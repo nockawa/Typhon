@@ -7,8 +7,8 @@
   },
 
   "database": {
-    "_doc": "Same 32 MB cache as the default variant; at 250K+ Versioned entities the cache will definitely churn, producing Disk Read/Write + PageEvicted activity throughout the spawnCheckpointLoop stage — that's intentional signal, not a bug.",
-    "cacheSizeMB": 32,
+    "_doc": "128 MB cache — 4× the default variant. Rationale: at 32 MB (4096 × 8 KB pages) the spawnCheckpointLoop stage's ~250K Versioned entities would fill every slot dirty+epoch-protected and the engine would enter backpressure waits (observed: 3×5s waits between gcChurn and txFlood in earlier runs), pushing total runtime past a reasonable cap. 128 MB (16K pages) gives the workload enough headroom to run without stalling — cache churn is still plentiful (visible Disk Read/Write + PageEvicted activity throughout), just not pathologically starved.",
+    "cacheSizeMB": 128,
     "walEnabled": true
   },
 

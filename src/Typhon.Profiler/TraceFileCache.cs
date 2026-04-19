@@ -199,8 +199,22 @@ public struct ChunkManifestEntry
     /// <summary>Uncompressed payload size (output size of LZ4 decompress; needed to pre-size the client's decode buffer).</summary>
     public uint UncompressedBytes;
 
-    /// <summary>Padding to keep the struct 8-byte-aligned (sizeof = 32).</summary>
-    public uint Padding;
+    /// <summary>
+    /// Per-chunk flag bits. Also serves as the 4-byte tail padding keeping the struct 8-byte-aligned (sizeof = 32); the wire size and field
+    /// offset match the former <c>Padding</c> field exactly, so v7 caches built with Flags=0 are upward-compatible as "normal, non-continuation"
+    /// chunks — the reader just sees zero bits, which is the no-flags-set state.
+    /// <para>
+    /// <b>Bit 0: <see cref="TraceFileCacheConstants.FlagIsContinuation"/></b> — set when this chunk starts mid-tick (continuation of the tick
+    /// whose first events lived in the PREVIOUS chunk). Continuation chunks have NO <c>TickStart</c> record at their head; the decoder must
+    /// seed its tick counter to <c>FromTick</c> directly rather than <c>FromTick - 1</c>. See the chunker-version-8 changelog entry for the
+    /// reason mid-tick splitting exists.
+    /// </para>
+    /// <para>
+    /// Bits 1-31: reserved for future per-chunk flags. Builders MUST write zero for reserved bits; readers MUST ignore unknown bits so that
+    /// a future v8+ feature that sets a new bit doesn't break older readers on the same version.
+    /// </para>
+    /// </summary>
+    public uint Flags;
 }
 
 /// <summary>
@@ -268,10 +282,28 @@ public static class TraceFileCacheConstants
     ///
     /// 50 000 chosen empirically: at ~300 bytes average decoded per event (span + alloc mix), this is ~15 MB of resident heap per
     /// chunk — comfortable against the client's 500 MB LRU budget (30+ chunks headroom) and decodes in roughly 100-200 ms on a modern
-    /// CPU. Does NOT split a single tick across chunks (the cap only fires AT tick boundaries), so a pathological single-tick
-    /// outlier with millions of events still produces one giant chunk — that case needs a separate intra-tick-split refactor.
+    /// CPU. For ticks that fit under this cap, they're emitted as single whole chunks — no intra-tick splitting, no client-side merge.
     /// </summary>
     public const int EventCap = 50_000;
+
+    /// <summary>
+    /// Mid-tick byte cap. A SINGLE tick's accumulated record bytes exceeding this trigger the builder to close the current chunk
+    /// in the middle of the tick and start a new continuation chunk (marked with <see cref="FlagIsContinuation"/>). Deliberately
+    /// larger than <see cref="ByteCap"/> (2×) so that well-sized ticks never trip it — only genuinely pathological single ticks
+    /// (e.g., >1 MiB of records in one tick) get split, keeping the client-side <c>mergeTickData</c> path cold for the common case.
+    /// </summary>
+    public const int IntraTickByteCap = 2 * ByteCap;
+
+    /// <summary>
+    /// Mid-tick event cap. Parallels <see cref="IntraTickByteCap"/> but counts records instead of bytes. A single tick whose event
+    /// count hits this value triggers a mid-tick chunk close. 2× <see cref="EventCap"/> (100 000) so that a tick marginally over the
+    /// normal event cap still emits as a single chunk — only genuinely pathological dense ticks split. Tuned independently of
+    /// <see cref="EventCap"/> — they're separate dials so we can tighten one without affecting the other as workload data arrives.
+    /// </summary>
+    public const int IntraTickEventCap = 2 * EventCap;
+
+    /// <summary>Bit 0 of <see cref="ChunkManifestEntry.Flags"/> — chunk starts mid-tick (continuation of the previous chunk's last tick).</summary>
+    public const uint FlagIsContinuation = 0x1;
 
     /// <summary>
     /// Current chunker policy version. Incremented when <see cref="TickCap"/>, <see cref="ByteCap"/>, or the fold logic changes in a way that
@@ -287,9 +319,14 @@ public static class TraceFileCacheConstants
     ///     the first TickStart — readers that see v5 must rebuild against a v6 builder to surface them.
     /// v7: added <c>TraceEventKind.ThreadInfo</c> (kind 77). Emitted at slot claim — typically pre-first-tick — and added to the pre-tick
     ///     buffer path. Old v6 caches don't surface thread names; readers must rebuild against v7 to populate lane labels.
-    /// v8: added <see cref="EventCap"/> as a chunk-close trigger. Caches built with v7 are structurally valid but may contain a few
-    ///     over-large chunks in dense multi-tick regions; readers that see v7 rebuild against v8 to get the tighter event-count-based
-    ///     splitting, which shrinks the worst-case per-chunk decode + deserialize cost.
+    /// v8: two combined changes, both invalidating prior caches:
+    ///     (a) <see cref="EventCap"/> as a tick-boundary chunk-close trigger — shrinks the worst-case per-chunk decode cost in dense
+    ///         multi-tick regions that previously squeaked under <see cref="ByteCap"/> because of small record sizes.
+    ///     (b) Intra-tick splitting — a single pathologically dense tick (e.g., 2 M events in one tick) can now be split across multiple
+    ///         chunks via <see cref="IntraTickByteCap"/> / <see cref="IntraTickEventCap"/>. Continuation chunks are marked with
+    ///         <see cref="FlagIsContinuation"/>. The decoder must seed its tick counter to FromTick directly for continuation chunks
+    ///         (vs FromTick - 1 for normal chunks). The former <c>ChunkManifestEntry.Padding</c> u32 is now <c>Flags</c>; offset and
+    ///         size are unchanged, so v7-on-disk entries read back with Flags=0 which correctly means "normal, non-continuation."
     /// </summary>
     public const ushort CurrentChunkerVersion = 8;
 

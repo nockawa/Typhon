@@ -272,6 +272,18 @@ export interface TickData {
    * so this is usually empty after the initial slot claims.
    */
   threadInfos: ThreadInfoEvent[];
+  /**
+   * The raw events that went into building this TickData. Stored verbatim so that <c>mergeTickData</c> can combine two
+   * partial <c>TickData</c> entries (from an intra-tick-split chunk pair) by concatenating their <c>rawEvents</c> and re-running
+   * <c>processTickEvents</c> on the union — guaranteeing byte-identical output to a single-pass build on the full events.
+   *
+   * Memory cost: ~2× per-TickData (the derived state + the raw events). Acceptable because (a) TickData objects are short-lived
+   * LRU cache entries capped by the 500 MB budget, (b) raw TraceEvent records are the same size as the SpanData entries they
+   * produce, so we're not doubling the total — more like +50-70%, (c) the merge path is rare (intra-tick splits only fire on
+   * pathological ticks). If memory pressure shows up in real workloads, the optimisation is to only retain rawEvents for
+   * <b>boundary</b> ticks — the first and last tick of each chunk, the only candidates for participating in a merge.
+   */
+  rawEvents: TraceEvent[];
 }
 
 /** One ThreadInfo record (kind 77) — slot ownership metadata emitted when a producer thread claims its slot. */
@@ -389,7 +401,8 @@ export function processTrace(metadata: TraceMetadata, events: TraceEvent[]): Pro
   let maxTickDurationUs = 0;
 
   for (const [tickNumber, tickEvents] of tickMap) {
-    const tickData = processTickEvents(tickNumber, tickEvents, systems);
+    // processTrace takes full-session event arrays (file-upload path) — every tick is self-contained, never a continuation.
+    const tickData = processTickEvents(tickNumber, tickEvents, systems, /*isContinuation=*/false);
     if (tickData.durationUs > maxTickDurationUs) {
       maxTickDurationUs = tickData.durationUs;
     }
@@ -465,7 +478,7 @@ export function findTickIndex(trace: ProcessedTrace, tickNumber: number): number
   return trace.ticks.findIndex(t => t.tickNumber === tickNumber);
 }
 
-export function processTickEvents(tickNumber: number, events: TraceEvent[], systems: SystemDef[]): TickData {
+export function processTickEvents(tickNumber: number, events: TraceEvent[], systems: SystemDef[], isContinuation: boolean): TickData {
   let startUs = Infinity;
   let endUs = -Infinity;
 
@@ -753,7 +766,11 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
   // get tagged with 0. Those events correctly flow into gcEvents / memoryAllocEvents etc. via aggregateGaugeData; the warning
   // was a false positive. Suppress it and still set startUs/endUs to 0 so downstream math stays safe.
   if (startUs === Infinity) {
-    if (tickNumber > 0) warnMalformedTick(tickNumber);
+    // Suppress the warning for continuation chunks — they legitimately have no TickStart (the previous chunk already
+    // consumed it), so "startUs = Infinity" here is expected, not a malformed-trace indicator. Same reasoning covers
+    // the tickNumber==0 pre-tick case. The malformed warning fires only when we had a real, complete chunk expected to
+    // contain a TickStart and genuinely didn't — at that point it's a useful signal about a broken trace.
+    if (tickNumber > 0 && !isContinuation) warnMalformedTick(tickNumber);
     startUs = 0;
   }
   if (endUs === -Infinity) endUs = startUs;
@@ -969,7 +986,47 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
     gcEvents,
     gcSuspensions,
     threadInfos,
+    rawEvents: events,
   };
+}
+
+/**
+ * Merge two <see cref="TickData"/> entries that share the same <c>tickNumber</c>. Used by
+ * <c>assembleTickViewAndNumbers</c> when an intra-tick split (cache v8+) produced multiple chunks covering the same tick —
+ * each chunk's per-chunk call to <c>processTickEvents</c> yields a partial <c>TickData</c>, and the consumer needs ONE
+ * combined entry with correctly-merged derived state.
+ *
+ * <b>Strategy:</b> concatenate the <c>rawEvents</c> of both inputs and re-run <c>processTickEvents</c> on the union. This
+ * is correct by construction — the merged output is byte-identical to what a single-pass call on the full event stream
+ * would produce, including:
+ *   <ul>
+ *     <li>Async-completion fold across the split (Q4): a kickoff in tick-A + completion in tick-B now see each other
+ *         because both are in the combined events array, so the fold path pairs them into one span with the full duration.</li>
+ *     <li>Sort stability: the full event sort runs over the union, avoiding any edge case where per-chunk sort orderings
+ *         would produce a different final order when naively concatenated.</li>
+ *     <li>Depth / running-max / per-kind projections: all derived from the re-sorted merged spans, so no partial-state
+ *         desyncs are possible.</li>
+ *   </ul>
+ *
+ * <b>Cost:</b> O(N log N) in the combined event count, where N is the sum of raw events from both inputs. For a split tick
+ * of 150K events, that's ~100-300 ms on the main thread — noticeable but bounded, and only fires when a split actually
+ * happens (rare by design: intra-tick split caps are 2× the normal per-chunk caps).
+ *
+ * Throws if the two inputs have different <c>tickNumber</c> values — mergeTickData is strictly for intra-tick merges; a
+ * mismatch indicates a caller bug.
+ */
+export function mergeTickData(a: TickData, b: TickData, systems: SystemDef[]): TickData {
+  if (a.tickNumber !== b.tickNumber) {
+    throw new Error(`mergeTickData: tickNumber mismatch (a=${a.tickNumber} vs b=${b.tickNumber})`);
+  }
+  // Concat raw events and re-run. This is the whole implementation — the power of "make the happy path the cold path."
+  // Uses a flat concatenation; processTickEvents sorts internally so input order doesn't matter for correctness.
+  const combined = a.rawEvents.concat(b.rawEvents);
+  // Merged output is the union of a split tick's pieces — conceptually a fully-formed tick with its own TickStart at the
+  // head of the combined event stream. Not a continuation. Note: rawEvents on the merged result is intentionally preserved
+  // so a subsequent chain fold (mergeTickData(mergeTickData(t1,t2), t3)) has the cumulative raw events available. The caller
+  // (assembleTickViewAndNumbers) is responsible for wiping rawEvents on the FINAL merged result once no more folds can fire.
+  return processTickEvents(a.tickNumber, combined, systems, /*isContinuation=*/false);
 }
 
 /**
@@ -1079,7 +1136,8 @@ export function processTickAndAppend(
   tickNumber: number,
   events: TraceEvent[]
 ): ProcessedTrace {
-  const tickData = processTickEvents(tickNumber, events, trace.metadata.systems);
+  // processTickAndAppend is the live-session path — each tick arrives with its own TickStart, never a continuation.
+  const tickData = processTickEvents(tickNumber, events, trace.metadata.systems, /*isContinuation=*/false);
 
   const ticks = [...trace.ticks, tickData];
   const tickNumbers = [...trace.tickNumbers, tickNumber];

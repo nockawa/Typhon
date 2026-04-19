@@ -1,0 +1,82 @@
+{
+  "_doc": "1000-tick variant of the IO Profile Runner config — a faster-producing cousin of ioprofile-2k.json. Halves every iterative stage's tick budget and cuts the Versioned entity count in half, which in turn halves the event count of the final readBurst tick (target ~1M events instead of the 2k variant's ~2M). Use with: dotnet run -c Release -- ioprofile-1k.json. Output lands at ioprofile-1k.typhon-trace alongside the 2k-variant trace.",
+
+  "output": {
+    "tracePath": "ioprofile-1k.typhon-trace",
+    "workingDirectory": "ioprofile-data"
+  },
+
+  "database": {
+    "_doc": "Same 32 MB cache as the 2k variant. With ~130K Versioned entities the cache still churns enough to produce sustained DiskRead/DiskWrite + PageEvicted activity across the spawnCheckpointLoop stage — just less of it over 250 ticks instead of 500.",
+    "cacheSizeMB": 32,
+    "walEnabled": true
+  },
+
+  "workload": {
+    "_doc": "Stage budget — total ~1001 ticks: 1 + 1 + 250 + 250 + 250 + 247 + 1 + 1 = 1001. Each non-one-shot stage runs one iteration per tick, producing a steady signal across half the timeline of the 2k variant.",
+    "stages": {
+      "spawnBurst": {
+        "enabled": true,
+        "entityCount": 5000,
+        "batchSize": 500,
+        "_comment": "Same one-shot warm-up as the 2k variant — 5K entities in the first tick. Identical initial spike on every track so side-by-side comparison with the 2k trace is easy."
+      },
+      "checkpointAfterSpawn": {
+        "enabled": true
+      },
+      "spawnCheckpointLoop": {
+        "enabled": true,
+        "iterations": 250,
+        "entitiesPerIteration": 500,
+        "_comment": "250 iterations × 500 entities = 125K Versioned entities across 250 ticks (was 500/250K in the 2k variant). Halving the entity count is the primary lever for halving the final readBurst tick's event count, since readBurst walks every live entity and emits a page-cache event chain per read."
+      },
+      "txFlood": {
+        "enabled": true,
+        "iterations": 250,
+        "entitiesPerIteration": 50,
+        "_comment": "250 ticks × 50 independent commits per tick = 12.5K commits. Keeps the Tx+UoW gauge's per-tick rate lines at the same plateau as the 2k variant — just for half the duration."
+      },
+      "gcChurn": {
+        "enabled": true,
+        "iterations": 250,
+        "entitiesPerIteration": 8000,
+        "_comment": "250 ticks × 8K Hashtable entries per tick. Same per-tick intensity as the 2k variant — produces periodic Gen1/Gen2 collections without any single tick's duration dominating."
+      },
+      "transientChurn": {
+        "enabled": true,
+        "iterations": 247,
+        "entitiesPerIteration": 80,
+        "_comment": "247 × 80 = ~20K transient spawns across 247 ticks → ~280 component-segment pages, well under the 1024-page ceiling from Issue #244. The Transient Store gauge climbs monotonically then flattens, same shape as the 2k variant at half the scale."
+      },
+      "readBurst": {
+        "enabled": true,
+        "passes": 1,
+        "_comment": "Single one-shot read pass. With ~130K live Versioned entities (5K from spawnBurst + 125K from the loop) and ~4 page-cache events per read, this produces the heavy final tick (~500K-1M events depending on cache churn). That's roughly 50% of the 2k variant's last-tick event count — the explicit request that drove this config."
+      },
+      "finalCheckpoint": {
+        "enabled": true
+      }
+    }
+  },
+
+  "profile": {
+    "_doc": "Identical to the 2k variant's opt-in set.",
+
+    "pageCacheFetch": true,
+    "pageCacheDiskRead": true,
+    "pageCacheDiskWrite": true,
+    "pageCacheAllocatePage": true,
+    "pageCacheFlush": true,
+    "pageEvicted": true,
+
+    "pageCacheDiskReadCompleted": false,
+    "pageCacheDiskWriteCompleted": false,
+    "pageCacheFlushCompleted": false,
+
+    "transactionCommit": true,
+    "transactionCommitComponent": true,
+    "ecsSpawn": true,
+    "btreeInsert": true,
+    "btreeDelete": true
+  }
+}

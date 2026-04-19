@@ -287,9 +287,12 @@ function renderMemoryGroup(cx: GaugeRenderContext): void {
     }
     drawTrackAxis(cx.ctx, 0, yMax, 'bytes-compact', unmanagedRow, cx.labelWidth, 'rgba(180,180,200,0.55)');
     // Legend for row 2 — only includes Peak if the peak series actually has data (otherwise the dashed reference line isn't drawn).
+    // "(dashed)" suffix matches the convention used by the WAL track's capacity/peak legend entries: any dashed reference line
+    // gets the suffix so the reader can mentally map "solid filled area = current value, dashed line = high-watermark reference"
+    // without reading the chart pixels.
     const row2Legend = [{ color: UNMANAGED_COLOR, label: 'Unmanaged' }];
     if (unmanagedPeak && unmanagedPeak.samples.length > 0) {
-      row2Legend.push({ color: PEAK_COLOR, label: 'Peak' });
+      row2Legend.push({ color: PEAK_COLOR, label: 'Peak (dashed)' });
     }
     drawLegendIfVisible(cx,row2Legend, unmanagedRow);
   }
@@ -588,10 +591,21 @@ function renderTransientGroup(cx: GaugeRenderContext): void {
 
 // WAL content colors — palette picks for the three series the track renders. Commit-buffer area uses the accent color (track identity);
 // inflight frames + staging rented use distinct indices so the two overlays don't blur together.
-const WAL_COMMIT_BUFFER_COLOR = GAUGE_PALETTE[2];  // #14618D  ocean blue — area fill (primary "backpressure" signal)
-const WAL_INFLIGHT_COLOR      = GAUGE_PALETTE[6];  // #C3C22E  mustard    — "submitted but not durable" line
-const WAL_STAGING_COLOR       = GAUGE_PALETTE[4];  // #35A96D  green      — pool rent level
-const WAL_STAGING_PEAK_COLOR  = GAUGE_PALETTE[7];  // #F6D85C  warm yellow — peak high-watermark reference
+// Convention across gauge tracks: PLAIN fill colors are cool (blue/navy/purple) for "current value", DASHED reference lines
+// are yellow for "capacity / peak / high-watermark" (same convention as the Memory track's unmanaged area + peak). The WAL
+// commit-buffer area takes the same navy as Page Cache's "Free" bucket so the two "this is the healthy fill color" signals
+// stay visually related. Inflight sits in indigo-purple — pulled deliberately away from the green of Staging rented (both
+// were in the green / teal family before and read as a single blur). Capacity on the commit-buffer row + the staging-pool
+// peak both use yellow for "attention reference".
+const WAL_COMMIT_BUFFER_COLOR = GAUGE_PALETTE[1];  // navy          — commit-buffer area fill (matches Page Cache Free)
+const WAL_CAPACITY_COLOR      = GAUGE_PALETTE[7];  // warm yellow   — dashed capacity reference line on the buffer row
+const WAL_INFLIGHT_COLOR      = GAUGE_PALETTE[0];  // indigo-purple — "submitted but not durable" line (cool, bold contrast
+                                                   //                 to green Staging rented — earlier teal [3] sat too close
+                                                   //                 to green [4] for readers to separate the two lines)
+const WAL_STAGING_COLOR       = GAUGE_PALETTE[4];  // green         — pool rent level (growth / healthy)
+const WAL_STAGING_PEAK_COLOR  = GAUGE_PALETTE[7];  // warm yellow   — dashed peak high-watermark reference on the pool row
+                                                   //                 (same hue as capacity above — both are "dashed yellow =
+                                                   //                 reference line / attention" per the project convention)
 
 function renderWalGroup(cx: GaugeRenderContext): void {
 
@@ -612,39 +626,61 @@ function renderWalGroup(cx: GaugeRenderContext): void {
   const bufferRow = rows[0];
   const overlayRow = rows[1];
 
-  // ── Row 1: commit-buffer used bytes as an area chart, with capacity as a dashed reference line if known ──
+  // ── Row 1: commit-buffer used bytes as an area chart, with capacity as an optional dashed reference line ──
+  // Same scaling principle as row 2: pin the Y axis to observed data with 10% headroom. Capacity is drawn as a reference line
+  // ONLY when it falls inside the visible range — for lightly-loaded workloads where buffer usage is far below capacity,
+  // pinning Y to capacity would collapse the usage curve to ~0% of the row (invisible). The commit-buffer capacity is still
+  // discoverable via the tooltip (TOOLTIP_CAPACITY_FOR_GROUP['gauge-wal-buffer']) even when the reference line is off-screen.
   if (commitBuf) {
-    const yMax = bufferCapacity && bufferCapacity > 0 ? bufferCapacity : yMaxFromSeries(commitBuf);
+    const dataMax = yMaxFromSeries(commitBuf);
+    const yMax = Math.max(1, dataMax * 1.1);
+    const capacityInRange = bufferCapacity !== undefined && bufferCapacity > 0 && bufferCapacity <= yMax;
     drawAreaChart(cx.ctx, commitBuf.samples, cx.vp, cx.labelWidth, bufferRow,
       WAL_COMMIT_BUFFER_COLOR + '80', WAL_COMMIT_BUFFER_COLOR, 0, yMax);
-    if (bufferCapacity && bufferCapacity > 0) {
-      drawReferenceLine(cx.ctx, bufferCapacity, bufferRow, WAL_COMMIT_BUFFER_COLOR, 0, yMax, true);
+    if (capacityInRange) {
+      // Capacity reference line in its own distinct yellow — plain fill stays navy (matching Page Cache Free) so the cool /
+      // warm split visually separates "current usage" from "reference limit you're approaching."
+      drawReferenceLine(cx.ctx, bufferCapacity, bufferRow, WAL_CAPACITY_COLOR, 0, yMax, true);
     }
     drawTrackAxis(cx.ctx, 0, yMax, 'bytes-compact', bufferRow, cx.labelWidth, 'rgba(180,180,200,0.55)');
     const row1Legend = [{ color: WAL_COMMIT_BUFFER_COLOR, label: 'Commit buffer' }];
-    if (bufferCapacity && bufferCapacity > 0) row1Legend.push({ color: WAL_COMMIT_BUFFER_COLOR, label: 'Capacity (dashed)' });
+    // Only include capacity in the legend when its dashed line is actually drawn — otherwise a legend entry with no matching
+    // visible element on-screen misleads the reader into searching for a line that isn't there.
+    if (capacityInRange) row1Legend.push({ color: WAL_CAPACITY_COLOR, label: 'Capacity (dashed)' });
     drawLegendIfVisible(cx,row1Legend, bufferRow);
   }
 
-  // ── Row 2: inflight frames + staging rented (two lines on a shared Y axis scaled to the larger of the two + staging capacity) ──
+  // ── Row 2: inflight frames + staging rented, scaled to actual data (NOT capacity) ──
+  // Previous version folded stagingCapacity (default 512 slots) into yMax2. On workloads where actual inflight/staging peaks
+  // at ~5-10 buffers, the Y axis would pin to 512 and the live lines would collapse into the bottom 1-2% of the row — visually
+  // flat and unreadable. Capacity is a FIXED pool size, not a load metric; reflecting it on the axis only makes sense if the
+  // workload is actually saturating the pool. For the common case (well-provisioned staging pool), the axis should auto-scale
+  // to observed data so headroom is visible. The pool's absolute capacity is still discoverable via the tooltip
+  // (TOOLTIP_CAPACITY_FOR_GROUP['gauge-wal-pool']).
+  //
+  // peakValue is the all-time high-watermark from the stagingPeak series — INCLUDED in the scale because it IS real data
+  // (the engine observed this level at some point), just aggregated rather than per-tick.
   if (inflight || staging) {
-    const yMax2 = Math.max(
-      yMaxFromSeries(inflight),
-      yMaxFromSeries(staging),
-      stagingCapacity && stagingCapacity > 0 ? stagingCapacity : 0,
-    );
+    const peakValue = (stagingPeak && stagingPeak.samples.length > 0)
+      ? stagingPeak.samples[stagingPeak.samples.length - 1].value
+      : 0;
+    const dataMax = Math.max(yMaxFromSeries(inflight), yMaxFromSeries(staging), peakValue);
+    // Minimum floor of 1 for empty-data traces (yMax=0 would make drawLineChart produce NaN coordinates); 10% headroom so lines
+    // don't sit flush against the row's top edge where they'd be hard to see and visually overlap the legend.
+    const yMax2 = Math.max(1, dataMax * 1.1);
     if (inflight) drawLineChart(cx.ctx, inflight.samples, cx.vp, cx.labelWidth, overlayRow, WAL_INFLIGHT_COLOR, 0, yMax2, 1.25);
     if (staging)  drawLineChart(cx.ctx, staging.samples,  cx.vp, cx.labelWidth, overlayRow, WAL_STAGING_COLOR,  0, yMax2, 1.25);
     // Peak high-watermark reference line — shows "how close to capacity did staging-pool usage get?"
     if (stagingPeak && stagingPeak.samples.length > 0) {
-      const peakValue = stagingPeak.samples[stagingPeak.samples.length - 1].value;
       drawReferenceLine(cx.ctx, peakValue, overlayRow, WAL_STAGING_PEAK_COLOR, 0, yMax2, true);
     }
     drawTrackAxis(cx.ctx, 0, yMax2, 'count', overlayRow, cx.labelWidth, 'rgba(180,180,200,0.55)');
     const row2Legend: { color: string; label: string }[] = [];
     if (inflight) row2Legend.push({ color: WAL_INFLIGHT_COLOR, label: 'Inflight' });
     if (staging)  row2Legend.push({ color: WAL_STAGING_COLOR,  label: 'Staging rented' });
-    if (stagingPeak && stagingPeak.samples.length > 0) row2Legend.push({ color: WAL_STAGING_PEAK_COLOR, label: 'Staging peak' });
+    // "Staging peak (dashed)" suffix matches the Memory track's peak legend + the WAL buffer row's capacity legend — every
+    // dashed reference line gets the suffix so the reader doesn't have to inspect stroke style to tell "live line" from "ref line".
+    if (stagingPeak && stagingPeak.samples.length > 0) row2Legend.push({ color: WAL_STAGING_PEAK_COLOR, label: 'Staging peak (dashed)' });
     if (row2Legend.length > 0) drawLegendIfVisible(cx,row2Legend, overlayRow);
   }
 }
@@ -900,25 +936,40 @@ const TOOLTIP_GAUGES: Record<string, TooltipGaugeSpec[]> = {
     { id: GaugeId.MemoryUnmanagedPeakBytes,  label: 'Peak',        unit: 'bytes-compact', color: GAUGE_PALETTE[7] },
     { id: GaugeId.MemoryUnmanagedLiveBlocks, label: 'Live blocks', unit: 'count' },
   ],
-  'gauge-persistence': [
-    // Bucket colors exactly mirror the BUCKET_*_COLOR constants the renderer uses. Epoch + I/O overlay lines borrow the
-    // row-2 overlay colors.
-    { id: GaugeId.PageCacheFreePages,            label: 'Free',       unit: 'count', color: GAUGE_PALETTE[1] },
-    { id: GaugeId.PageCacheCleanUsedPages,       label: 'Clean',      unit: 'count', color: GAUGE_PALETTE[3] },
-    { id: GaugeId.PageCacheDirtyUsedPages,       label: 'Dirty',      unit: 'count', color: GAUGE_PALETTE[6] },
-    { id: GaugeId.PageCacheExclusivePages,       label: 'Exclusive',  unit: 'count', color: '#E85D4D' },
-    { id: GaugeId.PageCacheEpochProtectedPages,  label: 'Epoch-held', unit: 'count', color: GAUGE_PALETTE[2] },
-    { id: GaugeId.PageCachePendingIoReads,       label: 'Pending I/O', unit: 'count', color: GAUGE_PALETTE[5] },
+  // Page Cache is split into TWO sub-tooltips based on which sub-row the cursor is over (see persistenceSubRowKey below). Row 1
+  // (mutually-exclusive bucket stack — Free / Clean / Dirty / Exclusive) → bucket breakdown only. Row 2 (epoch + pending-I/O overlay
+  // lines) → the two overlay metrics only. Dispatch via the internal virtual keys below; the plain 'gauge-persistence' key is left
+  // out so a caller without sub-row info falls back to no tooltip (same fail-safe as Memory).
+  'gauge-persistence-buckets': [
+    // Bucket colors exactly mirror the BUCKET_*_COLOR constants the row-1 stacked-area renderer uses.
+    { id: GaugeId.PageCacheFreePages,      label: 'Free',      unit: 'count', color: GAUGE_PALETTE[1] },
+    { id: GaugeId.PageCacheCleanUsedPages, label: 'Clean',     unit: 'count', color: GAUGE_PALETTE[3] },
+    { id: GaugeId.PageCacheDirtyUsedPages, label: 'Dirty',     unit: 'count', color: GAUGE_PALETTE[6] },
+    { id: GaugeId.PageCacheExclusivePages, label: 'Exclusive', unit: 'count', color: '#E85D4D' },
+  ],
+  'gauge-persistence-overlay': [
+    // Row-2 overlay lines — epoch and pending-I/O are overlaid on the same axis, not stacked, so the tooltip presents them as
+    // independent metrics rather than summing-to-total.
+    { id: GaugeId.PageCacheEpochProtectedPages, label: 'Epoch-held',  unit: 'count', color: GAUGE_PALETTE[2] },
+    { id: GaugeId.PageCachePendingIoReads,      label: 'Pending I/O', unit: 'count', color: GAUGE_PALETTE[5] },
   ],
   'gauge-transient': [
     // Transient area uses the track's accent color — match it in the tooltip.
     { id: GaugeId.TransientStoreBytesUsed, label: 'Used', unit: 'bytes-compact', color: GAUGE_PALETTE[1] },
   ],
-  'gauge-wal': [
-    // Mirror the three WAL_*_COLOR constants defined on the renderer.
-    { id: GaugeId.WalCommitBufferUsedBytes,    label: 'Commit buffer', unit: 'bytes-compact', color: GAUGE_PALETTE[2] },
-    { id: GaugeId.WalInflightFrames,           label: 'Inflight',      unit: 'count',         color: GAUGE_PALETTE[6] },
-    { id: GaugeId.WalStagingPoolRented,        label: 'Staging rented', unit: 'count',        color: GAUGE_PALETTE[4] },
+  // WAL track splits into two sub-tooltips via walSubRowKey(). Row 1 (commit-buffer area + capacity dashed line) → buffer-only
+  // tooltip with the capacity suffix. Row 2 (Inflight + Staging-rented + Staging-peak reference line) → pool metrics. The plain
+  // 'gauge-wal' key is left out so a caller without sub-row info falls through to no tooltip — same fail-safe as Memory / Page
+  // Cache.
+  // Colors MUST stay in sync with the WAL_*_COLOR constants the renderer uses — see renderWalGroup. Indexed into GAUGE_PALETTE
+  // here (rather than imported from the constants) for consistency with how the other TOOLTIP_GAUGES entries reference colors.
+  'gauge-wal-buffer': [
+    { id: GaugeId.WalCommitBufferUsedBytes, label: 'Commit buffer', unit: 'bytes-compact', color: GAUGE_PALETTE[1] },
+  ],
+  'gauge-wal-pool': [
+    { id: GaugeId.WalInflightFrames,          label: 'Inflight',       unit: 'count', color: GAUGE_PALETTE[0] },
+    { id: GaugeId.WalStagingPoolRented,       label: 'Staging rented', unit: 'count', color: GAUGE_PALETTE[4] },
+    { id: GaugeId.WalStagingPoolPeakRented,   label: 'Staging peak',   unit: 'count', color: GAUGE_PALETTE[7] },
   ],
   // Tx+UoW is intentionally absent from TOOLTIP_GAUGES — it gets its own tooltip builder (<see cref="buildTxUowTooltipLines"/>) because
   // the on-screen chart renders *per-tick deltas*, not raw cumulative totals. The generic <c>buildGaugeTooltipLines</c> can only
@@ -927,9 +978,14 @@ const TOOLTIP_GAUGES: Record<string, TooltipGaugeSpec[]> = {
 
 /** Fixed-at-init capacity gauges — rendered as a dashed reference line in the chart; shown in tooltips as a suffix "(cap: XXX)". */
 const TOOLTIP_CAPACITY_FOR_GROUP: Record<string, GaugeId | undefined> = {
-  'gauge-persistence': GaugeId.PageCacheTotalPages,
+  // Capacity belongs to the bucket row only: row-1's Y-axis IS the cache capacity (pages). The row-2 overlay metrics (epoch /
+  // pending I/O) don't have a corresponding capacity — they're scaled auto-max against their own two-line range.
+  'gauge-persistence-buckets': GaugeId.PageCacheTotalPages,
   'gauge-transient': GaugeId.TransientStoreMaxBytes,
-  'gauge-wal': GaugeId.WalCommitBufferCapacityBytes,
+  // WAL splits the capacity similarly: buffer row has its own capacity (bytes), pool row has a separate capacity (staging-pool
+  // slot count). Each sub-tooltip shows only its own row's capacity suffix.
+  'gauge-wal-buffer': GaugeId.WalCommitBufferCapacityBytes,
+  'gauge-wal-pool': GaugeId.WalStagingPoolCapacity,
 };
 
 /**
@@ -958,6 +1014,51 @@ function memorySubRowKey(localY: number, trackHeight: number): string {
   return 'gauge-memory-unmanaged';   // markers row falls through to the same tooltip as row 2 (live blocks IS the row-3 metric)
 }
 
+/**
+ * Page Cache-track tooltip dispatcher. Splits by sub-row using the SAME weights as the renderer's <c>splitRows(layout, [40, 20])</c>
+ * call so the tooltip's content matches exactly which visual band the cursor is over: row 1 (bucket stack: Free/Clean/Dirty/Exclusive)
+ * gets the four bucket breakdown, row 2 (epoch-held + pending I/O overlay lines) gets just those two metrics.
+ */
+function persistenceSubRowKey(localY: number, trackHeight: number): string {
+  // Weights [40, 20] MUST match the renderPageCacheGroup call. usableHeight = trackHeight + 1 matches splitRows' internal math so a
+  // cursor at the exact pixel boundary lands on the same sub-row the renderer drew.
+  const weights = [40, 20];
+  const total = weights[0] + weights[1];
+  const usableHeight = trackHeight + 1;
+  const boundary1 = Math.round((weights[0] / total) * usableHeight);
+  if (localY < boundary1) return 'gauge-persistence-buckets';
+  return 'gauge-persistence-overlay';
+}
+
+/**
+ * WAL-track tooltip dispatcher. Splits by sub-row using <c>splitRows(layout, [50, 28])</c> weights — row 1 (commit-buffer area +
+ * capacity dashed line) → buffer-only tooltip, row 2 (Inflight + Staging + Staging-peak lines) → pool metrics only.
+ */
+function walSubRowKey(localY: number, trackHeight: number): string {
+  // Weights [50, 28] MUST match renderWalGroup's splitRows call.
+  const weights = [50, 28];
+  const total = weights[0] + weights[1];
+  const usableHeight = trackHeight + 1;
+  const boundary1 = Math.round((weights[0] / total) * usableHeight);
+  if (localY < boundary1) return 'gauge-wal-buffer';
+  return 'gauge-wal-pool';
+}
+
+/**
+ * Tx+UoW-track sub-row key. Splits <c>splitRows(layout, [38, 38])</c> at the midpoint — row 1 is the Tx (chain) metrics, row 2
+ * is the UoW (unit-of-work) metrics. Because Tx+UoW uses a custom tooltip builder (<see cref="buildTxUowTooltipLines"/>), the
+ * returned key is interpreted by that function rather than routed through TOOLTIP_GAUGES.
+ */
+function txUowSubRowKey(localY: number, trackHeight: number): 'tx' | 'uow' {
+  // Weights [38, 38] — equal split. Cursor at the exact midpoint lands on the Tx side (< comparison).
+  const weights = [38, 38];
+  const total = weights[0] + weights[1];
+  const usableHeight = trackHeight + 1;
+  const boundary1 = Math.round((weights[0] / total) * usableHeight);
+  if (localY < boundary1) return 'tx';
+  return 'uow';
+}
+
 export function buildGaugeTooltipLines(
   trace: ProcessedTrace,
   trackId: string,
@@ -969,9 +1070,18 @@ export function buildGaugeTooltipLines(
   trackHeight?: number,
 ): TooltipLine[] {
   // Tx+UoW gets its own specialized tooltip because the chart draws per-tick deltas (derived client-side), not raw cumulative
-  // totals. Mixing the two in a single generic path would mean the tooltip lies about what the chart is showing.
+  // totals. Mixing the two in a single generic path would mean the tooltip lies about what the chart is showing. Sub-row
+  // dispatch determines whether to surface Tx (row 1) or UoW (row 2) fields. Without sub-row info we fall back to the combined
+  // legacy view — not ideal but preserves behaviour for any caller that can't compute localY.
   if (trackId === 'gauge-tx-uow') {
-    return buildTxUowTooltipLines(trace, groupLabel, cursorUs);
+    const section: 'tx' | 'uow' | 'both' = (localY !== undefined && trackHeight !== undefined)
+      ? txUowSubRowKey(localY, trackHeight)
+      : 'both';
+    const subLabel =
+      section === 'tx' ? 'Tx+UoW — Transactions' :
+      section === 'uow' ? 'Tx+UoW — UoW' :
+      groupLabel;
+    return buildTxUowTooltipLines(trace, subLabel, cursorUs, section);
   }
   // Memory track is sub-divided into 3 sub-rows via splitRows([40, 28, 10]). The tooltip content differs per row (heap-gen breakdown
   // in row 1, unmanaged totals in rows 2+3). Re-route through the sub-key map before the generic lookup below.
@@ -979,6 +1089,21 @@ export function buildGaugeTooltipLines(
     trackId = memorySubRowKey(localY, trackHeight);
     if (trackId === 'gauge-memory-heap') groupLabel = 'Memory — Heap';
     else groupLabel = 'Memory — Unmanaged';
+  }
+  // Page Cache track is sub-divided into 2 sub-rows via splitRows([40, 20]). Row 1 is the mutually-exclusive bucket stack (tooltip
+  // shows Free/Clean/Dirty/Exclusive); row 2 is the overlay lines (tooltip shows Epoch-held + Pending I/O). Dispatch mirrors the
+  // Memory pattern — callers without sub-row info fall through to no tooltip.
+  if (trackId === 'gauge-persistence' && localY !== undefined && trackHeight !== undefined) {
+    trackId = persistenceSubRowKey(localY, trackHeight);
+    if (trackId === 'gauge-persistence-buckets') groupLabel = 'Page Cache — Buckets';
+    else groupLabel = 'Page Cache — Overlay';
+  }
+  // WAL track splits similarly via splitRows([50, 28]). Row 1 is the commit-buffer area (tooltip shows commit-buffer used +
+  // capacity suffix); row 2 is the pool metrics overlay (tooltip shows Inflight + Staging + Staging-peak).
+  if (trackId === 'gauge-wal' && localY !== undefined && trackHeight !== undefined) {
+    trackId = walSubRowKey(localY, trackHeight);
+    if (trackId === 'gauge-wal-buffer') groupLabel = 'WAL — Commit Buffer';
+    else groupLabel = 'WAL — Pool';
   }
   // GC track renders a derived per-tick pause-time area chart and per-generation event markers — the generic snapshot path would
   // only surface committed bytes (unrelated to what's drawn now). Dispatch to the GC-specific builder.
@@ -1118,7 +1243,17 @@ function formatDurationInline(us: number): string {
   return `${(us / 1_000_000).toFixed(2)} s`;
 }
 
-function buildTxUowTooltipLines(trace: ProcessedTrace, groupLabel: string, cursorUs: number): TooltipLine[] {
+function buildTxUowTooltipLines(
+  trace: ProcessedTrace,
+  groupLabel: string,
+  cursorUs: number,
+  /**
+   * Which sub-section of the two-row track to populate the tooltip for. 'tx' (row 1) emits only the Tx-chain fields; 'uow'
+   * (row 2) emits only the UoW-registry fields; 'both' preserves the legacy combined view for callers that can't compute
+   * a sub-row index.
+   */
+  section: 'tx' | 'uow' | 'both',
+): TooltipLine[] {
   // Binary-search for the nearest snapshot-bearing tick, same as the generic path. For Tx+UoW we ALSO need the predecessor
   // (for delta computation), which we find by walking backwards from the matched tick's array index until we hit another
   // snapshot — typically 0 or 1 steps because snapshots are emitted at every tick in practice.
@@ -1141,35 +1276,48 @@ function buildTxUowTooltipLines(trace: ProcessedTrace, groupLabel: string, curso
     return Math.max(0, curV - prevV);         // cumulative counters are monotonic; clamp defensively against counter resets
   };
 
-  const created = delta(GaugeId.TxChainCreatedTotal);
-  const commits = delta(GaugeId.TxChainCommitTotal);
-  const rollbacks = delta(GaugeId.TxChainRollbackTotal);
-  const uowCreated = delta(GaugeId.UowRegistryCreatedTotal);
-  const uowCommitted = delta(GaugeId.UowRegistryCommittedTotal);
-  // Snapshot (live-state) gauges — read directly off the current snapshot, not differenced. These complement the per-tick deltas
-  // by showing "what's alive right now" instead of "what happened this tick."
-  const txActive = cur.values.get(GaugeId.TxChainActiveCount);
-  const txPool = cur.values.get(GaugeId.TxChainPoolSize);
-  const uowActive = cur.values.get(GaugeId.UowRegistryActiveCount);
-  const uowVoid = cur.values.get(GaugeId.UowRegistryVoidCount);
-
   const fmt = (v: number | undefined): string => v === undefined ? '—' : formatGaugeValue(v, 'count');
-  // Per-line coloring mirrors the renderer: active-count lines use the area fill color, rate lines use their overlay-line color.
-  // Tx pool (idle) + UoW void are tooltip-only (not drawn on-chart), so they stay in the default TEXT_COLOR.
-  return [
-    groupLabel,
-    `Tick: ${cur.tickNumber}`,
-    `(live state — what's alive at this exact tick)`,
-    { text: `Tx active:       ${fmt(txActive)}`,   color: TX_ACTIVE_COLOR },
-    `Tx pool (idle):  ${fmt(txPool)}`,
-    { text: `UoW active:      ${fmt(uowActive)}`,  color: UOW_ACTIVE_COLOR },
-    `UoW void:        ${fmt(uowVoid)}`,
-    ``,
-    `(per-tick counts — what happened in this one tick)`,
-    { text: `Tx created:      ${fmt(created)}`,    color: TX_CREATED_COLOR },
-    { text: `Tx commits:      ${fmt(commits)}`,    color: TX_COMMIT_COLOR },
-    { text: `Tx rollbacks:    ${fmt(rollbacks)}`,  color: TX_ROLLBACK_COLOR },
-    { text: `UoW created:     ${fmt(uowCreated)}`, color: UOW_CREATED_COLOR },
-    { text: `UoW committed:   ${fmt(uowCommitted)}`, color: UOW_COMMITTED_COLOR },
-  ];
+
+  // ── Tx-section lines (row 1) ────────────────────────────────────────────────────────────────
+  const txLines = (): TooltipLine[] => {
+    const txActive = cur.values.get(GaugeId.TxChainActiveCount);
+    const txPool = cur.values.get(GaugeId.TxChainPoolSize);
+    const created = delta(GaugeId.TxChainCreatedTotal);
+    const commits = delta(GaugeId.TxChainCommitTotal);
+    const rollbacks = delta(GaugeId.TxChainRollbackTotal);
+    return [
+      `(live state — what's alive at this exact tick)`,
+      { text: `Tx active:       ${fmt(txActive)}`, color: TX_ACTIVE_COLOR },
+      `Tx pool (idle):  ${fmt(txPool)}`,
+      ``,
+      `(per-tick counts — what happened in this one tick)`,
+      { text: `Tx created:      ${fmt(created)}`,   color: TX_CREATED_COLOR },
+      { text: `Tx commits:      ${fmt(commits)}`,   color: TX_COMMIT_COLOR },
+      { text: `Tx rollbacks:    ${fmt(rollbacks)}`, color: TX_ROLLBACK_COLOR },
+    ];
+  };
+
+  // ── UoW-section lines (row 2) ───────────────────────────────────────────────────────────────
+  const uowLines = (): TooltipLine[] => {
+    const uowActive = cur.values.get(GaugeId.UowRegistryActiveCount);
+    const uowVoid = cur.values.get(GaugeId.UowRegistryVoidCount);
+    const uowCreated = delta(GaugeId.UowRegistryCreatedTotal);
+    const uowCommitted = delta(GaugeId.UowRegistryCommittedTotal);
+    return [
+      `(live state — what's alive at this exact tick)`,
+      { text: `UoW active:     ${fmt(uowActive)}`,    color: UOW_ACTIVE_COLOR },
+      `UoW void:       ${fmt(uowVoid)}`,
+      ``,
+      `(per-tick counts — what happened in this one tick)`,
+      { text: `UoW created:    ${fmt(uowCreated)}`,   color: UOW_CREATED_COLOR },
+      { text: `UoW committed:  ${fmt(uowCommitted)}`, color: UOW_COMMITTED_COLOR },
+    ];
+  };
+
+  const header: TooltipLine[] = [groupLabel, `Tick: ${cur.tickNumber}`];
+  if (section === 'tx')  return [...header, ...txLines()];
+  if (section === 'uow') return [...header, ...uowLines()];
+  // 'both' fallback — preserves the legacy combined view for callers that can't compute localY. Used only when localY wasn't
+  // supplied to buildGaugeTooltipLines; once every caller supplies sub-row info this branch becomes dead and can be removed.
+  return [...header, ...txLines(), ``, ...uowLines()];
 }

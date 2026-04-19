@@ -20,10 +20,10 @@
  * thread. Feature detection happens on first-worker-attempt; subsequent attempts short-circuit via `workerUnavailable`.
  */
 import type { TickData } from './traceModel';
-import { processTickEvents } from './traceModel';
 import type { TraceEvent, SystemDef } from './types';
 import { decompressLz4Block } from './lz4Block';
 import { decodeChunkBinary } from './chunkDecoder';
+import { buildTickDataFromEvents } from './tickBuilder';
 
 interface WorkerMessage {
   type: 'processed' | 'error';
@@ -152,7 +152,7 @@ export function processEventsInWorker(events: TraceEvent[], systems: SystemDef[]
   const slotIdx = pickSlot();
   const w = ensureSlot(slotIdx);
   if (!w) {
-    return Promise.resolve(buildTickDataSync(events, systems));
+    return Promise.resolve(buildTickDataFromEvents(events, systems, /*continuationTickNumber=*/-1));
   }
 
   const slot = pool[slotIdx];
@@ -176,6 +176,7 @@ export function processBinaryInWorker(
   fromTick: number,
   ticksPerUs: number,
   systems: SystemDef[],
+  isContinuation: boolean,
 ): Promise<TickData[]> {
   const slotIdx = pickSlot();
   const w = ensureSlot(slotIdx);
@@ -183,8 +184,8 @@ export function processBinaryInWorker(
     // Synchronous fallback when module workers are unavailable. Runs the same pipeline inline — no transfer semantics needed because the
     // main thread already owns the ArrayBuffer.
     const raw = decompressLz4Block(new Uint8Array(compressed), uncompressedBytes);
-    const events = decodeChunkBinary(raw, fromTick, ticksPerUs);
-    return Promise.resolve(buildTickDataSync(events, systems));
+    const events = decodeChunkBinary(raw, fromTick, ticksPerUs, isContinuation);
+    return Promise.resolve(buildTickDataFromEvents(events, systems, isContinuation ? fromTick : -1));
   }
 
   const slot = pool[slotIdx];
@@ -202,25 +203,8 @@ export function processBinaryInWorker(
       fromTick,
       ticksPerUs,
       systems,
+      isContinuation,
     }, [compressed]);
   });
 }
 
-function buildTickDataSync(events: TraceEvent[], systems: SystemDef[]): TickData[] {
-  if (events.length === 0) return [];
-  const byTick = new Map<number, TraceEvent[]>();
-  for (const evt of events) {
-    let bucket = byTick.get(evt.tickNumber);
-    if (!bucket) {
-      bucket = [];
-      byTick.set(evt.tickNumber, bucket);
-    }
-    bucket.push(evt);
-  }
-  const result: TickData[] = [];
-  for (const [tickNumber, bucket] of byTick) {
-    result.push(processTickEvents(tickNumber, bucket, systems));
-  }
-  result.sort((a, b) => a.tickNumber - b.tickNumber);
-  return result;
-}

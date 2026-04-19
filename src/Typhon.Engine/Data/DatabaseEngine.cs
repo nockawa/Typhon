@@ -214,7 +214,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private WalRecoveryResult                   _lastRecoveryResult;
     internal TransientOptions                   TransientOptions => _options.Transient;
     internal WalRecoveryResult                  LastRecoveryResult => _lastRecoveryResult;
-    internal ILogger<DatabaseEngine>            Logger { get; }
+
+    // ReSharper disable once ConvertToAutoProperty MUST KEEP _logger for SourceGen to generate the log properly
+    internal ILogger<DatabaseEngine> Logger => _logger;
+
     internal IMemoryAllocator                   MemoryAllocator { get; }
 
     /// <summary>Shared WAL staging buffer pool — exposed to the profiler's gauge emitter. Null when WAL is disabled. Do not keep references across engine lifecycle boundaries.</summary>
@@ -333,6 +336,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     private readonly List<EcsCleanupEntry> _ecsCleanupQueue = [];
     private readonly Lock _ecsCleanupLock = new();
+    private readonly ILogger<DatabaseEngine> _logger;
 
     /// <summary>Enqueue an ECS entity for deferred cleanup (LinearHash removal + chunk freeing).</summary>
     internal void EnqueueEcsCleanup(EntityId id, ArchetypeMetadata meta, long diedTSN)
@@ -479,7 +483,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         MMF = mmf;
         EpochManager = epochManager;
         Watchdog = watchdog;
-        Logger = log;
+        _logger = log;
         _options = options;
         MemoryAllocator = memoryAllocator;
         _walFileIO = walFileIO;

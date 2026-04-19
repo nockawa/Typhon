@@ -40,10 +40,9 @@ public sealed class TraceFileCacheReader : IDisposable
     private readonly List<TickIndexEntry> _tickIndex = new();
     private readonly List<TickSummary> _tickSummaries = new();
     private readonly List<ChunkManifestEntry> _chunkManifest = new();
-    // Index from FromTick → manifest position. Built once when the cache is loaded so endpoint handlers can resolve chunk lookups in O(1)
-    // instead of rescanning the manifest on every request. Keyed by FromTick alone — (fromTick, toTick) pairs are 1:1 in a valid manifest,
-    // so the ToTick value is validated against the stored entry after the dictionary lookup.
-    private readonly Dictionary<uint, int> _chunkIndexByFromTick = new();
+    // NOTE: the former `_chunkIndexByFromTick` dictionary was removed in chunker v8 when intra-tick splitting became supported — FromTick is
+    // no longer unique across entries (a split tick produces multiple chunks with the same [FromTick, ToTick)). Chunk endpoints now take a
+    // `chunkIdx` parameter and index directly into `_chunkManifest` instead, which is both simpler and strictly more expressive.
     private readonly List<SystemAggregateDuration> _systemAggregates = new();
     private readonly Dictionary<int, string> _spanNames = new();
     private GlobalMetricsFixed _globalMetrics;
@@ -90,9 +89,6 @@ public sealed class TraceFileCacheReader : IDisposable
     public IReadOnlyList<TickIndexEntry> TickIndex => _tickIndex;
     public IReadOnlyList<TickSummary> TickSummaries => _tickSummaries;
     public IReadOnlyList<ChunkManifestEntry> ChunkManifest => _chunkManifest;
-    /// <summary>O(1) index from a chunk's FromTick to its position in <see cref="ChunkManifest"/>. Endpoint handlers should use this to
-    /// resolve chunk lookups instead of scanning the manifest linearly.</summary>
-    public IReadOnlyDictionary<uint, int> ChunkIndexByFromTick => _chunkIndexByFromTick;
     public ref readonly GlobalMetricsFixed GlobalMetrics => ref _globalMetrics;
     public IReadOnlyList<SystemAggregateDuration> SystemAggregates => _systemAggregates;
     public IReadOnlyDictionary<int, string> SpanNames => _spanNames;
@@ -314,14 +310,6 @@ public sealed class TraceFileCacheReader : IDisposable
         if (_sectionsByid.TryGetValue(CacheSectionId.ChunkManifest, out var manifestSec))
         {
             LoadStructArray(manifestSec, _chunkManifest);
-            // Build the FromTick → index map once; every /api/trace/chunk and /api/trace/chunk-binary request uses it to short-circuit what
-            // used to be a full-manifest scan. For a 10K-entry manifest that's ~50 µs per request saved — negligible solo, real during a
-            // timeline load that fires hundreds of chunk requests.
-            _chunkIndexByFromTick.EnsureCapacity(_chunkManifest.Count);
-            for (var i = 0; i < _chunkManifest.Count; i++)
-            {
-                _chunkIndexByFromTick[_chunkManifest[i].FromTick] = i;
-            }
         }
         if (_sectionsByid.TryGetValue(CacheSectionId.GlobalMetrics, out var metricsSec))
         {

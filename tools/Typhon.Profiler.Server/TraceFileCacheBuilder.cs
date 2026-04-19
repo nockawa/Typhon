@@ -95,12 +95,26 @@ public static class TraceFileCacheBuilder
         long currentMaxSystemDurationTicks = 0;
         ulong currentActiveSystemsBitmask = 0;
 
-        // Chunk accumulator — raw record bytes for the currently-building chunk. Flushed at tick boundaries when TICK_CAP or BYTE_CAP hit.
+        // Chunk accumulator — raw record bytes for the currently-building chunk. Flushed at tick boundaries when TICK_CAP or BYTE_CAP hit,
+        // and mid-tick when IntraTickByteCap or IntraTickEventCap fire.
         // Using MemoryStream.GetBuffer() + tracked length avoids re-alloc when reused across chunks (its backing array grows to the worst-case
         // chunk size and is re-used across Write-then-Reset cycles). MemoryStream auto-grows to ByteCap + slack on demand.
         var chunkBuffer = new MemoryStream(capacity: TraceFileCacheConstants.ByteCap);
         uint chunkFromTick = 0;
         uint chunkEventCount = 0;
+        // Flags written into the ChunkManifestEntry for THIS chunk on its flush. Set to FlagIsContinuation when the previous flush was a
+        // mid-tick split — tells the decoder to seed its tick counter to FromTick directly instead of FromTick-1, since no TickStart record
+        // is at the head of this chunk. Reset to 0 on any tick-boundary flush (normal chunk opens with a TickStart).
+        uint chunkFlags = 0;
+        // Bytes contributed by the CURRENT tick to the current chunk buffer. Tracked separately from chunkBuffer.Length because the mid-tick
+        // cap needs to measure "how much of this one tick's data has accumulated here," not total chunk size (which mixes prior ticks).
+        // Reset at TickStart AND at mid-tick flush — on mid-tick flush the continuation chunk starts accumulating this tick from scratch.
+        long tickBytesInChunk = 0;
+        // Events contributed by the CURRENT tick to the current chunk buffer. Distinct from `currentEventCount`, which accumulates across a
+        // mid-tick split (it's used by the tick summary, which wants the full per-tick total). The intra-tick cap check must use THIS local
+        // counter — otherwise a split at 100K events would keep firing on every subsequent record (currentEventCount stays ≥ 100K for the
+        // rest of the tick), producing one empty continuation chunk per record after the cap is first hit.
+        uint tickEventsInChunk = 0;
 
         // openKickoffs: maps an async span's SpanId → the offset in `chunkBuffer` where the kickoff record starts. When a matching *Completed
         // record arrives, we seek back to (kickoffOffset + CommonHeaderSize) and rewrite the kickoff's DurationTicks field with the completion's
@@ -195,15 +209,20 @@ public static class TraceFileCacheBuilder
                             || chunkBuffer.Length >= TraceFileCacheConstants.ByteCap
                             || chunkEventCount >= TraceFileCacheConstants.EventCap)
                         {
-                            FlushChunk(writer, chunkBuffer, chunkManifest, chunkFromTick, nextTickNumber, chunkEventCount);
+                            FlushChunk(writer, chunkBuffer, chunkManifest, chunkFromTick, nextTickNumber, chunkEventCount, chunkFlags);
                             // Clear open kickoffs: their byte offsets pointed into the chunk that's now LZ4-compressed on disk, so they can't be
                             // retroactively rewritten. Any completion records that arrive after this point will fall through to the normal write
                             // path and the client's existing fold logic will handle them as cross-chunk pairs.
                             openKickoffs.Clear();
                             chunkFromTick = nextTickNumber;
                             chunkEventCount = 0;
+                            // New chunk opens with an incoming TickStart record (we're at a tick boundary), so it is NOT a continuation.
+                            chunkFlags = 0;
                         }
                     }
+                    // Every TickStart resets the per-tick-per-chunk accumulators — whether we just flushed or not, the NEW tick starts at 0.
+                    tickBytesInChunk = 0;
+                    tickEventsInChunk = 0;
 
                     currentTickNumber = nextTickNumber;
                     currentTickFirstTs = startTs;
@@ -261,6 +280,34 @@ public static class TraceFileCacheBuilder
                         // Kickoff not in cache (cross-chunk or never seen) — fall through to the normal write path.
                     }
 
+                    // ── Mid-tick split check ──
+                    // Fires BEFORE the kickoff-offset capture and the write, so the sequence is: flush → reset → record offset in NEW chunk →
+                    // write into NEW chunk. If we captured the kickoff offset first and THEN flushed, the recorded offset would point into the
+                    // old (now LZ4-compressed) chunk and a later completion trying to fold against it would silently rewrite bytes in the
+                    // wrong chunk buffer.
+                    //
+                    // Thresholds: per-tick-per-chunk bytes and events (reset on split). Using IntraTickByteCap / IntraTickEventCap (2× the
+                    // tick-boundary caps) keeps well-sized ticks from ever tripping this path. See TraceFileCacheConstants.IntraTickByteCap.
+                    if (tickBytesInChunk + size > TraceFileCacheConstants.IntraTickByteCap
+                        || tickEventsInChunk >= TraceFileCacheConstants.IntraTickEventCap)
+                    {
+                        // Flush the partial chunk. ToTick = currentTickNumber + 1 because tick currentTickNumber IS partially represented in
+                        // this chunk (it contains the TickStart and some of the events). The continuation chunk will also claim
+                        // [currentTickNumber, currentTickNumber + 1) — this overlap is the expected semantic of a tick split.
+                        FlushChunk(writer, chunkBuffer, chunkManifest, chunkFromTick, currentTickNumber + 1, chunkEventCount, chunkFlags);
+                        openKickoffs.Clear();
+                        // Open a continuation chunk. FromTick stays at currentTickNumber — this chunk continues the SAME tick, no TickStart
+                        // at its head. The decoder must be told via FlagIsContinuation so it seeds its tick counter to FromTick directly.
+                        chunkFromTick = currentTickNumber;
+                        chunkEventCount = 0;
+                        chunkFlags = TraceFileCacheConstants.FlagIsContinuation;
+                        // Per-tick-per-chunk accumulator resets: the continuation chunk starts fresh for BOTH bytes and events. Note that
+                        // currentEventCount (the per-tick TOTAL used by the tick summary) is NOT reset — it correctly keeps accumulating
+                        // so the tick's final EventCount in the summary matches the true total across all its chunks.
+                        tickBytesInChunk = 0;
+                        tickEventsInChunk = 0;
+                    }
+
                     currentEventCount++;
                     globalTotalEvents++;
                     // Remember the offset where a kickoff record starts, so a later completion in the same chunk can rewrite its duration field.
@@ -272,6 +319,8 @@ public static class TraceFileCacheBuilder
                     }
                     chunkBuffer.Write(span.Slice(pos, size));
                     chunkEventCount++;
+                    tickBytesInChunk += size;
+                    tickEventsInChunk++;
                 }
                 else if (kind == TraceEventKind.MemoryAllocEvent || kind == TraceEventKind.GcStart || kind == TraceEventKind.GcEnd
                     || kind == TraceEventKind.GcSuspension || kind == TraceEventKind.ThreadInfo)
@@ -340,7 +389,7 @@ public static class TraceFileCacheBuilder
         }
         if (chunkBuffer.Length > 0)
         {
-            FlushChunk(writer, chunkBuffer, chunkManifest, chunkFromTick, currentTickNumber + 1, chunkEventCount);
+            FlushChunk(writer, chunkBuffer, chunkManifest, chunkFromTick, currentTickNumber + 1, chunkEventCount, chunkFlags);
         }
 
         // tickSummaries[^1].TickNumber can never be 0 once populated (first tick is always 1, since TickStart bumps currentTickNumber to 1
@@ -442,7 +491,8 @@ public static class TraceFileCacheBuilder
         List<ChunkManifestEntry> manifest,
         uint fromTick,
         uint toTick,
-        uint eventCount)
+        uint eventCount,
+        uint flags)
     {
         // Skip flush for empty OR zero-event chunks. The old check only looked at byte length; a small amount of noise bytes
         // (e.g., a malformed size prefix that didn't advance our event counter) could still make it through as a manifest
@@ -465,7 +515,7 @@ public static class TraceFileCacheBuilder
             CacheByteLength = compressedLength,
             EventCount = eventCount,
             UncompressedBytes = uncompressedLength,
-            Padding = 0,
+            Flags = flags,
         });
 
         // Reset the buffer for reuse — SetLength(0) keeps the backing array, only resets the position counter. No heap thrash between chunks.

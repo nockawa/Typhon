@@ -46,6 +46,33 @@ internal sealed class GcEventListener : EventListener
         ArgumentNullException.ThrowIfNull(queue);
         _queue = queue;
         _ready = true;
+
+        // ── Post-base-ctor enable catch-up ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        // Documented .NET contract (MSDN, EventListener): when a new EventListener is instantiated, its BASE ctor enumerates every pre-existing EventSource in
+        // the process and invokes OnEventSourceCreated for each — via virtual dispatch into OUR override. Because Microsoft-Windows-DotNETRuntime is created by
+        // the CLR at process startup (long before any user code runs), the runtime EventSource ALWAYS pre-exists, and OnEventSourceCreated ALWAYS fires at
+        // least once during base()'s execution.
+        //
+        // When that happens, the override sets _runtimeSource but cannot call EnableEvents — _ready is false (our ctor body hasn't set it yet), so the guard in
+        // OnEventSourceCreated suppresses the EnableEvents call. Without the tail below, the listener would hold a reference to the runtime source but never
+        // actually subscribe, and no GC events would ever flow. (That symptom — thread slot claimed, zero GcStart/GcEnd/GcSuspension records in the trace — was
+        // observed in production when this tail was previously removed based on static-analyzer advice. The analyzer is unable to trace virtual dispatch across
+        // the base-class ctor and incorrectly concluded _runtimeSource could not have been written at this point; the empirical behavior contradicts that
+        // analysis.)
+        //
+        // The pragma below silences CA1508 ("avoid dead conditional code"). The condition IS reachable; the analyzer is reasoning about a constructor-local
+        // view that happens to miss virtual dispatch into a base-ctor callback..
+#pragma warning disable CA1508
+        // ReSharper disable once ExpressionIsAlwaysNull
+        var source = _runtimeSource;
+        // ReSharper disable once ConditionIsAlwaysTrueOrFalse
+        // ReSharper disable HeuristicUnreachableCode
+        if (source != null)
+        {
+            EnableEvents(source, EventLevel.Informational, GcKeyword);
+        }
+        // ReSharper restore HeuristicUnreachableCode
+#pragma warning restore CA1508
     }
 
     protected override void OnEventSourceCreated(EventSource eventSource)
@@ -53,10 +80,13 @@ internal sealed class GcEventListener : EventListener
         if (eventSource.Name == DotNetRuntimeSourceName)
         {
             _runtimeSource = eventSource;
-            // _ready gate: in THIS process's init order, OnEventSourceCreated never fires with the DotNetRuntime source during
-            // the base ctor — the runtime source is discovered post-construction (driven by whoever triggers its creation). The
-            // gate still matters for Dispose: DisposableSemantics sets _ready=false on teardown, and any in-flight
-            // OnEventSourceCreated callback that fires after Dispose has started must NOT re-enable events on a dying listener.
+            // _ready gate — two cases this guards:
+            // (1) During base ctor (before our derived ctor body runs): _ready is false. We record the source but skip
+            //     EnableEvents here; the derived ctor tail (above) does it once _ready has flipped to true. Without this
+            //     guard, EnableEvents would fire before _queue was assigned, and the first GC callback could hit a null
+            //     reference.
+            // (2) During/after Dispose: Dispose() sets _ready=false on teardown, and any in-flight OnEventSourceCreated
+            //     callback that lands after must NOT re-subscribe on a dying listener.
             if (_ready)
             {
                 EnableEvents(eventSource, EventLevel.Informational, GcKeyword);

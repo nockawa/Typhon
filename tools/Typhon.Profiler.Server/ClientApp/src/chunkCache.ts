@@ -12,7 +12,7 @@
  */
 import type { ChunkManifestEntry, GaugeId, SystemDef, TickSummary, TraceEvent, TraceMetadata } from './types';
 import type { GaugeSeries, GcEvent, GcSuspensionEvent, MemoryAllocEventData, TickData } from './traceModel';
-import { aggregateGaugeData } from './traceModel';
+import { aggregateGaugeData, mergeTickData } from './traceModel';
 import { fetchChunk, fetchChunkBinary } from './api';
 import { processEventsInWorker, processBinaryInWorker } from './chunkWorkerClient';
 import { OpfsChunkStore } from './opfsChunkStore';
@@ -56,6 +56,27 @@ export interface ChunkCacheState {
    * viewport intersection — surfacing as an error-banner loop the user can't escape.
    */
   failedChunks: Map<number, { error: string; failedAt: number }>;
+  /**
+   * Monotonic version counter bumped every time <see cref="entries"/> changes (insert, delete). Used by
+   * <see cref="assembleTickViewAndNumbers"/> to short-circuit on pure pan/zoom (no chunks loaded or evicted): if the version
+   * matches the last-computed assembly's snapshot, return the cached result directly. This turns a ~500 ms/frame cost on
+   * intra-tick-split traces (chain-fold re-runs of processTickEvents) into a pointer compare + return.
+   */
+  entriesVersion: number;
+  /** Snapshot of the last <see cref="assembleTickViewAndNumbers"/> output + the entriesVersion at which it was computed. */
+  lastAssembly: {
+    version: number;
+    result: {
+      tickData: TickData[];
+      tickNumbers: number[];
+      gaugeSeries: Map<GaugeId, GaugeSeries>;
+      gaugeCapacities: Map<GaugeId, number>;
+      memoryAllocEvents: MemoryAllocEventData[];
+      gcEvents: GcEvent[];
+      gcSuspensions: GcSuspensionEvent[];
+      threadNames: Map<number, string>;
+    };
+  } | null;
 }
 
 /**
@@ -89,6 +110,8 @@ const USE_BINARY_CHUNK_TRANSPORT = true;
 export function createChunkCache(budgetBytes: number = DEFAULT_BUDGET, opfsStore: OpfsChunkStore | null = null): ChunkCacheState {
   return {
     entries: new Map(),
+    entriesVersion: 0,
+    lastAssembly: null,
     totalBytes: 0,
     inFlight: new Map(),
     accessCounter: 0,
@@ -205,8 +228,8 @@ export async function ensureRangeLoaded(
  * The returned array is newly allocated on every call; callers should re-reference (setTrace) to trigger Preact re-render.
  * Prefer <see cref="assembleTickViewAndNumbers"/> when the caller needs both arrays — saves a second sort + second iteration.
  */
-export function assembleTickView(cache: ChunkCacheState): TickData[] {
-  return assembleTickViewAndNumbers(cache).tickData;
+export function assembleTickView(cache: ChunkCacheState, systems: SystemDef[]): TickData[] {
+  return assembleTickViewAndNumbers(cache, systems).tickData;
 }
 
 /**
@@ -219,7 +242,7 @@ export function assembleTickView(cache: ChunkCacheState): TickData[] {
  * alongside the tick arrays so callers can refresh <c>ProcessedTrace.gaugeSeries</c> / <c>gaugeCapacities</c> /
  * <c>memoryAllocEvents</c> in the same pass rather than walking the cache a second time.
  */
-export function assembleTickViewAndNumbers(cache: ChunkCacheState): {
+export function assembleTickViewAndNumbers(cache: ChunkCacheState, systems: SystemDef[]): {
   tickData: TickData[];
   tickNumbers: number[];
   gaugeSeries: Map<GaugeId, GaugeSeries>;
@@ -229,17 +252,76 @@ export function assembleTickViewAndNumbers(cache: ChunkCacheState): {
   gcSuspensions: GcSuspensionEvent[];
   threadNames: Map<number, string>;
 } {
-  const chunks = Array.from(cache.entries.values()).sort((a, b) => a.fromTick - b.fromTick);
-  const tickData: TickData[] = [];
-  const tickNumbers: number[] = [];
+  // ── Memo short-circuit ────────────────────────────────────────────────────────────────────────────────────────────
+  // assembleTickViewAndNumbers runs on EVERY viewport effect — which fires on every pan, zoom, and wheel event. When the
+  // cache hasn't changed (pure pan/zoom, no new chunks loaded or evicted) the expensive work below — particularly
+  // mergeTickData's chain-fold on intra-tick-split traces, which re-runs processTickEvents on a cumulative event union
+  // per iteration — produces an IDENTICAL result to the previous call. Gate on entriesVersion to skip all of it.
+  //
+  // The memo holds references to (not copies of) the TickData arrays and map objects from the previous computation.
+  // That's safe because:
+  //   (1) tickData entries are either (a) direct references to cache-resident per-chunk TickData (never mutated after
+  //       creation), or (b) merged results produced by mergeTickData (also never mutated after return; rawEvents is
+  //       wiped immediately in this function's same pass).
+  //   (2) The downstream consumer (App.tsx's setLoaded) shallow-assigns the arrays into trace state — Preact's shallow
+  //       compare sees the same references and skips re-rendering components that haven't changed otherwise.
+  if (cache.lastAssembly !== null && cache.lastAssembly.version === cache.entriesVersion) {
+    return cache.lastAssembly.result;
+  }
+
+  // Primary sort key is fromTick. For chunks that share the same fromTick (an intra-tick split, v8+), secondary sort by
+  // chunkIdx preserves the original emission order — continuation chunks always follow their parent in the manifest, so
+  // sorting by chunkIdx keeps the partial-tick events in the correct temporal order before we merge them.
+  const chunks = Array.from(cache.entries.values()).sort((a, b) => {
+    if (a.fromTick !== b.fromTick) return a.fromTick - b.fromTick;
+    return a.chunkIdx - b.chunkIdx;
+  });
+  const flattened: TickData[] = [];
   for (const chunk of chunks) {
     for (const tick of chunk.tickData) {
-      tickData.push(tick);
-      tickNumbers.push(tick.tickNumber);
+      flattened.push(tick);
     }
   }
+  // Intra-tick merge pass: walk the flattened tickData and combine adjacent entries that share a tickNumber. Handles chains
+  // of N > 2 split chunks via repeated fold from the left — after one merge, the result becomes the new candidate for the next
+  // iteration. The common case (no splits) is a no-op: every tickNumber is unique so the loop just copies entries across.
+  //
+  // mergedIndices tracks which tickData slots hold a merged result (as opposed to a pass-through from the LRU-cached per-chunk
+  // TickData). Only merged results own their rawEvents — pass-throughs are shared-owned by the LRU cache and must NOT be
+  // mutated here. Post-loop we wipe rawEvents on the merged slots only, since no further fold can fire on them (the chain is
+  // fully consumed) and a resident ~N-event array is pure display-time dead weight.
+  const tickData: TickData[] = [];
+  const tickNumbers: number[] = [];
+  const mergedIndices: number[] = [];
+  for (const td of flattened) {
+    const last = tickData.length > 0 ? tickData[tickData.length - 1] : null;
+    if (last !== null && last.tickNumber === td.tickNumber) {
+      // Replace the tail with the merged result. mergeTickData is O(N log N) in total events; with intra-tick splits only
+      // firing on pathological ticks, this is cold for normal workloads.
+      const slot = tickData.length - 1;
+      tickData[slot] = mergeTickData(last, td, systems);
+      // Track this slot only on the FIRST fold — subsequent folds on the same tickNumber reuse the slot and the tracker
+      // stays correct. Using a simple O(N) de-dupe check here is fine because chain-folds are rare.
+      if (mergedIndices.length === 0 || mergedIndices[mergedIndices.length - 1] !== slot) {
+        mergedIndices.push(slot);
+      }
+    } else {
+      tickData.push(td);
+      tickNumbers.push(td.tickNumber);
+    }
+  }
+  // Now that no further merges can fire, wipe rawEvents on the merged results. For a 2 M-event dense tick that split across
+  // N chunks and finally merged to a single TickData, this frees ~1 GB of otherwise-retained event data that no downstream
+  // renderer consumes.
+  for (const idx of mergedIndices) {
+    tickData[idx].rawEvents = [];
+  }
   const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } = aggregateGaugeData(tickData);
-  return { tickData, tickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames };
+  const result = { tickData, tickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames };
+  // Snapshot the version at which this result was computed. Any future call with the same version returns the same result via the
+  // short-circuit at the top. Invalidated automatically when entries mutate (loadChunk ↑, evict ↑).
+  cache.lastAssembly = { version: cache.entriesVersion, result };
+  return result;
 }
 
 /**
@@ -286,8 +368,8 @@ export function viewRangeToTickRange(
 }
 
 /** Extract a sorted array of tickNumbers from the current cache — updated alongside assembleTickView. */
-export function assembleTickNumbers(cache: ChunkCacheState): number[] {
-  return assembleTickViewAndNumbers(cache).tickNumbers;
+export function assembleTickNumbers(cache: ChunkCacheState, systems: SystemDef[]): number[] {
+  return assembleTickViewAndNumbers(cache, systems).tickNumbers;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -323,8 +405,11 @@ async function loadChunk(
           const dv = new DataView(opfsBytes, 0, 4);
           const uncompressedBytes = dv.getUint32(0, true);
           const compressed = opfsBytes.slice(4);  // structured clone, transferable to worker
+          // OPFS doesn't persist the isContinuation flag in the blob itself (the blob is just the LZ4 bytes) — pull it from the
+          // manifest entry, which is canonical. Server-side regeneration uses the same manifest, so this value is stable across
+          // all opens of the same trace even if the OPFS contents rehydrate.
           const decoded = await processBinaryInWorker(
-            compressed, uncompressedBytes, entry.fromTick, ticksPerUs, metadata.systems,
+            compressed, uncompressedBytes, entry.fromTick, ticksPerUs, metadata.systems, entry.isContinuation,
           );
           opfsDecoded = { tickData: decoded, byteSize: entry.eventCount * AVG_BYTES_PER_EVENT };
         } catch (err) {
@@ -343,7 +428,7 @@ async function loadChunk(
       }
     } else {
       // Legacy JSON path — server decodes, emits JSON, client runs through the Worker on already-parsed events.
-      const response = await fetchChunk(path, entry, signal);
+      const response = await fetchChunk(path, chunkIdx, signal);
       tickData = await processEventsInWorker(response.events, metadata.systems);
       byteSize = response.events.length * AVG_BYTES_PER_EVENT;
     }
@@ -357,6 +442,7 @@ async function loadChunk(
       lastAccessTick: ++cache.accessCounter,
     };
     cache.entries.set(chunkIdx, loaded);
+    cache.entriesVersion++;
     cache.totalBytes += byteSize;
     // Successful decode clears any prior failure record for this chunk. A transient error (network blip, server restart
     // mid-request) would otherwise leave a stale entry in failedChunks that suppresses future retries for the retry-after
@@ -405,9 +491,24 @@ async function fetchPersistAndDecode(
   systems: SystemDef[],
   signal: AbortSignal | undefined,
 ): Promise<{ tickData: TickData[]; byteSize: number }> {
-  const response = await fetchChunkBinary(path, entry, signal);
+  const response = await fetchChunkBinary(path, chunkIdx, signal);
   const compressedBuffer = response.compressed.buffer as ArrayBuffer;
   const uncompressedBytes = response.uncompressedBytes;
+  // Defense-in-depth: the manifest entry AND the response header both carry isContinuation. If they disagree, this is a
+  // server/client cache-format skew — the exact silent-corruption class this flag was designed to catch. In dev builds we
+  // throw loudly so CI and local testing fail fast; in prod builds we log + fall back to the manifest (canonical source,
+  // set at /open time). The production fallback keeps the viewer usable on a skewed deployment rather than bricking it,
+  // but dev-time testing is the time to catch the skew.
+  if (response.isContinuation !== entry.isContinuation) {
+    const msg =
+      `chunk #${chunkIdx} isContinuation mismatch: manifest=${entry.isContinuation}, header=${response.isContinuation}. ` +
+      `This indicates server/client cache-format skew.`;
+    // Vite exposes import.meta.env.DEV at build time — true during `npm run dev`, false in `npm run build` bundles.
+    if (import.meta.env.DEV) {
+      throw new Error(`[chunkCache] ${msg}`);
+    }
+    console.warn(`[chunkCache] ${msg} Using manifest value.`);
+  }
 
   // Persist to OPFS BEFORE we hand the ArrayBuffer to the worker (postMessage transfers ownership — the buffer becomes
   // detached in this frame afterwards). We copy the bytes by slicing first, then transfer the original to the worker.
@@ -421,7 +522,7 @@ async function fetchPersistAndDecode(
   }
 
   const tickData = await processBinaryInWorker(
-    compressedBuffer, uncompressedBytes, entry.fromTick, ticksPerUs, systems,
+    compressedBuffer, uncompressedBytes, entry.fromTick, ticksPerUs, systems, entry.isContinuation,
   );
   return { tickData, byteSize: response.eventCount * AVG_BYTES_PER_EVENT };
 }
@@ -456,6 +557,7 @@ function evictIfOverBudget(cache: ChunkCacheState, pinnedIdxs: Set<number>): voi
   for (const victim of candidates) {
     if (cache.totalBytes <= cache.budgetBytes) break;
     cache.entries.delete(victim.chunkIdx);
+    cache.entriesVersion++;
     cache.totalBytes -= victim.byteSize;
   }
   // Diagnostic: if we evicted every candidate and the cache is STILL over budget, the remaining overshoot is all in pinned

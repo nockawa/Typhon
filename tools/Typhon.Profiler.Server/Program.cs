@@ -339,7 +339,11 @@ app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
     var gm = cacheReader.GlobalMetrics;
 
     // Chunk manifest — small (20-40 bytes per entry, typically ≤ 10K entries), goes straight into the JSON response so the client has the full
-    // address book from the start. Client uses fromTick+toTick pairs to issue range-scoped chunk requests.
+    // address book from the start. Client uses the manifest-index position (chunkIdx) to issue chunk requests against the endpoints.
+    //
+    // `isContinuation` is set for chunks emitted mid-tick by the intra-tick splitter (v8+). The client must seed its tick counter at FromTick
+    // directly for continuation chunks rather than FromTick-1, so this flag is essential on the wire; without it the decoder mis-tags every
+    // event in a continuation chunk by one tick.
     var manifest = new object[cacheReader.ChunkManifest.Count];
     for (var i = 0; i < cacheReader.ChunkManifest.Count; i++)
     {
@@ -349,6 +353,7 @@ app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
             fromTick = c.FromTick,
             toTick = c.ToTick,
             eventCount = c.EventCount,
+            isContinuation = (c.Flags & TraceFileCacheConstants.FlagIsContinuation) != 0,
         };
     }
 
@@ -395,17 +400,15 @@ app.MapGet("/api/trace/open", (string path, TraceSessionService sessions) =>
 });
 
 /// <summary>
-/// Fetch one chunk's events. The chunk is identified by its [fromTick, toTick) range, which must match a manifest entry exactly (clients derive
-/// these from the chunkManifest returned by /api/trace/open). Server reads the LZ4 payload from the sidecar cache, decompresses, runs it through
-/// <see cref="RecordDecoder"/>, and returns the events as JSON — same wire shape as the legacy /api/trace/events path but scoped to one tick
-/// range. Phase 2 Lite: no binary wire yet; that's Phase 2b (TS decoder port).
+/// Fetch one chunk's events as JSON. The chunk is identified by <paramref name="chunkIdx"/> — its position in the manifest returned by
+/// <c>/api/trace/open</c>. Server reads the LZ4 payload from the sidecar cache, decompresses, walks it through <see cref="RecordDecoder"/>,
+/// and returns the events as JSON. Continuation chunks (bit 0 of <see cref="ChunkManifestEntry.Flags"/>) seed the decoder at FromTick
+/// directly instead of FromTick-1 so events carry the correct tick number for an intra-tick split.
 /// </summary>
-app.MapGet("/api/trace/chunk", (string path, int fromTick, int toTick, TraceSessionService sessions) =>
+app.MapGet("/api/trace/chunk", (string path, int chunkIdx, TraceSessionService sessions) =>
 {
     // Same threat model as the other endpoints: localhost is reachable by any browser the user visits, and the CORS policy
-    // is wide-open. Without PathGuard here, a malicious page could probe arbitrary paths via this endpoint — the "file is
-    // not a trace" path would still throw inside GetOrBuild, but the thrown error leaks existence + the session dictionary
-    // would accumulate entries keyed on attacker-controlled paths. Extension whitelist + canonicalization prevent both.
+    // is wide-open. Without PathGuard here, a malicious page could probe arbitrary paths via this endpoint.
     var validated = PathGuard.ValidateTracePath(path, ".typhon-trace");
     if (validated == null)
     {
@@ -413,18 +416,12 @@ app.MapGet("/api/trace/chunk", (string path, int fromTick, int toTick, TraceSess
     }
 
     var cacheReader = sessions.GetOrBuild(validated);
-
-    // O(1) lookup via the precomputed FromTick → index map. ToTick is verified against the stored entry after the lookup — manifest entries
-    // are 1:1 on FromTick so this is a complete match without a second scan.
-    if (!cacheReader.ChunkIndexByFromTick.TryGetValue((uint)fromTick, out var entryIdx))
+    if ((uint)chunkIdx >= (uint)cacheReader.ChunkManifest.Count)
     {
-        return Results.NotFound(new { error = "Chunk not found in manifest", fromTick, toTick });
+        return Results.NotFound(new { error = "chunkIdx out of range", chunkIdx, manifestCount = cacheReader.ChunkManifest.Count });
     }
-    var entry = cacheReader.ChunkManifest[entryIdx];
-    if (entry.ToTick != toTick)
-    {
-        return Results.NotFound(new { error = "Chunk toTick mismatch", fromTick, toTick, expectedToTick = entry.ToTick });
-    }
+    var entry = cacheReader.ChunkManifest[chunkIdx];
+    var isContinuation = (entry.Flags & TraceFileCacheConstants.FlagIsContinuation) != 0;
 
     // Rent buffers for compressed payload + uncompressed decoded bytes, size to the manifest entry's exact lengths.
     var compressedBuf = System.Buffers.ArrayPool<byte>.Shared.Rent((int)entry.CacheByteLength);
@@ -434,17 +431,20 @@ app.MapGet("/api/trace/chunk", (string path, int fromTick, int toTick, TraceSess
         cacheReader.DecompressChunk(entry, uncompressedBuf.AsSpan(0, (int)entry.UncompressedBytes), compressedBuf.AsSpan(0, (int)entry.CacheByteLength));
 
         var decoder = new RecordDecoder(GetSourceTimestampFrequency(validated));
-        // Seed the decoder's tick counter to fromTick - 1 so the first TickStart inside the chunk pushes it to fromTick. Without this, every
-        // chunk would start at tick 1 and misreport event tick numbers to the client.
-        decoder.SetCurrentTick(fromTick - 1);
+        // Normal chunks start with a TickStart → seed at FromTick-1 so the TickStart's increment lands on FromTick.
+        // Continuation chunks have no TickStart at the head → seed at FromTick directly so subsequent events land on FromTick.
+        if (isContinuation) decoder.SetCurrentTickForContinuation((int)entry.FromTick);
+        else                decoder.SetCurrentTick((int)entry.FromTick - 1);
 
         var events = new List<LiveTraceEvent>(capacity: (int)entry.EventCount);
         decoder.DecodeBlock(uncompressedBuf.AsSpan(0, (int)entry.UncompressedBytes), events);
 
         return Results.Ok(new
         {
-            fromTick,
-            toTick,
+            chunkIdx,
+            fromTick = entry.FromTick,
+            toTick = entry.ToTick,
+            isContinuation,
             events,
         });
     }
@@ -463,12 +463,14 @@ app.MapGet("/api/trace/chunk", (string path, int fromTick, int toTick, TraceSess
 /// </summary>
 /// <remarks>
 /// Response headers carry everything a client needs to decode:
-///   X-Chunk-From-Tick, X-Chunk-To-Tick — echo of the request range
+///   X-Chunk-From-Tick, X-Chunk-To-Tick — echo of the stored manifest entry's range
 ///   X-Chunk-Event-Count — record count, so the client can pre-size its output array
 ///   X-Chunk-Uncompressed-Bytes — output buffer size for LZ4 decompression
+///   X-Chunk-Is-Continuation — "1" if this chunk starts mid-tick (from an intra-tick split); "0" otherwise. The client must
+///     seed its tick counter differently based on this flag — see chunkDecoder.ts.
 ///   X-Timestamp-Frequency — ticks-per-second for the ts → µs conversion (avoids a second roundtrip)
 /// </remarks>
-app.MapGet("/api/trace/chunk-binary", (string path, int fromTick, int toTick, HttpContext http, TraceSessionService sessions) =>
+app.MapGet("/api/trace/chunk-binary", (string path, int chunkIdx, HttpContext http, TraceSessionService sessions) =>
 {
     // PathGuard — see identical block in /api/trace/chunk above. Chunk endpoints previously used a bare File.Exists, which
     // exposed a file-existence oracle + unbounded session-dictionary growth to any origin calling localhost.
@@ -479,22 +481,18 @@ app.MapGet("/api/trace/chunk-binary", (string path, int fromTick, int toTick, Ht
     }
 
     var cacheReader = sessions.GetOrBuild(validated);
-
-    // O(1) manifest lookup via the precomputed FromTick → index map (same approach as /api/trace/chunk).
-    if (!cacheReader.ChunkIndexByFromTick.TryGetValue((uint)fromTick, out var entryIdx))
+    if ((uint)chunkIdx >= (uint)cacheReader.ChunkManifest.Count)
     {
-        return Results.NotFound(new { error = "Chunk not found in manifest", fromTick, toTick });
+        return Results.NotFound(new { error = "chunkIdx out of range", chunkIdx, manifestCount = cacheReader.ChunkManifest.Count });
     }
-    var entry = cacheReader.ChunkManifest[entryIdx];
-    if (entry.ToTick != toTick)
-    {
-        return Results.NotFound(new { error = "Chunk toTick mismatch", fromTick, toTick, expectedToTick = entry.ToTick });
-    }
+    var entry = cacheReader.ChunkManifest[chunkIdx];
+    var isContinuation = (entry.Flags & TraceFileCacheConstants.FlagIsContinuation) != 0;
 
-    http.Response.Headers[ChunkBinaryHeaders.FromTick] = fromTick.ToString();
-    http.Response.Headers[ChunkBinaryHeaders.ToTick] = toTick.ToString();
+    http.Response.Headers[ChunkBinaryHeaders.FromTick] = entry.FromTick.ToString();
+    http.Response.Headers[ChunkBinaryHeaders.ToTick] = entry.ToTick.ToString();
     http.Response.Headers[ChunkBinaryHeaders.EventCount] = entry.EventCount.ToString();
     http.Response.Headers[ChunkBinaryHeaders.UncompressedBytes] = entry.UncompressedBytes.ToString();
+    http.Response.Headers[ChunkBinaryHeaders.IsContinuation] = isContinuation ? "1" : "0";
     // Timestamp frequency is stamped on the session slot by TraceSessionService.GetOrBuild — this read is a dictionary lookup, no file I/O.
     // Fall back to the source-file read only if the cache miss (shouldn't happen since GetOrBuild was called just above).
     var ts = sessions.GetCachedTimestampFrequency(validated);
@@ -848,12 +846,13 @@ internal static class ChunkBinaryHeaders
     public const string ToTick = "X-Chunk-To-Tick";
     public const string EventCount = "X-Chunk-Event-Count";
     public const string UncompressedBytes = "X-Chunk-Uncompressed-Bytes";
+    public const string IsContinuation = "X-Chunk-Is-Continuation";
     public const string TimestampFrequency = "X-Timestamp-Frequency";
 
     /// <summary>Comma-separated list of every custom header, suitable for <c>Access-Control-Expose-Headers</c>.</summary>
     public static readonly string ExposedHeadersList = string.Join(", ", new[]
     {
-        FromTick, ToTick, EventCount, UncompressedBytes, TimestampFrequency,
+        FromTick, ToTick, EventCount, UncompressedBytes, IsContinuation, TimestampFrequency,
     });
 }
 

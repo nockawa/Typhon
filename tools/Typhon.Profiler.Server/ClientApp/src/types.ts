@@ -425,6 +425,13 @@ export interface ChunkManifestEntry {
   fromTick: number;
   toTick: number;
   eventCount: number;
+  /**
+   * True iff this chunk is a continuation of the previous chunk's last tick (intra-tick split, cache v8+). Continuation chunks
+   * have no leading `TickStart` record — the decoder must seed its tick counter to `fromTick` directly, not `fromTick - 1`.
+   * Multiple chunks can share the same `(fromTick, toTick)` range: the original chunk plus N continuations, all covering the
+   * same tick. Older caches (v7 and earlier) never emit this flag, so the server-side DTO always defaults to `false` for them.
+   */
+  isContinuation: boolean;
 }
 
 /** /api/trace/open response shape — metadata + summary + global metrics + chunk manifest in one payload. */

@@ -33,18 +33,28 @@ const TRACE_CONTEXT_SIZE = 16;
 const SPAN_FLAGS_HAS_TRACE_CONTEXT = 0x01;
 
 /**
- * Entry point. Decode an LZ4-decompressed record block. <paramref name="firstTick"/> primes the tick counter so the first TickStart in the
- * block lands on that tick number (matching <c>RecordDecoder.SetCurrentTick(fromTick - 1)</c>). <paramref name="ticksPerUs"/> is
+ * Entry point. Decode an LZ4-decompressed record block. <paramref name="firstTick"/> primes the tick counter so events carry the correct
+ * tick number; the exact seed value depends on <paramref name="isContinuation"/>. <paramref name="ticksPerUs"/> is
  * <c>timestampFrequency / 1_000_000</c> — arrives via the X-Timestamp-Frequency response header on the binary chunk endpoint.
+ *
+ * <b>Seeding rules (mirrors the server's RecordDecoder):</b>
+ * <ul>
+ *   <li><b>Normal chunk</b> (<c>isContinuation=false</c>): seed at <c>firstTick - 1</c>. The first record in the chunk is a
+ *       <c>TickStart</c>, which increments the counter to <c>firstTick</c>; subsequent records get the right tick number.</li>
+ *   <li><b>Continuation chunk</b> (<c>isContinuation=true</c>, cache v8+ intra-tick splits): seed at <c>firstTick</c> directly.
+ *       The chunk has NO leading <c>TickStart</c> — the previous chunk already consumed it. All events before the NEXT (if any)
+ *       internal TickStart are tagged with <c>firstTick</c>.</li>
+ * </ul>
  *
  * Malformed records (size less than header, size overruns slice, or size exceeds ushort range) stop the walk early — partial results remain
  * returned. Mirrors the server's behavior and keeps the viewer useful on truncated traces.
  */
-export function decodeChunkBinary(bytes: Uint8Array, firstTick: number, ticksPerUs: number): TraceEvent[] {
+export function decodeChunkBinary(bytes: Uint8Array, firstTick: number, ticksPerUs: number, isContinuation: boolean): TraceEvent[] {
   const reader = new BinaryReader(bytes);
   const events: TraceEvent[] = [];
-  // Seed at (fromTick - 1) so the first TickStart increment produces fromTick. Matches RecordDecoder.SetCurrentTick(fromTick - 1).
-  let currentTick = firstTick - 1;
+  // Continuation → seed at firstTick directly (no decrement, no waiting for TickStart).
+  // Normal → seed at firstTick - 1 so the first TickStart increments the counter to firstTick.
+  let currentTick = isContinuation ? firstTick : firstTick - 1;
   let pos = 0;
 
   while (pos + COMMON_HEADER_SIZE <= reader.length) {

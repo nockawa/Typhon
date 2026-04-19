@@ -387,7 +387,7 @@ export function App() {
         if (controller.signal.aborted) return;
         // Single traversal of the cache entries for tick arrays + gauge aggregates — halves the per-chunk-load sort + iteration cost.
         const { tickData: newTicks, tickNumbers: newTickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } =
-          assembleTickViewAndNumbers(cache);
+          assembleTickViewAndNumbers(cache, metadata.systems);
 
         // Merge thread names into metadata. threadNames accumulates monotonically: a ThreadInfo record for slot N only arrives once
         // (at slot claim), so re-running aggregation over a superset of cached ticks never SHRINKS the map. Keep the existing entries

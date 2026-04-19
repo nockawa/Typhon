@@ -43,11 +43,21 @@ public sealed class RecordDecoder
     public void Reset() => _currentTick = 0;
 
     /// <summary>
-    /// Seed the tick counter before decoding a chunk that doesn't start from tick 1. Set to <c>(fromTick - 1)</c> so that the first
-    /// <see cref="TraceEventKind.TickStart"/> record in the chunk increments the counter to <c>fromTick</c> and subsequent events get the
-    /// correct tick numbers. Used by the chunk-serving endpoint when decoding individual chunks from the sidecar cache.
+    /// Seed the tick counter before decoding a chunk that doesn't start from tick 1. For NORMAL chunks (those starting with a TickStart
+    /// record), pass <c>(fromTick - 1)</c> so that the first TickStart increments the counter to <c>fromTick</c> and subsequent events
+    /// get the correct tick numbers. For CONTINUATION chunks (no TickStart at the head — the chunk is mid-tick from a previous
+    /// splitting builder flush), use <see cref="SetCurrentTickForContinuation"/> instead.
     /// </summary>
     public void SetCurrentTick(int value) => _currentTick = value;
+
+    /// <summary>
+    /// Seed the tick counter for a CONTINUATION chunk — one whose manifest entry carries
+    /// <see cref="TraceFileCacheConstants.FlagIsContinuation"/>. Continuation chunks have no leading <see cref="TraceEventKind.TickStart"/>
+    /// record (the previous chunk already consumed it), so we seed at <paramref name="fromTick"/> directly rather than <c>fromTick - 1</c>.
+    /// Every subsequent record in the block is then correctly tagged with <paramref name="fromTick"/> until the next TickStart (if any)
+    /// increments the counter.
+    /// </summary>
+    public void SetCurrentTickForContinuation(int fromTick) => _currentTick = fromTick;
 
     /// <summary>
     /// Walks <paramref name="recordBytes"/> as a sequence of size-prefixed records and appends one DTO per record to <paramref name="output"/>.
