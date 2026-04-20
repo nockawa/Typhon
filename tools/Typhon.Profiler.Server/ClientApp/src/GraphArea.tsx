@@ -4,8 +4,8 @@ import { getTicksInRange } from './traceModel';
 import type { Viewport, TrackLayout, TimeRange, TrackState } from './uiTypes';
 import type { NavHistory } from './useNavHistory';
 import {
-  setupCanvas, computeGridStep, formatRulerLabel, formatDuration, drawTooltip, getSystemColor,
-  PHASE_COLOR, BG_COLOR, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, GRID_COLOR, SPAN_PALETTE, TIMELINE_PALETTE
+  setupCanvas, computeGridStep, formatRulerLabel, formatDuration, drawTooltip, nameToPaletteIndex,
+  PHASE_COLOR, BG_COLOR, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, GRID_COLOR, SPAN_PALETTE, SPAN_PALETTE_TEXT_COLOR, TIMELINE_PALETTE
 } from './canvasUtils';
 import type { TooltipLine } from './canvasUtils';
 import {
@@ -538,31 +538,6 @@ function shortenName(name: string): string {
   return parts.length >= 2 ? parts.slice(-2).join('.') : base;
 }
 
-const _nameColorCache = new Map<string, string>();
-/**
- * Pick a stable color for a nested span (Transaction.Commit, BTree.Insert, PageCache.DiskRead, etc.) from the dedicated
- * <see cref="SPAN_PALETTE"/>. Same hash-modulo pattern as <c>FlameGraph.nameToColor</c>: the same span name always resolves to the
- * same palette index across sessions, so a given span kind looks the same every time you open a trace. The cache avoids recomputing
- * the hash per-frame since the full-screen render paints hundreds of spans per tick.
- *
- * Routing both this function and <c>getSystemColor</c> through <c>SPAN_PALETTE</c> (instead of the main <c>PALETTE</c>) means every
- * span-like surface shares one palette — the timeline, the flame graph, and the system-colored parent chunks all draw from the same
- * warm dark-violet → amber ramp, visually distinct from the gauge region that uses the main Turbo palette.
- */
-function nameToColor(name: string): string {
-  let c = _nameColorCache.get(name);
-  if (c !== undefined) return c;
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
-  }
-  // `>>> 0` coerces to unsigned before the modulo — JS bitwise ops produce signed 32-bit ints that can be negative.
-  const idx = (hash >>> 0) % SPAN_PALETTE.length;
-  c = SPAN_PALETTE[idx];
-  _nameColorCache.set(name, c);
-  return c;
-}
-
 // Pending-chunk diagonal-stripe pattern. Built once per context (cached via WeakMap since each canvas has its own 2D context).
 // Rendered over tick ranges whose chunks haven't landed yet so rapid panning doesn't leave empty holes — the user sees
 // "something's loading here at this exact time range" instead of a blank space.
@@ -719,8 +694,18 @@ export function GraphArea({ trace, tracePath, viewRange, onViewRangeChange, sele
         if (d > prev) depthBySlot.set(slot, d);
       }
     }
+    // Sort by resolved thread name (natural sort — so "Worker-2" < "Worker-10" instead of lexical "Worker-10" < "Worker-2"), falling back to
+    // slot index when a name isn't registered yet. Lanes thereby appear in a stable, human-ordered sequence (Worker-0, Worker-1, ...) rather
+    // than the first-come-first-served slot-claim order which is essentially random from a user's perspective. When two slots happen to share
+    // a name (e.g. a slot was reclaimed by a thread with the same name), their relative order is unspecified but they still render as two
+    // separate lanes because storage is slot-keyed — merging them would require the Option B rewrite.
+    const threadNames = trace.metadata.threadNames ?? {};
     return {
-      activeSlots: Array.from(slotSet).sort((a, b) => a - b),
+      activeSlots: Array.from(slotSet).sort((a, b) => {
+        const nameA = threadNames[a] ?? `Slot ${a}`;
+        const nameB = threadNames[b] ?? `Slot ${b}`;
+        return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+      }),
       slotsWithChunks: withChunks,
       spanMaxDepthBySlot: depthBySlot,
     };
@@ -1227,7 +1212,10 @@ export function GraphArea({ trace, tracePath, viewRange, onViewRangeChange, sele
               const x2 = pxOfUs(chunk.endUs);
               if (x2 < GUTTER_WIDTH || x1 > width) continue;
               const w = Math.max(x2 - x1, MIN_RECT_WIDTH);
-              ctx.fillStyle = getSystemColor(chunk.systemIndex);
+              // Direct array indexing into the palette + its parallel text-color array — no string hashing, no Map lookup on the rendering
+              // hot path. Modulo matches getSystemColor's internal formula so fill + text always come from the same palette slot.
+              const paletteIdx = chunk.systemIndex % SPAN_PALETTE.length;
+              ctx.fillStyle = SPAN_PALETTE[paletteIdx];
               ctx.fillRect(x1, ty + 1, w, chunkRowHeight - 2);
               if (selectedChunk && chunk.systemIndex === selectedChunk.systemIndex &&
                   chunk.chunkIndex === selectedChunk.chunkIndex && chunk.threadSlot === selectedChunk.threadSlot &&
@@ -1240,7 +1228,10 @@ export function GraphArea({ trace, tracePath, viewRange, onViewRangeChange, sele
                 ctx.beginPath();
                 ctx.rect(x1, ty + 1, w, chunkRowHeight - 2);
                 ctx.clip();
-                ctx.fillStyle = '#000'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
+                // Luminance-adaptive text color: bright palette entries (peach/amber/salmon) get dark text, dark entries (violet/plum) get
+                // light text. Looked up via paletteIdx (no Map, no hex parse) — the parallel SPAN_PALETTE_TEXT_COLOR array is precomputed
+                // at module load so this is a direct array index on the rendering hot path.
+                ctx.fillStyle = SPAN_PALETTE_TEXT_COLOR[paletteIdx]; ctx.font = '10px monospace'; ctx.textAlign = 'left';
                 const label = chunk.isParallel ? `${chunk.systemName}[${chunk.chunkIndex}]` : chunk.systemName;
                 ctx.fillText(label, x1 + 3, ty + chunkRowHeight / 2 + 3);
                 ctx.restore();
@@ -1335,7 +1326,11 @@ export function GraphArea({ trace, tracePath, viewRange, onViewRangeChange, sele
               }
               // Can't extend — flush this depth's old run, draw bar individually, start new run at this depth.
               flushDepth(d);
-              { const c = nameToColor(span.name); if (c !== prevFill) { ctx.fillStyle = c; prevFill = c; } }
+              {
+                const idxCoal = nameToPaletteIndex(span.name);
+                const c = SPAN_PALETTE[idxCoal];
+                if (c !== prevFill) { ctx.fillStyle = c; prevFill = c; }
+              }
               ctx.fillRect(x1, sy, w, SPAN_ROW_HEIGHT - 2);
               coalX1[d] = x1;
               coalX2[d] = x1 + w;
@@ -1347,7 +1342,11 @@ export function GraphArea({ trace, tracePath, viewRange, onViewRangeChange, sele
             // Wide bar — flush only THIS depth's pending run, then draw individually.
             flushDepth(d);
 
-            { const c = nameToColor(span.name); if (c !== prevFill) { ctx.fillStyle = c; prevFill = c; } }
+            // Direct array index into the palette for both fill and text — zero Map lookups, zero hex parsing. The hash itself is cached
+            // by nameToPaletteIndex so for recurring names (which is 100 % of real traces) this is two array loads + a Map.get of an int.
+            const spanIdx = nameToPaletteIndex(span.name);
+            const spanFill = SPAN_PALETTE[spanIdx];
+            if (spanFill !== prevFill) { ctx.fillStyle = spanFill; prevFill = spanFill; }
             ctx.fillRect(x1, sy, w, SPAN_ROW_HEIGHT - 2);
 
             if (selectedSpan && selectedSpan.spanId !== undefined && selectedSpan.spanId === span.spanId) {
@@ -1361,7 +1360,9 @@ export function GraphArea({ trace, tracePath, viewRange, onViewRangeChange, sele
               ctx.beginPath();
               ctx.rect(x1, sy, actualWidth, SPAN_ROW_HEIGHT - 2);
               ctx.clip();
-              ctx.fillStyle = '#eee';
+              // Luminance-adaptive text color — same rationale as the chunk-bar path above. Direct array lookup into the parallel
+              // SPAN_PALETTE_TEXT_COLOR[] via the already-resolved paletteIdx: no Map, no re-hash.
+              ctx.fillStyle = SPAN_PALETTE_TEXT_COLOR[spanIdx];
               ctx.font = '11px monospace';
               // Same vertical-centering fix as the coalesced text a few lines up: baseline at sy + 13 places the 11 px cell center at
               // bar center (sy + 10). The offset is the same (−9) as for the 9 px coalesced font because ascent/descent scale

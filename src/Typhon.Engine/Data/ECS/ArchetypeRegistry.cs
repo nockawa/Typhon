@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -315,6 +316,21 @@ public static class ArchetypeRegistry
             }
         }
     }
+
+    /// <summary>
+    /// Enumerate registered archetypes as (id, display-name) pairs. Exposed publicly for profiler session metadata and other external consumers
+    /// that need to map archetype IDs back to human-readable names without depending on the internal <see cref="ArchetypeMetadata"/> shape.
+    /// Display name is the CLR type's short name (e.g. <c>Ant</c>, <c>Food</c>) — the same label the viewer shows in lane labels and tooltips.
+    /// </summary>
+    public static IEnumerable<(ushort Id, string Name)> EnumerateArchetypes() => 
+        GetAllArchetypes().Select(meta => (meta.ArchetypeId, meta.ArchetypeType?.Name ?? $"Archetype{meta.ArchetypeId}"));
+
+    /// <summary>
+    /// Enumerate registered component types as (id, display-name) pairs. Name is the <c>[Component("SchemaName")]</c> attribute if present,
+    /// otherwise the CLR type's short name. Same consumption rationale as <see cref="EnumerateArchetypes"/>.
+    /// </summary>
+    public static IEnumerable<(int Id, string Name)> EnumerateComponentTypes() => 
+        from kv in ComponentTypeById let name = kv.Value.GetCustomAttribute<ComponentAttribute>()?.Name ?? kv.Value.Name select (kv.Key, name);
 
     /// <summary>
     /// Build an ArchetypeMask256 with bits set for all archetypes that declare a component with the given type ID.

@@ -1,3 +1,4 @@
+using JetBrains.Annotations;
 using System;
 using Typhon.Profiler;
 
@@ -11,6 +12,7 @@ namespace Typhon.Engine.Profiler;
 /// All fields are immutable for the lifetime of the session — set once at <c>TyphonProfiler.Start</c> and never mutated. Multiple exporters can
 /// safely read them concurrently without synchronization.
 /// </remarks>
+[PublicAPI]
 public sealed class ProfilerSessionMetadata
 {
     /// <summary>System DAG metadata captured at session start. Empty array if the profiler is started outside a runtime context.</summary>
@@ -44,8 +46,17 @@ public sealed class ProfilerSessionMetadata
     /// </summary>
     public long SamplingSessionStartQpc { get; }
 
+    /// <summary>
+    /// Delegate returning the engine's current scheduler tick number. Called by <c>TcpExporter</c> at TCP-connect time to stamp the Init frame
+    /// with "engine was on tick N when this client connected." The viewer uses this to display absolute engine tick numbers rather than a
+    /// 1-based counter that restarts on every reconnect. <c>null</c> when the host doesn't run a scheduler (e.g., IO-only profile runs) — in
+    /// that case the Init frame carries zero and the server's decoder falls back to its legacy restart-from-1 behavior.
+    /// </summary>
+    public Func<long> CurrentEngineTickProvider { get; }
+
     public ProfilerSessionMetadata(SystemDefinitionRecord[] systems, ArchetypeRecord[] archetypes, ComponentTypeRecord[] componentTypes, int workerCount,
-        float baseTickRate, long startTimestamp, long stopwatchFrequency, DateTime startedUtc, long samplingSessionStartQpc = 0)
+        float baseTickRate, long startTimestamp, long stopwatchFrequency, DateTime startedUtc, long samplingSessionStartQpc = 0,
+        Func<long> currentEngineTickProvider = null)
     {
         Systems = systems ?? [];
         Archetypes = archetypes ?? [];
@@ -56,5 +67,6 @@ public sealed class ProfilerSessionMetadata
         StopwatchFrequency = stopwatchFrequency;
         StartedUtc = startedUtc;
         SamplingSessionStartQpc = samplingSessionStartQpc;
+        CurrentEngineTickProvider = currentEngineTickProvider;
     }
 }

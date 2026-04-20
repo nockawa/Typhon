@@ -265,3 +265,75 @@ export function drawTooltip(
 export function getSystemColor(index: number): string {
   return SPAN_PALETTE[index % SPAN_PALETTE.length];
 }
+
+/**
+ * Compute the contrast text color for a hex background. Rec. 601 perceived-brightness weighting (0.299R + 0.587G + 0.114B), threshold 0.55.
+ * Returns <c>#111</c> on bright / <c>#eee</c> on dark / <c>#eee</c> on malformed input (defensive). Internal — most callers should go through
+ * <see cref="pickContrastTextColor"/> which caches palette results.
+ */
+function computeContrastTextColor(hexBackground: string): string {
+  const hex = hexBackground.startsWith('#') ? hexBackground.slice(1) : hexBackground;
+  if (hex.length < 6) return '#eee';
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return '#eee';
+  const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return brightness > 0.55 ? '#111' : '#eee';
+}
+
+/**
+ * Hash a span/node name to an index into <see cref="SPAN_PALETTE"/>. Shared single implementation — previously duplicated as local
+ * <c>nameToColor</c> functions in <c>GraphArea.tsx</c> and <c>FlameGraph.tsx</c>. Callers get the index and then look up fill +
+ * text color via direct array access (<c>SPAN_PALETTE[idx]</c> / <c>SPAN_PALETTE_TEXT_COLOR[idx]</c>), eliminating the string-keyed
+ * Map lookup on the rendering hot path.
+ *
+ * Hash: djb2-style <c>((h &lt;&lt; 5) - h) + ch</c>. Cached per name because the same span/node names recur every frame — with typical
+ * traces containing tens of thousands of identical names over the session, the hash is computed once per unique name and then served
+ * from the <c>Map</c> at ~30 ns/call. The cache is unbounded but name cardinality in practice is hundreds at most (system names,
+ * operation kinds, function names), so memory is negligible.
+ */
+const _nameIndexCache = new Map<string, number>();
+export function nameToPaletteIndex(name: string): number {
+  const cached = _nameIndexCache.get(name);
+  if (cached !== undefined) return cached;
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  // `>>> 0` coerces to unsigned before the modulo — JS bitwise ops produce signed 32-bit ints that can be negative.
+  const idx = (hash >>> 0) % SPAN_PALETTE.length;
+  _nameIndexCache.set(name, idx);
+  return idx;
+}
+
+/**
+ * Parallel array to <see cref="SPAN_PALETTE"/> — precomputed contrast text color for each palette entry. Indexed by the same position as
+ * <see cref="SPAN_PALETTE"/>, so consumers that already have a palette index (e.g. <see cref="getSystemColor"/> / <c>nameToPaletteIndex</c>
+ * call sites that first hash-mod into the palette) can skip the Map lookup entirely and go straight to <c>SPAN_PALETTE_TEXT_COLOR[index]</c>.
+ *
+ * Shape chosen as `readonly string[]` (not `Record<string,string>`) specifically because V8 inlines numeric-indexed access on small dense arrays
+ * into direct memory loads — faster than object-property or Map-keyed access in a rendering hot path where this is called hundreds of times
+ * per frame across timeline bars + flame-graph nodes.
+ */
+export const SPAN_PALETTE_TEXT_COLOR: readonly string[] = SPAN_PALETTE.map(computeContrastTextColor);
+
+/**
+ * Lookup-backed variant keyed by hex string. For callers that already have the fill color as a string (rather than its palette index), this is
+ * O(1) Map.get on the cached palette entries. Off-palette inputs (none today, but future-proofed for e.g. interpolated colors) fall through to
+ * <see cref="computeContrastTextColor"/>. Precomputed at module load — no per-call arithmetic for any palette color.
+ */
+const PALETTE_TEXT_CACHE: ReadonlyMap<string, string> = new Map(
+  SPAN_PALETTE.map((c, i) => [c, SPAN_PALETTE_TEXT_COLOR[i]])
+);
+
+/**
+ * Pick a foreground text color (dark or light) with acceptable contrast against the given hex background. O(1) cache hit for any
+ * <see cref="SPAN_PALETTE"/> entry (100 % of current traffic); fallback recompute for off-palette inputs. Used on the rendering hot path —
+ * chunk bars, span bars, flame-graph nodes — so the palette-hit path must not allocate or parse strings.
+ */
+export function pickContrastTextColor(hexBackground: string): string {
+  const cached = PALETTE_TEXT_CACHE.get(hexBackground);
+  if (cached !== undefined) return cached;
+  return computeContrastTextColor(hexBackground);
+}

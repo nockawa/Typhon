@@ -53,8 +53,17 @@ public struct TraceFileHeader
     /// </summary>
     public long SamplingSessionStartQpc;
 
+    /// <summary>
+    /// Engine's scheduler tick number at the moment this Init payload was built. For file-based traces this is always <c>0</c> (files start before
+    /// the scheduler runs). For TCP live streams it's the tick the engine was on when the client connected — the server's decoder seeds its
+    /// running tick counter with <c>EngineTickAtInit - 1</c> so subsequent TickStart records carry the absolute engine tick number instead of a
+    /// 1-based counter that restarts on every reconnect. Old trace files without this field have a zeroed slot here, which falls back to the
+    /// legacy "decoder starts counting from 1" behavior — no compatibility break.
+    /// </summary>
+    public long EngineTickAtInit;
+
     /// <summary>Reserved for future use.</summary>
-    public unsafe fixed byte Reserved[9];
+    public byte Reserved0;
 
     /// <summary>File magic constant: ASCII "TYTR".</summary>
     public const uint MagicValue = 0x52_54_59_54; // 'T','Y','T','R' little-endian

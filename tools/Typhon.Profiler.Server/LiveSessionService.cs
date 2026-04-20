@@ -71,6 +71,18 @@ public sealed partial class LiveSessionService : BackgroundService
     private int _nextSubscriberId;
     private long _tickCount;
 
+    // Accumulated ThreadInfo registrations for the current session. The engine emits a kind-77 record once per slot claim; a browser that
+    // subscribes AFTER those records have been broadcast would otherwise never learn the slot→thread-name mapping and couldn't lay out
+    // span lanes. Every newly-received ThreadInfo updates this map; every new subscriber gets the map replayed as a synthetic tick-0 batch
+    // before real tick batches start flowing. Cleared on Init (new session ⇒ slot claims start over).
+    private readonly ConcurrentDictionary<byte, LiveTraceEvent> _threadRegistrations = new();
+
+    // First PerTickSnapshot (kind 76) observed in the current session. The engine stamps capacity/total gauges (TotalPageCount,
+    // TransientStoreMaxBytes, WalCommitBufferCapacity, StagingPoolCapacity — see GaugeId.cs) into the first snapshot and never re-emits them.
+    // Late-subscribing browsers would otherwise render those gauges as zero/missing for the whole session. Cached on first observation, exposed
+    // via GetInitialGaugesSnapshot for the metadata DTO. Cleared on Init / disconnect.
+    private volatile LiveTraceEvent _firstGaugeSnapshot;
+
     public LiveSessionService(IConfiguration config, ILogger<LiveSessionService> logger)
     {
         _logger = logger;
@@ -97,6 +109,36 @@ public sealed partial class LiveSessionService : BackgroundService
         LogSubscriberConnected(id, _subscribers.Count);
         return (id, channel.Reader);
     }
+
+    /// <summary>
+    /// Snapshot the current slot→thread-name map, built from every ThreadInfo record received so far in the session. Caller reads it to
+    /// populate <c>TraceMetadata.threadNames</c> on the client — the browser can't rely on kind-77 records arriving in normal tick batches
+    /// because the synthesized records emitted by the engine's <c>TcpExporter.TrySendCatchupThreadInfoBlock</c> are consumed by the server
+    /// before any SSE subscriber exists.
+    /// </summary>
+    /// <remarks>
+    /// Returns a sparse dictionary keyed by slot. Empty when no ThreadInfo records have arrived yet (session just started, no worker has
+    /// emitted anything). The map mutates as new slots claim — re-fetch on each metadata request rather than caching.
+    /// </remarks>
+    public Dictionary<byte, string> GetThreadNamesSnapshot()
+    {
+        var result = new Dictionary<byte, string>(_threadRegistrations.Count);
+        foreach (var kv in _threadRegistrations)
+        {
+            if (kv.Value.ThreadName is { Length: > 0 } name)
+            {
+                result[kv.Key] = name;
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Snapshot the first-observed PerTickSnapshot's gauge values. Returns null if no snapshot has been seen yet (no ticks received since
+    /// TCP connect / after Init). Intended for the metadata DTO so late-subscribing browsers see one-shot init-value gauges (page cache
+    /// capacity, staging pool size, etc.) that the engine only emits in the session's first snapshot.
+    /// </summary>
+    public Dictionary<int, double> GetInitialGaugesSnapshot() => _firstGaugeSnapshot?.Gauges;
 
     /// <summary>Remove a subscriber.</summary>
     public void Unsubscribe(int id)
@@ -140,9 +182,12 @@ public sealed partial class LiveSessionService : BackgroundService
                 LogUnexpectedError(ex);
             }
 
+            FlushPendingTick();
             _state = null;
             _decoder = null;
             Interlocked.Exchange(ref _tickCount, 0);
+            _threadRegistrations.Clear(); // mappings are only meaningful within the current session
+            _firstGaugeSnapshot = null;
 
             if (!ct.IsCancellationRequested)
             {
@@ -189,6 +234,7 @@ public sealed partial class LiveSessionService : BackgroundService
                         break;
 
                     case LiveFrameType.Shutdown:
+                        FlushPendingTick();
                         LogShutdownReceived();
                         _state = null;
                         return;
@@ -235,7 +281,22 @@ public sealed partial class LiveSessionService : BackgroundService
 
         _state = state;
         _decoder = new RecordDecoder(reader.Header.TimestampFrequency);
+
+        // Seed the decoder's running tick counter from the engine's reported tick-at-connect. Without this, the decoder restarts at 1 on every
+        // TCP reconnect and tick numbers the browser sees don't match anything the engine logs. With it, tick numbers are absolute and align
+        // across reconnects. Seed value is (engineTickAtInit - 1) so the first TickStart record (which increments before tagging) lands on
+        // engineTickAtInit — matches the same convention the file-replay path uses via SetCurrentTick. Header carries 0 for file-based traces
+        // (no scheduler running at file-start), in which case we leave the decoder at its default of 0 → first TickStart becomes tick 1.
+        if (reader.Header.EngineTickAtInit > 0)
+        {
+            _decoder.SetCurrentTick((int)(reader.Header.EngineTickAtInit - 1));
+        }
+
         Interlocked.Exchange(ref _tickCount, 0);
+        _threadRegistrations.Clear(); // fresh session ⇒ slot claims start over; old mappings are no longer meaningful
+        _firstGaugeSnapshot = null;   // fresh session ⇒ new set of init-value gauges; discard the previous one
+        _pendingTickEvents.Clear();
+        _pendingTickNumber = -1;
         LogInitReceived(state.Systems.Count, state.Header.WorkerCount, state.Header.BaseTickRate);
     }
 
@@ -292,21 +353,62 @@ public sealed partial class LiveSessionService : BackgroundService
             return;
         }
 
-        // Records arrive sorted by timestamp (consumer drain guarantees it), and TickStart events always precede the tick's other records —
-        // so tick numbers form contiguous runs within a block. Walk once, slice into per-tick batches, broadcast each.
-        var runStart = 0;
-        var runTick = decoded[0].TickNumber;
-
-        for (var i = 1; i < decoded.Count; i++)
+        // Snapshot any ThreadInfo records into the replay map BEFORE broadcasting, so any subscriber that joins mid-broadcast sees a
+        // consistent view (either missing this slot entirely, or seeing it via the synthetic tick-0 batch plus the normal tick batch).
+        foreach (var ev in decoded)
         {
-            if (decoded[i].TickNumber != runTick)
+            if (ev.Kind == (int)Typhon.Engine.Profiler.TraceEventKind.ThreadInfo)
             {
-                EmitTickBatch(runTick, decoded, runStart, i);
-                runStart = i;
-                runTick = decoded[i].TickNumber;
+                _threadRegistrations[ev.ThreadSlot] = ev;
+            }
+            else if (ev.Kind == (int)Typhon.Engine.Profiler.TraceEventKind.PerTickSnapshot && _firstGaugeSnapshot == null)
+            {
+                // First PerTickSnapshot of the session — carries capacity/total gauges that are never re-emitted. Cache for late subscribers.
+                _firstGaugeSnapshot = ev;
             }
         }
-        EmitTickBatch(runTick, decoded, runStart, decoded.Count);
+
+        // Buffer events by tick number across blocks. The engine's profiler consumer thread drains at ~1ms cadence; at 60 Hz a single
+        // tick's events span ~10-16 blocks. Emitting one SSE batch per contiguous same-tick run within a block would produce many
+        // fragmentary batches with the same tickNumber — the client's processTickAndAppend assumes one call = one complete tick and
+        // breaks when fed fragments (appends fragmentary TickData entries with startUs = Infinity, corrupting the global time origin).
+        //
+        // Strategy: accumulate events for the current tick in _pendingTickEvents. Flush (EmitTickBatch) only when a different tick
+        // number is seen — that's the guaranteed "current tick is definitively complete" signal because records within a block are
+        // timestamp-sorted and TickStart of tick N+1 can only appear after all of tick N's records. Trailing partial ticks are flushed
+        // on Shutdown frame or TCP disconnect; see ExecuteAsync + the Shutdown case in ProcessStreamAsync.
+        foreach (var ev in decoded)
+        {
+            if (_pendingTickNumber == -1)
+            {
+                _pendingTickNumber = ev.TickNumber;
+            }
+            else if (ev.TickNumber != _pendingTickNumber)
+            {
+                EmitTickBatch(_pendingTickNumber, _pendingTickEvents, 0, _pendingTickEvents.Count);
+                _pendingTickEvents.Clear();
+                _pendingTickNumber = ev.TickNumber;
+            }
+            _pendingTickEvents.Add(ev);
+        }
+    }
+
+    // Pending-tick buffer. Single-threaded access (only the ExecuteAsync reader loop writes), no locking needed.
+    private readonly List<LiveTraceEvent> _pendingTickEvents = new(256);
+    private int _pendingTickNumber = -1;
+
+    /// <summary>
+    /// Flush any partially-accumulated tick to subscribers. Called from the stream reader on Shutdown, and from ExecuteAsync when a TCP
+    /// disconnect occurs, so trailing events aren't lost. Safe to call repeatedly — resets the pending state even if no events pending.
+    /// </summary>
+    private void FlushPendingTick()
+    {
+        if (_pendingTickNumber != -1 && _pendingTickEvents.Count > 0)
+        {
+            EmitTickBatch(_pendingTickNumber, _pendingTickEvents, 0, _pendingTickEvents.Count);
+        }
+        _pendingTickEvents.Clear();
+        _pendingTickNumber = -1;
     }
 
     private void EmitTickBatch(int tickNumber, List<LiveTraceEvent> source, int startInclusive, int endExclusive)

@@ -31,6 +31,13 @@ internal sealed class ThreadSlot
     public int OwnerManagedThreadId;
 
     /// <summary>
+    /// Name of the current owning thread, captured once at claim time. Cached so exporters can synthesize catch-up
+    /// <see cref="TraceEventKind.ThreadInfo"/> records for clients that connect after the slot was claimed — without this, mid-session
+    /// live connections have no slot→name mapping and the viewer can't label lanes. Nulled on retirement. Not read on the hot path.
+    /// </summary>
+    public string OwnerThreadName;
+
+    /// <summary>
     /// Hot-path flag: when <c>false</c>, <c>TyphonEvent</c> skips the <see cref="System.Diagnostics.Activity.Current"/> lookup entirely,
     /// saving ~5–9 ns per span. Cleared via <c>TyphonEvent.SuppressActivityContextOnThisThread</c> by scheduler workers and the profiler consumer
     /// thread at their startup entry.

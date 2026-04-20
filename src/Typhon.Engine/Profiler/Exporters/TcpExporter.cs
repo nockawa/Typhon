@@ -249,6 +249,14 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
                 socket.SendTimeout = 5000;
                 socket.Send(frameBuffer);
+
+                // Before switching to non-blocking (and before exposing _client to ProcessBatch), send a catch-up Block frame
+                // carrying a synthetic ThreadInfo record for every currently-claimed slot. Without this, mid-session live
+                // connections never see the one-shot ThreadInfo records emitted when each worker claimed its slot — those
+                // were silently dropped by ProcessBatch while _client was null — and the viewer has no slot→name mapping,
+                // which leaves lanes unlabeled and the UI unable to lay out span tracks. See docs on TcpExporter above.
+                TrySendCatchupThreadInfoBlock(socket);
+
                 socket.Blocking = false;
                 _client = socket;
             }
@@ -284,6 +292,10 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
             ComponentTypeCount = (ushort)_metadata.ComponentTypes.Length,
             CreatedUtcTicks = _metadata.StartedUtc.Ticks,
             SamplingSessionStartQpc = _metadata.SamplingSessionStartQpc,
+            // Snapshot the engine's current tick AT CONNECT TIME (not at Start time) so the server decoder can seed its running counter
+            // with an absolute value. Null provider (no scheduler, or host didn't wire one) falls back to 0 — server treats that as "unknown,
+            // use legacy restart-from-1 behavior."
+            EngineTickAtInit = _metadata.CurrentEngineTickProvider?.Invoke() ?? 0
         };
         ms.Write(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(in header, 1)));
 
@@ -331,6 +343,88 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
         bw.Flush();
         return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Encode a ThreadInfo record for every currently-claimed slot and send them as one Block frame on <paramref name="socket"/>. Runs once per
+    /// client accept, while the socket is still in blocking mode. Silent no-op if zero slots are claimed (no data yet, or the client connected
+    /// before the first worker emitted an event — in that case the normal path will deliver ThreadInfo as usual).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reads <see cref="ThreadSlot.OwnerManagedThreadId"/> and <see cref="ThreadSlot.OwnerThreadName"/> from another thread. The producer-side
+    /// assignment order is <c>State → CAS Active</c> then <c>ManagedThreadId</c> then <c>OwnerThreadName</c>, so we skip any slot whose
+    /// <c>OwnerManagedThreadId</c> is still zero — <c>AssignClaim</c> is mid-flight and the producer will emit its own ThreadInfo shortly.
+    /// </para>
+    /// <para>
+    /// Failure mode: any send exception propagates up to <see cref="AcceptLoop"/>'s catch block, which closes the socket — identical handling to
+    /// an init-frame send failure. The next reconnect attempt will get a fresh replay.
+    /// </para>
+    /// </remarks>
+    private static void TrySendCatchupThreadInfoBlock(Socket socket)
+    {
+        var scanLimit = ThreadSlotRegistry.HighWaterMark;
+        if (scanLimit == 0)
+        {
+            return;
+        }
+
+        // Allocate generously — 256 max slots × 273 bytes (12+4+2+255 name cap) = ~70 KB worst case. Heap-allocated because this runs once per
+        // client accept; the cost is negligible and keeps the stack frame small.
+        var rawScratch = new byte[ThreadSlotRegistry.MaxSlots * 273];
+        var writePos = 0;
+        var recordCount = 0;
+        var timestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        for (var i = 0; i < scanLimit; i++)
+        {
+            var state = ThreadSlotRegistry.GetSlotState(i);
+            if (state != (int)SlotState.Active && state != (int)SlotState.Retiring)
+            {
+                continue;
+            }
+
+            var slot = ThreadSlotRegistry.GetSlot(i);
+            var managedThreadId = slot.OwnerManagedThreadId;
+            if (managedThreadId == 0)
+            {
+                continue; // AssignClaim still mid-flight — producer will emit its own ThreadInfo
+            }
+
+            var name = slot.OwnerThreadName;
+            var nameBytes = name != null ? Encoding.UTF8.GetBytes(name) : Array.Empty<byte>();
+            if (nameBytes.Length > 255)
+            {
+                nameBytes = nameBytes.AsSpan(0, 255).ToArray(); // defensive cap; pathological for a thread name
+            }
+
+            var recordSize = ThreadInfoEventCodec.ComputeSize(nameBytes.Length);
+            if (writePos + recordSize > rawScratch.Length)
+            {
+                break;
+            }
+
+            ThreadInfoEventCodec.WriteThreadInfo(rawScratch.AsSpan(writePos), (byte)i, timestamp, managedThreadId, nameBytes, out var bytesWritten);
+            writePos += bytesWritten;
+            recordCount++;
+        }
+
+        if (recordCount == 0)
+        {
+            return;
+        }
+
+        // Same framing as ProcessBatch: [frame header][block header][LZ4 compressed records].
+        var maxCompressed = LZ4Codec.MaximumOutputSize(writePos);
+        var frame = new byte[LiveStreamProtocol.FrameHeaderSize + TraceBlockEncoder.BlockHeaderSize + maxCompressed];
+        var blockHeader = frame.AsSpan(LiveStreamProtocol.FrameHeaderSize, TraceBlockEncoder.BlockHeaderSize);
+        var compressedSlot = frame.AsSpan(LiveStreamProtocol.FrameHeaderSize + TraceBlockEncoder.BlockHeaderSize);
+
+        var compressedSize = TraceBlockEncoder.EncodeBlock(rawScratch.AsSpan(0, writePos), recordCount, compressedSlot, blockHeader);
+        var payloadSize = TraceBlockEncoder.BlockHeaderSize + compressedSize;
+        LiveStreamProtocol.WriteFrameHeader(frame.AsSpan(), LiveFrameType.Block, payloadSize);
+
+        socket.Send(frame, 0, LiveStreamProtocol.FrameHeaderSize + payloadSize, SocketFlags.None);
     }
 
     private static void WriteShortString(BinaryWriter bw, string value)

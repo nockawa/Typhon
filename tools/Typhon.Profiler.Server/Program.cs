@@ -657,12 +657,19 @@ app.MapGet("/api/live/status", (LiveSessionService live) =>
 // Shared metadata DTO builder — used by both /api/live/metadata and the first /api/live/events payload.
 // Important: do NOT enable response compression on the SSE endpoint. SSE streams need immediate bytes on the wire;
 // compression buffers them and breaks real-time delivery.
-static object BuildLiveMetadataDto(LiveSessionState state) => new
+// threadNames is carried here rather than as a separate SSE event so the client populates TraceMetadata.threadNames at session start
+// without having to process kind-77 records through the tick pipeline. Delivering them as a synthetic tick batch breaks processTickEvents
+// (no TickStart → startUs = Infinity → global time origin corruption), hence this metadata-side channel.
+// initialGauges carries capacity/total gauges from the session's first PerTickSnapshot (kind 76) — those values are never re-emitted,
+// so late subscribers would see them as zero/missing without this replay path. Same rationale as threadNames, different one-shot kind.
+static object BuildLiveMetadataDto(LiveSessionState state, Dictionary<byte, string> threadNames, Dictionary<int, double> initialGauges) => new
 {
     header = BuildHeaderDto(state.Header),
     systems = BuildSystemDtos(state.Systems),
     archetypes = BuildArchetypeDtos(state.Archetypes),
     componentTypes = BuildComponentTypeDtos(state.ComponentTypes),
+    threadNames = threadNames,
+    initialGauges = initialGauges,
 };
 
 app.MapGet("/api/live/metadata", (LiveSessionService live) =>
@@ -672,7 +679,7 @@ app.MapGet("/api/live/metadata", (LiveSessionService live) =>
     {
         return Results.NotFound(new { error = "No live session" });
     }
-    return Results.Ok(BuildLiveMetadataDto(state));
+    return Results.Ok(BuildLiveMetadataDto(state, live.GetThreadNamesSnapshot(), live.GetInitialGaugesSnapshot()));
 });
 
 /// <summary>
@@ -722,7 +729,10 @@ app.MapGet("/api/trace/build-progress", async (HttpContext context, string path,
         }
     });
 
-    var ct = context.RequestAborted;
+    // Link RequestAborted with ApplicationStopping so the loop exits promptly on host shutdown — without this, the SSE endpoint holds the
+    // host hostage for the full HostOptions.ShutdownTimeout (default 30 s) because RequestAborted only fires on client-side disconnect.
+    using var ctSource = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lifetime.ApplicationStopping);
+    var ct = ctSource.Token;
     try
     {
         await foreach (var p in channel.Reader.ReadAllAsync(ct))
@@ -767,7 +777,7 @@ app.MapGet("/api/live/events", async (HttpContext context, LiveSessionService li
     var state = live.GetState();
     if (state != null)
     {
-        var meta = JsonSerializer.Serialize(BuildLiveMetadataDto(state), jsonOpts);
+        var meta = JsonSerializer.Serialize(BuildLiveMetadataDto(state, live.GetThreadNamesSnapshot(), live.GetInitialGaugesSnapshot()), jsonOpts);
         await context.Response.WriteAsync($"event: metadata\ndata: {meta}\n\n");
         await context.Response.Body.FlushAsync();
     }
@@ -775,7 +785,12 @@ app.MapGet("/api/live/events", async (HttpContext context, LiveSessionService li
     var (subId, reader) = live.Subscribe();
     try
     {
-        var ct = context.RequestAborted;
+        // Link RequestAborted with ApplicationStopping so the SSE loop exits promptly when the host is shutting down. Without this the endpoint
+        // holds the host hostage for the full graceful-shutdown timeout (~30 s) because the browser is still connected (so RequestAborted never
+        // fires on shutdown). With it, Ctrl+C on the server exits in <1 s; the browser's EventSource sees a normal connection close and (with
+        // the reconnect fix in liveSource.ts) auto-retries when the server comes back.
+        using var ctSource = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted, lifetime.ApplicationStopping);
+        var ct = ctSource.Token;
 
         while (!ct.IsCancellationRequested)
         {

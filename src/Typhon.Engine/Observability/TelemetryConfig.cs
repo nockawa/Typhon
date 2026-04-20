@@ -196,9 +196,6 @@ public static class TelemetryConfig
     /// <summary>Whether Scheduler component telemetry is enabled in configuration.</summary>
     public static readonly bool SchedulerEnabled;
 
-    /// <summary>Whether to track per-system transition latency (deps-satisfied to first-chunk-grab).</summary>
-    public static readonly bool SchedulerTrackTransitionLatency;
-
     /// <summary>Whether to track per-worker active/idle time breakdown.</summary>
     public static readonly bool SchedulerTrackWorkerUtilization;
 
@@ -336,7 +333,6 @@ public static class TelemetryConfig
         // Scheduler
         var schedSection = section.GetSection("Scheduler");
         SchedulerEnabled = schedSection.GetValue("Enabled", false);
-        SchedulerTrackTransitionLatency = schedSection.GetValue("TrackTransitionLatency", true);
         SchedulerTrackWorkerUtilization = schedSection.GetValue("TrackWorkerUtilization", true);
         SchedulerTrackStragglerGap = schedSection.GetValue("TrackStragglerGap", true);
         SchedulerActive = Enabled && SchedulerEnabled;
@@ -444,8 +440,8 @@ public static class TelemetryConfig
              Enabled={SpatialEnabled}
 
            Scheduler: Active={SchedulerActive}
-             Enabled={SchedulerEnabled}, TransitionLatency={SchedulerTrackTransitionLatency},
-             WorkerUtilization={SchedulerTrackWorkerUtilization}, StragglerGap={SchedulerTrackStragglerGap}
+             Enabled={SchedulerEnabled}, WorkerUtilization={SchedulerTrackWorkerUtilization},
+             StragglerGap={SchedulerTrackStragglerGap}
 
            Profiler: Active={ProfilerActive}
              Enabled={ProfilerEnabled}, GcTracing={ProfilerGcTracingEnabled} (Active={ProfilerGcTracingActive}),

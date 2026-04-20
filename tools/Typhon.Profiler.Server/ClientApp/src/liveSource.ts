@@ -88,16 +88,16 @@ export function connectLive(callbacks: LiveCallbacks): EventSource {
   });
 
   es.onerror = () => {
-    // Close the EventSource explicitly on any error. EventSource's default behavior is to auto-retry every ~3 s after a connection loss —
-    // that retry loop produces a stuttering error banner and hammers the server if the failure is persistent (e.g., server stopped, route
-    // misconfigured). We'd rather surface the error once, stop the connection, and let the user manually reconnect. For genuinely transient
-    // network blips the user sees one disconnect event + re-clicks Connect Live; that's the accepted cost.
-    const wasClosed = es.readyState === EventSource.CLOSED;
-    es.close();
-    if (wasClosed) {
+    // EventSource has three readyStates after an error: CONNECTING (it's auto-retrying internally), CLOSED (permanent failure — server
+    // returned non-2xx or the tab was unloaded), and rarely OPEN (transient wobble). We let CONNECTING retries proceed — that's the
+    // browser reconnecting on its own every ~3 s, which is exactly what we want when the Typhon server restarts. We only explicitly
+    // close + signal disconnect when readyState is CLOSED (EventSource won't retry from that state). The onError callback still fires
+    // so the UI can show a transient "reconnecting..." indicator without having to poll readyState.
+    if (es.readyState === EventSource.CLOSED) {
       callbacks.onDisconnect();
     } else {
-      callbacks.onError('SSE connection error');
+      // CONNECTING (auto-retry in progress) or OPEN (rare). Surface the error for UX feedback but let EventSource keep retrying.
+      callbacks.onError('SSE connection interrupted — retrying...');
     }
   };
 

@@ -192,7 +192,10 @@ internal static class ThreadSlotRegistry
         // Emit a ThreadInfo record right after the claim so the viewer can label this lane with a real thread name instead of just "Slot N".
         // This runs on the claiming thread, so the per-slot SPSC invariant is preserved (this thread is the sole writer of its ring). If the
         // thread has no name set we pass null — the encoder writes a zero-length name and the viewer falls back to "Thread {id}" downstream.
+        // Cache on the slot so TCP exporters can replay ThreadInfo to late-connecting clients (mid-session live connect otherwise has no
+        // way to see this one-shot record — it was drained and fanned out long before the client connected).
         var threadName = Thread.CurrentThread.Name;
+        slot.OwnerThreadName = threadName;
         TyphonEvent.EmitThreadInfo((byte)index, threadId, threadName);
     }
 
@@ -224,6 +227,7 @@ internal static class ThreadSlotRegistry
         if (Interlocked.CompareExchange(ref SSlots[slotIndex].State, (int)SlotState.Free, (int)SlotState.Retiring) == (int)SlotState.Retiring)
         {
             SSlots[slotIndex].Slot.OwnerManagedThreadId = 0;
+            SSlots[slotIndex].Slot.OwnerThreadName = null;
             Interlocked.Decrement(ref SActiveSlotCount);
         }
     }

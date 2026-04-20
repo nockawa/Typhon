@@ -41,26 +41,23 @@ public sealed partial class DagScheduler
                 sm.TransitionLatencyUs = TicksToUs(sm.FirstChunkGrabTick - sm.ReadyTick);
                 sm.DurationUs = TicksToUs(sm.LastChunkDoneTick - sm.FirstChunkGrabTick);
 
-                // Deep mode: straggler gap for multi-chunk systems (Pipeline and parallel QuerySystem)
+                // Straggler gap for multi-chunk parallel systems (Pipeline and parallel QuerySystem).
+                // Per-chunk accumulators (TotalChunkWorkTicks, MaxChunkWorkTicks, WorkerBitmap) are populated
+                // on worker threads via AccumulateChunkTelemetry; here we fold them into the final metrics.
                 if (TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackStragglerGap)
                 {
                     var sys = Systems[i];
-                    if ((sys.Type == SystemType.PipelineSystem || sys.IsParallelQuery) && sys.TotalChunks > 1 && sm.WorkersTouched > 0)
+                    if ((sys.Type == SystemType.PipelineSystem || sys.IsParallelQuery) 
+                        && sys.TotalChunks > 1 && sm.WorkersTouched > 1 && sm.TotalChunkWorkTicks > 0)
                     {
-                        // Theoretical duration with perfect parallelism:
-                        // total work divided evenly across participating workers
-                        var parallelism = Math.Min(sm.WorkersTouched, sys.TotalChunks);
-                        if (parallelism > 1)
-                        {
-                            // Estimate: total sequential work ≈ duration × parallelism, theoretical = that / parallelism
-                            // More precisely: straggler = actual - (actual * parallelism / parallelism) = 0 in ideal.
-                            // We approximate: theoretical = actual if perfectly balanced. The gap is the deviation.
-                            // Use a simpler metric: chunk_work × totalChunks / parallelism (but we don't know chunk_work).
-                            // Fall back to: gap = 0 when only 1 worker touched it, otherwise report raw duration as-is.
-                            // For v1, just record duration. The straggler gap will be more meaningful when we have
-                            // per-chunk timing data from actual Pipeline integration.
-                            sm.StragglerGapUs = 0f; // Placeholder — refined in Pipeline integration (#196)
-                        }
+                        // Ideal-parallel: if the total CPU time were split evenly across all participating workers.
+                        // Wall-clock span of the system (DurationUs) minus ideal-parallel = imbalance penalty.
+                        var idealParallelUs = TicksToUs(sm.TotalChunkWorkTicks) / sm.WorkersTouched;
+                        var gap = sm.DurationUs - idealParallelUs;
+                        
+                        // Clamp: floating-point rounding can push an ideally-balanced gap microscopically negative.
+                        sm.StragglerGapUs = gap > 0f ? gap : 0f;
+                        sm.MaxChunkDurationUs = TicksToUs(sm.MaxChunkWorkTicks);
                     }
                 }
             }

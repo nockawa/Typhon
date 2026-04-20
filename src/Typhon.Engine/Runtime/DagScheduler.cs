@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Diagnostics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using Typhon.Engine.Profiler;
@@ -899,9 +900,15 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var workEnd = Stopwatch.GetTimestamp();
             InspectorChunkEnd(sysIdx, chunk, workEnd, 0);
 
+            var chunkTicks = workEnd - workStart;
             if (trackUtilization)
             {
-                _workerActiveTicks[workerId] += workEnd - workStart;
+                _workerActiveTicks[workerId] += chunkTicks;
+            }
+
+            if (TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackStragglerGap)
+            {
+                AccumulateChunkTelemetry(sysIdx, workerId, chunkTicks);
             }
 
             // D8: countdown — last completer dispatches successors
@@ -909,6 +916,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             if (remaining == 0)
             {
                 RecordSystemDone(sysIdx, workEnd);
+                // Distinct-worker popcount: happens-before ordering guaranteed by the _remainingChunks
+                // countdown — the last completer observes all prior bitmap writes.
+                _currentTickSystemMetrics[sysIdx].WorkersTouched = BitOperations.PopCount(_currentTickSystemMetrics[sysIdx].WorkerBitmap);
                 OnSystemComplete(sysIdx, workerId, trackUtilization);
                 break;
             }
@@ -961,9 +971,15 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var workEnd = Stopwatch.GetTimestamp();
             InspectorChunkEnd(sysIdx, chunk, workEnd, _currentTickSystemMetrics[sysIdx].EntitiesProcessed);
 
+            var chunkTicks = workEnd - workStart;
             if (trackUtilization)
             {
-                _workerActiveTicks[workerId] += workEnd - workStart;
+                _workerActiveTicks[workerId] += chunkTicks;
+            }
+
+            if (TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackStragglerGap)
+            {
+                AccumulateChunkTelemetry(sysIdx, workerId, chunkTicks);
             }
 
             // D8: countdown — last completer dispatches successors and runs cleanup
@@ -971,7 +987,9 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             if (remaining == 0)
             {
                 RecordSystemDone(sysIdx, workEnd);
-                _currentTickSystemMetrics[sysIdx].WorkersTouched = sys.TotalChunks;
+                // Distinct-worker popcount (fix: was incorrectly `= sys.TotalChunks`, which is chunk count, not worker count).
+                // Happens-before from _remainingChunks countdown makes bitmap writes visible to this last completer.
+                _currentTickSystemMetrics[sysIdx].WorkersTouched = BitOperations.PopCount(_currentTickSystemMetrics[sysIdx].WorkerBitmap);
                 // Issue #234: cleanup may return true to re-dispatch for another phase (checkerboard Black after Red).
                 var reDispatch = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
                 if (reDispatch)
@@ -1196,6 +1214,36 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void RecordSystemDone(int sysIdx, long timestamp) =>
         _currentTickSystemMetrics[sysIdx].LastChunkDoneTick = timestamp;
+
+    /// <summary>
+    /// Accumulates per-chunk telemetry (sum of work ticks, running max, worker participation bitmap) from any worker thread.
+    /// Called at chunk completion in <see cref="ProcessPipeline"/> and <see cref="ProcessParallelQuery"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Cost per chunk:</b> 1 <c>Interlocked.Add</c> + 1 <c>Interlocked.Or</c> + CAS-loop max (≈15-25 ns uncontended on x64).
+    /// Bounded contention: at most N workers race on the same system's fields, and only at chunk boundaries.</para>
+    /// <para><b>Gated</b> behind <see cref="TelemetryConfig.SchedulerTrackStragglerGap"/>: when off, the JIT folds this call away
+    /// at the callsite if the flag is constant-foldable.</para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AccumulateChunkTelemetry(int sysIdx, int workerId, long chunkTicks)
+    {
+        ref var sm = ref _currentTickSystemMetrics[sysIdx];
+
+        Interlocked.Add(ref sm.TotalChunkWorkTicks, chunkTicks);
+        Interlocked.Or(ref sm.WorkerBitmap, 1UL << (workerId & 63));
+
+        // CAS-loop max: only retries when a larger sample lands concurrently, which is the uncommon case.
+        long current;
+        do
+        {
+            current = sm.MaxChunkWorkTicks;
+            if (chunkTicks <= current)
+            {
+                break;
+            }
+        } while (Interlocked.CompareExchange(ref sm.MaxChunkWorkTicks, chunkTicks, current) != current);
+    }
 
     private void ResetTickState()
     {

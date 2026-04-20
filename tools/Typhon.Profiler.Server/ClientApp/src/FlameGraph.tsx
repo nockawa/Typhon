@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'preact/hooks';
 import { fetchFlameGraph, type FlameNode } from './api';
-import { setupCanvas, drawTooltip, BG_COLOR, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, SPAN_PALETTE } from './canvasUtils';
+import { setupCanvas, drawTooltip, nameToPaletteIndex, BG_COLOR, HEADER_BG, BORDER_COLOR, TEXT_COLOR, DIM_TEXT, SPAN_PALETTE, SPAN_PALETTE_TEXT_COLOR } from './canvasUtils';
 import type { TimeRange } from './uiTypes';
 
 interface FlameGraphProps {
@@ -24,16 +24,6 @@ const HEADER_HEIGHT = 24;
  * depth + width already convey structure, and where the warm ramp gives a consistent visual identity to "this is code running," that
  * collision rate is a tolerable trade for the section-coloring consistency.
  */
-function nameToColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
-  }
-  // Force non-negative index — bitwise int can be negative in JS when the top bit is set.
-  const idx = (hash >>> 0) % SPAN_PALETTE.length;
-  return SPAN_PALETTE[idx];
-}
-
 interface LayoutRect {
   x: number;
   width: number;
@@ -153,8 +143,10 @@ export function FlameGraph({ tracePath, viewRange }: FlameGraphProps) {
     for (const rect of rects) {
       if (rect.x + rect.width < 0 || rect.x > width) continue;
 
-      const color = nameToColor(rect.node.name);
-      ctx.fillStyle = color;
+      // Direct palette lookup for both fill and text — hash is cached by nameToPaletteIndex, so recurring node names (same function
+      // appearing in many stack frames) pay the hash cost exactly once per unique name over the session.
+      const paletteIdx = nameToPaletteIndex(rect.node.name);
+      ctx.fillStyle = SPAN_PALETTE[paletteIdx];
       ctx.fillRect(rect.x, rect.y, rect.width, FLAME_ROW_HEIGHT);
 
       // Border
@@ -162,9 +154,9 @@ export function FlameGraph({ tracePath, viewRange }: FlameGraphProps) {
       ctx.lineWidth = 0.5;
       ctx.strokeRect(rect.x, rect.y, rect.width, FLAME_ROW_HEIGHT);
 
-      // Label
+      // Label — luminance-adaptive text color against the node's fill, same rationale as the timeline bars.
       if (rect.width > MIN_WIDTH_FOR_LABEL) {
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = SPAN_PALETTE_TEXT_COLOR[paletteIdx];
         ctx.font = '10px monospace';
         ctx.textAlign = 'left';
         // Shorten name: take last segment (method name)

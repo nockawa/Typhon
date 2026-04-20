@@ -29,11 +29,20 @@ public struct SystemTelemetry
     public float DurationUs;
 
     /// <summary>
-    /// Difference between actual duration and theoretical optimal parallel duration.
-    /// Only computed when <see cref="TelemetryConfig.SchedulerTrackStragglerGap"/> is enabled.
+    /// Difference between actual wall-clock duration and theoretical optimal parallel duration (<c>sum(chunk_duration) / WorkersTouched</c>).
+    /// Only computed when <see cref="TelemetryConfig.SchedulerTrackStragglerGap"/> is enabled AND the system is multi-chunk parallel
+    /// (<c>TotalChunks &gt; 1</c> AND (pipeline OR parallel query)).
     /// Positive values indicate load imbalance (some workers finished earlier and idled).
     /// </summary>
     public float StragglerGapUs;
+
+    /// <summary>
+    /// Longest single-chunk duration observed this tick. Paired with <see cref="StragglerGapUs"/>:
+    /// a large gap with a large <see cref="MaxChunkDurationUs"/> approaching <see cref="DurationUs"/> means one straggler chunk dominated; similar gap with
+    /// uniform chunk durations means evenly lumpy load.
+    /// Only computed when <see cref="TelemetryConfig.SchedulerTrackStragglerGap"/> is enabled.
+    /// </summary>
+    public float MaxChunkDurationUs;
 
     /// <summary>Number of entities this system processed (from <c>TickContext.Entities</c>). Zero for CallbackSystems.</summary>
     public int EntitiesProcessed;
@@ -63,4 +72,26 @@ public struct SystemTelemetry
 
     /// <summary>Stopwatch timestamp when the last chunk completed (or Callback finished).</summary>
     internal long LastChunkDoneTick;
+
+    /// <summary>
+    /// Accumulated chunk work time in Stopwatch ticks across all participating workers.
+    /// Updated via <c>Interlocked.Add</c> at each chunk completion in multi-threaded dispatch.
+    /// Used to derive <see cref="StragglerGapUs"/> at tick end.
+    /// </summary>
+    internal long TotalChunkWorkTicks;
+
+    /// <summary>
+    /// Maximum single-chunk duration in Stopwatch ticks this tick.
+    /// Updated via a CAS loop at each chunk completion. Source of <see cref="MaxChunkDurationUs"/>.
+    /// </summary>
+    internal long MaxChunkWorkTicks;
+
+    /// <summary>
+    /// Bitmap of worker IDs that processed at least one chunk for this system this tick.
+    /// Each worker OR's <c>1UL &lt;&lt; workerId</c> into this field via <c>Interlocked.Or</c> on its first chunk.
+    /// Popcount yields the distinct-worker count stored in <see cref="WorkersTouched"/>.
+    /// 64-worker limit: fine for Typhon (thread IDs are 16-bit but worker pools stay small;
+    /// if &gt; 64 workers ever ship, upgrade to a multi-word bitmap).
+    /// </summary>
+    internal ulong WorkerBitmap;
 }

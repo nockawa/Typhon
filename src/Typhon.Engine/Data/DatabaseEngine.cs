@@ -1741,7 +1741,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
             changeSet.SaveChanges();
             changeSet.ReleaseExcessDirtyMarks();
-            migrationActivity?.Dispose();
 
             // Reset queue for next tick BEFORE any re-throw path can escape. Leaving entries in the queue after a mid-batch exception would cause the next
             // tick's ExecuteMigrations to re-attempt already-applied migrations, double-allocating destination slots and orphaning source clusters.
