@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using Typhon.Engine;
+using Typhon.Engine.Profiler;
 
 namespace AntHill.ProfileRunner;
 
@@ -28,10 +29,11 @@ public static class Program
             }
         }
 
-        // Shared profiler activation path (same as Godot's Main.cs).
-        // This enforces the JIT-gate ordering rule in exactly one place.
+        // Shared profiler activation path (same ordering as Godot's Main.cs).
+        // Step 1 runs env-var + TelemetryConfig setup BEFORE bridge construction so the
+        // JIT gate (TelemetryConfig.ProfilerActive) is open when the scheduler compiles.
         var (traceFile, livePort) = ProfilerSetup.ParseArgs(args);
-        IRuntimeInspector inspector = ProfilerSetup.TryCreateInspector(traceFile, livePort);
+        bool profilingRequested = ProfilerSetup.PrepareProfiling(traceFile, livePort);
 
         if (traceFile != null)
         {
@@ -46,13 +48,37 @@ public static class Program
         Console.WriteLine($"Warming up {WarmupSeconds}s, measuring {durationSec}s...");
 
         var bridge = new TyphonBridge();
-        bridge.Initialize(inspector);
+        bridge.Initialize();
+
+        // Step 2: exporters + profiler start, now that DI has built registry.Profiler.
+        // Must happen BEFORE bridge.Start() so the very first tick is captured. Dual-attach when both --trace and --live are passed.
+        System.Collections.Generic.List<IProfilerExporter> exporters = null;
+        if (profilingRequested)
+        {
+            try
+            {
+                exporters = ProfilerSetup.CreateExporters(traceFile, livePort, bridge.ProfilerParent);
+                foreach (var exp in exporters) TyphonProfiler.AttachExporter(exp);
+                var metadata = ProfilerSetup.BuildSessionMetadata(
+                    bridge.Systems, workerCount: 16, baseTickRate: 60f,
+                    currentEngineTickProvider: () => bridge.CurrentTick);
+                TyphonProfiler.Start(bridge.ProfilerParent, metadata);
+            }
+            catch (Exception ex)
+            {
+                // Port busy / firewall / disposal race / non-writable trace path. Continue without profiling rather than crashing.
+                Console.Error.WriteLine($"Profiler startup FAILED — {ex.GetType().Name}: {ex.Message}");
+                Console.Error.WriteLine($"  Likely cause: port {livePort} already in use, firewall blocking, or trace path not writable. Running without profiling.");
+                exporters = null;
+            }
+        }
+
         bridge.Start();
 
-        // Telemetry diagnostics — prints full config state, inspector type, and
-        // whether TyphonActivitySource has an ActivityListener attached. Run right
-        // after Start() so the scheduler has had a chance to register the listener.
-        ProfilerSetup.PrintDiagnostics(Console.WriteLine, inspector);
+        // Telemetry diagnostics — prints full config state, exporter types, and whether
+        // TyphonProfiler's consumer thread is running. Run right after Start() so the
+        // scheduler has had a chance to register with the profiler.
+        ProfilerSetup.PrintDiagnostics(Console.WriteLine, exporters);
 
         // Warm up
         Thread.Sleep(WarmupSeconds * 1000);
@@ -128,6 +154,18 @@ public static class Program
         Console.WriteLine($"──────────────────────────────────────────────────");
 
         bridge.Dispose();
+
+        // Stop the profiler AFTER the bridge so any final tick/shutdown events have been emitted.
+        // TyphonProfiler.Stop flushes + disposes every attached exporter; DetachExporter clears the
+        // static list so re-running in the same process starts from empty state.
+        if (exporters != null && exporters.Count > 0)
+        {
+            TyphonProfiler.Stop();
+            foreach (var exp in exporters)
+            {
+                TyphonProfiler.DetachExporter(exp);
+            }
+        }
     }
 
     private static void PrintUsage()

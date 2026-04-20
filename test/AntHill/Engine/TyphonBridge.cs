@@ -102,8 +102,8 @@ public sealed class TyphonBridge : IDisposable
         get
         {
             if (_nestFoodStock == null) return 0;
-            int total = 0;
-            for (int i = 0; i < _nestFoodStock.Length; i++) total += Math.Max(0, _nestFoodStock[i]);
+            var total = 0;
+            for (var i = 0; i < _nestFoodStock.Length; i++) total += Math.Max(0, _nestFoodStock[i]);
             return total;
         }
     }
@@ -112,8 +112,8 @@ public sealed class TyphonBridge : IDisposable
         get
         {
             if (_foodRemainingInt == null) return 0;
-            int count = 0;
-            for (int i = 0; i < _foodRemainingInt.Length; i++)
+            var count = 0;
+            for (var i = 0; i < _foodRemainingInt.Length; i++)
             {
                 if (_foodRemainingInt[i] > 0) count++;
             }
@@ -129,7 +129,7 @@ public sealed class TyphonBridge : IDisposable
         _camMaxY = maxY;
     }
 
-    public void Initialize(IRuntimeInspector inspector = null)
+    public void Initialize()
     {
         var services = new ServiceCollection();
         services
@@ -185,12 +185,11 @@ public sealed class TyphonBridge : IDisposable
         {
             BaseTickRate = 60,
             WorkerCount = workerCount,
-            Inspector = inspector,
         });
 
         // Per-worker render buffers: each parallel FillRender worker writes to its own buffer
         _workerBuffers = new RenderWorkerBuffer[workerCount];
-        for (int i = 0; i < workerCount; i++)
+        for (var i = 0; i < workerCount; i++)
         {
             _workerBuffers[i] = new RenderWorkerBuffer(AntCount / workerCount + 1024);
         }
@@ -263,25 +262,25 @@ public sealed class TyphonBridge : IDisposable
 
     private void TierAssignment(TickContext ctx)
     {
-        float camX = (_camMinX + _camMaxX) * 0.5f;
-        float camY = (_camMinY + _camMaxY) * 0.5f;
+        var camX = (_camMinX + _camMaxX) * 0.5f;
+        var camY = (_camMinY + _camMaxY) * 0.5f;
 
         var grid = ctx.SpatialGrid;
         grid.ResetAllTiers(SimTier.Tier3);
 
-        float r0sq = _tier0Radius * _tier0Radius;
-        float r1sq = (_tier0Radius * 3f) * (_tier0Radius * 3f);
-        float r2sq = Tier2Radius * Tier2Radius;
+        var r0sq = _tier0Radius * _tier0Radius;
+        var r1sq = (_tier0Radius * 3f) * (_tier0Radius * 3f);
+        var r2sq = Tier2Radius * Tier2Radius;
 
-        for (int cy = 0; cy < GridCells; cy++)
+        for (var cy = 0; cy < GridCells; cy++)
         {
-            for (int cx = 0; cx < GridCells; cx++)
+            for (var cx = 0; cx < GridCells; cx++)
             {
-                float cellCenterX = cx * CellSize + CellSize * 0.5f;
-                float cellCenterY = cy * CellSize + CellSize * 0.5f;
-                float dx = cellCenterX - camX;
-                float dy = cellCenterY - camY;
-                float distSq = dx * dx + dy * dy;
+                var cellCenterX = cx * CellSize + CellSize * 0.5f;
+                var cellCenterY = cy * CellSize + CellSize * 0.5f;
+                var dx = cellCenterX - camX;
+                var dy = cellCenterY - camY;
+                var distSq = dx * dx + dy * dy;
 
                 SimTier tier;
                 if (distSq < r0sq) tier = SimTier.Tier0;
@@ -307,7 +306,7 @@ public sealed class TyphonBridge : IDisposable
 
     private void MoveAllAnts(TickContext ctx)
     {
-        float dt = ctx.DeltaTime * _timeScale;
+        var dt = ctx.DeltaTime * _timeScale;
         using var clusters = ctx.ClusterIds != null
             ? ctx.Accessor.GetClusterEnumerator<Ant>(ctx.ClusterIds, ctx.StartClusterIndex, ctx.EndClusterIndex)
             : ctx.Accessor.GetClusterEnumerator<Ant>(ctx.StartClusterIndex, ctx.EndClusterIndex);
@@ -317,14 +316,14 @@ public sealed class TyphonBridge : IDisposable
             var positions = cluster.GetSpan(Ant.Position);
             while (bits != 0)
             {
-                int idx = BitOperations.TrailingZeroCount(bits);
+                var idx = BitOperations.TrailingZeroCount(bits);
                 bits &= bits - 1;
                 ref var pos = ref positions[idx];
 
-                float x = pos.Bounds.MinX + pos.VelocityX * dt;
-                float y = pos.Bounds.MinY + pos.VelocityY * dt;
-                float vx = pos.VelocityX;
-                float vy = pos.VelocityY;
+                var x = pos.Bounds.MinX + pos.VelocityX * dt;
+                var y = pos.Bounds.MinY + pos.VelocityY * dt;
+                var vx = pos.VelocityX;
+                var vy = pos.VelocityY;
 
                 if (x < 0f) { x = -x; vx = -vx; }
                 else if (x > WorldSize) { x = 2f * WorldSize - x; vx = -vx; }
@@ -351,7 +350,7 @@ public sealed class TyphonBridge : IDisposable
 
     private void MetabolismTick(TickContext ctx)
     {
-        float dtScale = ctx.AmortizedDeltaTime / BaseDt * _timeScale;
+        var dtScale = ctx.AmortizedDeltaTime / BaseDt * _timeScale;
         var nests = _nestPositions;
         var nestStock = _nestFoodStock;
 
@@ -366,7 +365,7 @@ public sealed class TyphonBridge : IDisposable
             var genetics = cluster.GetReadOnlySpan(Ant.Genetics);
             while (bits != 0)
             {
-                int idx = BitOperations.TrailingZeroCount(bits);
+                var idx = BitOperations.TrailingZeroCount(bits);
                 bits &= bits - 1;
                 ref var state = ref states[idx];
                 ref readonly var gen = ref genetics[idx];
@@ -376,10 +375,10 @@ public sealed class TyphonBridge : IDisposable
                 if (state.Energy <= 0f)
                 {
                     Interlocked.Increment(ref _deathCount);
-                    int ni = gen.HomeNestIndex;
+                    var ni = gen.HomeNestIndex;
 
-                    float freeE = gen.BaseEnergy * 0.5f;
-                    float bonusE = 0f;
+                    var freeE = gen.BaseEnergy * 0.5f;
+                    var bonusE = 0f;
                     if (ni >= 0 && ni < NestCount &&
                         Interlocked.Add(ref nestStock[ni], -gen.EatAmount) >= 0)
                     {
@@ -397,9 +396,9 @@ public sealed class TyphonBridge : IDisposable
                     pos.X = nests[ni].x;
                     pos.Y = nests[ni].y;
 
-                    uint h = (uint)(idx * 2654435761 + cluster.ChunkId * 40503 + ctx.TickNumber);
-                    float angle = (h % 6283u) * 0.001f; // 0 to ~2π
-                    float speed = gen.Speed * 40f;
+                    var h = (uint)(idx * 2654435761 + cluster.ChunkId * 40503 + ctx.TickNumber);
+                    var angle = (h % 6283u) * 0.001f; // 0 to ~2π
+                    var speed = gen.Speed * 40f;
                     pos.VelocityX = MathF.Cos(angle) * speed;
                     pos.VelocityY = MathF.Sin(angle) * speed;
                     _dbe.MarkClusterSlotDirty(AntArchetypeId, cluster.ChunkId, idx);
@@ -439,7 +438,7 @@ public sealed class TyphonBridge : IDisposable
             var genetics = cluster.GetReadOnlySpan(Ant.Genetics);
             while (bits != 0)
             {
-                int idx = BitOperations.TrailingZeroCount(bits);
+                var idx = BitOperations.TrailingZeroCount(bits);
                 bits &= bits - 1;
                 ref var pos = ref positions[idx];
                 ref var state = ref states[idx];
@@ -449,20 +448,20 @@ public sealed class TyphonBridge : IDisposable
                 if (state.State == AntState.Foraging)
                 {
                     // Grid lookup: only check food sources in this cell
-                    int gcx = Math.Clamp((int)(pos.X * FoodGridInvCellSize), 0, FoodGridCells - 1);
-                    int gcy = Math.Clamp((int)(pos.Y * FoodGridInvCellSize), 0, FoodGridCells - 1);
+                    var gcx = Math.Clamp((int)(pos.X * FoodGridInvCellSize), 0, FoodGridCells - 1);
+                    var gcy = Math.Clamp((int)(pos.Y * FoodGridInvCellSize), 0, FoodGridCells - 1);
                     var candidates = foodGrid[gcy * FoodGridCells + gcx];
                     if (candidates == null) continue;
 
-                    float bestDistSq = float.MaxValue;
-                    int bestIdx = -1;
-                    for (int ci = 0; ci < candidates.Length; ci++)
+                    var bestDistSq = float.MaxValue;
+                    var bestIdx = -1;
+                    for (var ci = 0; ci < candidates.Length; ci++)
                     {
-                        int fi = candidates[ci];
+                        var fi = candidates[ci];
                         if (foodRemaining[fi] <= 0) continue;
-                        float dx = pos.X - food[fi].x;
-                        float dy = pos.Y - food[fi].y;
-                        float distSq = dx * dx + dy * dy;
+                        var dx = pos.X - food[fi].x;
+                        var dy = pos.Y - food[fi].y;
+                        var distSq = dx * dx + dy * dy;
 
                         if (distSq < FoodPickupRangeSq)
                         {
@@ -490,8 +489,8 @@ public sealed class TyphonBridge : IDisposable
 
                     if (bestIdx >= 0)
                     {
-                        float heading = MathF.Atan2(food[bestIdx].y - pos.Y, food[bestIdx].x - pos.X);
-                        float speed = MathF.Sqrt(pos.VelocityX * pos.VelocityX + pos.VelocityY * pos.VelocityY);
+                        var heading = MathF.Atan2(food[bestIdx].y - pos.Y, food[bestIdx].x - pos.X);
+                        var speed = MathF.Sqrt(pos.VelocityX * pos.VelocityX + pos.VelocityY * pos.VelocityY);
                         ref readonly var gen = ref genetics[idx];
                         if (speed < 0.01f) speed = gen.Speed * 40f;
                         pos.VelocityX = MathF.Cos(heading) * speed;
@@ -501,9 +500,9 @@ public sealed class TyphonBridge : IDisposable
                 else // Returning
                 {
                     ref readonly var gen = ref genetics[idx];
-                    int ni = gen.HomeNestIndex;
-                    float dx = pos.X - nests[ni].x;
-                    float dy = pos.Y - nests[ni].y;
+                    var ni = gen.HomeNestIndex;
+                    var dx = pos.X - nests[ni].x;
+                    var dy = pos.Y - nests[ni].y;
                     if (dx * dx + dy * dy < NestDropRangeSq)
                     {
                         Interlocked.Add(ref nestStock[ni], 3);
@@ -532,7 +531,7 @@ public sealed class TyphonBridge : IDisposable
     {
         var phero = _pheromones;
         var nests = _nestPositions;
-        long tick = ctx.TickNumber;
+        var tick = ctx.TickNumber;
 
         using var clusters = ctx.ClusterIds != null
             ? ctx.Accessor.GetClusterEnumerator<Ant>(ctx.ClusterIds, ctx.StartClusterIndex, ctx.EndClusterIndex)
@@ -545,7 +544,7 @@ public sealed class TyphonBridge : IDisposable
             var genetics = cluster.GetReadOnlySpan(Ant.Genetics);
             while (bits != 0)
             {
-                int idx = BitOperations.TrailingZeroCount(bits);
+                var idx = BitOperations.TrailingZeroCount(bits);
                 bits &= bits - 1;
                 ref var pos = ref positions[idx];
                 ref readonly var state = ref states[idx];
@@ -553,22 +552,22 @@ public sealed class TyphonBridge : IDisposable
 
                 if (state.Energy <= 0f) continue;
 
-                float speed = MathF.Sqrt(pos.VelocityX * pos.VelocityX + pos.VelocityY * pos.VelocityY);
+                var speed = MathF.Sqrt(pos.VelocityX * pos.VelocityX + pos.VelocityY * pos.VelocityY);
                 if (speed < 0.01f) speed = gen.Speed * 40f;
-                float heading = MathF.Atan2(pos.VelocityY, pos.VelocityX);
+                var heading = MathF.Atan2(pos.VelocityY, pos.VelocityX);
 
-                bool steered = false;
+                var steered = false;
 
                 if (state.State == AntState.Foraging)
                 {
                     // Pheromone trail following (food trail)
-                    float sL = phero.Food[PheromoneGrid.WorldToIndex(
+                    var sL = phero.Food[PheromoneGrid.WorldToIndex(
                         pos.X + MathF.Cos(heading - SensorAngle) * SensorDistance,
                         pos.Y + MathF.Sin(heading - SensorAngle) * SensorDistance)];
-                    float sC = phero.Food[PheromoneGrid.WorldToIndex(
+                    var sC = phero.Food[PheromoneGrid.WorldToIndex(
                         pos.X + MathF.Cos(heading) * SensorDistance,
                         pos.Y + MathF.Sin(heading) * SensorDistance)];
-                    float sR = phero.Food[PheromoneGrid.WorldToIndex(
+                    var sR = phero.Food[PheromoneGrid.WorldToIndex(
                         pos.X + MathF.Cos(heading + SensorAngle) * SensorDistance,
                         pos.Y + MathF.Sin(heading + SensorAngle) * SensorDistance)];
 
@@ -578,27 +577,27 @@ public sealed class TyphonBridge : IDisposable
                 }
                 else // Returning — pheromone + nest direction validation
                 {
-                    int ni = gen.HomeNestIndex;
-                    float toNestX = nests[ni].x - pos.X;
-                    float toNestY = nests[ni].y - pos.Y;
-                    float nestHeading = MathF.Atan2(toNestY, toNestX);
+                    var ni = gen.HomeNestIndex;
+                    var toNestX = nests[ni].x - pos.X;
+                    var toNestY = nests[ni].y - pos.Y;
+                    var nestHeading = MathF.Atan2(toNestY, toNestX);
 
-                    float sL = phero.Home[PheromoneGrid.WorldToIndex(
+                    var sL = phero.Home[PheromoneGrid.WorldToIndex(
                         pos.X + MathF.Cos(heading - SensorAngle) * SensorDistance,
                         pos.Y + MathF.Sin(heading - SensorAngle) * SensorDistance)];
-                    float sC = phero.Home[PheromoneGrid.WorldToIndex(
+                    var sC = phero.Home[PheromoneGrid.WorldToIndex(
                         pos.X + MathF.Cos(heading) * SensorDistance,
                         pos.Y + MathF.Sin(heading) * SensorDistance)];
-                    float sR = phero.Home[PheromoneGrid.WorldToIndex(
+                    var sR = phero.Home[PheromoneGrid.WorldToIndex(
                         pos.X + MathF.Cos(heading + SensorAngle) * SensorDistance,
                         pos.Y + MathF.Sin(heading + SensorAngle) * SensorDistance)];
 
-                    float pheroHeading = heading;
+                    var pheroHeading = heading;
                     if (sL > sC && sL > sR) pheroHeading -= SteerStrength;
                     else if (sR > sC && sR > sL) pheroHeading += SteerStrength;
 
                     // Validate: does pheromone heading take us closer to nest?
-                    float dot = MathF.Cos(pheroHeading) * toNestX + MathF.Sin(pheroHeading) * toNestY;
+                    var dot = MathF.Cos(pheroHeading) * toNestX + MathF.Sin(pheroHeading) * toNestY;
                     heading = dot > 0f ? pheroHeading : nestHeading;
                     steered = true;
                 }
@@ -606,16 +605,16 @@ public sealed class TyphonBridge : IDisposable
                 // Wander: tiny jitter + periodic direction change
                 if (!steered)
                 {
-                    uint h = (uint)(idx * 2654435761 + cluster.ChunkId * 40503);
+                    var h = (uint)(idx * 2654435761 + cluster.ChunkId * 40503);
 
-                    float jitter = ((h + (uint)tick * 2246822519u) % 1000u / 1000f - 0.5f) * 2f * WanderJitter;
+                    var jitter = ((h + (uint)tick * 2246822519u) % 1000u / 1000f - 0.5f) * 2f * WanderJitter;
                     heading += jitter;
 
-                    uint epoch = (uint)(tick / WanderChangeTicks);
-                    uint prevEpoch = (uint)((tick - (long)ctx.AmortizedDeltaTime * 60) / WanderChangeTicks);
+                    var epoch = (uint)(tick / WanderChangeTicks);
+                    var prevEpoch = (uint)((tick - (long)ctx.AmortizedDeltaTime * 60) / WanderChangeTicks);
                     if (epoch != prevEpoch)
                     {
-                        float turn = ((h * 48271u + epoch * 16807u) % 1000u / 1000f - 0.5f) * 2f * WanderTurnMax;
+                        var turn = ((h * 48271u + epoch * 16807u) % 1000u / 1000f - 0.5f) * 2f * WanderTurnMax;
                         heading += turn;
                     }
                 }
@@ -643,7 +642,7 @@ public sealed class TyphonBridge : IDisposable
         var nests = _nestPositions;
 
         // Scale deposit by amortization so all tiers produce the same pheromone per second
-        float amortScale = ctx.AmortizedDeltaTime / BaseDt;
+        var amortScale = ctx.AmortizedDeltaTime / BaseDt;
 
         using var clusters = ctx.ClusterIds != null
             ? ctx.Accessor.GetClusterEnumerator<Ant>(ctx.ClusterIds, ctx.StartClusterIndex, ctx.EndClusterIndex)
@@ -655,14 +654,14 @@ public sealed class TyphonBridge : IDisposable
             var states = cluster.GetReadOnlySpan(Ant.State);
             while (bits != 0)
             {
-                int idx = BitOperations.TrailingZeroCount(bits);
+                var idx = BitOperations.TrailingZeroCount(bits);
                 bits &= bits - 1;
                 ref readonly var pos = ref positions[idx];
                 ref readonly var state = ref states[idx];
 
                 if (state.Energy <= 0f) continue;
 
-                int cellIdx = PheromoneGrid.WorldToIndex(pos.X, pos.Y);
+                var cellIdx = PheromoneGrid.WorldToIndex(pos.X, pos.Y);
 
                 if (state.State == AntState.Foraging)
                 {
@@ -672,13 +671,13 @@ public sealed class TyphonBridge : IDisposable
                 else
                 {
                     // Returning: deposit food pheromone, stronger near the food source this ant came from
-                    float deposit = BaseDeposit;
-                    int fi = state.FoodSourceIndex;
+                    var deposit = BaseDeposit;
+                    var fi = state.FoodSourceIndex;
                     if (fi >= 0 && fi < food.Length)
                     {
-                        float dx = pos.X - food[fi].x;
-                        float dy = pos.Y - food[fi].y;
-                        float distSq = dx * dx + dy * dy;
+                        var dx = pos.X - food[fi].x;
+                        var dy = pos.Y - food[fi].y;
+                        var distSq = dx * dx + dy * dy;
                         if (distSq < DepositFalloffRangeSq)
                         {
                             deposit += (1f - MathF.Sqrt(distSq) / DepositFalloffRange) * NearFoodMultiplier;
@@ -707,7 +706,7 @@ public sealed class TyphonBridge : IDisposable
 
     private void PrepareRender(TickContext ctx)
     {
-        int crossings = Interlocked.Exchange(ref _cellCrossingsThisTick, 0);
+        var crossings = Interlocked.Exchange(ref _cellCrossingsThisTick, 0);
         _crossingsAccum += crossings;
         _crossingsTickCount++;
         if (_crossingsTickCount >= 60)
@@ -722,7 +721,7 @@ public sealed class TyphonBridge : IDisposable
 
         // Anchor instances: two invisible points per worker buffer at world corners.
         // Forces Godot's computed AABB to span the world so it never culls the node.
-        for (int w = 0; w < _workerBuffers.Length; w++)
+        for (var w = 0; w < _workerBuffers.Length; w++)
         {
             var wb = _workerBuffers[w];
             wb.EnsureCapacity(2);
@@ -742,29 +741,29 @@ public sealed class TyphonBridge : IDisposable
         _overlayBuffer.Reset();
         _overlayBuffer.EnsureCapacity(FoodCount + NestCount);
         var oBuf = _overlayBuffer.Data;
-        int oi = 0;
+        var oi = 0;
 
-        for (int fi = 0; fi < _foodCache.Length; fi++)
+        for (var fi = 0; fi < _foodCache.Length; fi++)
         {
             var (fx, fy, initial) = _foodCache[fi];
-            int rem = _foodRemainingInt[fi];
-            float ratio = initial > 0 ? Math.Max(rem, 0) / initial : 0f;
-            float scale = 2f + ratio * 10f;
-            float green = 0.3f + ratio * 0.7f;
-            int off = oi * Stride;
+            var rem = _foodRemainingInt[fi];
+            var ratio = initial > 0 ? Math.Max(rem, 0) / initial : 0f;
+            var scale = 2f + ratio * 10f;
+            var green = 0.3f + ratio * 0.7f;
+            var off = oi * Stride;
             oBuf[off + 0] = scale; oBuf[off + 1] = 0f; oBuf[off + 2] = 0f; oBuf[off + 3] = fx;
             oBuf[off + 4] = 0f; oBuf[off + 5] = scale; oBuf[off + 6] = 0f; oBuf[off + 7] = fy;
             oBuf[off + 8] = 0.2f; oBuf[off + 9] = green; oBuf[off + 10] = 0.2f; oBuf[off + 11] = 0.5f;
             oi++;
         }
 
-        for (int ni = 0; ni < _nestPositions.Length; ni++)
+        for (var ni = 0; ni < _nestPositions.Length; ni++)
         {
             var (nx, ny) = _nestPositions[ni];
-            int stock = _nestFoodStock[ni];
-            float nestRatio = Math.Clamp(stock / (float)InitialNestFood, 0f, 3f);
-            float nestScale = 3f + nestRatio * 20f;
-            int off = oi * Stride;
+            var stock = _nestFoodStock[ni];
+            var nestRatio = Math.Clamp(stock / (float)InitialNestFood, 0f, 3f);
+            var nestScale = 3f + nestRatio * 20f;
+            var off = oi * Stride;
             oBuf[off + 0] = nestScale; oBuf[off + 1] = 0f; oBuf[off + 2] = 0f; oBuf[off + 3] = nx;
             oBuf[off + 4] = 0f; oBuf[off + 5] = nestScale; oBuf[off + 6] = 0f; oBuf[off + 7] = ny;
             oBuf[off + 8] = 0.6f; oBuf[off + 9] = 0.3f; oBuf[off + 10] = 0.1f; oBuf[off + 11] = 0.5f;
@@ -784,30 +783,30 @@ public sealed class TyphonBridge : IDisposable
             var maxH = _heatMaxHome;
 
             // Linear scan over source arrays — fully sequential reads, cache-friendly
-            for (int sy = 0; sy < gs; sy++)
+            for (var sy = 0; sy < gs; sy++)
             {
-                int hy = sy / 5;
-                int srcRow = sy * gs;
-                int hiRow = hy * hs;
-                for (int sx = 0; sx < gs; sx++)
+                var hy = sy / 5;
+                var srcRow = sy * gs;
+                var hiRow = hy * hs;
+                for (var sx = 0; sx < gs; sx++)
                 {
-                    int hi = hiRow + sx / 5;
-                    int si = srcRow + sx;
-                    float f = foodSrc[si];
-                    float h = homeSrc[si];
+                    var hi = hiRow + sx / 5;
+                    var si = srcRow + sx;
+                    var f = foodSrc[si];
+                    var h = homeSrc[si];
                     if (f > maxF[hi]) maxF[hi] = f;
                     if (h > maxH[hi]) maxH[hi] = h;
                 }
             }
 
             // Convert to RGBA + reset accumulators in one pass
-            float invMax = 255f / PheromoneGrid.MaxPheromone;
+            var invMax = 255f / PheromoneGrid.MaxPheromone;
             var rgba = _heatmapRGBA;
-            for (int i = 0; i < HeatmapPixels; i++)
+            for (var i = 0; i < HeatmapPixels; i++)
             {
-                byte gv = (byte)Math.Min(maxF[i] * invMax, 255f);
-                byte bv = (byte)Math.Min(maxH[i] * invMax, 255f);
-                int p = i * 4;
+                var gv = (byte)Math.Min(maxF[i] * invMax, 255f);
+                var bv = (byte)Math.Min(maxH[i] * invMax, 255f);
+                var p = i * 4;
                 rgba[p + 0] = 0;
                 rgba[p + 1] = gv;
                 rgba[p + 2] = bv;
@@ -822,13 +821,18 @@ public sealed class TyphonBridge : IDisposable
     {
         var wb = _workerBuffers[ctx.WorkerId];
         var tierMirror = _tierMirror;
-        float invCellSize = 1f / CellSize;
+        var invCellSize = 1f / CellSize;
 
-        // Snapshot camera AABB for clipping
-        float clipMinX = _camMinX;
-        float clipMinY = _camMinY;
-        float clipMaxX = _camMaxX;
-        float clipMaxY = _camMaxY;
+        // Snapshot camera AABB for clipping.
+        // Cluster AABBs are one tick stale (recomputed at tick fence, after FillRender).
+        // Add a margin so clusters near the camera edge aren't wrongly rejected due to
+        // entity movement since the last AABB recompute. The per-entity clip (below)
+        // still does exact filtering.
+        const float clusterMargin = CellSize;
+        var clipMinX = _camMinX - clusterMargin;
+        var clipMinY = _camMinY - clusterMargin;
+        var clipMaxX = _camMaxX + clusterMargin;
+        var clipMaxY = _camMaxY + clusterMargin;
 
         Span<int> localTiers = stackalloc int[4];
         int sForaging = 0, sCarrying = 0;
@@ -840,7 +844,7 @@ public sealed class TyphonBridge : IDisposable
         {
             var liveCount = cluster.LiveCount;
 
-            // Fast reject: cluster tight AABB fully outside camera
+            // Fast reject: cluster tight AABB fully outside camera (with margin)
             ref readonly var bounds = ref cluster.SpatialBounds;
             if (bounds.MaxX < clipMinX || bounds.MinX > clipMaxX || bounds.MaxY < clipMinY || bounds.MinY > clipMaxY)
             {
@@ -854,10 +858,10 @@ public sealed class TyphonBridge : IDisposable
 
             // Tier from first entity position
             var bitsVis = cluster.OccupancyBits;
-            int firstIdx = BitOperations.TrailingZeroCount(bitsVis);
+            var firstIdx = BitOperations.TrailingZeroCount(bitsVis);
             ref readonly var firstPos = ref positions[firstIdx];
-            int tcx = Math.Clamp((int)(firstPos.X * invCellSize), 0, GridCells - 1);
-            int tcy = Math.Clamp((int)(firstPos.Y * invCellSize), 0, GridCells - 1);
+            var tcx = Math.Clamp((int)(firstPos.X * invCellSize), 0, GridCells - 1);
+            var tcy = Math.Clamp((int)(firstPos.Y * invCellSize), 0, GridCells - 1);
             localTiers[Math.Min((int)tierMirror[tcy * GridCells + tcx], 3)] += liveCount;
 
             wb.EnsureCapacity(liveCount);
@@ -881,13 +885,13 @@ public sealed class TyphonBridge : IDisposable
                 }
 
                 ref readonly var gen = ref genetics[idx];
-                float energyRatio = gen.BaseEnergy > 0f ? Math.Clamp(state.Energy / gen.BaseEnergy, 0f, 1f) : 0f;
-                float alpha = 0.15f + energyRatio * 0.70f;
+                var energyRatio = gen.BaseEnergy > 0f ? Math.Clamp(state.Energy / gen.BaseEnergy, 0f, 1f) : 0f;
+                var alpha = 0.15f + energyRatio * 0.70f;
 
                 float r = 1f, g = 0.3f, b = 0.3f;
                 if (state.IsReturning) { r = 0.3f; g = 1f; b = 0.3f; }
 
-                int off = writeIdx * Stride;
+                var off = writeIdx * Stride;
                 buf[off + 0] = 1f;  buf[off + 1] = 0f; buf[off + 2] = 0f; buf[off + 3] = pos.X;
                 buf[off + 4] = 0f;  buf[off + 5] = 1f; buf[off + 6] = 0f; buf[off + 7] = pos.Y;
                 buf[off + 8] = r;   buf[off + 9] = g;  buf[off + 10] = b; buf[off + 11] = alpha;
@@ -909,8 +913,8 @@ public sealed class TyphonBridge : IDisposable
     {
         // Snapshot current Data/Count into immutable frame — Godot reads only this
         var buffers = new BufferSnapshot[_workerBuffers.Length];
-        int total = 0;
-        for (int i = 0; i < _workerBuffers.Length; i++)
+        var total = 0;
+        for (var i = 0; i < _workerBuffers.Length; i++)
         {
             buffers[i] = new BufferSnapshot { Data = _workerBuffers[i].Data, Count = _workerBuffers[i].Count };
             total += _workerBuffers[i].Count;
@@ -931,7 +935,7 @@ public sealed class TyphonBridge : IDisposable
         (_heatmapRGBA, _heatmapRGBARead) = (_heatmapRGBARead, _heatmapRGBA);
 
         // Swap all render buffers AFTER publish — next frame writes to the other slot
-        for (int i = 0; i < _workerBuffers.Length; i++)
+        for (var i = 0; i < _workerBuffers.Length; i++)
         {
             _workerBuffers[i].Reset();
         }
@@ -949,7 +953,7 @@ public sealed class TyphonBridge : IDisposable
                 var sysDefs = _runtime.Systems;
 
                 Console.Write($"T{ctx.TickNumber,6} {tick.ActualDurationMs:F1}ms | T0:{_tierCounts[0]} T1:{_tierCounts[1]} T2:{_tierCounts[2]} T3:{_tierCounts[3]} |");
-                for (int i = 0; i < systems.Length && i < sysDefs.Length; i++)
+                for (var i = 0; i < systems.Length && i < sysDefs.Length; i++)
                 {
                     ref readonly var s = ref systems[i];
                     if (!s.WasSkipped && s.DurationUs > 1f)
@@ -970,13 +974,13 @@ public sealed class TyphonBridge : IDisposable
     {
         var rng = new Random(42);
         const int batchSize = 1_000;
-        int antsPerNest = AntCount / NestCount;
-        float spawnRadius = 200f;
+        var antsPerNest = AntCount / NestCount;
+        var spawnRadius = 200f;
 
-        for (int nestIdx = 0; nestIdx < NestCount; nestIdx++)
+        for (var nestIdx = 0; nestIdx < NestCount; nestIdx++)
         {
             var (nx, ny) = _nestPositions[nestIdx];
-            int remaining = (nestIdx == NestCount - 1) ? AntCount - antsPerNest * (NestCount - 1) : antsPerNest;
+            var remaining = (nestIdx == NestCount - 1) ? AntCount - antsPerNest * (NestCount - 1) : antsPerNest;
 
             while (remaining > 0)
             {
@@ -986,16 +990,16 @@ public sealed class TyphonBridge : IDisposable
 
                 for (var i = 0; i < count; i++)
                 {
-                    float angle = (float)(rng.NextDouble() * Math.PI * 2);
-                    float dist = (float)(rng.NextDouble() * spawnRadius);
-                    float x = Math.Clamp(nx + MathF.Cos(angle) * dist, 0f, WorldSize);
-                    float y = Math.Clamp(ny + MathF.Sin(angle) * dist, 0f, WorldSize);
-                    float headAngle = (float)(rng.NextDouble() * Math.PI * 2);
-                    float baseSpeed = 40f + (float)(rng.NextDouble() * 40);
-                    float speedMul = 0.8f + (float)(rng.NextDouble() * 0.7f);
-                    float finalSpeed = baseSpeed * speedMul; // baked into velocity
-                    float baseEnergy = 800f + (float)(rng.NextDouble() * 800f);
-                    int eatAmount = 1 + rng.Next(3);
+                    var angle = (float)(rng.NextDouble() * Math.PI * 2);
+                    var dist = (float)(rng.NextDouble() * spawnRadius);
+                    var x = Math.Clamp(nx + MathF.Cos(angle) * dist, 0f, WorldSize);
+                    var y = Math.Clamp(ny + MathF.Sin(angle) * dist, 0f, WorldSize);
+                    var headAngle = (float)(rng.NextDouble() * Math.PI * 2);
+                    var baseSpeed = 40f + (float)(rng.NextDouble() * 40);
+                    var speedMul = 0.8f + (float)(rng.NextDouble() * 0.7f);
+                    var finalSpeed = baseSpeed * speedMul; // baked into velocity
+                    var baseEnergy = 800f + (float)(rng.NextDouble() * 800f);
+                    var eatAmount = 1 + rng.Next(3);
 
                     var pos = new Position
                     {
@@ -1035,11 +1039,11 @@ public sealed class TyphonBridge : IDisposable
         _foodCache = new (float, float, float)[FoodCount];
         _foodRemainingInt = new int[FoodCount];
         using var tx = _dbe.CreateQuickTransaction();
-        for (int i = 0; i < FoodCount; i++)
+        for (var i = 0; i < FoodCount; i++)
         {
-            float x = (float)(rng.NextDouble() * WorldSize);
-            float y = (float)(rng.NextDouble() * WorldSize);
-            float remaining = 5000f + (float)(rng.NextDouble() * 15000f);
+            var x = (float)(rng.NextDouble() * WorldSize);
+            var y = (float)(rng.NextDouble() * WorldSize);
+            var remaining = 5000f + (float)(rng.NextDouble() * 15000f);
             _foodCache[i] = (x, y, remaining);
             _foodRemainingInt[i] = (int)remaining;
             var source = new FoodSource
@@ -1057,24 +1061,24 @@ public sealed class TyphonBridge : IDisposable
     {
         // Bucket each food source into all cells whose area overlaps the smell range
         var lists = new System.Collections.Generic.List<int>[FoodGridCells * FoodGridCells];
-        int smellCells = (int)MathF.Ceiling(FoodSmellRange * FoodGridInvCellSize); // cells radius
+        var smellCells = (int)MathF.Ceiling(FoodSmellRange * FoodGridInvCellSize); // cells radius
 
-        for (int fi = 0; fi < _foodCache.Length; fi++)
+        for (var fi = 0; fi < _foodCache.Length; fi++)
         {
             var (fx, fy, _) = _foodCache[fi];
-            int cx = Math.Clamp((int)(fx * FoodGridInvCellSize), 0, FoodGridCells - 1);
-            int cy = Math.Clamp((int)(fy * FoodGridInvCellSize), 0, FoodGridCells - 1);
+            var cx = Math.Clamp((int)(fx * FoodGridInvCellSize), 0, FoodGridCells - 1);
+            var cy = Math.Clamp((int)(fy * FoodGridInvCellSize), 0, FoodGridCells - 1);
 
-            int minCx = Math.Max(0, cx - smellCells);
-            int maxCx = Math.Min(FoodGridCells - 1, cx + smellCells);
-            int minCy = Math.Max(0, cy - smellCells);
-            int maxCy = Math.Min(FoodGridCells - 1, cy + smellCells);
+            var minCx = Math.Max(0, cx - smellCells);
+            var maxCx = Math.Min(FoodGridCells - 1, cx + smellCells);
+            var minCy = Math.Max(0, cy - smellCells);
+            var maxCy = Math.Min(FoodGridCells - 1, cy + smellCells);
 
-            for (int gy = minCy; gy <= maxCy; gy++)
+            for (var gy = minCy; gy <= maxCy; gy++)
             {
-                for (int gx = minCx; gx <= maxCx; gx++)
+                for (var gx = minCx; gx <= maxCx; gx++)
                 {
-                    int gi = gy * FoodGridCells + gx;
+                    var gi = gy * FoodGridCells + gx;
                     lists[gi] ??= new System.Collections.Generic.List<int>();
                     lists[gi].Add(fi);
                 }
@@ -1082,7 +1086,7 @@ public sealed class TyphonBridge : IDisposable
         }
 
         _foodGrid = new int[FoodGridCells * FoodGridCells][];
-        for (int i = 0; i < lists.Length; i++)
+        for (var i = 0; i < lists.Length; i++)
         {
             _foodGrid[i] = lists[i]?.ToArray();
         }
@@ -1095,7 +1099,7 @@ public sealed class TyphonBridge : IDisposable
             (5000f, 5000f), (15000f, 5000f), (10000f, 10000f), (5000f, 15000f), (15000f, 15000f)
         };
         _nestFoodStock = new int[NestCount];
-        for (int i = 0; i < NestCount; i++)
+        for (var i = 0; i < NestCount; i++)
         {
             _nestFoodStock[i] = InitialNestFood;
         }
@@ -1122,6 +1126,14 @@ public sealed class TyphonBridge : IDisposable
     public void SetHeatmapEnabled(bool enabled) => _heatmapEnabled = enabled;
     public TickTelemetryRing Telemetry => _runtime?.Telemetry;
     public SystemDefinition[] Systems => _runtime?.Systems;
+
+    // Parent resource under which profiler exporters (FileExporter / TcpExporter) must be created.
+    // Available only after Initialize() has built the service provider.
+    public IResource ProfilerParent => _serviceProvider?.GetRequiredService<IResourceRegistry>().Profiler;
+
+    // Current scheduler tick. Passed as a Func<long> provider into ProfilerSessionMetadata so TcpExporter can stamp the Init frame with the
+    // live engine-tick at every client connect — lets the viewer display absolute tick numbers across reconnects. Returns 0 before bridge.Start.
+    public long CurrentTick => _runtime?.CurrentTickNumber ?? 0;
 
     public string GetTimingInfo()
     {
@@ -1162,9 +1174,28 @@ public sealed class TyphonBridge : IDisposable
 
     public void Dispose()
     {
-        try { _runtime?.Shutdown(); } catch { }
-        try { _runtime?.Dispose(); } catch { }
-        try { _antView?.Dispose(); } catch { }
-        try { _serviceProvider?.Dispose(); } catch { }
+        try { _runtime?.Shutdown(); }
+        catch
+        {
+            // ignored
+        }
+
+        try { _runtime?.Dispose(); }
+        catch
+        {
+            // ignored
+        }
+
+        try { _antView?.Dispose(); }
+        catch
+        {
+            // ignored
+        }
+
+        try { _serviceProvider?.Dispose(); }
+        catch
+        {
+            // ignored
+        }
     }
 }

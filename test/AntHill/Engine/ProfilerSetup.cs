@@ -1,5 +1,10 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using Typhon.Engine;
+using Typhon.Engine.Profiler;
+using Typhon.Engine.Profiler.Exporters;
+using Typhon.Profiler;
 
 namespace AntHill;
 
@@ -8,49 +13,156 @@ namespace AntHill;
 /// and the headless profile runner (profiling/Program.cs).
 /// </summary>
 /// <remarks>
-/// Centralizes the JIT-gate ordering rule so neither entry point can silently
-/// break it. The sequence must be:
+/// Post-#243 the engine switched from the pull-based <c>IRuntimeInspector</c> to a push-based
+/// typed-event pipeline: the scheduler emits <c>TyphonEvent.Emit*</c> internally, a single
+/// consumer thread drains the producer rings, and fans the batches out to one or more
+/// <see cref="IProfilerExporter"/> instances.
+///
+/// Activation requires two steps in strict order:
 /// <list type="number">
-/// <item>Set Typhon telemetry env vars</item>
-/// <item>Call <see cref="TelemetryConfig.EnsureInitialized"/></item>
-/// <item>Only then construct <see cref="TyphonBridge"/> / <see cref="TyphonRuntime"/></item>
+/// <item>Before any engine type JITs, set <c>TYPHON__TELEMETRY__ENABLED</c> and
+/// <c>TYPHON__TELEMETRY__PROFILER__ENABLED</c> env vars, then call
+/// <see cref="TelemetryConfig.EnsureInitialized"/> so <see cref="TelemetryConfig.ProfilerActive"/>
+/// is baked to <c>true</c>. See <see cref="PrepareProfiling"/>.</item>
+/// <item>After <see cref="TyphonBridge.Initialize"/> builds the DI container, construct a
+/// <see cref="FileExporter"/> or <see cref="TcpExporter"/> parented to <c>registry.Profiler</c>,
+/// attach it to <see cref="TyphonProfiler"/>, then call <see cref="TyphonProfiler.Start"/> with
+/// a <see cref="ProfilerSessionMetadata"/> describing the system DAG. See <see cref="CreateExporter"/>
+/// and <see cref="BuildSessionMetadata"/>.</item>
 /// </list>
-/// If env vars are set AFTER the TelemetryConfig static constructor has run, or
-/// EnsureInitialized is called AFTER DagScheduler has JIT'd its hot methods,
-/// the DeepTrace flag is silently ignored and the inspector receives zero events.
+/// Teardown: call <see cref="TyphonProfiler.Stop"/> — it flushes + disposes every attached
+/// exporter. <see cref="TyphonProfiler.DetachExporter"/> afterwards leaves the static list empty
+/// for the next run (relevant when the same process re-inits, e.g. hot-reload scenarios).
 /// </remarks>
 public static class ProfilerSetup
 {
-    public const int DefaultLivePort = 9001;
+    public const int DefaultLivePort = 9100;
 
     /// <summary>
-    /// If profiling was requested, enables telemetry, forces TelemetryConfig initialization,
-    /// and constructs the appropriate inspector. Returns null if neither traceFile nor
-    /// livePort was provided.
+    /// Step 1 of profiler activation: env vars + <see cref="TelemetryConfig.EnsureInitialized"/>.
+    /// Must run BEFORE constructing <see cref="TyphonBridge"/> so the JIT gate
+    /// (<see cref="TelemetryConfig.ProfilerActive"/>) is open when DagScheduler's hot methods compile.
+    /// Returns <c>true</c> if profiling was requested (either input is set), <c>false</c> otherwise.
     /// </summary>
-    /// <param name="traceFile">Path to write a .typhon-trace file, or null for no file mode.</param>
-    /// <param name="livePort">TCP port for live mode, or -1 for no live mode.</param>
-    /// <remarks>
-    /// Call BEFORE constructing <see cref="TyphonBridge"/>. If both traceFile and livePort
-    /// are provided, traceFile wins (file mode).
-    /// </remarks>
-    public static IRuntimeInspector TryCreateInspector(string traceFile, int livePort)
+    public static bool PrepareProfiling(string traceFile, int livePort)
     {
-        if (traceFile == null && livePort < 0) return null;
+        if (traceFile == null && livePort < 0) return false;
 
-        // Step 1: env vars. Must happen before TelemetryConfig static ctor reads them.
         Environment.SetEnvironmentVariable("TYPHON__TELEMETRY__ENABLED", "true");
-        Environment.SetEnvironmentVariable("TYPHON__TELEMETRY__SCHEDULER__ENABLED", "true");
-        Environment.SetEnvironmentVariable("TYPHON__TELEMETRY__SCHEDULER__DEEPTRACE", "true");
-
-        // Step 2: force the static ctor to run now, with env vars in place.
-        // Must happen before DagScheduler's hot methods JIT, or the guard is baked as false.
+        Environment.SetEnvironmentVariable("TYPHON__TELEMETRY__PROFILER__ENABLED", "true");
         TelemetryConfig.EnsureInitialized();
+        return true;
+    }
 
-        // Step 3: construct the inspector. Safe to call TyphonBridge.Initialize(inspector) after.
-        return traceFile != null
-            ? new TraceFileInspector(traceFile)
-            : new TcpStreamInspector(livePort);
+    /// <summary>
+    /// Step 2 of profiler activation: construct exporters parented to the engine's <c>registry.Profiler</c> resource. Must run AFTER
+    /// <see cref="TyphonBridge.Initialize"/> has built the DI container (so the parent resource exists).
+    /// </summary>
+    /// <remarks>
+    /// If both <paramref name="traceFile"/> and <paramref name="livePort"/> are supplied, BOTH exporters are returned (dual-attach):
+    /// the session is simultaneously streamed to the live viewer AND archived to the file. <see cref="TyphonProfiler"/> fans each batch
+    /// to every attached exporter, so there's no double-decode or double-network cost — the consumer thread pushes the same bytes to
+    /// both. Passing only one yields just that exporter. Passing neither yields an empty list (profiling not requested).
+    /// </remarks>
+    /// <param name="profilerParent">The <see cref="IResource"/> from <c>registry.Profiler</c>. Use <see cref="TyphonBridge.ProfilerParent"/>
+    /// post-<c>Initialize</c>.</param>
+    public static List<IProfilerExporter> CreateExporters(string traceFile, int livePort, IResource profilerParent)
+    {
+        var exporters = new List<IProfilerExporter>(2);
+        if (traceFile == null && livePort < 0) return exporters;
+        ArgumentNullException.ThrowIfNull(profilerParent);
+
+        if (traceFile != null) exporters.Add(new FileExporter(traceFile, profilerParent));
+        if (livePort >= 0) exporters.Add(new TcpExporter(livePort, profilerParent));
+        return exporters;
+    }
+
+    /// <summary>
+    /// Build the <see cref="ProfilerSessionMetadata"/> passed to <see cref="TyphonProfiler.Start"/>.
+    /// Converts the runtime's <see cref="SystemDefinition"/> array into the serialized
+    /// <see cref="SystemDefinitionRecord"/> shape expected by the trace file / TCP stream, so the
+    /// viewer can resolve system-index → display name.
+    /// </summary>
+    /// <remarks>
+    /// Archetype + component-type tables are left empty: the engine currently emits typed events
+    /// containing numeric IDs only; name resolution for those tables is a follow-up when the
+    /// AntHill workload needs per-archetype flame-graph labels. Timestamps anchor the session —
+    /// all subsequent events are measured against <c>startTimestamp</c>.
+    /// </remarks>
+    public static ProfilerSessionMetadata BuildSessionMetadata(SystemDefinition[] systems, int workerCount, float baseTickRate,
+        Func<long> currentEngineTickProvider = null)
+    {
+        return new ProfilerSessionMetadata(BuildSystemRecords(systems), BuildArchetypeRecords(), BuildComponentTypeRecords(), workerCount, baseTickRate, 
+            Stopwatch.GetTimestamp(), Stopwatch.Frequency, DateTime.UtcNow, 0L, currentEngineTickProvider);
+    }
+
+    // Pulled from ArchetypeRegistry.EnumerateArchetypes so the viewer can resolve ArchetypeId → "Ant"/"Food"/"Nest" names in spans like
+    // EcsSpawn, ClusterMigration, EcsQueryExecute. Without this table, those records carry raw numeric IDs that the viewer can't label.
+    private static ArchetypeRecord[] BuildArchetypeRecords()
+    {
+        var list = new List<ArchetypeRecord>();
+        foreach (var (id, name) in ArchetypeRegistry.EnumerateArchetypes())
+        {
+            list.Add(new ArchetypeRecord { ArchetypeId = id, Name = name });
+        }
+        return list.ToArray();
+    }
+
+    // Same shape as archetype records but for component types — resolves ComponentTypeId → "AntHill.Position"/"AntHill.Genetics"/... in
+    // TransactionCommitComponent spans. The name is the [Component(...)] attribute's schema name when present, falling back to the CLR type name.
+    private static ComponentTypeRecord[] BuildComponentTypeRecords()
+    {
+        var list = new List<ComponentTypeRecord>();
+        foreach (var (id, name) in ArchetypeRegistry.EnumerateComponentTypes())
+        {
+            list.Add(new ComponentTypeRecord { ComponentTypeId = id, Name = name });
+        }
+        return list.ToArray();
+    }
+
+    // SystemDefinition stores successors but not predecessors — invert the edge list once so the
+    // record table is self-describing for the viewer (which renders both directions).
+    private static SystemDefinitionRecord[] BuildSystemRecords(SystemDefinition[] systems)
+    {
+        if (systems == null || systems.Length == 0) return [];
+
+        var predecessors = new List<ushort>[systems.Length];
+        for (int i = 0; i < systems.Length; i++)
+        {
+            predecessors[i] = new List<ushort>();
+        }
+        for (int i = 0; i < systems.Length; i++)
+        {
+            foreach (var succ in systems[i].Successors)
+            {
+                predecessors[succ].Add((ushort)i);
+            }
+        }
+
+        var records = new SystemDefinitionRecord[systems.Length];
+        for (int i = 0; i < systems.Length; i++)
+        {
+            var sys = systems[i];
+            var succIndices = sys.Successors;
+            var succUshort = new ushort[succIndices.Length];
+            for (int s = 0; s < succIndices.Length; s++)
+            {
+                succUshort[s] = (ushort)succIndices[s];
+            }
+
+            records[i] = new SystemDefinitionRecord
+            {
+                Index = (ushort)sys.Index,
+                Name = sys.Name,
+                Type = (byte)sys.Type,
+                Priority = (byte)sys.Priority,
+                IsParallel = sys.IsParallelQuery,
+                TierFilter = (byte)sys.TierFilter,
+                Predecessors = predecessors[i].ToArray(),
+                Successors = succUshort,
+            };
+        }
+        return records;
     }
 
     /// <summary>
@@ -68,7 +180,7 @@ public static class ProfilerSetup
         if (!string.IsNullOrWhiteSpace(liveEnv))
         {
             if (int.TryParse(liveEnv, out var p)) livePort = p;
-            else livePort = DefaultLivePort; // presence without a number → default port
+            else livePort = DefaultLivePort;
         }
 
         return (traceFile, livePort);
@@ -77,20 +189,13 @@ public static class ProfilerSetup
     /// <summary>
     /// Prints telemetry diagnostics to the provided logger delegate. Safe to call after
     /// <see cref="TyphonBridge"/>'s runtime has been started. Intended for startup troubleshooting
-    /// when OTel spans aren't appearing in the profiler viewer.
+    /// when profiler events aren't reaching the viewer.
     /// </summary>
     /// <param name="log">Logger delegate — pass <c>Godot.GD.Print</c> from Godot code or
     /// <c>System.Console.WriteLine</c> from the headless runner.</param>
-    /// <param name="inspector">The inspector that was passed to <c>TyphonBridge.Initialize</c>,
-    /// or null if profiling wasn't requested.</param>
-    /// <remarks>
-    /// The key diagnostic value is <c>TyphonActivitySource.Instance.HasListeners()</c>. If it
-    /// returns <c>true</c>, the profiler's <c>ActivityListener</c> is registered and spans
-    /// emitted by the engine will be captured. If <c>false</c>, the listener was never attached
-    /// — either because profiling wasn't requested (inspector is null), the scheduler hasn't
-    /// started yet, or <c>TelemetryConfig.SchedulerDeepTrace</c> was false at JIT time.
-    /// </remarks>
-    public static void PrintDiagnostics(Action<string> log, IRuntimeInspector inspector)
+    /// <param name="exporter">The exporter returned by <see cref="CreateExporter"/>, or null if
+    /// profiling wasn't requested.</param>
+    public static void PrintDiagnostics(Action<string> log, IList<IProfilerExporter> exporters)
     {
         if (log == null) return;
 
@@ -101,17 +206,28 @@ public static class ProfilerSetup
         log("");
         log(TelemetryConfig.GetConfigurationSummary());
         log("");
-        log($" Inspector:                       {(inspector != null ? inspector.GetType().Name : "(none — profiling not requested)")}");
-        log($" OTel ActivityListener attached:  {TyphonActivitySource.Instance.HasListeners()}");
+        string exporterSummary;
+        if (exporters == null || exporters.Count == 0)
+        {
+            exporterSummary = "(none — profiling not requested)";
+        }
+        else
+        {
+            var names = new string[exporters.Count];
+            for (int i = 0; i < exporters.Count; i++) names[i] = exporters[i].GetType().Name;
+            exporterSummary = string.Join(", ", names);
+        }
+        log($" Exporters:                 {exporterSummary}");
+        log($" ProfilerActive (JIT gate): {TelemetryConfig.ProfilerActive}");
+        log($" TyphonProfiler.IsRunning:  {TyphonProfiler.IsRunning}");
         log("");
         log(" Interpretation:");
-        log("   * If 'OTel ActivityListener attached' is TRUE, the capture path is live.");
-        log("     Spans fired by the engine (Transaction/ECS/Spatial/...) will flow to the viewer");
-        log("     provided their TelemetryConfig.XxxActive flag is also TRUE above.");
-        log("   * If FALSE, no spans will be captured. Most common causes:");
-        log("     - Inspector is null (profiling wasn't requested this run)");
-        log("     - Scheduler hasn't started yet (call this AFTER TyphonBridge.Start)");
-        log("     - TelemetryConfig.SchedulerDeepTrace was false at JIT time");
+        log("   * ProfilerActive must be TRUE at JIT time for the scheduler to emit events.");
+        log("     If FALSE: env vars weren't set or EnsureInitialized ran too late. Check");
+        log("     PrepareProfiling is called BEFORE TyphonBridge construction.");
+        log("   * TyphonProfiler.IsRunning must be TRUE for the consumer thread to drain");
+        log("     events to the exporter. If FALSE: TyphonProfiler.Start was never called");
+        log("     or already Stopped.");
         log("───────────────────────────────────────────────────────────");
     }
 

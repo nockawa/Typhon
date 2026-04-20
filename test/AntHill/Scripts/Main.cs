@@ -1,4 +1,5 @@
 using Godot;
+using Typhon.Engine.Profiler;
 
 namespace AntHill;
 
@@ -13,29 +14,66 @@ public partial class Main : Node2D
     private Label _hudLeft;
     private Label _hudRight;
 
+    // Persisted window state — path is a user:// URI so Godot resolves it to the platform app-data dir (on Windows:
+    // %APPDATA%/Godot/app_userdata/<project-name>/window_state.cfg), keeping the file out of the project folder and per-user.
+    private const string WindowStatePath = "user://window_state.cfg";
+
     public override void _Ready()
     {
+        // Restore last run's window position/size FIRST, before any scene-graph work. Godot's layout pass treats the window
+        // dimensions as authoritative; changing them later would cascade into HUD anchor recalculations.
+        LoadWindowState();
+
         GD.Print("AntHill: Initializing Typhon engine...");
 
-        // Profiler activation (runs BEFORE TyphonBridge construction so the JIT gate
-        // is open when DagScheduler's hot methods are compiled).
-        // Two input channels, both optional, env vars take precedence:
-        //   1. Env vars: TYPHON_PROFILER_LIVE=9001 or TYPHON_PROFILER_TRACE=<path>
-        //   2. Godot cmdline user args: launch with "++ --live 9001" or "++ --trace <path>"
+        // Resolve profiler inputs from either env vars (TYPHON_PROFILER_TRACE / TYPHON_PROFILER_LIVE)
+        // or Godot cmdline user args after the "++" separator (--trace <path> / --live [port]).
+        // Env vars take precedence when both are set.
         var (envTrace, envPort) = ProfilerSetup.ReadEnvVars();
         var (argTrace, argPort) = ProfilerSetup.ParseArgs(OS.GetCmdlineUserArgs());
-        string traceFile = envTrace ?? argTrace;
-        int livePort = envPort >= 0 ? envPort : argPort;
-        _inspector = ProfilerSetup.TryCreateInspector(traceFile, livePort);
-        if (_inspector != null)
-        {
-            GD.Print(traceFile != null
-                ? $"AntHill: Profiler enabled -> file mode: {traceFile}"
-                : $"AntHill: Profiler enabled -> live mode: TCP listener on port {livePort}");
-        }
+        _traceFile = envTrace ?? argTrace;
+        _livePort = envPort >= 0 ? envPort : argPort;
+
+        // Step 1: env vars + TelemetryConfig.EnsureInitialized. Must happen BEFORE the bridge
+        // constructs the runtime so the JIT gate (TelemetryConfig.ProfilerActive) is open when
+        // DagScheduler's hot methods compile.
+        bool profilingRequested = ProfilerSetup.PrepareProfiling(_traceFile, _livePort);
 
         _bridge = new TyphonBridge();
-        _bridge.Initialize(_inspector);
+        _bridge.Initialize();
+
+        // Step 2: exporter + TyphonProfiler.Start, now that DI exists so registry.Profiler is reachable.
+        // Must still happen BEFORE _bridge.Start() — attaching an exporter while TyphonProfiler is
+        // running throws, and we want the first tick's events captured.
+        if (profilingRequested)
+        {
+            try
+            {
+                // Dual-attach when both --trace and --live are supplied: records the session to disk AND streams live to the viewer. The engine's
+                // consumer thread fans each batch to every attached exporter, so the CPU/bandwidth cost of having both is near-zero.
+                _exporters = ProfilerSetup.CreateExporters(_traceFile, _livePort, _bridge.ProfilerParent);
+                foreach (var exp in _exporters) TyphonProfiler.AttachExporter(exp);
+                var metadata = ProfilerSetup.BuildSessionMetadata(
+                    _bridge.Systems, workerCount: 16, baseTickRate: 60f,
+                    currentEngineTickProvider: () => _bridge?.CurrentTick ?? 0);
+                TyphonProfiler.Start(_bridge.ProfilerParent, metadata);
+
+                if (_traceFile != null) GD.Print($"AntHill: Profiler enabled -> file: {_traceFile}");
+                if (_livePort >= 0)
+                {
+                    GD.Print($"AntHill: Profiler enabled -> live TCP listener on :{_livePort}.");
+                    GD.Print($"  Viewer server must connect to this port (LiveStream:Port in its config, default 9100).");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                // Most likely causes: port in use (someone else listening on 9100), firewall block, disposal race on quick relaunch, or a
+                // non-writable trace path. Surface loudly so the user doesn't conclude "profiler silently broken."
+                GD.PrintErr($"AntHill: profiler startup FAILED — {ex.GetType().Name}: {ex.Message}");
+                GD.PrintErr($"  Likely cause: port {_livePort} already in use, firewall blocking, or trace path not writable. Continuing without profiling.");
+                _exporters = null;
+            }
+        }
 
         GD.Print($"AntHill: Spawned {TyphonBridge.AntCount:N0} ants. Starting runtime...");
 
@@ -80,13 +118,15 @@ public partial class Main : Node2D
         _bridge.Start();
         GD.Print("AntHill: Runtime started. WASD=pan, wheel=zoom, `=pause, 1-4=speed, H=pheromone overlay.");
 
-        // Telemetry diagnostics — prints current TelemetryConfig state, inspector type,
-        // and most importantly whether TyphonActivitySource has an ActivityListener attached.
-        // Call AFTER _bridge.Start() so the scheduler has had a chance to register the listener.
-        ProfilerSetup.PrintDiagnostics(GD.Print, _inspector);
+        // Telemetry diagnostics — prints current TelemetryConfig state, exporter types, and whether
+        // TyphonProfiler's consumer is running. Call AFTER _bridge.Start() so the scheduler has
+        // emitted at least the session's SystemDefinition events.
+        ProfilerSetup.PrintDiagnostics(GD.Print, _exporters);
     }
 
-    private Typhon.Engine.IRuntimeInspector _inspector;
+    private System.Collections.Generic.List<IProfilerExporter> _exporters;
+    private string _traceFile;
+    private int _livePort;
 
     public override void _UnhandledInput(InputEvent @event)
     {
@@ -164,7 +204,69 @@ public partial class Main : Node2D
     public override void _ExitTree()
     {
         GD.Print("AntHill: Shutting down...");
-        _bridge?.Dispose();
+
+        // Persist window state BEFORE disposing the bridge — the window is still realized here and DisplayServer queries are valid.
+        // Wrapped in try so a disk/permissions failure here doesn't cascade into the bridge-cleanup path below.
+        try { SaveWindowState(); } catch (System.Exception ex) { GD.PrintErr($"AntHill: failed to save window state — {ex.Message}"); }
+
+        // Tear down in reverse order: bridge first (so any final tick events are emitted), then TyphonProfiler.Stop (which flushes + disposes
+        // every attached exporter — don't dispose them ourselves), then DetachExporter for each so the static list is empty if the process is
+        // reused. Detach is idempotent per exporter but must happen after Stop since Stop rejects mutations while running.
+        try { _bridge?.Dispose(); } catch { }
         _bridge = null;
+        if (_exporters != null && _exporters.Count > 0)
+        {
+            try { TyphonProfiler.Stop(); } catch { }
+            foreach (var exp in _exporters)
+            {
+                try { TyphonProfiler.DetachExporter(exp); } catch { }
+            }
+            _exporters = null;
+        }
+    }
+
+    /// <summary>
+    /// Restore window position, size, and maximize-state from the persisted ConfigFile. No-op on first run (file doesn't exist) — Godot
+    /// keeps its default placement in that case. The position is clamped to the current screen's usable rect so a config saved on a monitor
+    /// that no longer exists doesn't spawn the window off-screen (a surprisingly common scenario when moving between laptop/desktop setups).
+    /// </summary>
+    private void LoadWindowState()
+    {
+        var cfg = new ConfigFile();
+        if (cfg.Load(WindowStatePath) != Error.Ok) return;
+
+        var savedMode = (int)(long)cfg.GetValue("window", "mode", (long)(int)DisplayServer.WindowGetMode());
+        var savedPos = (Vector2I)cfg.GetValue("window", "position", DisplayServer.WindowGetPosition());
+        var savedSize = (Vector2I)cfg.GetValue("window", "size", DisplayServer.WindowGetSize());
+
+        // Clamp position to the current screen's usable region. Leave 100 px headroom on the right/bottom edges so the titlebar stays
+        // grabbable even if the user drags the window partially off-screen before closing.
+        var screen = DisplayServer.WindowGetCurrentScreen();
+        var screenRect = DisplayServer.ScreenGetUsableRect(screen);
+        savedPos.X = System.Math.Clamp(savedPos.X, screenRect.Position.X, screenRect.Position.X + screenRect.Size.X - 100);
+        savedPos.Y = System.Math.Clamp(savedPos.Y, screenRect.Position.Y, screenRect.Position.Y + screenRect.Size.Y - 100);
+
+        // Restore size/position FIRST, then mode — Godot's maximized/fullscreen modes don't re-read position/size until the mode
+        // transitions out, so if we applied mode first the saved geometry would just be lost on next minimize-unmaximize.
+        DisplayServer.WindowSetSize(savedSize);
+        DisplayServer.WindowSetPosition(savedPos);
+        if (savedMode != (int)DisplayServer.WindowMode.Windowed)
+        {
+            DisplayServer.WindowSetMode((DisplayServer.WindowMode)savedMode);
+        }
+    }
+
+    /// <summary>
+    /// Snapshot current window geometry to the persisted ConfigFile. When the window is maximized/fullscreen, Godot's WindowGet(Position|Size)
+    /// return the WINDOWED dimensions (i.e. what the window would restore to), which is exactly what we want — the next run will restore that
+    /// geometry and re-apply the maximize/fullscreen mode on top.
+    /// </summary>
+    private void SaveWindowState()
+    {
+        var cfg = new ConfigFile();
+        cfg.SetValue("window", "mode", (long)(int)DisplayServer.WindowGetMode());
+        cfg.SetValue("window", "position", DisplayServer.WindowGetPosition());
+        cfg.SetValue("window", "size", DisplayServer.WindowGetSize());
+        cfg.Save(WindowStatePath);
     }
 }

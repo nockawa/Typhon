@@ -1,8 +1,8 @@
 [gd_scene format=3 uid="uid://c6165nwv08y0v"]
 
-[ext_resource type="Script" uid="uid://dja8bu0k714qg" path="res://scripts/Main.cs" id="1"]
-[ext_resource type="Script" uid="uid://c8g1c0qq7ng5" path="res://scripts/AntRenderer.cs" id="2"]
-[ext_resource type="Script" uid="uid://4ns7f330d2v0" path="res://scripts/GameCamera.cs" id="3"]
+[ext_resource type="Script" uid="uid://dja8bu0k714qg" path="res://Scripts/Main.cs" id="1"]
+[ext_resource type="Script" uid="uid://c8g1c0qq7ng5" path="res://Scripts/AntRenderer.cs" id="2"]
+[ext_resource type="Script" uid="uid://4ns7f330d2v0" path="res://Scripts/GameCamera.cs" id="3"]
 
 [node name="Main" type="Node2D" unique_id=1288788662]
 script = ExtResource("1")
