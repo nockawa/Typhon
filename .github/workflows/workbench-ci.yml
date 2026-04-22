@@ -1,7 +1,10 @@
 name: Workbench CI
 
 on:
+  # `push` limited to main so we don't double-run on PR branches — the `pull_request`
+  # trigger already covers feature branches by running against a synthetic merge commit.
   push:
+    branches: [main]
     paths:
       - 'tools/Typhon.Workbench/**'
       - 'Typhon.slnx'
@@ -12,6 +15,12 @@ on:
       - 'Typhon.slnx'
       - '.github/workflows/workbench-ci.yml'
   workflow_dispatch:
+
+# Back-to-back pushes within a single PR kill the older run instead of queueing —
+# saves runner minutes and lets failures surface against the latest code only.
+concurrency:
+  group: workbench-ci-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
