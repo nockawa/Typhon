@@ -39,6 +39,13 @@ jobs:
         working-directory: tools/Typhon.Workbench/ClientApp
         run: npm ci --no-audit --no-fund
 
+      # Regenerate Orval types from the committed OpenAPI spec.
+      # `src/api/generated/` is gitignored (per convention — generated output stays out of git),
+      # so every CI run must materialize it before typecheck / lint / test / build can see it.
+      - name: Generate API types (Orval)
+        working-directory: tools/Typhon.Workbench/ClientApp
+        run: npm run generate-types
+
       - name: TypeScript typecheck
         working-directory: tools/Typhon.Workbench/ClientApp
         run: npx tsc --noEmit
