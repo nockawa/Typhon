@@ -27,8 +27,10 @@
         <Project Path="test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj" />
         <Project Path="test/Typhon.IOProfileRunner/Typhon.IOProfileRunner.csproj" />
         <Project Path="test/Typhon.MonitoringDemo/Typhon.MonitoringDemo.csproj" />
+        <Project Path="test/Typhon.Workbench.Tests/Typhon.Workbench.Tests.csproj" />
     </Folder>
     <Folder Name="/tools/">
         <Project Path="tools/Typhon.Profiler.Server/Typhon.Profiler.Server.csproj" />
+        <Project Path="tools/Typhon.Workbench/Typhon.Workbench.csproj" />
     </Folder>
 </Solution>

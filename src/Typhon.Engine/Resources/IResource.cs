@@ -108,6 +108,19 @@ public enum ResourceType
 public interface IResource : IDisposable
 {
     string Id { get; }
+
+    /// <summary>
+    /// Human-readable display label. May equal <see cref="Id"/> for structural nodes whose id is already self-describing (e.g. "Storage"), but for resources
+    /// with synthetic ids (GUIDs, hex suffixes) this is the user-facing name the Workbench and diagnostics should surface.
+    /// </summary>
+    string Name { get; }
+
+    /// <summary>
+    /// Optional scalar count exposed to UIs (Workbench tree badges, diagnostics). For ComponentTable this is the entity count; for a segments folder it could
+    /// be the segment count. Structural nodes with no meaningful count return null.
+    /// </summary>
+    int? Count { get; }
+
     ResourceType Type { get; }
     IResource Parent { get; }
     IEnumerable<IResource> Children { get; }

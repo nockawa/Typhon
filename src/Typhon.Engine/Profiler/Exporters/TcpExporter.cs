@@ -53,9 +53,6 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     }
 
     /// <inheritdoc />
-    public string Name => "TcpExporter";
-
-    /// <inheritdoc />
     public ExporterQueue Queue { get; }
 
     /// <summary>Number of frames dropped because the socket was not write-ready or partially sent.</summary>

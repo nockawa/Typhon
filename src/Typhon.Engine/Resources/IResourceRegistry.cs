@@ -99,4 +99,10 @@ public interface IResourceRegistry : IDisposable
     /// <param name="separator">Path separator (default: "/").</param>
     /// <returns>The resource at the path, or null if not found.</returns>
     IResource FindByPath(string path, string separator = "/");
+
+    /// <summary>
+    /// Raised whenever a resource is added to or removed from the graph. Subscribers must not throw (the registry isolates faulty handlers but fault-tolerance
+    /// is best-effort) and must not mutate the graph from within the handler (would re-enter and cause recursive raise).
+    /// </summary>
+    event Action<ResourceMutationEventArgs> NodeMutated;
 }

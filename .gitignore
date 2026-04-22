@@ -32,6 +32,10 @@ bld/
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 
+# Playwright (hyphenated convention — not matched by TestResult*/)
+test-results/
+playwright-report/
+
 # NUNIT
 *.VisualState.xml
 TestResult.xml

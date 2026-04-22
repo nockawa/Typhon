@@ -533,6 +533,8 @@ public unsafe class ConcurrentBitmapL3All : IResource, IMetricSource, IDebugProp
     }
 
     public string Id { get; }
+    public string Name => Id;
+    public int? Count => null;
     public ResourceType Type => ResourceType.Bitmap;
     public IResource Parent { get; }
 

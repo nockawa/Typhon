@@ -8,7 +8,7 @@ namespace Typhon.Engine;
 /// Configuration options for <see cref="ResourceRegistry"/>.
 /// </summary>
 [PublicAPI]
-public class ResourceRegistryOptions
+public sealed class ResourceRegistryOptions
 {
     /// <summary>Name for this registry instance (for diagnostics).</summary>
     public string Name { get; set; }
@@ -115,6 +115,35 @@ public class ResourceRegistry : IResourceRegistry
         var parent = GetSubsystem(subsystem);
         parent.RegisterChild(resource);
         return parent;
+    }
+
+    /// <inheritdoc />
+    public event Action<ResourceMutationEventArgs> NodeMutated;
+
+    /// <summary>
+    /// Fires <see cref="NodeMutated"/>, invoking each subscriber inside its own try/catch so one
+    /// faulty handler doesn't break the rest. Intentionally internal — only <see cref="ResourceNode"/>
+    /// should raise mutations.
+    /// </summary>
+    internal void RaiseMutation(ResourceMutationEventArgs args)
+    {
+        var handlers = NodeMutated;
+        if (handlers == null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                ((Action<ResourceMutationEventArgs>)handler).Invoke(args);
+            }
+            catch
+            {
+                // Subscriber contract: handlers must not throw. Swallow to keep other subscribers alive.
+            }
+        }
     }
 
     /// <inheritdoc />

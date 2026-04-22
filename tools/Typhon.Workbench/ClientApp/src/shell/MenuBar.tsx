@@ -1,0 +1,107 @@
+import { useRef, useState } from 'react';
+import {
+ Menubar,
+ MenubarContent,
+ MenubarItem,
+ MenubarMenu,
+ MenubarSeparator,
+ MenubarTrigger,
+} from '@/components/ui/menubar';
+import { useDeleteApiSessionsId } from '@/api/generated/sessions/sessions';
+import { usePaletteStore } from '@/stores/usePaletteStore';
+import { useSessionStore } from '@/stores/useSessionStore';
+import { useThemeStore } from '@/stores/useThemeStore';
+import CommandPalette from './CommandPalette';
+import ConnectDialog, { type ConnectTab } from './dialogs/ConnectDialog';
+import NavButtons from './NavButtons';
+import PaletteTrigger from './PaletteTrigger';
+
+export default function MenuBar() {
+ const paletteOpen = usePaletteStore((s) => s.open);
+ const togglePalette = usePaletteStore((s) => s.toggle);
+ const closePalette = usePaletteStore((s) => s.setOpen);
+ const triggerRef = useRef<HTMLButtonElement>(null);
+
+ const kind = useSessionStore((s) => s.kind);
+ const sessionId = useSessionStore((s) => s.sessionId);
+ const clearSession = useSessionStore((s) => s.clearSession);
+ const toggleTheme = useThemeStore((s) => s.toggle);
+
+ const [dialogOpen, setDialogOpen] = useState(false);
+ const [initialTab, setInitialTab] = useState<ConnectTab>('open');
+
+ const openConnect = (tab: ConnectTab) => {
+ setInitialTab(tab);
+ setDialogOpen(true);
+ };
+
+ const deleteSession = useDeleteApiSessionsId();
+ const handleCloseSession = async () => {
+ if (!sessionId) return;
+ await deleteSession.mutateAsync({ id: sessionId });
+ clearSession();
+ };
+
+ return (
+ <header className="relative flex h-10 shrink-0 items-center gap-2 border-b border-border bg-card px-2">
+ <Menubar className="border-0 bg-transparent p-0 shadow-none">
+ <MenubarMenu>
+ <MenubarTrigger className="h-7 px-2 text-density-sm">File</MenubarTrigger>
+ <MenubarContent>
+ <MenubarItem onClick={() => openConnect('open')}>Open .typhon File…</MenubarItem>
+ <MenubarItem onClick={() => openConnect('cached')}>Open .typhon-trace…</MenubarItem>
+ <MenubarItem onClick={() => openConnect('attach')}>Attach to Engine…</MenubarItem>
+ <MenubarSeparator />
+ <MenubarItem onClick={() => openConnect('recent')}>Recent Files…</MenubarItem>
+ </MenubarContent>
+ </MenubarMenu>
+
+ <MenubarMenu>
+ <MenubarTrigger className="h-7 px-2 text-density-sm">Edit</MenubarTrigger>
+ <MenubarContent>
+ <MenubarItem disabled>Find…</MenubarItem>
+ </MenubarContent>
+ </MenubarMenu>
+
+ <MenubarMenu>
+ <MenubarTrigger className="h-7 px-2 text-density-sm">View</MenubarTrigger>
+ <MenubarContent>
+ <MenubarItem onClick={toggleTheme}>Toggle Dark / Light Mode</MenubarItem>
+ </MenubarContent>
+ </MenubarMenu>
+
+ <MenubarMenu>
+ <MenubarTrigger className="h-7 px-2 text-density-sm">Session</MenubarTrigger>
+ <MenubarContent>
+ <MenubarItem disabled={kind === 'none'} onClick={handleCloseSession}>
+ Close Session
+ </MenubarItem>
+ </MenubarContent>
+ </MenubarMenu>
+
+ <MenubarMenu>
+ <MenubarTrigger className="h-7 px-2 text-density-sm">Help</MenubarTrigger>
+ <MenubarContent>
+ <MenubarItem disabled>About Typhon Workbench</MenubarItem>
+ </MenubarContent>
+ </MenubarMenu>
+ </Menubar>
+
+ {/* Centered group: NavButtons immediately left of PaletteTrigger. The transform creates a
+ stacking context — raise it above dockview's 9999 so the palette dropdown is not buried. */}
+ <div className="absolute left-1/2 z-[10000] flex -translate-x-1/2 items-center gap-2">
+ <NavButtons />
+ <div className="relative">
+ <PaletteTrigger triggerRef={triggerRef} onClick={togglePalette} />
+ <CommandPalette
+ open={paletteOpen}
+ onClose={() => closePalette(false)}
+ anchorRef={triggerRef}
+ />
+ </div>
+ </div>
+
+ <ConnectDialog open={dialogOpen} initialTab={initialTab} onOpenChange={setDialogOpen} />
+ </header>
+ );
+}

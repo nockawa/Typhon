@@ -1,0 +1,107 @@
+import { useEffect, useState } from 'react';
+import {
+ Dialog,
+ DialogContent,
+ DialogDescription,
+ DialogHeader,
+ DialogTitle,
+} from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { usePostApiSessionsFile } from '@/api/generated/sessions/sessions';
+import { useRecentFilesStore, type RecentFileState } from '@/stores/useRecentFilesStore';
+import { useSessionStore } from '@/stores/useSessionStore';
+import RecentFilesTab from './tabs/RecentFilesTab';
+import OpenFileTab from './tabs/OpenFileTab';
+import AttachTab from './tabs/AttachTab';
+import CachedDataTab from './tabs/CachedDataTab';
+
+export type ConnectTab = 'recent' | 'open' | 'attach' | 'cached';
+
+function extractDetail(err: unknown): string {
+ if (err && typeof err === 'object' && 'detail' in err) {
+ const d = (err as Record<string, unknown>).detail;
+ if (typeof d === 'string') return d;
+ }
+ return '';
+}
+
+interface Props {
+ open: boolean;
+ initialTab: ConnectTab;
+ onOpenChange: (open: boolean) => void;
+}
+
+export default function ConnectDialog({ open, initialTab, onOpenChange }: Props) {
+ const [tab, setTab] = useState<ConnectTab>(initialTab);
+ const setSession = useSessionStore((s) => s.setSession);
+ const recordRecent = useRecentFilesStore((s) => s.record);
+ const postFile = usePostApiSessionsFile();
+
+ // Snap to the requested tab every time the dialog opens — the prop may have changed while the
+ // dialog was closed (different Welcome button / MenuBar item).
+ useEffect(() => {
+ if (open) setTab(initialTab);
+ }, [open, initialTab]);
+
+ const handleOpen = async (filePath: string, schemaDllPaths: string[]) => {
+ const response = await postFile.mutateAsync({
+ data: {
+ filePath,
+ schemaDllPaths: schemaDllPaths.length > 0 ? schemaDllPaths : undefined,
+ },
+ });
+ const dto = response.data;
+ setSession(dto);
+ recordRecent({
+ filePath: dto.filePath ?? filePath,
+ schemaDllPaths: (dto.schemaDllPaths as string[] | null | undefined) ?? schemaDllPaths,
+ lastOpenedAt: new Date().toISOString(),
+ lastState: (dto.state as RecentFileState) ?? 'Ready',
+ });
+ onOpenChange(false);
+ };
+
+ return (
+ <Dialog open={open} onOpenChange={onOpenChange}>
+ <DialogContent className="flex h-[640px] max-w-4xl flex-col gap-3">
+ <DialogHeader>
+ <DialogTitle className="">Connect</DialogTitle>
+ <DialogDescription className="text-density-sm">
+ Open a database, attach to a live engine, or replay a trace.
+ </DialogDescription>
+ </DialogHeader>
+
+ <Tabs
+ value={tab}
+ onValueChange={(v) => setTab(v as ConnectTab)}
+ className="flex min-h-0 flex-1 flex-col"
+ >
+ <TabsList className="shrink-0">
+ <TabsTrigger value="recent">Recent</TabsTrigger>
+ <TabsTrigger value="open">Open File</TabsTrigger>
+ <TabsTrigger value="attach">Attach</TabsTrigger>
+ <TabsTrigger value="cached">Cached Data</TabsTrigger>
+ </TabsList>
+ <TabsContent value="recent" className="min-h-0 flex-1">
+ <RecentFilesTab onOpen={handleOpen} />
+ </TabsContent>
+ <TabsContent value="open" className="min-h-0 flex-1">
+ <OpenFileTab onOpen={handleOpen} isOpening={postFile.isPending} />
+ </TabsContent>
+ <TabsContent value="attach" className="min-h-0 flex-1">
+ <AttachTab />
+ </TabsContent>
+ <TabsContent value="cached" className="min-h-0 flex-1">
+ <CachedDataTab />
+ </TabsContent>
+ </Tabs>
+
+ {postFile.isError && (
+ <p className="shrink-0 rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+ Failed to open session. {extractDetail(postFile.error)}
+ </p>
+ )}
+ </DialogContent>
+ </Dialog>
+ );
+}

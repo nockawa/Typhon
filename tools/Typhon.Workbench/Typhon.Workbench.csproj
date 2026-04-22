@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>default</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <RootNamespace>Typhon.Workbench</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
+        <ProjectReference Include="..\..\src\Typhon.Profiler\Typhon.Profiler.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
+    </ItemGroup>
+
+    <!-- Exclude client build artifacts and node_modules from the C# project -->
+    <ItemGroup>
+        <Content Remove="ClientApp\**" />
+        <None Remove="ClientApp\**" />
+    </ItemGroup>
+
+    <!-- Incremental client build: collect TS/TSX/CSS/HTML/JSON sources under ClientApp so MSBuild can compare their mtimes against
+         the built wwwroot bundle. Without this, TypeScript edits are silently ignored on every subsequent `dotnet build` — the server
+         just keeps serving the stale bundle. This is the same pattern proven in tools/Typhon.Profiler.Server. -->
+    <ItemGroup>
+        <ClientAppSource Include="ClientApp\src\**\*.ts;ClientApp\src\**\*.tsx;ClientApp\src\**\*.css" />
+        <ClientAppSource Include="ClientApp\index.html;ClientApp\package.json;ClientApp\tsconfig.json;ClientApp\vite.config.ts;ClientApp\tailwind.config.ts" />
+    </ItemGroup>
+
+    <Target Name="BuildClientApp" BeforeTargets="Build"
+            Inputs="@(ClientAppSource)"
+            Outputs="wwwroot\index.html">
+        <Message Importance="high" Text="Building Typhon Workbench client (sources changed or first build)..." />
+        <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="ClientApp" />
+        <Exec Command="npm run build" WorkingDirectory="ClientApp" />
+    </Target>
+
+    <Target Name="PublishClientApp" BeforeTargets="Publish">
+        <Message Importance="high" Text="Building Typhon Workbench client for publish..." />
+        <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="ClientApp" />
+        <Exec Command="npm run build" WorkingDirectory="ClientApp" />
+    </Target>
+
+    <Target Name="CleanClientApp" AfterTargets="Clean">
+        <RemoveDir Directories="wwwroot" />
+    </Target>
+
+</Project>

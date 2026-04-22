@@ -34,6 +34,8 @@ public abstract class MemoryBlockBase : MemoryManager<byte>, IMemoryResource, ID
     }
 
     public string Id { get; }
+    public string Name => Id;
+    public int? Count => null;
     public ResourceType Type => ResourceType.Memory;
     public IResource Parent { get; }
     public abstract IEnumerable<IResource> Children { get; }

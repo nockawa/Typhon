@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Husky pre-commit for Typhon Workbench ClientApp.
+# Runs lint-staged over staged *.ts/*.tsx/*.css/*.json/*.md files relative to ClientApp.
+# Only fires when a staged change lives under tools/Typhon.Workbench/ClientApp/ — other parts
+# of the repo (e.g. engine C#) are unaffected.
+cd "$(dirname "$0")/.." || exit 1
+if git diff --cached --name-only --diff-filter=ACMR | grep -q '^tools/Typhon\.Workbench/ClientApp/'; then
+  npx lint-staged
+fi

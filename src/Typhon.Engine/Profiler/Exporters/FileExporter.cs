@@ -42,9 +42,6 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
     }
 
     /// <inheritdoc />
-    public string Name => "FileExporter";
-
-    /// <inheritdoc />
     public ExporterQueue Queue { get; }
 
     /// <inheritdoc />

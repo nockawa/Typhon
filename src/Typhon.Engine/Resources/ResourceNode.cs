@@ -11,6 +11,14 @@ namespace Typhon.Engine;
 public class ResourceNode : IResource
 {
     public string Id { get; }
+    public string Name { get; }
+
+    /// <summary>
+    /// Default: no count. Subclasses that wrap a countable resource (ComponentTable, Segments folder, Index, …) override this to surface a live count to the
+    /// Workbench tree.
+    /// </summary>
+    public virtual int? Count => null;
+
     public ResourceType Type { get; }
     public IResource Parent { get; }
     public IEnumerable<IResource> Children => _children.Values;
@@ -25,21 +33,54 @@ public class ResourceNode : IResource
     /// </remarks>
     public ExhaustionPolicy ExhaustionPolicy { get; }
 
-    public bool RegisterChild(IResource child) => _children.TryAdd(child.Id, child);
-    public bool RemoveChild(IResource resource) => _children.TryRemove(resource.Id, out _);
+    public bool RegisterChild(IResource child)
+    {
+        if (!_children.TryAdd(child.Id, child))
+        {
+            return false;
+        }
+        (Owner as ResourceRegistry)?.RaiseMutation(new ResourceMutationEventArgs
+        {
+            Kind = ResourceMutationKind.Added,
+            NodeId = child.Id,
+            ParentId = Id,
+            Type = child.Type,
+            Timestamp = DateTime.UtcNow
+        });
+        return true;
+    }
 
-    private ConcurrentDictionary<string, IResource> _children;
+    public bool RemoveChild(IResource resource)
+    {
+        if (!_children.TryRemove(resource.Id, out _))
+        {
+            return false;
+        }
+        (Owner as ResourceRegistry)?.RaiseMutation(new ResourceMutationEventArgs
+        {
+            Kind = ResourceMutationKind.Removed,
+            NodeId = resource.Id,
+            ParentId = Id,
+            Type = resource.Type,
+            Timestamp = DateTime.UtcNow
+        });
+        return true;
+    }
 
-    public ResourceNode(string id, ResourceType type, IResource parent, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None)
+    private readonly ConcurrentDictionary<string, IResource> _children = new();
+
+    public ResourceNode(string id, ResourceType type, IResource parent, ExhaustionPolicy exhaustionPolicy = ExhaustionPolicy.None, string name = null)
     {
         Id = id ?? $"{GetType().Name}";
+        Name = name ?? Id;
         Type = type;
         Parent = parent;
         Owner = parent.Owner;
         ExhaustionPolicy = exhaustionPolicy;
         CreatedAt = DateTime.UtcNow;
+        // _children is already initialized (field initializer) so subscribers to NodeMutated
+        // can safely walk our (empty) child set during the Added event.
         Parent.RegisterChild(this);
-        _children = new ConcurrentDictionary<string, IResource>();
     }
 
     internal static ResourceNode CreateRoot(ResourceRegistry registry) => new(registry);
@@ -47,12 +88,12 @@ public class ResourceNode : IResource
     private ResourceNode(ResourceRegistry registry)
     {
         Id = "Root";
+        Name = "Root";
         Type = ResourceType.Node;
         Parent = null;
         Owner = registry;
         ExhaustionPolicy = ExhaustionPolicy.None;
         CreatedAt = DateTime.UtcNow;
-        _children = new ConcurrentDictionary<string, IResource>();
     }
 
     public void Dispose()
@@ -63,24 +104,14 @@ public class ResourceNode : IResource
 
     protected virtual void Dispose(bool disposing)
     {
-        if (_children == null)
+        if (!disposing)
         {
             return;
         }
-        
-        if (disposing)
+        foreach (var resource in _children.Values)
         {
-            foreach (var resource in _children.Values)
-            {
-                resource.Dispose();
-            }
-            _children.Clear();
-            _children = null;
+            resource.Dispose();
         }
-    }
-    
-    ~ResourceNode()
-    {
-        Dispose(false);
+        _children.Clear();
     }
 }
