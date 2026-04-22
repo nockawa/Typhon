@@ -185,6 +185,12 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     public ChunkBasedSegment<PersistentStore> TailIndexSegment { get; private set; }
 
     /// <summary>
+    /// Surfaces the entity count as <see cref="IResource.Count"/> so the Workbench can render a
+    /// live badge on the ComponentTable tree node without a second round-trip.
+    /// </summary>
+    public override int? Count => EstimatedEntityCount;
+
+    /// <summary>
     /// Estimated total entity count. Sums EntityMap entry counts across archetypes that include this component.
     /// </summary>
     public int EstimatedEntityCount

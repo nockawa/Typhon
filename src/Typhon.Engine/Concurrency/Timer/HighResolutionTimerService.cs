@@ -66,9 +66,6 @@ public sealed class HighResolutionTimerService : HighResolutionTimerServiceBase
         _nextTick = long.MaxValue;
     }
 
-    /// <summary>Human-readable name for this timer.</summary>
-    public string Name => _name;
-
     /// <summary>Configured interval in <see cref="Stopwatch"/> ticks.</summary>
     public long IntervalTicks => _intervalTicks;
 

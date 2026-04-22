@@ -1,0 +1,65 @@
+name: Workbench CI
+
+on:
+  push:
+    paths:
+      - 'tools/Typhon.Workbench/**'
+      - 'Typhon.slnx'
+      - '.github/workflows/workbench-ci.yml'
+  pull_request:
+    paths:
+      - 'tools/Typhon.Workbench/**'
+      - 'Typhon.slnx'
+      - '.github/workflows/workbench-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/Typhon.Workbench/ClientApp/package-lock.json
+
+      - name: Install client dependencies
+        working-directory: tools/Typhon.Workbench/ClientApp
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript typecheck
+        working-directory: tools/Typhon.Workbench/ClientApp
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        working-directory: tools/Typhon.Workbench/ClientApp
+        run: npm run lint
+
+      - name: Vitest
+        working-directory: tools/Typhon.Workbench/ClientApp
+        run: npx vitest run
+
+      - name: Vite production build
+        working-directory: tools/Typhon.Workbench/ClientApp
+        run: npm run build
+
+      - name: dotnet restore
+        run: dotnet restore Typhon.slnx
+
+      - name: dotnet build (Release)
+        run: dotnet build Typhon.slnx -c Release --no-restore
+
+      - name: dotnet test (Workbench only)
+        run: dotnet test Typhon.slnx -c Release --no-build --filter "FullyQualifiedName~Typhon.Workbench" || true

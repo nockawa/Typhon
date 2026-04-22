@@ -13,16 +13,6 @@ using System.Linq.Expressions;
 using Typhon.Engine.Profiler;
 using Typhon.Schema.Definition;
 
-[assembly: InternalsVisibleTo("Typhon.Engine.Tests")]
-[assembly: InternalsVisibleTo("Typhon.Client.Tests")]
-[assembly: InternalsVisibleTo("Typhon.Benchmark")]
-[assembly: InternalsVisibleTo("Typhon.MonitoringDemo")]
-[assembly: InternalsVisibleTo("Typhon.ARPG.Shell")]
-[assembly: InternalsVisibleTo("tsh")]
-[assembly: InternalsVisibleTo("AntHill")]
-[assembly: InternalsVisibleTo("AntHill.ProfileRunner")]
-[assembly: InternalsVisibleTo("Typhon.IOProfileRunner")]
-
 namespace Typhon.Engine;
 
 [StructLayout(LayoutKind.Sequential)]
@@ -2460,8 +2450,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     /// <summary>
     /// Restores the system schema (FieldR1 and ComponentR1 tables) from persisted SPIs on database reopen.
-    /// Populates <see cref="_persistedComponents"/> so that subsequent <see cref="RegisterComponentFromAccessor{T}"/> calls load existing segments instead
-    /// of allocating fresh ones.
+    /// Populates <see cref="_persistedComponents"/> so that subsequent <see cref="RegisterComponentFromAccessor{T}"/>
+    /// / <see cref="RegisterComponentByType"/> calls load existing segments instead of allocating fresh ones.
     /// </summary>
     private void LoadSystemSchemaR1()
     {
@@ -2683,7 +2673,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     /// <summary>
     /// Records a schema change in the <see cref="SchemaHistoryR1"/> audit trail.
-    /// Called during <see cref="RegisterComponentFromAccessor{T}"/> after schema persistence.
+    /// Called during <see cref="RegisterComponentFromAccessor{T}"/> / <see cref="RegisterComponentByType"/> after schema persistence.
     /// </summary>
     private void RecordSchemaHistory(string componentName, SchemaDiff diff, MigrationResult? migrationResult, int fromRevision, int toRevision)
     {
@@ -2767,6 +2757,52 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Non-generic entry point for registering a component when the type is only known at runtime — e.g. types discovered via reflection from a plugin or
+    /// user-supplied schema DLL, as the Workbench does when loading <c>*.schema.dll</c> into a collectible AssemblyLoadContext.
+    /// </summary>
+    /// <remarks>
+    /// Internally invokes the generic <see cref="RegisterComponentFromAccessor{T}"/> via <see cref="MethodInfo.MakeGenericMethod"/>.
+    /// Any <see cref="TargetInvocationException"/> raised by reflection is unwrapped with <see cref="System.Runtime.ExceptionServices.ExceptionDispatchInfo"/>
+    /// so callers observe the real underlying exception — e.g. <c>SchemaValidationException</c>, <c>SchemaDowngradeException</c>,
+    /// <c>SchemaMigrationException</c> — with its original stack trace preserved.
+    /// </remarks>
+    /// <param name="componentType">
+    /// A closed unmanaged value type tagged with <c>[Component]</c>. The <see langword="unmanaged"/> constraint from the generic overload is verified at
+    /// runtime by the CLR when the method is specialized; non-blittable or reference-type inputs will throw from deep inside <see cref="MethodInfo.MakeGenericMethod"/>.
+    /// </param>
+    /// <param name="changeSet">Optional transactional change set. See <see cref="RegisterComponentFromAccessor{T}"/>.</param>
+    /// <param name="schemaValidation">Schema validation policy (default: <see cref="SchemaValidationMode.Enforce"/>).</param>
+    /// <param name="storageModeOverride">Optional override for the storage mode declared by the component.</param>
+    /// <returns>Forwarded from <see cref="RegisterComponentFromAccessor{T}"/> — <see langword="true"/> on success.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="componentType"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="componentType"/> is not a closed value type.</exception>
+    /// <seealso cref="RegisterComponentFromAccessor{T}"/>
+    public bool RegisterComponentByType(Type componentType, ChangeSet changeSet = null, SchemaValidationMode schemaValidation = SchemaValidationMode.Enforce,
+        StorageMode? storageModeOverride = null)
+    {
+        ArgumentNullException.ThrowIfNull(componentType);
+        if (!componentType.IsValueType || componentType.IsGenericTypeDefinition)
+        {
+            throw new ArgumentException($"Component type must be a closed unmanaged value type: {componentType.FullName}", nameof(componentType));
+        }
+
+        var method = typeof(DatabaseEngine).GetMethod(nameof(RegisterComponentFromAccessor), BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new InvalidOperationException($"{nameof(RegisterComponentFromAccessor)} not found on DatabaseEngine.");
+        var generic = method.MakeGenericMethod(componentType);
+        try
+        {
+            return (bool)generic.Invoke(this, [changeSet, schemaValidation, storageModeOverride])!;
+        }
+        catch (TargetInvocationException tie) when (tie.InnerException != null)
+        {
+            // Re-throw the underlying exception with its original stack trace so callers see
+            // SchemaValidationException / SchemaDowngradeException directly, not wrapped.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(tie.InnerException).Throw();
+            throw; // unreachable
+        }
     }
 
     public bool RegisterComponentFromAccessor<T>(ChangeSet changeSet = null, SchemaValidationMode schemaValidation = SchemaValidationMode.Enforce,
@@ -2988,7 +3024,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// <summary>
     /// Registers a strongly-typed migration function that transforms component data from <typeparamref name="TOld"/> to <typeparamref name="TNew"/>.
     /// Both types must have [Component] attributes with the same Name but different Revisions.
-    /// Must be called before <see cref="RegisterComponentFromAccessor{T}"/> for the target component.
+    /// Must be called before <see cref="RegisterComponentFromAccessor{T}"/> / <see cref="RegisterComponentByType"/> for the target component.
     /// </summary>
     public void RegisterMigration<TOld, TNew>(MigrationFunc<TOld, TNew> func) where TOld : unmanaged where TNew : unmanaged
     {
@@ -2998,7 +3034,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     /// <summary>
     /// Registers a byte-level migration function for scenarios where the old struct type is no longer available in code.
-    /// Must be called before <see cref="RegisterComponentFromAccessor{T}"/> for the target component.
+    /// Must be called before <see cref="RegisterComponentFromAccessor{T}"/> / <see cref="RegisterComponentByType"/> for the target component.
     /// </summary>
     public void RegisterByteMigration(string componentName, int fromRevision, int toRevision, int oldSize, int newSize, ByteMigrationFunc func)
     {
