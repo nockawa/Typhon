@@ -44,8 +44,22 @@ public sealed class WorkbenchAssemblyLoadContext : AssemblyLoadContext, IDisposa
 
     protected override Assembly Load(AssemblyName assemblyName)
     {
-        // Defer system / shared deps to the default ALC so we don't duplicate runtime types.
-        // Only try to resolve from probe directories for assemblies we authored.
+        // Defer shared deps to the default ALC so we don't duplicate runtime types. Probing from the
+        // fixture/schema-DLL directory naively would load a SECOND copy of (e.g.) Typhon.Schema.Definition
+        // when the user has `dotnet publish` output sitting next to their schema.dll — and then
+        // [ComponentAttribute] on the schema types would be a *different* type than the one SchemaLoader
+        // uses, and attribute lookup silently returns null → 0 components loaded.
+        //
+        // Defer if:
+        //   (a) the default ALC already has this assembly loaded, OR
+        //   (b) the name matches a well-known shared prefix (Typhon.*, System.*, Microsoft.*, runtime dlls)
+        //       — handles the case where the default ALC hasn't loaded it yet but we still want runtime-
+        //       resolution rather than shadowing from the probe dir.
+        if (IsSharedAssembly(assemblyName) || IsAlreadyLoadedInDefaultContext(assemblyName))
+        {
+            return null;
+        }
+
         // Snapshot under the lock — the CLR can invoke Load re-entrantly while LoadSchema is still
         // adding probe directories on another thread.
         string[] probes;
@@ -62,6 +76,32 @@ public sealed class WorkbenchAssemblyLoadContext : AssemblyLoadContext, IDisposa
             }
         }
         return null;
+    }
+
+    /// <summary>Well-known prefixes for assemblies that must be resolved by the default ALC to keep type identity
+    /// consistent. Loading duplicates of these silently breaks attribute lookups across ALC boundaries.</summary>
+    private static bool IsSharedAssembly(AssemblyName name)
+    {
+        var n = name.Name;
+        if (string.IsNullOrEmpty(n)) return false;
+        return n.StartsWith("Typhon.", StringComparison.Ordinal)
+            || n.StartsWith("System.", StringComparison.Ordinal)
+            || n.StartsWith("Microsoft.", StringComparison.Ordinal)
+            || n.Equals("System", StringComparison.Ordinal)
+            || n.Equals("mscorlib", StringComparison.Ordinal)
+            || n.Equals("netstandard", StringComparison.Ordinal);
+    }
+
+    private static bool IsAlreadyLoadedInDefaultContext(AssemblyName name)
+    {
+        foreach (var asm in Default.Assemblies)
+        {
+            if (string.Equals(asm.GetName().Name, name.Name, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void Dispose()

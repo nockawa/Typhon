@@ -41,7 +41,7 @@ public abstract class Archetype<TSelf> where TSelf : Archetype<TSelf>
     protected static Comp<T> Register<T>() where T : unmanaged => ArchetypeRegistry.DeclareComponent<TSelf, T>();
 
     /// <summary>Force static initialization of this archetype type (triggers field initializers and finalization).</summary>
-    internal static void Touch()
+    public static void Touch()
     {
         // Accessing any static member triggers the CLR type initializer.
         // After that, EnsureFinalized() can be called safely.

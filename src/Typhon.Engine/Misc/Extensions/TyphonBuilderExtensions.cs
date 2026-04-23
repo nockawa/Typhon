@@ -322,7 +322,7 @@ public static class ServiceCollectionExtensions
         }
     }
     
-    internal static void EnsureFileDeleted<TO>(this IServiceProvider provider) where TO : PagedMMFOptions
+    public static void EnsureFileDeleted<TO>(this IServiceProvider provider) where TO : PagedMMFOptions
     {
         using var scope = provider.CreateScope();
         var options = scope.ServiceProvider.GetRequiredService<IOptions<TO>>().Value;

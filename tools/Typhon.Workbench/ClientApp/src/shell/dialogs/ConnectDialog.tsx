@@ -10,12 +10,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { usePostApiSessionsFile } from '@/api/generated/sessions/sessions';
 import { useRecentFilesStore, type RecentFileState } from '@/stores/useRecentFilesStore';
 import { useSessionStore } from '@/stores/useSessionStore';
+import { logError, logInfo, logWarn } from '@/stores/useLogStore';
+import { customFetch } from '@/api/client';
 import RecentFilesTab from './tabs/RecentFilesTab';
 import OpenFileTab from './tabs/OpenFileTab';
 import AttachTab from './tabs/AttachTab';
 import CachedDataTab from './tabs/CachedDataTab';
+import DevFixtureTab from './tabs/DevFixtureTab';
 
-export type ConnectTab = 'recent' | 'open' | 'attach' | 'cached';
+export type ConnectTab = 'recent' | 'open' | 'attach' | 'cached' | 'devfixture';
 
 function extractDetail(err: unknown): string {
  if (err && typeof err === 'object' && 'detail' in err) {
@@ -37,6 +40,24 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  const recordRecent = useRecentFilesStore((s) => s.record);
  const postFile = usePostApiSessionsFile();
 
+ // Dev-fixture tab availability — probe once on mount. The server exposes /api/fixtures/capability
+ // only when built with DEBUG, so a 404 here means "Release build, hide the tab". Keeping this as
+ // one-time state (not a live query) because the server's build config can't change mid-session.
+ const [devFixtureAvailable, setDevFixtureAvailable] = useState(false);
+
+ useEffect(() => {
+ let cancelled = false;
+ (async () => {
+ try {
+ await customFetch('/api/fixtures/capability', { method: 'GET' });
+ if (!cancelled) setDevFixtureAvailable(true);
+ } catch {
+ /* endpoint absent in Release builds — leave the tab hidden */
+ }
+ })();
+ return () => { cancelled = true; };
+ }, []);
+
  // Snap to the requested tab every time the dialog opens — the prop may have changed while the
  // dialog was closed (different Welcome button / MenuBar item).
  useEffect(() => {
@@ -44,6 +65,11 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  }, [open, initialTab]);
 
  const handleOpen = async (filePath: string, schemaDllPaths: string[]) => {
+ logInfo(`Opening database: ${filePath}`, {
+ filePath,
+ explicitSchemaDlls: schemaDllPaths,
+ });
+ try {
  const response = await postFile.mutateAsync({
  data: {
  filePath,
@@ -58,7 +84,33 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  lastOpenedAt: new Date().toISOString(),
  lastState: (dto.state as RecentFileState) ?? 'Ready',
  });
+
+ const resolvedDlls = (dto.schemaDllPaths as string[] | null | undefined) ?? [];
+ const diagnostics = (dto.schemaDiagnostics ?? []) as Array<{
+ componentName?: string | null;
+ kind?: string | null;
+ detail?: string | null;
+ }>;
+ const sessionState = dto.state ?? 'Ready';
+ const logLevel = sessionState === 'Incompatible' ? logError : sessionState === 'Ready' ? logInfo : logWarn;
+ logLevel(
+ `Session opened — state: ${sessionState} (${dto.loadedComponentTypes ?? 0} component types loaded)`,
+ {
+ sessionId: dto.sessionId,
+ filePath: dto.filePath ?? filePath,
+ schemaStatus: dto.schemaStatus,
+ schemaDllPaths: resolvedDlls,
+ diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
+ },
+ );
  onOpenChange(false);
+ } catch (err) {
+ logError(`Failed to open database: ${filePath}`, {
+ filePath,
+ error: extractDetail(err) || String(err),
+ });
+ throw err;
+ }
  };
 
  return (
@@ -81,6 +133,7 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  <TabsTrigger value="open">Open File</TabsTrigger>
  <TabsTrigger value="attach">Attach</TabsTrigger>
  <TabsTrigger value="cached">Cached Data</TabsTrigger>
+ {devFixtureAvailable && <TabsTrigger value="devfixture">Dev Fixture</TabsTrigger>}
  </TabsList>
  <TabsContent value="recent" className="min-h-0 flex-1">
  <RecentFilesTab onOpen={handleOpen} />
@@ -94,6 +147,11 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  <TabsContent value="cached" className="min-h-0 flex-1">
  <CachedDataTab />
  </TabsContent>
+ {devFixtureAvailable && (
+ <TabsContent value="devfixture" className="min-h-0 flex-1">
+ <DevFixtureTab onOpen={handleOpen} isOpening={postFile.isPending} />
+ </TabsContent>
+ )}
  </Tabs>
 
  {postFile.isError && (

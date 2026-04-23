@@ -37,6 +37,9 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
         <ProjectReference Include="..\..\src\Typhon.Profiler\Typhon.Profiler.csproj" />
+        <!-- Fixture project — Workbench schema DLL the generator populates and ships alongside the .bin.
+             Lives in tools/ because the Workbench also references it at runtime (DEBUG-only Dev Fixture tab). -->
+        <ProjectReference Include="..\..\tools\Typhon.Workbench.Fixtures\Typhon.Workbench.Fixtures.csproj" />
     </ItemGroup>
 
     <!-- Pull in the profiler server's RecordDecoder + LiveTraceEvent + TraceFileCacheBuilder as compile items so tests can exercise the

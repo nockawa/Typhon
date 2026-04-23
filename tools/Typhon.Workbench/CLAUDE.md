@@ -52,6 +52,14 @@ Umbrella: [#253](https://github.com/nockawa/Typhon/issues/253). Full plan: [09-b
 Skills, MCP server registrations, and hooks for Workbench development live in the **repo root `.claude/`** (prefixed `wb-`). 
 Nested `settings.json` is not loaded when the session is started from the repo root — only this `CLAUDE.md` is auto-loaded when Claude edits files under `tools/Typhon.Workbench/`.
 
+### Running the webapp locally
+
+**Always use `/wb-dev` to start / stop the dev servers.** It tracks both Kestrel (:5200) and Vite (:5173) PIDs in `.claude/state/wb-dev.json` so a later session (or `stop` invocation) can tear them down even if it didn't start them.
+
+- **When you need the webapp running** — running Playwright specs (`e2e/*.spec.ts`), hitting `/api/*` by hand, exercising the dev UI, testing the Dev Fixture tab — run `/wb-dev status` first. If nothing is running, `/wb-dev start`. Do not launch `dotnet watch` or `npm run dev` directly; it leaves untracked processes that clash with future `/wb-dev` invocations.
+- **When you're done** — `/wb-dev stop`. Leaving the servers running between sessions is fine (they hot-reload) but a stale Kestrel will lock `Typhon.Workbench.dll` and break any subsequent `dotnet build tools/Typhon.Workbench`.
+- **Playwright prerequisites** — Playwright tests expect `:5173` reachable with the Vite proxy forwarding to `:5200`. `/wb-dev status` confirms both are LISTENING before you invoke `npx playwright test`.
+
 ## Threat model (localhost-only tool)
 
 The Workbench is a single-user local dev tool. It binds Kestrel to `127.0.0.1` only — never a routable interface. Two defenses layer on top:
