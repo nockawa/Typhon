@@ -182,6 +182,37 @@ gh project item-edit --project-id PVT_kwHOAud1ac4BNdCj --id ITEM_ID \
   --field-id FIELD_ID --single-select-option-id OPTION_ID
 ```
 
+## Umbrella issues (parent-of-many)
+
+If the issue represents a multi-phase effort and the user wants separate tracking issues for each phase, treat it as an **umbrella** and do two things:
+
+1. **Include a `[tasklist]` block in the body** with one `#N` reference per sub-issue — this is what humans read in the rendered markdown.
+2. **Link each sub-issue natively via the GitHub Sub-issues API** — this is what drives the Sub-issues section in the GitHub UI (separate from the text body). GitHub's `sub_issues_summary` on the umbrella reflects only the native links, not the `[tasklist]` text.
+
+**How to link natively** — for each sub-issue, get its database `id` (the big integer in the issue's JSON, not the small issue `number`) and POST it to the umbrella's `sub_issues` endpoint. Use `gh api -F` (not `-f`) so the id is serialized as a JSON integer, not a string:
+
+```bash
+# Get each sub-issue's database id
+SUB_ID=$(gh api repos/nockawa/Typhon/issues/<sub_number> --jq '.id')
+
+# Link it as a native sub-issue of the umbrella
+gh api repos/nockawa/Typhon/issues/<umbrella_number>/sub_issues -X POST -F sub_issue_id=$SUB_ID
+```
+
+**Verify:**
+
+```bash
+gh api repos/nockawa/Typhon/issues/<umbrella_number>/sub_issues | python3 -c "
+import json, sys
+for s in json.load(sys.stdin):
+    print(f'#{s[\"number\"]} - {s[\"title\"]} [{s[\"state\"]}]')
+"
+```
+
+Recap: the `[tasklist]` block gives you a checkbox-driven progress view embedded in the body (good for narrative + markdown tooling like `/complete-subtask` that checks the box). The native sub-issues linkage gives you GitHub's first-class UI — the "Sub-issues" panel, roll-up progress bar, and breadcrumb on the child. **Do both** when creating an umbrella — they serve different surfaces.
+
+If the user asks to retroactively convert an existing umbrella (body has `[tasklist]` but `sub_issues_summary.total` is 0), run the linking loop above — no need to edit the body.
+
 ## Field Reference
 
 ### Project ID

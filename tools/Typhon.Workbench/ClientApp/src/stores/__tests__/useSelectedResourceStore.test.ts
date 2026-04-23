@@ -19,7 +19,9 @@ const sample: SelectedResource = {
 };
 
 beforeEach(() => {
-  useSelectedResourceStore.getState().clear();
+  // Reset via direct setState instead of clear() — clear() bumps touchedAt on purpose, which
+  // would leave before/after values equal within the same millisecond tick in the recency tests.
+  useSelectedResourceStore.setState({ selected: null, touchedAt: 0 });
 });
 
 describe('useSelectedResourceStore', () => {
@@ -36,5 +38,20 @@ describe('useSelectedResourceStore', () => {
     useSelectedResourceStore.getState().setSelected(sample);
     useSelectedResourceStore.getState().clear();
     expect(useSelectedResourceStore.getState().selected).toBeNull();
+  });
+
+  it('setSelected bumps touchedAt so DetailPanel can order vs. schema-field selection', () => {
+    const before = useSelectedResourceStore.getState().touchedAt;
+    useSelectedResourceStore.getState().setSelected(sample);
+    const after = useSelectedResourceStore.getState().touchedAt;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('clear bumps touchedAt (cleared-just-now is a real signal for the recency race)', () => {
+    useSelectedResourceStore.getState().setSelected(sample);
+    const mid = useSelectedResourceStore.getState().touchedAt;
+    useSelectedResourceStore.getState().clear();
+    const after = useSelectedResourceStore.getState().touchedAt;
+    expect(after).toBeGreaterThanOrEqual(mid);
   });
 });

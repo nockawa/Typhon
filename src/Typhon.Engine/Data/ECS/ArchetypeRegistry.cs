@@ -260,6 +260,36 @@ public static class ArchetypeRegistry
     }
 
     /// <summary>
+    /// Rebuild every archetype's slot→Type cache from the current <c>ComponentTypeById</c> map. Call this after loading a schema DLL into a fresh
+    /// AssemblyLoadContext on top of a registry that was already populated by a prior ALC:
+    /// <c>EnsureFinalized</c> short-circuits on already-registered archetype ids and leaves <c>_slotToComponentType</c> pointing at the first
+    /// ALC's <see cref="Type"/> instances. <c>DeclareComponent</c> already refreshes <c>ComponentTypeById</c> via the schema-name dedup path, so the up-to-date
+    /// Type is available — this method just propagates that into every affected archetype. Only needed by the Workbench (per-session collectible ALCs);
+    /// production hosts with a single ALC can ignore it.
+    ///
+    /// If a slot's component type is no longer registered in the current registry (e.g., the new schema DLL dropped that component), the slot is set
+    /// to <c>null</c> rather than leaving the stale ALC Type behind — downstream code like <see cref="DatabaseEngine.InitializeArchetypes"/> already
+    /// null-checks each slot and falls back to schema-name matching, so a null is a fail-fast signal rather than a silent wrong answer.
+    /// </summary>
+    public static void RefreshSlotTypes()
+    {
+        for (int i = 0; i < Archetypes.Length; i++)
+        {
+            var meta = Archetypes[i];
+            if (meta == null || meta._slotToComponentType == null)
+            {
+                continue;
+            }
+            var ids = meta._componentTypeIds;
+            var slots = meta._slotToComponentType;
+            for (int s = 0; s < slots.Length; s++)
+            {
+                slots[s] = ComponentTypeById.GetValueOrDefault(ids[s]);
+            }
+        }
+    }
+
+    /// <summary>
     /// Walk the base type chain to find the direct parent archetype type.
     /// Returns null if this is a root archetype (inherits directly from Archetype&lt;TSelf&gt;).
     /// </summary>
@@ -304,7 +334,9 @@ public static class ArchetypeRegistry
     /// <summary>Whether the registry is frozen (no more registrations allowed).</summary>
     public static bool IsFrozen => Frozen;
 
-    /// <summary>Enumerate all registered archetype metadata (non-null entries).</summary>
+    /// <summary>Enumerate all registered archetype metadata (non-null entries). The Workbench Schema Inspector accesses this via <c>InternalsVisibleTo</c> —
+    /// promoting to public would cascade to <see cref="ArchetypeMetadata"/> and its 50+ fields. The registry freezes after bootstrap, so the result is stable
+    /// once the engine is initialized.</summary>
     internal static IEnumerable<ArchetypeMetadata> GetAllArchetypes()
     {
         for (int i = 0; i < Archetypes.Length; i++)

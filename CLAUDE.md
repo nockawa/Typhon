@@ -10,9 +10,9 @@ When the user asks for your opinion on a design choice, code approach, or any to
 
 Typhon maintains comprehensive documentation in the `claude/` directory.
 Use these resources to understand architecture, design rationale, and development workflow.
-When working on a new idea, always start by reading relevant documents in `claude/overview`, you can also read files in `claude/reference` to get more context of existing features and APIs.
+When working on a new idea, always start by reading relevant documents in `claude/overview`, you can also read files in `claude/design` to get more context of existing features and APIs.
 Architecture Design Records are located in `claude/adr`, use it when designing new code.
-To estimate the CPU time taken by a given algorithm, base yourself on `claude/reference/cpu-timings.md`.
+To estimate the CPU time taken by a given algorithm, base yourself on `claude/design/cpu-timings.md`.
 
 > **Separate git repo:** The `claude/` directory is its own nested git repository. To commit or perform any git operations on documentation files, you must `cd claude/` first. Running `git status` from the Typhon root will not show changes to `claude/` files.
 
@@ -31,9 +31,9 @@ Never deviate from established specs without explicitly noting the deviation and
 | **Why a decision was made** | `claude/adr/` | 30 Architecture Decision Records with rationale |
 | **What must always hold** | `claude/rules/` | Correctness invariants by domain (WAL, checkpoint, page safety) |
 | **Current priorities** | [GitHub Project](https://github.com/users/nockawa/projects/7) | Work tracking, status, roadmap |
-| **Feature designs** | `claude/design/` | Pre-implementation specifications |
+| **Feature designs & docs** | `claude/design/` | Implementation specs and API docs (stay here after implementation) |
 | **Deep research** | `claude/research/` | Analysis studies (e.g., timeout patterns, query systems) |
-| **Document workflows** | `claude/README.md` | Lifecycle, templates, trigger phrases |
+| **Document workflows** | `claude/CLAUDE.md` | Lifecycle, templates, trigger phrases |
 
 ### Architecture Overview Series
 
@@ -252,7 +252,7 @@ For complex/ambiguous requests, ask clarifying questions via AskUserQuestion bef
 This project uses a structured document lifecycle in `claude/`. Documents progress through stages:
 
 ```
-ideas/ → research/ → design/ → reference/ → archive/
+ideas/ → research/ → design/ → archive/
 ```
 
 **When creating documents**, Claude asks for the category location (e.g., `database-engine/`, `persistence/`) unless specified explicitly.

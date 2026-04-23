@@ -10,6 +10,9 @@
     <ItemGroup>
         <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
         <ProjectReference Include="..\..\src\Typhon.Profiler\Typhon.Profiler.csproj" />
+        <!-- Dev-only: the Workbench's DEBUG-gated "Dev Fixture" Connect tab calls the internal
+             FixtureDatabase.CreateOrReuse method from this project to produce a populated test DB. -->
+        <ProjectReference Include="..\Typhon.Workbench.Fixtures\Typhon.Workbench.Fixtures.csproj" />
     </ItemGroup>
 
     <ItemGroup>

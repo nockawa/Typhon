@@ -9,11 +9,14 @@ import {
 import { useRecentFilesStore } from '@/stores/useRecentFilesStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useResourceGraphStore } from '@/stores/useResourceGraphStore';
+import { useSchemaInspectorStore } from '@/stores/useSchemaInspectorStore';
+import { openSchemaLayout } from '@/shell/commands/openSchemaBrowser';
 
 interface Props {
   resourceId: string;          // synthetic uid — used for pin storage (unique)
   naturalId: string;           // engine-native id (display / copy)
   name: string;
+  kind: string;                // resource type (e.g., "ComponentTable"); drives contextual action availability
   path: string[];
   onReveal: () => void;        // clears filter + scrolls to row
   onRefreshSubtree: () => void;
@@ -24,6 +27,7 @@ export default function ResourceTreeContextMenu({
   resourceId,
   naturalId,
   name,
+  kind,
   path,
   onReveal,
   onRefreshSubtree,
@@ -34,9 +38,11 @@ export default function ResourceTreeContextMenu({
   const pinResource = useRecentFilesStore((s) => s.pinResource);
   const unpinResource = useRecentFilesStore((s) => s.unpinResource);
   const clearFilter = useResourceGraphStore((s) => s.setFilter);
+  const selectSchemaComponent = useSchemaInspectorStore((s) => s.selectComponent);
 
   const isPinned = pins.includes(resourceId);
   const pathStr = path.join('/');
+  const canOpenInSchema = kind === 'ComponentTable';
 
   async function copyToClipboard(text: string) {
     try {
@@ -81,7 +87,20 @@ export default function ResourceTreeContextMenu({
           Refresh Subtree
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem disabled>Open in Schema Inspector</ContextMenuItem>
+        <ContextMenuItem
+          disabled={!canOpenInSchema}
+          onSelect={() => {
+            if (!canOpenInSchema) return;
+            // ComponentTable nodes carry the resource-tree name "ComponentTable_{Definition.Name}"
+            // (see ComponentTable's base(...) call in the engine). The server looks up by the raw
+            // Definition.Name, so we strip the prefix.
+            const typeName = name.startsWith('ComponentTable_') ? name.slice('ComponentTable_'.length) : name;
+            selectSchemaComponent(typeName);
+            openSchemaLayout();
+          }}
+        >
+          Show Component Layout
+        </ContextMenuItem>
         <ContextMenuItem disabled>Open in Data Browser</ContextMenuItem>
         <ContextMenuItem disabled>Open in Query Console</ContextMenuItem>
         <ContextMenuItem disabled>Open in Profiler</ContextMenuItem>

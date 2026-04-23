@@ -166,6 +166,7 @@ function NodeRow({ node, style, dragHandle }: NodeRendererProps<ResourceNode>) {
  resourceId={node.data.id}
  naturalId={node.data.naturalId}
  name={node.data.name}
+ kind={node.data.type}
  path={(() => {
  const parts: string[] = [];
  let cur: NodeApi<ResourceNode> | null = node;
@@ -178,9 +179,13 @@ function NodeRow({ node, style, dragHandle }: NodeRendererProps<ResourceNode>) {
  <div
  style={{ ...style, paddingLeft: indent + 4 }}
  ref={(el) => dragHandle?.(el)}
- className={`flex cursor-pointer items-center gap-1.5 px-1 text-[11px]
- leading-none hover:bg-muted
- ${isNavSelected ? 'border-l-2 border-accent bg-muted text-foreground' : 'text-foreground'}`}
+ // Native title attr — desktop-style hover tooltip with name + kind. Cheaper than a Radix
+ // Tooltip per row and doesn't compete with the context menu.
+ title={`${node.data.name} — ${node.data.type}`}
+ className={`relative isolate flex cursor-pointer items-center gap-1.5 px-1 text-[11px] leading-none hover:bg-primary/20
+ ${isNavSelected
+ ? 'text-foreground before:pointer-events-none before:absolute before:inset-x-0 before:-top-px before:-bottom-px before:-z-10 before:border-l-2 before:border-accent before:bg-primary/15'
+ : 'text-foreground'}`}
  onClick={() => {
  node.select();
  activateFromTreeNode(node);
@@ -188,11 +193,11 @@ function NodeRow({ node, style, dragHandle }: NodeRendererProps<ResourceNode>) {
  }}
  >
  {node.isInternal ? (
- <span className="w-3 shrink-0 text-muted-foreground">{node.isOpen ? '▾' : '▸'}</span>
+ <span className="w-3.5 shrink-0 text-[13px] leading-none text-muted-foreground">{node.isOpen ? '▾' : '▸'}</span>
  ) : (
- <span className="w-3 shrink-0" />
+ <span className="w-3.5 shrink-0" />
  )}
- <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+ <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
  <span className="min-w-0 flex-1 truncate">{node.data.name}</span>
  {isPinned && (
  <Pin className="h-3 w-3 shrink-0 fill-primary text-primary" aria-label="Pinned" />
@@ -335,7 +340,7 @@ export default function ResourceTreePanel() {
  <Tree
  ref={treeRef}
  data={[rootNode]}
- rowHeight={22}
+ rowHeight={18}
  openByDefault
  selection={navSelectedId}
  onSelect={(nodes) => {

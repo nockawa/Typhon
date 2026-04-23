@@ -4,6 +4,7 @@ import { buildBaseCommands } from './commands/baseCommands';
 import { buildResourceHits, groupHitsByKind } from './commands/resourceCommands';
 import { activateResource } from './commands/activateResource';
 import { useResourceIndex } from '@/hooks/useResourceIndex';
+import { logInfo } from '@/stores/useLogStore';
 
 interface CommandPaletteProps {
  open: boolean;
@@ -120,6 +121,7 @@ export default function CommandPalette({ open, onClose, anchorRef }: CommandPale
  value={cmd.id}
  keywords={[cmd.label, cmd.keywords ?? '']}
  onSelect={() => {
+ logInfo(`Command: ${cmd.label}`, { id: cmd.id });
  cmd.action();
  onClose();
  }}

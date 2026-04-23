@@ -4,9 +4,16 @@ import { useDockLayoutStore } from '@/stores/useDockLayoutStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useTreeVisibilityStore } from '@/stores/useTreeVisibilityStore';
 import DetailPanel from '@/panels/DetailPanel';
-import PlaceholderLogs from '@/panels/PlaceholderLogs';
+import LogsPanel from '@/panels/LogsPanel';
 import ResourceTreePanel from '@/panels/ResourceTreePanel';
 import PlaceholderStartHere from '@/panels/PlaceholderStartHere';
+import SchemaBrowserPanel from '@/panels/SchemaBrowser/SchemaBrowserPanel';
+import ArchetypeBrowserPanel from '@/panels/SchemaBrowser/ArchetypeBrowserPanel';
+import SchemaLayoutPanel from '@/panels/SchemaInspector/SchemaLayoutPanel';
+import SchemaArchetypePanel from '@/panels/SchemaInspector/SchemaArchetypePanel';
+import SchemaIndexPanel from '@/panels/SchemaInspector/SchemaIndexPanel';
+import SchemaRelationshipsPanel from '@/panels/SchemaInspector/SchemaRelationshipsPanel';
+import { registerDockApi } from './commands/openSchemaBrowser';
 import MigrationRequiredBanner from './banners/MigrationRequiredBanner';
 import IncompatibleBanner from './banners/IncompatibleBanner';
 
@@ -17,7 +24,13 @@ const components: Record<string, React.FC<IDockviewPanelProps>> = {
   ResourceTree: ResourceTreePanel,
   StartHere: PlaceholderStartHere,
   Detail: DetailPanel,
-  Logs: PlaceholderLogs,
+  Logs: LogsPanel,
+  SchemaBrowser: SchemaBrowserPanel,
+  ArchetypeBrowser: ArchetypeBrowserPanel,
+  SchemaLayout: SchemaLayoutPanel,
+  SchemaArchetypes: SchemaArchetypePanel,
+  SchemaIndexes: SchemaIndexPanel,
+  SchemaRelationships: SchemaRelationshipsPanel,
 };
 
 function buildDefaultLayout(api: DockviewReadyEvent['api']) {
@@ -89,6 +102,7 @@ export default function DockHost() {
 
   function onReady(event: DockviewReadyEvent) {
     apiRef.current = event.api;
+    registerDockApi(event.api);
     const saved = getLayout(layoutKey);
     if (saved) {
       try {

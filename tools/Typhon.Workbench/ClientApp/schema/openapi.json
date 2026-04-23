@@ -6,7 +6,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:5200/"
+      "url": "http://127.0.0.1:5212/"
     }
   ],
   "paths": {
@@ -14,6 +14,29 @@
       "get": {
         "tags": [
           "Sessions"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/resources/stream": {
+      "get": {
+        "tags": [
+          "Resources"
         ],
         "parameters": [
           {
@@ -198,6 +221,197 @@
         }
       }
     },
+    "/api/sessions/{sessionId}/schema/components": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ComponentSummaryDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/schema/components/{typeName}": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "typeName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComponentSchemaDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/schema/components/{typeName}/archetypes": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "typeName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ArchetypeInfoDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/schema/components/{typeName}/indexes": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "typeName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IndexInfoDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/schema/components/{typeName}/systems": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "typeName",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemRelationshipsResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/sessions/file": {
       "post": {
         "tags": [
@@ -369,6 +583,211 @@
   },
   "components": {
     "schemas": {
+      "ArchetypeInfoDto": {
+        "required": [
+          "archetypeId",
+          "componentTypes",
+          "entityCount",
+          "componentSize",
+          "storageMode",
+          "chunkCount",
+          "chunkCapacity",
+          "occupancyPct"
+        ],
+        "type": "object",
+        "properties": {
+          "archetypeId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "componentTypes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "entityCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "componentSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "storageMode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "chunkCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "chunkCapacity": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "occupancyPct": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "ComponentSchemaDto": {
+        "required": [
+          "typeName",
+          "fullName",
+          "storageSize",
+          "totalSize",
+          "allowMultiple",
+          "revision",
+          "fields"
+        ],
+        "type": "object",
+        "properties": {
+          "typeName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "fullName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "storageSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "totalSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "allowMultiple": {
+            "type": "boolean"
+          },
+          "revision": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "fields": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FieldDto"
+            }
+          }
+        }
+      },
+      "ComponentSummaryDto": {
+        "required": [
+          "typeName",
+          "fullName",
+          "storageSize",
+          "fieldCount",
+          "archetypeCount",
+          "entityCount",
+          "indexCount"
+        ],
+        "type": "object",
+        "properties": {
+          "typeName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "fullName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "storageSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "fieldCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "archetypeCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "entityCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "indexCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
       "CreateAttachSessionRequest": {
         "required": [
           "endpointAddress"
@@ -448,6 +867,73 @@
             "items": {
               "$ref": "#/components/schemas/FileEntryDto"
             }
+          },
+          "truncated": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "FieldDto": {
+        "required": [
+          "name",
+          "typeName",
+          "typeFullName",
+          "offset",
+          "size",
+          "fieldId",
+          "isIndexed",
+          "indexAllowsMultiple"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "typeName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "typeFullName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "offset": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "size": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "fieldId": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "isIndexed": {
+            "type": "boolean"
+          },
+          "indexAllowsMultiple": {
+            "type": "boolean"
           }
         }
       },
@@ -498,6 +984,49 @@
           },
           "isSchemaDll": {
             "type": "boolean"
+          }
+        }
+      },
+      "IndexInfoDto": {
+        "required": [
+          "fieldName",
+          "fieldOffset",
+          "fieldSize",
+          "allowsMultiple",
+          "indexType"
+        ],
+        "type": "object",
+        "properties": {
+          "fieldName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "fieldOffset": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "fieldSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "allowsMultiple": {
+            "type": "boolean"
+          },
+          "indexType": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -653,6 +1182,75 @@
             }
           }
         }
+      },
+      "SystemRelationshipDto": {
+        "required": [
+          "systemName",
+          "systemType",
+          "access",
+          "queryViewSchema",
+          "changeFilterTypes"
+        ],
+        "type": "object",
+        "properties": {
+          "systemName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "systemType": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "access": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "queryViewSchema": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "changeFilterTypes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SystemRelationshipsResponseDto": {
+        "required": [
+          "runtimeHosted",
+          "systems"
+        ],
+        "type": "object",
+        "properties": {
+          "runtimeHosted": {
+            "type": "boolean"
+          },
+          "systems": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SystemRelationshipDto"
+            }
+          }
+        }
       }
     }
   },
@@ -661,13 +1259,16 @@
       "name": "Sessions"
     },
     {
+      "name": "Resources"
+    },
+    {
       "name": "Files"
     },
     {
       "name": "Health"
     },
     {
-      "name": "Resources"
+      "name": "Schema"
     }
   ]
 }

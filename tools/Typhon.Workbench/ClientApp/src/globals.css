@@ -192,6 +192,12 @@
   body {
     @apply bg-background text-foreground;
     letter-spacing: var(--tracking-normal);
+    /* App feel, not web feel: disable accidental text-selection on drag across the chrome.
+       Inputs, textareas, and elements inside [contenteditable] override this automatically via
+       user-agent styles, so typing stays unaffected. Text surfaces that the user legitimately
+       wants to copy (currently: Logs panel) opt back in via `select-text`. */
+    user-select: none;
+    -webkit-user-select: none;
   }
 }
 

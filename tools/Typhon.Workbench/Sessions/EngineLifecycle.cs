@@ -145,6 +145,61 @@ public sealed class EngineLifecycle : IDisposable
                 state = result.State;
                 diagnostics = result.Diagnostics;
                 loaded = result.RegisteredCount;
+
+                // Discover + register archetype types. Two-step dance:
+                //   1. RunClassConstructor triggers the archetype's static field initializers — the
+                //      `public static readonly Comp<T> X = Register<T>()` lines which populate
+                //      ArchetypeRegistry's component→archetype slot map.
+                //   2. ArchetypeRegistry.EnsureFinalized assigns the archetype its id and inserts it
+                //      into Archetypes[] so GetAllArchetypes() + ComponentTable.EstimatedEntityCount
+                //      can find it. (RunClassConstructor alone only runs the field inits — the metadata
+                //      insertion happens inside the lazily-invoked Metadata property getter.)
+                // Then InitializeArchetypes wires per-engine archetype storage (EntityMap pages) so
+                // counts are recovered from the MMF-backed state. Per-archetype try/catch keeps one
+                // bad archetype from aborting the rest.
+                if (result.RegisteredCount > 0 && loadedSchema.ArchetypeTypes.Length > 0)
+                {
+                    foreach (var archetypeType in loadedSchema.ArchetypeTypes)
+                    {
+                        try
+                        {
+                            System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(archetypeType.TypeHandle);
+                            Typhon.Engine.ArchetypeRegistry.EnsureFinalized(archetypeType);
+                        }
+                        catch (Exception archEx)
+                        {
+                            // Per-archetype tolerance — a broken archetype shouldn't block the rest. Surface it as
+                            // a diagnostic so the user has a breadcrumb; swallowing silently meant the Schema
+                            // Inspector could show wrong counts with no visible error.
+                            diagnostics = [.. diagnostics, new SchemaCompatibility.Diagnostic(
+                                ComponentName: archetypeType.FullName ?? archetypeType.Name,
+                                Kind: "archetype_finalize_failed",
+                                Detail: archEx.ToString())];
+                        }
+                    }
+                    // After a reopen, every session spins up a fresh collectible ALC — the schema DLL's component/archetype
+                    // types are *new* CLR Type instances even when the file is byte-identical. DeclareComponent already
+                    // refreshes the global Type→componentTypeId map through its schema-name dedup path, but EnsureFinalized
+                    // short-circuits on pre-populated archetype slots, leaving _slotToComponentType pointing at the first
+                    // ALC's Type instances. RefreshSlotTypes propagates the current ALC's Types into every archetype so
+                    // reflection-equality lookups (Workbench's GetArchetypesForComponent, etc.) match the session's engine.
+                    Typhon.Engine.ArchetypeRegistry.RefreshSlotTypes();
+                    try
+                    {
+                        engine.InitializeArchetypes();
+                    }
+                    catch (Exception initEx)
+                    {
+                        diagnostics = [.. diagnostics, new SchemaCompatibility.Diagnostic(
+                            ComponentName: "(InitializeArchetypes)",
+                            Kind: "archetype_init_failed",
+                            Detail: initEx.ToString())];
+                        if (state == SchemaCompatibility.State.Ready)
+                        {
+                            state = SchemaCompatibility.State.MigrationRequired;
+                        }
+                    }
+                }
             }
 
             return new EngineLifecycle(sp, alc, engine, registry, allocator, fullPath, state, loaded, diagnostics);

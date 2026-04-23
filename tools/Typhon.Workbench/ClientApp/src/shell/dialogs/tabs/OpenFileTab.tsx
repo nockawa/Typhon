@@ -1,65 +1,70 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import FileBrowser from '@/shell/components/FileBrowser';
-import SchemaDllPicker from '@/shell/components/SchemaDllPicker';
 
 interface Props {
  onOpen: (filePath: string, schemaDllPaths: string[]) => void;
  isOpening?: boolean;
 }
 
+/**
+ * Open-File dialog tab. Two entry paths for the same action:
+ *   • Browse — standard file tree, extension-filtered to `.bin` / `.typhon`
+ *   • Paste  — input field for an absolute path, wins if non-empty
+ *
+ * Schema DLLs are resolved server-side via the `*.schema.dll` convention in the database file's
+ * directory. No manual picker — the explicit picker was a common source of stale paths after
+ * regenerating fixtures, and convention covers the realistic workflow.
+ */
 export default function OpenFileTab({ onOpen, isOpening }: Props) {
- const [filePath, setFilePath] = useState<string | null>(null);
- const [manualDlls, setManualDlls] = useState<string[] | null>(null);
+ const [selectedPath, setSelectedPath] = useState<string | null>(null);
+ const [pastedPath, setPastedPath] = useState<string>('');
 
- const initialDir = useMemo(() => {
- if (!filePath) return undefined;
- const lastSep = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
- return lastSep >= 0 ? filePath.slice(0, lastSep) : undefined;
- }, [filePath]);
-
- const canOpen = !!filePath && !isOpening;
- const dllsForOpen = manualDlls ?? [];
+ // Pasted path wins when non-empty (explicit user intent). Otherwise fall back to tree selection.
+ const effectivePath = pastedPath.trim().length > 0 ? pastedPath.trim() : selectedPath;
+ const canOpen = !!effectivePath && !isOpening;
 
  return (
  <div className="flex h-full flex-col gap-3">
- <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
  <div className="flex min-h-0 flex-col gap-1">
- <label className="shrink-0 text-density-sm text-muted-foreground">
- Database file
- </label>
+ <label className="shrink-0 text-density-sm text-muted-foreground">Database file</label>
  <div className="min-h-0 flex-1">
  <FileBrowser
- extensionFilter={['.typhon']}
- onSelectionChange={(paths) => setFilePath(paths[0] ?? null)}
- onActivate={(p) => setFilePath(p)}
+ extensionFilter={['.bin', '.typhon']}
+ onSelectionChange={(paths) => setSelectedPath(paths[0] ?? null)}
+ onActivate={(p) => setSelectedPath(p)}
  />
  </div>
- {filePath && (
- <p className="shrink-0 truncate text-[10px] text-muted-foreground" title={filePath}>
- Selected: <span className="text-foreground">{filePath}</span>
- </p>
- )}
  </div>
 
- <div className="flex min-h-0 flex-col">
- <SchemaDllPicker
- paths={dllsForOpen}
- onChange={setManualDlls}
- initialPath={initialDir}
- onAutoDetect={() => setManualDlls(null)}
+ <div className="flex shrink-0 flex-col gap-1">
+ <label className="text-density-sm text-muted-foreground">
+ Or paste absolute path
+ </label>
+ <Input
+ placeholder="C:\path\to\database.bin"
+ value={pastedPath}
+ onChange={(e) => setPastedPath(e.target.value)}
+ spellCheck={false}
+ autoComplete="off"
+ className="font-mono text-[12px]"
  />
- {manualDlls === null && filePath && (
- <p className="mt-1 shrink-0 text-[10px] text-muted-foreground">
- Convention: server will auto-discover <code>*.schema.dll</code> next to the file.
+ </div>
+
+ {effectivePath && (
+ <p className="shrink-0 truncate text-[10px] text-muted-foreground" title={effectivePath}>
+ Will open: <span className="font-mono text-foreground">{effectivePath}</span>
  </p>
  )}
- </div>
- </div>
+
+ <p className="shrink-0 text-[10px] text-muted-foreground">
+ Schema DLLs are auto-discovered via the <code>*.schema.dll</code> convention in the same directory.
+ </p>
 
  <div className="flex shrink-0 justify-end gap-2">
  <Button
- onClick={() => filePath && onOpen(filePath, manualDlls ?? [])}
+ onClick={() => effectivePath && onOpen(effectivePath, [])}
  disabled={!canOpen}
  className="text-density-sm"
  >

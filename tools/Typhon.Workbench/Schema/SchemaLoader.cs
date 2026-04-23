@@ -1,4 +1,5 @@
 using System.Reflection;
+using Typhon.Engine;
 using Typhon.Schema.Definition;
 using Typhon.Workbench.Sessions;
 
@@ -51,6 +52,7 @@ public static class SchemaLoader
 
         var types = new List<Type>();
         var names = new List<string>();
+        var archetypeTypes = new List<Type>();
         foreach (var asm in assemblies)
         {
             Type[] exported;
@@ -67,14 +69,50 @@ public static class SchemaLoader
 
             foreach (var type in exported)
             {
-                if (!type.IsValueType) continue;
-                var attr = type.GetCustomAttribute<ComponentAttribute>();
-                if (attr == null) continue;
-                types.Add(type);
-                names.Add(attr.Name ?? type.Name);
+                // Components — value types with [Component].
+                if (type.IsValueType)
+                {
+                    var attr = type.GetCustomAttribute<ComponentAttribute>();
+                    if (attr != null)
+                    {
+                        types.Add(type);
+                        names.Add(attr.Name ?? type.Name);
+                    }
+                    continue;
+                }
+                // Archetypes — concrete (non-abstract) classes whose inheritance chain includes
+                // Typhon.Engine.Archetype<> or Archetype<,>.
+                if (type.IsClass && !type.IsAbstract && InheritsFromArchetype(type))
+                {
+                    archetypeTypes.Add(type);
+                }
             }
         }
 
-        return new LoadedSchema(assemblies.ToArray(), types.ToArray(), names.ToArray());
+        return new LoadedSchema(
+            assemblies.ToArray(),
+            types.ToArray(),
+            names.ToArray(),
+            archetypeTypes.ToArray());
+    }
+
+    /// <summary>True if <paramref name="type"/>'s base-type chain contains a closed generic over
+    /// <c>Typhon.Engine.Archetype&lt;&gt;</c> or <c>Archetype&lt;,&gt;</c>. Walks up the chain because deeper
+    /// hierarchies (e.g., <c>Child : Archetype&lt;Child, Parent&gt;</c>) still trace back to the generic
+    /// base definitions.</summary>
+    private static bool InheritsFromArchetype(Type type)
+    {
+        var archetypeBase1 = typeof(Archetype<>);
+        var archetypeBase2 = typeof(Archetype<,>);
+        for (var cursor = type.BaseType; cursor != null && cursor != typeof(object); cursor = cursor.BaseType)
+        {
+            if (!cursor.IsGenericType) continue;
+            var def = cursor.GetGenericTypeDefinition();
+            if (def == archetypeBase1 || def == archetypeBase2)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }

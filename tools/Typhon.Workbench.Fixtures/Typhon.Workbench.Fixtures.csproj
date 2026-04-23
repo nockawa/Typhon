@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>default</LangVersion>
+        <IsPackable>false</IsPackable>
+        <Nullable>disable</Nullable>
+        <!-- Emit the assembly as *.schema.dll directly so the Workbench's SchemaConvention loader picks it up
+             without the fixture generator having to rename it. -->
+        <AssemblyName>Typhon.Workbench.Fixtures.schema</AssemblyName>
+        <RootNamespace>Typhon.Workbench.Fixtures</RootNamespace>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\Typhon.Engine\Typhon.Engine.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Source generators / analyzers the Typhon.Engine types depend on at compile time. -->
+        <ProjectReference Include="..\..\src\Typhon.Analyzers\Typhon.Analyzers.csproj" ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
+        <ProjectReference Include="..\..\src\Typhon.Generators\Typhon.Generators.csproj" ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- The fixture database generator is internal so it never becomes part of the public API
+             surface for user schema DLLs. The Workbench (DEBUG-only Dev Fixture tab) and the engine
+             test project are the only intended callers. -->
+        <InternalsVisibleTo Include="Typhon.Workbench" />
+        <InternalsVisibleTo Include="Typhon.Engine.Tests" />
+    </ItemGroup>
+
+</Project>

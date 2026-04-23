@@ -239,7 +239,7 @@ When linking to `claude/` docs in GitHub issues, use the `main` branch:
 | Artifact | Action |
 |----------|--------|
 | GitHub Issue | Closed (auto or manual) |
-| Design doc | → `reference/` (if useful) or `archive/` |
+| Design doc | Stays in `design/`; move to `archive/` only if superseded |
 | GitHub Project | Status → Done |
 | overview/ | Updated if architectural impact |
 | ADR | Created if significant decision was made |
@@ -282,17 +282,17 @@ When linking to `claude/` docs in GitHub issues, use the `main` branch:
                              │
                              │ produces
                              ▼
-                    ┌─────────────────┐    ┌──────────────┐
-                    │      PR         │───►│  reference/  │
-                    │                 │    │              │
-                    └─────────────────┘    └──────────────┘
-                                                  │
-                                           updates│
-                                                  ▼
-                                          ┌──────────────┐
-                                          │  overview/   │
-                                          │  (Living)    │
-                                          └──────────────┘
+                    ┌─────────────────┐
+                    │      PR         │
+                    │                 │
+                    └────────┬────────┘
+                             │
+                      updates│
+                             ▼
+                    ┌──────────────────┐
+                    │   overview/      │
+                    │   (Living)       │
+                    └──────────────────┘
 ```
 
 ### Linking Conventions
@@ -346,7 +346,7 @@ Both approaches end in the same state: issue In Progress, branch created, Rider 
 1. **Rider:** `Alt+Shift+W` (Close Task) — commits remaining changes, optionally merges branch
 2. **Update issue** with summary of what was done
 3. **Ask Claude:** `/complete-task #42`
-   - Claude moves design doc → reference/archive
+   - Claude updates design doc status (or archives if superseded)
    - Claude updates GitHub Project status → Done
    - Claude checks for overview/ updates
    - Claude offers branch cleanup
@@ -474,7 +474,7 @@ argument-hint: [issue number]
 
 Actions:
 1. Update issue status → Done (or close)
-2. Move design doc → reference/ or archive/
+2. Design doc stays in design/ (archive only if superseded)
 3. Update GitHub Project status → Done
 4. Check for overview/ updates needed
 5. Prompt for ADR if significant decision
@@ -766,7 +766,7 @@ Developer: "Feature for #42 is done, PR merged"
 Claude: "Excellent! Let me wrap this up:
 
   ✅ Issue #42 closed
-  ✅ Moved design/QueryEngine.md → reference/
+  ✅ design/QueryEngine.md kept in place (implementation complete)
   ✅ Project status → Done
 
   Quick questions:

@@ -11,10 +11,19 @@ import { useDeleteApiSessionsId } from '@/api/generated/sessions/sessions';
 import { usePaletteStore } from '@/stores/usePaletteStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useThemeStore } from '@/stores/useThemeStore';
+import { useSchemaInspectorStore } from '@/stores/useSchemaInspectorStore';
 import CommandPalette from './CommandPalette';
 import ConnectDialog, { type ConnectTab } from './dialogs/ConnectDialog';
 import NavButtons from './NavButtons';
 import PaletteTrigger from './PaletteTrigger';
+import {
+  openArchetypeBrowser,
+  openSchemaArchetypes,
+  openSchemaBrowser,
+  openSchemaIndexes,
+  openSchemaRelationships,
+} from './commands/openSchemaBrowser';
+import { logError, logInfo } from '@/stores/useLogStore';
 
 export default function MenuBar() {
  const paletteOpen = usePaletteStore((s) => s.open);
@@ -26,6 +35,7 @@ export default function MenuBar() {
  const sessionId = useSessionStore((s) => s.sessionId);
  const clearSession = useSessionStore((s) => s.clearSession);
  const toggleTheme = useThemeStore((s) => s.toggle);
+ const hasComponentSelection = useSchemaInspectorStore((s) => s.selectedComponentType != null);
 
  const [dialogOpen, setDialogOpen] = useState(false);
  const [initialTab, setInitialTab] = useState<ConnectTab>('open');
@@ -38,8 +48,15 @@ export default function MenuBar() {
  const deleteSession = useDeleteApiSessionsId();
  const handleCloseSession = async () => {
  if (!sessionId) return;
- await deleteSession.mutateAsync({ id: sessionId });
+ const closingId = sessionId;
+ try {
+ await deleteSession.mutateAsync({ id: closingId });
  clearSession();
+ logInfo('Session closed', { sessionId: closingId });
+ } catch (err) {
+ logError('Failed to close session', { sessionId: closingId, error: String(err) });
+ throw err;
+ }
  };
 
  return (
@@ -66,6 +83,31 @@ export default function MenuBar() {
  <MenubarMenu>
  <MenubarTrigger className="h-7 px-2 text-density-sm">View</MenubarTrigger>
  <MenubarContent>
+ <MenubarItem onClick={openSchemaBrowser}>Component Browser</MenubarItem>
+ <MenubarItem onClick={openArchetypeBrowser}>Archetype Browser</MenubarItem>
+ <MenubarSeparator />
+ <MenubarItem
+ disabled={!hasComponentSelection}
+ onClick={openSchemaArchetypes}
+ title={hasComponentSelection ? undefined : 'Select a component first'}
+ >
+ Component Archetypes
+ </MenubarItem>
+ <MenubarItem
+ disabled={!hasComponentSelection}
+ onClick={openSchemaIndexes}
+ title={hasComponentSelection ? undefined : 'Select a component first'}
+ >
+ Component Indexes
+ </MenubarItem>
+ <MenubarItem
+ disabled={!hasComponentSelection}
+ onClick={openSchemaRelationships}
+ title={hasComponentSelection ? undefined : 'Select a component first'}
+ >
+ Component Relationships
+ </MenubarItem>
+ <MenubarSeparator />
  <MenubarItem onClick={toggleTheme}>Toggle Dark / Light Mode</MenubarItem>
  </MenubarContent>
  </MenubarMenu>

@@ -239,7 +239,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     private ComponentTable _componentsTable;
     private ComponentTable _schemaHistoryTable;
-    private ComponentTable _archetypesTable;
     private ConcurrentDictionary<Type, ComponentTable> _componentTableByType;
 
     /// <summary>Component schema names that underwent migration during this engine session. Used to invalidate stale EntityMaps.</summary>
@@ -612,9 +611,45 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
-    /// Returns all registered ComponentTables. Used by <see cref="StatisticsWorker"/> to iterate tables.
+    /// Returns all registered ComponentTables. Used by <see cref="StatisticsWorker"/> to iterate tables, and by external tooling (e.g., the Workbench
+    /// Schema Inspector) to enumerate the schema. <see cref="ConcurrentDictionary{TKey,TValue}.Values"/> returns a stable snapshot, so concurrent
+    /// registration is safe.
     /// </summary>
-    internal IEnumerable<ComponentTable> GetAllComponentTables() => _componentTableByType.Values;
+    public IEnumerable<ComponentTable> GetAllComponentTables() => _componentTableByType.Values;
+
+    /// <summary>
+    /// Current entity count for the given archetype in this engine. Returns 0 if the archetype has no state in this engine (not registered or not yet
+    /// initialized). Used by external tooling (Workbench Schema Inspector) to populate the Archetype panel — intentionally a scalar accessor so the
+    /// internal <see cref="ArchetypeEngineState"/> type does not need to leak into the public surface.
+    /// </summary>
+    public long GetArchetypeEntityCount(ushort archetypeId)
+    {
+        var states = _archetypeStates;
+        if (states == null || archetypeId >= states.Length)
+        {
+            return 0;
+        }
+
+        var state = states[archetypeId];
+        return state?.EntityMap.EntryCount ?? 0;
+    }
+
+    /// <summary>
+    /// Number of active cluster chunks for the given archetype in this engine. Returns 0 for legacy archetypes (non-cluster storage) or if the archetype has
+    /// no cluster state yet. Paired with <see cref="GetArchetypeEntityCount"/> the caller can derive occupancy for cluster archetypes:
+    /// <c>entityCount / (chunkCount * ArchetypeClusterInfo.ClusterSize)</c>.
+    /// </summary>
+    public int GetArchetypeClusterChunkCount(ushort archetypeId)
+    {
+        var states = _archetypeStates;
+        if (states == null || archetypeId >= states.Length)
+        {
+            return 0;
+        }
+
+        var state = states[archetypeId];
+        return state?.ClusterState?.ActiveClusterCount ?? 0;
+    }
 
     /// <summary>
     /// Sum of pinned-heap bytes currently held by every live <see cref="TransientStore"/> in this engine. Transient storage is distributed across several
@@ -2272,7 +2307,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // ArchetypeR1 registered AFTER _componentsTable is set — ensures its ComponentR1 row
         // is persisted to the system schema (needed for LoadPersistedArchetypes on reopen).
         RegisterComponentFromAccessor<ArchetypeR1>(cs);
-        _archetypesTable = GetComponentTable<ArchetypeR1>();
 
         using var guard = EpochGuard.Enter(EpochManager);
         var epoch = guard.Epoch;
@@ -2640,6 +2674,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             arch.EntityMapSPI = state.EntityMap.Segment.RootPageIndex;
             arch.ClusterSegmentSPI = state.ClusterState?.ClusterSegment?.RootPageIndex ?? 0;
             arch.NextEntityKey = Interlocked.Read(ref state.NextEntityKey);
+
+            // EntityMap's meta chunk tracks the total entry count, but FlushMetaToChunk is otherwise only called during a bucket split. For append-only
+            // workloads that never split (e.g. a session with fewer entries than n0 × 0.75 × bucketCapacity), the persisted meta count stays at 0 from
+            // Create() even though the bucket data is correct. Flush it here so the next InitializeOpen reads an accurate total without having to walk
+            // the bucket chains.
+            state.EntityMap.FlushMeta(cs);
 
             // Persist per-archetype cluster index segment SPI via bootstrap dictionary
             if (state.ClusterState?.IndexSegment != null)
@@ -3089,8 +3129,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             _pendingGridConfig = null;
         }
 
-        // Ensure ArchetypeR1 system component is registered (may not be if this is a database reopen
-        // — CreateSystemSchemaR1 only runs on new databases, LoadSystemSchemaR1 doesn't restore ArchetypeR1)
+        // Ensure ArchetypeR1 is registered in this session. On a new database CreateSystemSchemaR1 already registered it; on reopen LoadSystemSchemaR1 stops
+        // after ComponentR1 + SchemaHistoryR1 (ArchetypeR1 is treated as a regular user-visible system component), so we pick it up here via the standard
+        // registration path — which reuses the persisted SPIs via _persistedComponents.
         if (GetComponentTable<ArchetypeR1>() == null)
         {
             RegisterComponentFromAccessor<ArchetypeR1>();

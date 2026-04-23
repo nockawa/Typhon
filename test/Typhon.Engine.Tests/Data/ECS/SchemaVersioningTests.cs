@@ -109,7 +109,60 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
     }
 
     [Test]
-    [Ignore("ArchetypeR1 table not yet persisted in root header SPIs — table is recreated fresh on reopen, losing tampered data")]
+    public void Persist_ThenReopen_EntityCount_Survives()
+    {
+        // Regression: the EntityMap's in-memory _entryCount was only flushed to the persisted meta chunk during bucket splits. For small entity counts that
+        // never trigger a split, the persisted count stayed at 0 and GetArchetypeEntityCount returned 0 after reopen even though all the bucket chunks had
+        // the right data. Fix: PersistArchetypeState now calls EntityMap.FlushMeta on dispose so the count reaches disk.
+
+        const int unitCount = 15;
+        const int soldierCount = 7;
+
+        using (var scope1 = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope1.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<EcsPosition>();
+            dbe.RegisterComponentFromAccessor<EcsVelocity>();
+            dbe.RegisterComponentFromAccessor<EcsHealth>();
+            dbe.InitializeArchetypes();
+
+            using (var tx = dbe.CreateQuickTransaction())
+            {
+                var pos = new EcsPosition(1, 2, 3);
+                var vel = new EcsVelocity(4, 5, 6);
+                for (int i = 0; i < unitCount; i++)
+                {
+                    tx.Spawn<EcsUnit>(EcsUnit.Position.Set(in pos), EcsUnit.Velocity.Set(in vel));
+                }
+                var health = new EcsHealth(100, 100);
+                for (int i = 0; i < soldierCount; i++)
+                {
+                    tx.Spawn<EcsSoldier>(
+                        EcsUnit.Position.Set(in pos),
+                        EcsUnit.Velocity.Set(in vel),
+                        EcsSoldier.Health.Set(in health));
+                }
+                Assert.That(tx.Commit(), Is.True);
+            }
+            dbe.ForceCheckpoint();
+        }
+
+        using (var scope2 = ServiceProvider.CreateScope())
+        {
+            using var dbe = scope2.ServiceProvider.GetRequiredService<DatabaseEngine>();
+            dbe.RegisterComponentFromAccessor<EcsPosition>();
+            dbe.RegisterComponentFromAccessor<EcsVelocity>();
+            dbe.RegisterComponentFromAccessor<EcsHealth>();
+            dbe.InitializeArchetypes();
+
+            Assert.That(dbe.GetArchetypeEntityCount(100), Is.EqualTo(unitCount),
+                "EcsUnit entity count should survive reopen without a bucket split");
+            Assert.That(dbe.GetArchetypeEntityCount(101), Is.EqualTo(soldierCount),
+                "EcsSoldier entity count should survive reopen without a bucket split");
+        }
+    }
+
+    [Test]
     public void Persist_ThenTamper_ComponentCount_Throws()
     {
         // Phase 1: Create database with archetypes
@@ -174,7 +227,6 @@ unsafe class SchemaVersioningTests : TestBase<SchemaVersioningTests>
     }
 
     [Test]
-    [Ignore("ArchetypeR1 table not yet persisted in root header SPIs — table is recreated fresh on reopen, losing tampered data")]
     public void Persist_ThenTamper_Revision_Throws()
     {
         // Phase 1: Create database

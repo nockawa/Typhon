@@ -449,6 +449,26 @@ public abstract unsafe partial class PagedHashMapBase<TStore> where TStore : str
         meta.EntryCount = _entryCount;
     }
 
+    /// <summary>
+    /// Flush <c>_entryCount</c> and <c>PackedMeta</c> to the persisted meta chunk (chunk 0). Call before
+    /// engine dispose so the next <see cref="InitializeOpen"/> reads the correct total without
+    /// having to walk every bucket chain. Bucket splits also flush meta as they run, so this call is
+    /// only needed when an append-only workload never triggers a split (e.g., a small number of
+    /// entities relative to <c>n0</c>).
+    /// </summary>
+    public void FlushMeta(ChangeSet changeSet)
+    {
+        var accessor = _segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            FlushMetaToChunk(ref accessor);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Create / Open scaffolding (called by concrete factory methods)
     // ═══════════════════════════════════════════════════════════════════════

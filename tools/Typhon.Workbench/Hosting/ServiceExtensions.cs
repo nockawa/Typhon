@@ -1,4 +1,5 @@
 using Typhon.Workbench.Fs;
+using Typhon.Workbench.Schema;
 using Typhon.Workbench.Security;
 using Typhon.Workbench.Sessions;
 using Typhon.Workbench.Streams;
@@ -13,6 +14,7 @@ public static class ServiceExtensions
         services.AddSingleton<SessionManager>();
         services.AddSingleton<DemoDataProvider>();
         services.AddSingleton<FileBrowserService>();
+        services.AddSingleton<SchemaService>();
         return services;
     }
 

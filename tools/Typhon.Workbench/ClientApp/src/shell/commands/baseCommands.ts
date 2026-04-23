@@ -2,6 +2,13 @@ import { deleteApiSessionsId } from '@/api/generated/sessions/sessions';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { refreshResourceGraph } from '@/hooks/useResourceIndex';
+import {
+  openArchetypeBrowser,
+  openSchemaArchetypes,
+  openSchemaBrowser,
+  openSchemaIndexes,
+  openSchemaRelationships,
+} from './openSchemaBrowser';
 
 export interface CommandItem {
   id: string;
@@ -26,6 +33,11 @@ export function buildBaseCommands(): CommandItem[] {
     { id: 'open-trace',    label: 'Open Trace…',              keywords: 'trace typhon',      action: () => {} },
     { id: 'close-session', label: 'Close Session',            keywords: 'close disconnect',  action: closeSession },
     { id: 'refresh-graph', label: 'Refresh Resource Graph',   keywords: 'refresh reload tree', action: refreshResourceGraph },
+    { id: 'schema-browser', label: 'Open Component Browser',       keywords: 'schema components inspector #schema browser', action: openSchemaBrowser },
+    { id: 'archetype-browser', label: 'Open Archetype Browser',    keywords: 'archetypes list schema cluster legacy',       action: openArchetypeBrowser },
+    { id: 'schema-archetypes', label: 'Open Component Archetypes', keywords: 'schema archetypes cluster storage',           action: openSchemaArchetypes },
+    { id: 'schema-indexes', label: 'Open Component Indexes',       keywords: 'schema indexes btree fields',                 action: openSchemaIndexes },
+    { id: 'schema-relationships', label: 'Open Component Relationships', keywords: 'schema systems relationships',          action: openSchemaRelationships },
     { id: 'toggle-theme',  label: 'Toggle Dark / Light Mode', keywords: 'theme dark light',  action: toggleTheme },
     { id: 'reload',        label: 'Reload',                   keywords: 'refresh',           action: () => location.reload() },
     { id: 'about',         label: 'About Typhon Workbench',   keywords: 'version info',      action: () => {} },

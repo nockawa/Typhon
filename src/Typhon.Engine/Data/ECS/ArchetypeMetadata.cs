@@ -127,6 +127,29 @@ internal class ArchetypeMetadata
         return (uint)componentTypeId < (uint)arr.Length && arr[componentTypeId] != 0xFF;
     }
 
+    /// <summary>Enumerate the CLR types of components in this archetype. Used by external tooling (Workbench Schema
+    /// Inspector) to present the archetype's component set without reaching into internals.</summary>
+    public IEnumerable<Type> GetComponentTypes()
+    {
+        var arr = _slotToComponentType;
+        if (arr == null)
+        {
+            yield break;
+        }
+
+        for (int i = 0; i < arr.Length; i++)
+        {
+            if (arr[i] != null)
+            {
+                yield return arr[i];
+            }
+        }
+    }
+
+    /// <summary>True if this archetype uses cluster storage (fixed-size SoA chunks). False for legacy
+    /// per-ComponentTable segment storage.</summary>
+    public bool UsesClusterStorage => IsClusterEligible;
+
     [System.Diagnostics.CodeAnalysis.DoesNotReturn]
     private void ThrowComponentNotInArchetype(int componentTypeId) =>
         throw new InvalidOperationException(
