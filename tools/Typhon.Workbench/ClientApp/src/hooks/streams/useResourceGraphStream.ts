@@ -18,9 +18,11 @@ export interface ResourceGraphEventPayload {
  */
 export function useResourceGraphStream(): { state: 'connecting' | 'open' | 'closed' } {
   const sessionId = useSessionStore((s) => s.sessionId);
+  const kind = useSessionStore((s) => s.kind);
   const queryClient = useQueryClient();
 
-  const url = sessionId ? `/api/sessions/${sessionId}/resources/stream` : null;
+  // SSE stream is Open-session only — server returns 401 for other kinds. Null URL = hook stays closed.
+  const url = sessionId && kind === 'open' ? `/api/sessions/${sessionId}/resources/stream` : null;
 
   const onMessage = useCallback(
     (_evt: ResourceGraphEventPayload) => {

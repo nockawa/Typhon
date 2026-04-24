@@ -1,0 +1,305 @@
+import type { TimeRange } from '@/libs/profiler/model/uiTypes';
+import {
+  OVERVIEW_PALETTE,
+  formatDuration,
+  setupCanvas,
+} from './canvasUtils';
+import type { StudioTheme } from './theme';
+
+/**
+ * Minimal row shape the overview strip needs. Feeds both from server-supplied `metadata.tickSummaries`
+ * (trace mode — complete, pre-aggregated) and from live-tick aggregation (attach mode — filled in as
+ * ticks arrive). Derived at the call site; the draw function doesn't care about the source.
+ */
+export interface TickRow {
+  tickNumber: number;
+  startUs: number;
+  endUs: number;
+  durationUs: number;
+  eventCount: number;
+}
+
+/** Inputs to `drawTickOverview` and hit-test helpers. */
+export interface TickOverviewInputs {
+  ticks: TickRow[];
+  /** The main graph's viewport — used to render the orange "selected ticks" overlay. */
+  viewRange: TimeRange;
+  /** Slice of ticks currently visible in the overview (pan state, separate from viewRange). */
+  scrollWindow: { startIdx: number; endIdx: number };
+  /** Ticks that overlap viewRange. `-1`/`-1` if no overlap. */
+  selection: { first: number; last: number };
+  /** In-flight drag preview, or null if no drag. */
+  dragPreview: { startIdx: number; currentIdx: number; moved: boolean } | null;
+  /** Hovered tick + mouse-relative coordinates, or null. */
+  hover: { tickIdx: number; x: number; y: number } | null;
+  /** P95 tick duration (µs) — bars clamp at this; taller ticks are drawn in a warning hue. */
+  p95TickDurationUs: number;
+  /** Legends + "?" help glyph visibility ('l' key toggles). */
+  legendsVisible: boolean;
+  /** True when the cursor is inside the help-glyph hit zone — brightens the glyph. */
+  helpHovered: boolean;
+}
+
+export const TIMELINE_HEIGHT = 80;
+export const MAX_BAR_WIDTH = 10;
+/** Per-bar floor so individual ticks stay legible. Caps visible window at `floor(width/MIN_BAR_WIDTH)` ticks. */
+export const MIN_BAR_WIDTH = 4;
+/** Pixel threshold separating click from drag. */
+export const DRAG_THRESHOLD_PX = 3;
+/**
+ * Help-glyph geometry. Anchored at the top-right of the canvas (not the gutter — the overview sits alone
+ * until the time-area section lands in 2b and provides a real gutter). `HELP_GLYPH_MARGIN_RIGHT` is the
+ * distance from the right canvas edge to the glyph's right baseline.
+ */
+export const HELP_GLYPH_MARGIN_RIGHT = 8;
+export const HELP_GLYPH_Y_BASELINE = 14;
+export const HELP_ICON_HIT_PAD = 4;
+export const HELP_ICON_GLYPH_WIDTH = 10;
+
+const OVERLAY_COLOR = OVERVIEW_PALETTE.selection + '40';
+const OVERLAY_BORDER = OVERVIEW_PALETTE.selection + 'B3';
+
+/**
+ * Pure render entry point for the tick-overview strip. Clears + repaints the whole canvas each call —
+ * rAF-driven from the React wrapper. Theme is passed in so this stays DOM-free and unit-testable.
+ */
+export function drawTickOverview(
+  canvas: HTMLCanvasElement,
+  inputs: TickOverviewInputs,
+  theme: StudioTheme,
+): void {
+  const { width, height } = setupCanvas(canvas);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const { ticks, scrollWindow: sr, selection, dragPreview, hover, p95TickDurationUs, legendsVisible, helpHovered } = inputs;
+  const p95 = p95TickDurationUs || 1;
+  const visibleCount = sr.endIdx - sr.startIdx;
+  if (visibleCount <= 0) return;
+
+  // Background
+  ctx.fillStyle = theme.card;
+  ctx.fillRect(0, 0, width, height);
+
+  // Bottom border
+  ctx.strokeStyle = theme.border;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, height - 0.5);
+  ctx.lineTo(width, height - 0.5);
+  ctx.stroke();
+
+  const barAreaHeight = height - 18;
+  const barAreaTop = 2;
+
+  // P95 reference dashed line — drawn before bars so bars visually sit "under the ceiling". The P95 LABEL
+  // is drawn much later (after bars + overlay) so its backdrop stays on top and actually reads.
+  ctx.strokeStyle = theme.mutedForeground;
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(0, barAreaTop);
+  ctx.lineTo(width, barAreaTop);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const barWidth = Math.min(width / visibleCount, MAX_BAR_WIDTH);
+
+  // Bars. Minimum 1 px height floor so very-short ticks (e.g. a fast ForceCheckpoint) stay visible.
+  for (let i = sr.startIdx; i < sr.endIdx; i++) {
+    const tick = ticks[i];
+    const ratio = Math.min(tick.durationUs / p95, 1.0);
+    const barH = Math.max(1, ratio * barAreaHeight);
+    const x = (i - sr.startIdx) * barWidth;
+    const y = barAreaTop + barAreaHeight - barH;
+
+    ctx.fillStyle = tick.durationUs > p95 ? theme.overviewP95 : theme.overviewBar;
+    ctx.fillRect(x + 0.5, y, Math.max(barWidth - 1, 1), barH);
+  }
+
+  // Orange selection overlay — ticks overlapping viewRange.
+  if (selection.first >= 0) {
+    const drawFirst = Math.max(selection.first, sr.startIdx);
+    const drawLast = Math.min(selection.last, sr.endIdx - 1);
+    if (drawFirst <= drawLast) {
+      const overlayStartX = (drawFirst - sr.startIdx) * barWidth;
+      const overlayEndX = (drawLast - sr.startIdx + 1) * barWidth;
+      ctx.fillStyle = OVERLAY_COLOR;
+      ctx.fillRect(overlayStartX, barAreaTop, overlayEndX - overlayStartX, barAreaHeight);
+      ctx.strokeStyle = OVERLAY_BORDER;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(overlayStartX, barAreaTop, overlayEndX - overlayStartX, barAreaHeight);
+
+      // "N frames" caption (total selection — not clamped — so the number stays stable as bars scroll).
+      const totalFrames = selection.last - selection.first + 1;
+      const label = totalFrames === 1 ? '1 frame' : `${totalFrames} frames`;
+      ctx.font = '10px monospace';
+      const textWidth = ctx.measureText(label).width;
+      if (textWidth + 12 <= overlayEndX - overlayStartX) {
+        ctx.fillStyle = theme.foreground;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, (overlayStartX + overlayEndX) / 2, barAreaTop + barAreaHeight / 2);
+        ctx.textBaseline = 'alphabetic';
+      }
+    }
+
+    // Edge chevrons when selection extends past the visible window.
+    const cy = barAreaTop + barAreaHeight / 2;
+    if (selection.first < sr.startIdx) {
+      ctx.fillStyle = OVERLAY_BORDER;
+      ctx.beginPath();
+      ctx.moveTo(6, cy);
+      ctx.lineTo(12, cy - 5);
+      ctx.lineTo(12, cy + 5);
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (selection.last >= sr.endIdx) {
+      ctx.fillStyle = OVERLAY_BORDER;
+      ctx.beginPath();
+      ctx.moveTo(width - 6, cy);
+      ctx.lineTo(width - 12, cy - 5);
+      ctx.lineTo(width - 12, cy + 5);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // Tick number labels — spaced at ~60 px min to avoid overlap.
+  ctx.fillStyle = theme.mutedForeground;
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  const labelEvery = Math.max(1, Math.floor(60 / barWidth));
+  for (let i = sr.startIdx; i < sr.endIdx; i += labelEvery) {
+    const x = (i - sr.startIdx) * barWidth + barWidth / 2;
+    ctx.fillText(`${ticks[i].tickNumber}`, x, height - 5);
+  }
+
+  // Drag-preview overlay (in-flight select drag).
+  if (dragPreview && dragPreview.moved) {
+    const a = Math.min(dragPreview.startIdx, dragPreview.currentIdx);
+    const b = Math.max(dragPreview.startIdx, dragPreview.currentIdx);
+    const clampedA = Math.max(sr.startIdx, a);
+    const clampedB = Math.min(sr.endIdx - 1, b);
+    if (clampedA <= clampedB) {
+      const x1 = (clampedA - sr.startIdx) * barWidth;
+      const x2 = (clampedB - sr.startIdx + 1) * barWidth;
+      ctx.fillStyle = OVERVIEW_PALETTE.selection + '30';
+      ctx.fillRect(x1, barAreaTop, x2 - x1, barAreaHeight);
+      ctx.strokeStyle = OVERLAY_BORDER;
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x1, barAreaTop, x2 - x1, barAreaHeight);
+      ctx.setLineDash([]);
+
+      // Live "N frames" caption during drag (uses unclamped range).
+      const dragFrames = b - a + 1;
+      const dragLabel = dragFrames === 1 ? '1 frame' : `${dragFrames} frames`;
+      ctx.font = '11px monospace';
+      const dragTextWidth = ctx.measureText(dragLabel).width;
+      if (dragTextWidth + 12 <= x2 - x1) {
+        ctx.fillStyle = theme.foreground;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(dragLabel, (x1 + x2) / 2, barAreaTop + barAreaHeight / 2);
+        ctx.textBaseline = 'alphabetic';
+      }
+    }
+  }
+
+  // "P95: X" label at top-left — backdrop + text drawn AFTER bars/overlay so it stays legible over any bar
+  // that pokes up to the top of the strip. Same adaptive tooltip bg/text as the "?" glyph.
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const p95Label = `P95: ${formatDuration(p95)}`;
+  const p95LabelWidth = ctx.measureText(p95Label).width;
+  ctx.fillStyle = theme.tooltipBackground;
+  ctx.fillRect(2, barAreaTop + 1, p95LabelWidth + 6, 13);
+  ctx.fillStyle = theme.mutedForeground;
+  ctx.fillText(p95Label, 5, barAreaTop + 11);
+
+  // Help "?" glyph — anchored at the top-right of the canvas with a theme-aware backdrop so the glyph reads
+  // in both themes regardless of what bars sit under it (bars fill edge-to-edge in this section).
+  if (legendsVisible) {
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 11px monospace';
+    const glyphRight = width - HELP_GLYPH_MARGIN_RIGHT;
+    const bgW = HELP_ICON_GLYPH_WIDTH + 6;
+    const bgH = 14;
+    ctx.fillStyle = theme.tooltipBackground;
+    ctx.fillRect(glyphRight - bgW + 3, HELP_GLYPH_Y_BASELINE - 11, bgW, bgH);
+    ctx.fillStyle = helpHovered ? theme.foreground : theme.mutedForeground;
+    ctx.fillText('?', glyphRight, HELP_GLYPH_Y_BASELINE);
+  }
+
+  // Hover outline — the tooltip itself is a DOM overlay rendered BELOW the canvas by the React
+  // wrapper (see TickOverview.tsx) so it doesn't obstruct adjacent bars in the strip. The canvas
+  // draw pass only highlights the hovered bar; content goes through HelpOverlay.
+  if (!helpHovered && hover && hover.tickIdx >= sr.startIdx && hover.tickIdx < sr.endIdx) {
+    const x = (hover.tickIdx - sr.startIdx) * barWidth;
+    // Primary accent — chromatic outline that reads as "this is hovered" in both themes without feeling as
+    // heavy as a jet-black foreground stroke does against a pale card in light mode.
+    ctx.strokeStyle = theme.primary;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x, barAreaTop, barWidth, barAreaHeight);
+  }
+}
+
+/**
+ * Translate an in-canvas mouse X to the tick index under it (within the current visible window), or `-1`.
+ * Caller supplies the canvas width so this stays DOM-free.
+ */
+export function hitTestTick(
+  mouseX: number,
+  canvasWidth: number,
+  scrollWindow: { startIdx: number; endIdx: number },
+): number {
+  const visibleCount = scrollWindow.endIdx - scrollWindow.startIdx;
+  if (visibleCount <= 0) return -1;
+  const barWidth = Math.min(canvasWidth / visibleCount, MAX_BAR_WIDTH);
+  if (mouseX < 0 || mouseX >= visibleCount * barWidth) return -1;
+  return scrollWindow.startIdx + Math.floor(mouseX / barWidth);
+}
+
+/**
+ * Binary-search the `[first, last]` index range of ticks overlapping `viewRange`. Strict half-open semantics
+ * — two neighbouring ticks that merely kiss boundaries never both count as "selected". Returns `{-1, -1}`
+ * when no tick overlaps.
+ */
+export function computeSelectionIdxRange(ticks: TickRow[], viewRange: TimeRange): { first: number; last: number } {
+  if (ticks.length === 0) return { first: -1, last: -1 };
+  let lo = 0;
+  let hi = ticks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (ticks[mid].endUs > viewRange.startUs) hi = mid;
+    else lo = mid + 1;
+  }
+  const first = lo;
+  if (first >= ticks.length || ticks[first].startUs >= viewRange.endUs) {
+    return { first: -1, last: -1 };
+  }
+  lo = first;
+  hi = ticks.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (ticks[mid].startUs < viewRange.endUs) lo = mid + 1;
+    else hi = mid;
+  }
+  return { first, last: lo - 1 };
+}
+
+/** True when canvas-space `(mx, my)` falls inside the "?" help glyph's hit zone. */
+export function isInHelpHitZone(mx: number, my: number, canvasWidth: number, legendsVisible: boolean): boolean {
+  if (!legendsVisible) return false;
+  const glyphRightX = canvasWidth - HELP_GLYPH_MARGIN_RIGHT;
+  const glyphLeftX = glyphRightX - HELP_ICON_GLYPH_WIDTH;
+  const glyphTop = HELP_GLYPH_Y_BASELINE - 11;
+  const glyphBottom = HELP_GLYPH_Y_BASELINE + 3;
+  return mx >= glyphLeftX - HELP_ICON_HIT_PAD
+    && mx <= glyphRightX + HELP_ICON_HIT_PAD
+    && my >= glyphTop - HELP_ICON_HIT_PAD
+    && my <= glyphBottom + HELP_ICON_HIT_PAD;
+}

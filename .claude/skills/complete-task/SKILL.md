@@ -31,7 +31,7 @@ What it does:
   1. Verifies issue state and checks PR/branch status
   2. Closes the issue
   3. Updates project status to Done
-  4. Handles design doc (move to reference/archive/keep)
+  4. Handles design doc (keep / move to archive)
   5. Suggests overview doc updates and ADR creation
   6. Offers branch cleanup
 
@@ -181,10 +181,11 @@ If a design doc exists, ask the user:
 Question: "The design doc 'claude/design/FeatureName.md' was used. What should happen to it?"
 Header: "Design Doc"
 Options:
-  - Move to reference/ (implementation complete, useful for future reference)
-  - Move to archive/ (outdated or superseded)
-  - Keep in design/ (still relevant for ongoing work)
+  - Keep in design/ (Recommended) — still the authoritative spec; stays as living documentation for the feature
+  - Move to archive/ — outdated, superseded, or no longer relevant
 ```
+
+Note: we no longer move shipped design docs to `reference/` — design docs are the feature's living spec and stay in `design/` after implementation. Archive is reserved for superseded designs.
 
 ### 6. Suggest Overview Updates
 
@@ -261,7 +262,7 @@ Completing #<number>: <title>
   Issue closed
   Status: In Progress -> Done
   Design doc: claude/design/<Name>.md
-   -> Moved to reference/ (or kept/archived)
+   -> Kept (or archived)
 
   Overview docs reviewed: (list or "skipped")
   ADR created: claude/adr/0XX-decision.md (or "none")

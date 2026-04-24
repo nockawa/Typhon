@@ -231,7 +231,7 @@ When closing a GitHub issue: 1) Check ALL checkboxes in the issue body, 2) Updat
 - **Status**: Workflow stage (Backlog → Done)
 - **Priority**: P0-Critical, P1-High, P2-Medium, P3-Low
 - **Phase**: Telemetry, Query, WAL, Reliability, Infrastructure
-- **Area**: Database, MVCC, Transactions, Indexes, Schema, Storage, Memory, Concurrency, Primitives
+- **Area**: Database, MVCC, Transactions, Indexes, Schema, Storage, Memory, Concurrency, Primitives, Observability, Execution, Errors, Workbench
 - **Estimate**: XS, S, M, L, XL
 - **Target**: Target date for Roadmap view
 

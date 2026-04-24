@@ -46,6 +46,15 @@ export function openSchemaRelationships(): void {
   openDockPanel('schema-relationships', 'SchemaRelationships', 'Component Relationships');
 }
 
+/**
+ * Open (or focus) the Detail panel — useful when the user closed it and wants it back. In
+ * trace/attach sessions the default layout dock this to the right of the Profiler; in open
+ * sessions it's already in the default layout, so this is mostly for "I closed it, bring it back".
+ */
+export function openDetailPanel(): void {
+  openDockPanel('detail', 'Detail', 'Detail');
+}
+
 function openDockPanel(id: string, componentKey: string, title: string): void {
   const api = registeredApi;
   if (!api) return;

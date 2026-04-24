@@ -17,12 +17,17 @@ export function refreshResourceGraph() {
 
 export function useResourceIndex() {
   const sessionId = useSessionStore((s) => s.sessionId);
+  const kind = useSessionStore((s) => s.kind);
   const queryClient = useQueryClient();
+
+  // Resource graph is an Open-session concept — Trace and Attach sessions don't have one and the server
+  // returns 409 for those kinds. Gate the query off entirely rather than spamming the logs with failures.
+  const enabled = !!sessionId && kind === 'open';
 
   const query = useGetApiSessionsSessionIdResourcesRoot(
     sessionId ?? '',
     { depth: 'all' },
-    { query: { enabled: !!sessionId, staleTime: 30_000 } },
+    { query: { enabled, staleTime: 30_000 } },
   );
 
   const root = query.data?.data?.root as ResourceNodeDto | undefined;

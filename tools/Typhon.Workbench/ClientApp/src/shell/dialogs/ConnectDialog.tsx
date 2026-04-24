@@ -7,18 +7,20 @@ import {
  DialogTitle,
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { usePostApiSessionsFile } from '@/api/generated/sessions/sessions';
+import { usePostApiSessionsAttach, usePostApiSessionsFile, usePostApiSessionsTrace } from '@/api/generated/sessions/sessions';
 import { useRecentFilesStore, type RecentFileState } from '@/stores/useRecentFilesStore';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { logError, logInfo, logWarn } from '@/stores/useLogStore';
 import { customFetch } from '@/api/client';
 import RecentFilesTab from './tabs/RecentFilesTab';
 import OpenFileTab from './tabs/OpenFileTab';
+import OpenTraceTab from './tabs/OpenTraceTab';
 import AttachTab from './tabs/AttachTab';
 import CachedDataTab from './tabs/CachedDataTab';
 import DevFixtureTab from './tabs/DevFixtureTab';
+import { openProfilerPanel } from '@/shell/commands/profilerCommands';
 
-export type ConnectTab = 'recent' | 'open' | 'attach' | 'cached' | 'devfixture';
+export type ConnectTab = 'recent' | 'open' | 'trace' | 'attach' | 'cached' | 'devfixture';
 
 function extractDetail(err: unknown): string {
  if (err && typeof err === 'object' && 'detail' in err) {
@@ -39,6 +41,8 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  const setSession = useSessionStore((s) => s.setSession);
  const recordRecent = useRecentFilesStore((s) => s.record);
  const postFile = usePostApiSessionsFile();
+ const postTrace = usePostApiSessionsTrace();
+ const postAttach = usePostApiSessionsAttach();
 
  // Dev-fixture tab availability — probe once on mount. The server exposes /api/fixtures/capability
  // only when built with DEBUG, so a 404 here means "Release build, hide the tab". Keeping this as
@@ -83,6 +87,7 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  schemaDllPaths: (dto.schemaDllPaths as string[] | null | undefined) ?? schemaDllPaths,
  lastOpenedAt: new Date().toISOString(),
  lastState: (dto.state as RecentFileState) ?? 'Ready',
+ kind: 'db',
  });
 
  const resolvedDlls = (dto.schemaDllPaths as string[] | null | undefined) ?? [];
@@ -113,6 +118,49 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  }
  };
 
+ const handleOpenTrace = async (filePath: string) => {
+ logInfo(`Opening trace: ${filePath}`, { filePath });
+ try {
+ const response = await postTrace.mutateAsync({ data: { filePath } });
+ const dto = response.data;
+ setSession(dto);
+ recordRecent({
+ filePath: dto.filePath ?? filePath,
+ schemaDllPaths: [],
+ lastOpenedAt: new Date().toISOString(),
+ lastState: 'Ready',
+ kind: 'trace',
+ });
+ logInfo(`Trace session opened`, { sessionId: dto.sessionId, filePath: dto.filePath ?? filePath });
+ onOpenChange(false);
+ openProfilerPanel();
+ } catch (err) {
+ logError(`Failed to open trace: ${filePath}`, {
+ filePath,
+ error: extractDetail(err) || String(err),
+ });
+ throw err;
+ }
+ };
+
+ const handleOpenAttach = async (endpoint: string) => {
+ logInfo(`Attaching to engine: ${endpoint}`, { endpoint });
+ try {
+ const response = await postAttach.mutateAsync({ data: { endpointAddress: endpoint } });
+ const dto = response.data;
+ setSession(dto);
+ logInfo(`Attach session opened`, { sessionId: dto.sessionId, endpoint });
+ onOpenChange(false);
+ openProfilerPanel();
+ } catch (err) {
+ logError(`Failed to attach to: ${endpoint}`, {
+ endpoint,
+ error: extractDetail(err) || String(err),
+ });
+ // Swallowed — error pill below surfaces postAttach.isError; keep the dialog open for retry.
+ }
+ };
+
  return (
  <Dialog open={open} onOpenChange={onOpenChange}>
  <DialogContent className="flex h-[640px] max-w-4xl flex-col gap-3">
@@ -131,18 +179,22 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  <TabsList className="shrink-0">
  <TabsTrigger value="recent">Recent</TabsTrigger>
  <TabsTrigger value="open">Open File</TabsTrigger>
+ <TabsTrigger value="trace">Open Trace</TabsTrigger>
  <TabsTrigger value="attach">Attach</TabsTrigger>
  <TabsTrigger value="cached">Cached Data</TabsTrigger>
  {devFixtureAvailable && <TabsTrigger value="devfixture">Dev Fixture</TabsTrigger>}
  </TabsList>
  <TabsContent value="recent" className="min-h-0 flex-1">
- <RecentFilesTab onOpen={handleOpen} />
+ <RecentFilesTab onOpen={handleOpen} onOpenTrace={handleOpenTrace} />
  </TabsContent>
  <TabsContent value="open" className="min-h-0 flex-1">
  <OpenFileTab onOpen={handleOpen} isOpening={postFile.isPending} />
  </TabsContent>
+ <TabsContent value="trace" className="min-h-0 flex-1">
+ <OpenTraceTab onOpen={handleOpenTrace} isOpening={postTrace.isPending} />
+ </TabsContent>
  <TabsContent value="attach" className="min-h-0 flex-1">
- <AttachTab />
+ <AttachTab onAttach={handleOpenAttach} isAttaching={postAttach.isPending} />
  </TabsContent>
  <TabsContent value="cached" className="min-h-0 flex-1">
  <CachedDataTab />
@@ -157,6 +209,16 @@ export default function ConnectDialog({ open, initialTab, onOpenChange }: Props)
  {postFile.isError && (
  <p className="shrink-0 rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
  Failed to open session. {extractDetail(postFile.error)}
+ </p>
+ )}
+ {postTrace.isError && (
+ <p className="shrink-0 rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+ Failed to open trace. {extractDetail(postTrace.error)}
+ </p>
+ )}
+ {postAttach.isError && (
+ <p className="shrink-0 rounded border border-destructive/50 bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+ Failed to attach. {extractDetail(postAttach.error)}
  </p>
  )}
  </DialogContent>

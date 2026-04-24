@@ -25,11 +25,15 @@ test.describe('Phase 4 — Connect Dialog', () => {
     await expect(page.getByRole('dialog')).not.toBeVisible();
   });
 
-  test('Attach button opens dialog on Attach tab (stubbed)', async ({ page }) => {
+  test('Attach button opens dialog on Attach tab with live endpoint form', async ({ page }) => {
+    // Attach shipped in Phase 1b — the old "coming soon" stub is gone. This test now verifies
+    // the real form chrome: endpoint input with default placeholder + an Attach submit button.
+    // Real attach-to-mock end-to-end coverage lives in profiler-attach-connect.spec.ts.
     await page.goto('/');
     await page.getByRole('button', { name: /^attach to engine$/i }).click();
     await expect(page.getByRole('tab', { name: /attach/i })).toHaveAttribute('data-state', 'active');
-    await expect(page.getByRole('button', { name: /coming soon/i })).toBeDisabled();
+    await expect(page.getByPlaceholder('localhost:9100')).toBeVisible();
+    await expect(page.getByRole('button', { name: /^attach$/i })).toBeVisible();
   });
 
   test('Open File → browse to DemoData → pick demo.typhon → open → tree renders', async ({ page, request }) => {

@@ -1,8 +1,9 @@
 #if DEBUG
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Mvc;
-using Typhon.Workbench.Middleware;
 using Typhon.Workbench.Fixtures;
+using Typhon.Workbench.Middleware;
 
 namespace Typhon.Workbench.Controllers;
 
@@ -12,6 +13,12 @@ namespace Typhon.Workbench.Controllers;
 /// folder, so the "Dev Fixture" Connect tab can instantly open a real-content DB without the user
 /// having to run the NUnit generator manually.
 ///
+/// Also hosts two E2E-support endpoints for the Tier-0 profiler canaries:
+/// <list type="bullet">
+///   <item><c>POST /api/fixtures/trace</c> — writes a minimal valid <c>.typhon-trace</c> on disk and returns its path.</item>
+///   <item><c>POST /api/fixtures/mock-profiler</c> — starts an in-process <see cref="MockTcpProfilerServer"/> and returns its port.</item>
+///   <item><c>DELETE /api/fixtures/mock-profiler/{port}</c> — stops a previously-started mock server.</item>
+/// </list>
 /// Gated by <c>#if DEBUG</c> so this surface never ships in a Release build of the Workbench. The
 /// client detects availability via the capability probe at <see cref="GetCapability"/>.
 /// </summary>
@@ -21,6 +28,13 @@ namespace Typhon.Workbench.Controllers;
 [RequireBootstrapToken]
 public sealed class FixturesController : ControllerBase
 {
+    /// <summary>
+    /// Registry of live mock profiler servers, keyed by bound port. Static because the registry's
+    /// lifetime is the application's (not per-request), and DEBUG-only so it isn't a production
+    /// concern. A hosted-service shutdown hook disposes every entry when the process exits.
+    /// </summary>
+    internal static readonly ConcurrentDictionary<int, MockTcpProfilerServer> MockServers = new();
+
     /// <summary>Capability probe — lets the client decide whether to render the Dev Fixture tab.</summary>
     [HttpGet("capability")]
     public ActionResult<FixtureCapabilityDto> GetCapability()
@@ -45,6 +59,55 @@ public sealed class FixturesController : ControllerBase
             SchemaDllPath: result.SchemaDllPath,
             TotalEntities: result.TotalEntities,
             WasCreated: result.WasCreated));
+    }
+
+    /// <summary>
+    /// Write a minimal valid <c>.typhon-trace</c> to the fixtures directory and return its path. The
+    /// Tier-0 Playwright canary for the Open-Trace flow calls this, pastes the returned path into
+    /// the dialog, and asserts the Profiler panel mounts cleanly.
+    /// </summary>
+    [HttpPost("trace")]
+    public ActionResult<CreateTraceFixtureResponseDto> CreateTrace([FromBody] CreateTraceFixtureRequestDto req)
+    {
+        var outDir = Path.Combine(DefaultOutputDirectory(), "traces");
+        var tickCount = (req?.TickCount).GetValueOrDefault(3);
+        var instantsPerTick = (req?.InstantsPerTick).GetValueOrDefault(5);
+        var path = TraceFixtureBuilder.BuildMinimalTrace(outDir, tickCount, instantsPerTick);
+        return Ok(new CreateTraceFixtureResponseDto(TraceFilePath: path, TickCount: tickCount));
+    }
+
+    /// <summary>
+    /// Start an in-process <see cref="MockTcpProfilerServer"/> bound to an ephemeral loopback port
+    /// and return the port so the Playwright attach canary can point the UI at it. Tracks the
+    /// server in <see cref="MockServers"/>; the paired DELETE stops it, and the application
+    /// shutdown hook disposes any left over.
+    /// </summary>
+    [HttpPost("mock-profiler")]
+    public ActionResult<StartMockProfilerResponseDto> StartMockProfiler([FromBody] StartMockProfilerRequestDto req)
+    {
+        var server = new MockTcpProfilerServer
+        {
+            BlockInterval = TimeSpan.FromMilliseconds((req?.BlockIntervalMs).GetValueOrDefault(50)),
+            MaxBlocks = (req?.MaxBlocks).GetValueOrDefault(200),
+        };
+        server.Start();
+        MockServers[server.Port] = server;
+        return Ok(new StartMockProfilerResponseDto(Port: server.Port));
+    }
+
+    /// <summary>
+    /// Stop a previously-started mock profiler. Idempotent — a missing port returns 404 but is not a
+    /// hard test failure (a client can call it after the server self-terminated on MaxBlocks).
+    /// </summary>
+    [HttpDelete("mock-profiler/{port:int}")]
+    public async Task<IActionResult> StopMockProfiler(int port)
+    {
+        if (!MockServers.TryRemove(port, out var server))
+        {
+            return NotFound();
+        }
+        await server.DisposeAsync();
+        return NoContent();
     }
 
     /// <summary>
@@ -82,4 +145,16 @@ public sealed record CreateFixtureResponseDto(
     string SchemaDllPath,
     int TotalEntities,
     bool WasCreated);
+
+/// <summary>Request body for <see cref="FixturesController.CreateTrace"/>.</summary>
+public sealed record CreateTraceFixtureRequestDto(int? TickCount, int? InstantsPerTick);
+
+/// <summary>Response body for <see cref="FixturesController.CreateTrace"/>.</summary>
+public sealed record CreateTraceFixtureResponseDto(string TraceFilePath, int TickCount);
+
+/// <summary>Request body for <see cref="FixturesController.StartMockProfiler"/>.</summary>
+public sealed record StartMockProfilerRequestDto(int? BlockIntervalMs, int? MaxBlocks);
+
+/// <summary>Response body for <see cref="FixturesController.StartMockProfiler"/>.</summary>
+public sealed record StartMockProfilerResponseDto(int Port);
 #endif

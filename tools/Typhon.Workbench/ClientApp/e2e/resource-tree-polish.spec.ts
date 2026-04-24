@@ -56,8 +56,14 @@ test.describe('Phase 6 — Resource Tree polish', () => {
     await expect(page.getByRole('menuitem', { name: /copy path/i })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: /reveal in tree/i })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: /refresh subtree/i })).toBeVisible();
-    await expect(page.getByRole('menuitem', { name: /open in schema inspector/i })).toBeDisabled();
+    // The "Open in …" family was renamed; Schema Inspector became "Show Component Layout" (disabled
+    // for non-ComponentTable nodes). Data Browser / Query Console / Profiler remain as always-disabled
+    // placeholders for future modules. Assert the current shape so this test fails cleanly when those
+    // get wired up rather than sitting stale.
+    await expect(page.getByRole('menuitem', { name: /show component layout/i })).toBeDisabled();
+    await expect(page.getByRole('menuitem', { name: /open in data browser/i })).toBeDisabled();
     await expect(page.getByRole('menuitem', { name: /open in query console/i })).toBeDisabled();
+    await expect(page.getByRole('menuitem', { name: /open in profiler/i })).toBeDisabled();
 
     await page.keyboard.press('Escape');
   });

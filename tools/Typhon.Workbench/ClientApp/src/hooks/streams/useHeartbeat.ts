@@ -22,11 +22,15 @@ export interface HeartbeatState {
 
 export function useHeartbeat(): HeartbeatState {
   const sessionId = useSessionStore((s) => s.sessionId);
+  const kind = useSessionStore((s) => s.kind);
   const [status, setStatus] = useState<'green' | 'grey'>('grey');
   const [payload, setPayload] = useState<HeartbeatPayload | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const url = sessionId ? `/api/sessions/${sessionId}/heartbeat` : null;
+  // Heartbeat endpoint is only defined for database `open` sessions — the server returns 409 for
+  // `trace` / `attach` sessions, which would otherwise flood the devtools console with red errors
+  // every time the StatusBar mounts under a profiler session. Gate the EventSource accordingly.
+  const url = sessionId && kind === 'open' ? `/api/sessions/${sessionId}/heartbeat` : null;
 
   const onMessage = useCallback((data: HeartbeatPayload) => {
     setPayload(data);

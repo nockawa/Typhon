@@ -6,7 +6,7 @@
   },
   "servers": [
     {
-      "url": "http://127.0.0.1:5212/"
+      "url": "http://localhost:5000/"
     }
   ],
   "paths": {
@@ -37,6 +37,29 @@
       "get": {
         "tags": [
           "Resources"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/profiler/build-progress": {
+      "get": {
+        "tags": [
+          "Profiler"
         ],
         "parameters": [
           {
@@ -131,10 +154,131 @@
         }
       }
     },
+    "/api/fixtures/capability": {
+      "get": {
+        "tags": [
+          "Fixtures"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FixtureCapabilityDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fixtures/create": {
+      "post": {
+        "tags": [
+          "Fixtures"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFixtureRequestDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFixtureRequestDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFixtureRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateFixtureResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
           "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/profiler/metadata": {
+      "get": {
+        "tags": [
+          "Profiler"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfilerMetadataDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/profiler/chunks/{chunkIdx}": {
+      "get": {
+        "tags": [
+          "Profiler"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "chunkIdx",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": "integer",
+              "format": "int32"
+            }
+          }
         ],
         "responses": {
           "200": {
@@ -285,6 +429,39 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ComponentSchemaDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/schema/archetypes": {
+      "get": {
+        "tags": [
+          "Schema"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ArchetypeInfoDto"
+                  }
                 }
               }
             }
@@ -583,6 +760,29 @@
   },
   "components": {
     "schemas": {
+      "ArchetypeDto": {
+        "required": [
+          "archetypeId",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "archetypeId": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "ArchetypeInfoDto": {
         "required": [
           "archetypeId",
@@ -656,6 +856,44 @@
               "string"
             ],
             "format": "double"
+          }
+        }
+      },
+      "ChunkManifestEntryDto": {
+        "required": [
+          "fromTick",
+          "toTick",
+          "eventCount",
+          "isContinuation"
+        ],
+        "type": "object",
+        "properties": {
+          "fromTick": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint32"
+          },
+          "toTick": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint32"
+          },
+          "eventCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint32"
+          },
+          "isContinuation": {
+            "type": "boolean"
           }
         }
       },
@@ -788,6 +1026,29 @@
           }
         }
       },
+      "ComponentTypeDto": {
+        "required": [
+          "componentTypeId",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "componentTypeId": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "CreateAttachSessionRequest": {
         "required": [
           "endpointAddress"
@@ -822,6 +1083,58 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "CreateFixtureRequestDto": {
+        "required": [
+          "force",
+          "outputDirectory"
+        ],
+        "type": "object",
+        "properties": {
+          "force": {
+            "type": "boolean"
+          },
+          "outputDirectory": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "CreateFixtureResponseDto": {
+        "required": [
+          "typhonFilePath",
+          "schemaDllPath",
+          "totalEntities",
+          "wasCreated"
+        ],
+        "type": "object",
+        "properties": {
+          "typhonFilePath": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "schemaDllPath": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "totalEntities": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "wasCreated": {
+            "type": "boolean"
           }
         }
       },
@@ -987,6 +1300,138 @@
           }
         }
       },
+      "FixtureCapabilityDto": {
+        "required": [
+          "available",
+          "outputDirectory"
+        ],
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "outputDirectory": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "GcSuspensionDto": {
+        "required": [
+          "startUs",
+          "durationUs",
+          "threadSlot"
+        ],
+        "type": "object",
+        "properties": {
+          "startUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "durationUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "threadSlot": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          }
+        }
+      },
+      "GlobalMetricsDto": {
+        "required": [
+          "globalStartUs",
+          "globalEndUs",
+          "maxTickDurationUs",
+          "maxSystemDurationUs",
+          "p95TickDurationUs",
+          "totalEvents",
+          "totalTicks",
+          "systemAggregates"
+        ],
+        "type": "object",
+        "properties": {
+          "globalStartUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "globalEndUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "maxTickDurationUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "maxSystemDurationUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "p95TickDurationUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "totalEvents": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "totalTicks": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint32"
+          },
+          "systemAggregates": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SystemAggregateDto"
+            }
+          }
+        }
+      },
       "IndexInfoDto": {
         "required": [
           "fieldName",
@@ -1027,6 +1472,186 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "ProfilerHeaderDto": {
+        "required": [
+          "version",
+          "timestampFrequency",
+          "baseTickRate",
+          "workerCount",
+          "systemCount",
+          "archetypeCount",
+          "componentTypeCount",
+          "createdUtcTicks",
+          "samplingSessionStartQpc"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "timestampFrequency": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "baseTickRate": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "workerCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          },
+          "systemCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "archetypeCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "componentTypeCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "createdUtcTicks": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "samplingSessionStartQpc": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ProfilerMetadataDto": {
+        "required": [
+          "fingerprint",
+          "header",
+          "systems",
+          "archetypes",
+          "componentTypes",
+          "spanNames",
+          "globalMetrics",
+          "tickSummaries",
+          "chunkManifest",
+          "gcSuspensions"
+        ],
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "header": {
+            "$ref": "#/components/schemas/ProfilerHeaderDto"
+          },
+          "systems": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SystemDefinitionDto"
+            }
+          },
+          "archetypes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ArchetypeDto"
+            }
+          },
+          "componentTypes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ComponentTypeDto"
+            }
+          },
+          "spanNames": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "globalMetrics": {
+            "$ref": "#/components/schemas/GlobalMetricsDto"
+          },
+          "tickSummaries": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TickSummaryDto"
+            }
+          },
+          "chunkManifest": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ChunkManifestEntryDto"
+            }
+          },
+          "gcSuspensions": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/GcSuspensionDto"
+            }
           }
         }
       },
@@ -1183,6 +1808,124 @@
           }
         }
       },
+      "SystemAggregateDto": {
+        "required": [
+          "systemIndex",
+          "invocationCount",
+          "totalDurationUs"
+        ],
+        "type": "object",
+        "properties": {
+          "systemIndex": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "invocationCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint32"
+          },
+          "totalDurationUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "SystemDefinitionDto": {
+        "required": [
+          "index",
+          "name",
+          "type",
+          "priority",
+          "isParallel",
+          "tierFilter",
+          "predecessors",
+          "successors"
+        ],
+        "type": "object",
+        "properties": {
+          "index": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "type": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          },
+          "priority": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          },
+          "isParallel": {
+            "type": "boolean"
+          },
+          "tierFilter": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          },
+          "predecessors": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint16"
+            }
+          },
+          "successors": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint16"
+            }
+          }
+        }
+      },
       "SystemRelationshipDto": {
         "required": [
           "systemName",
@@ -1251,6 +1994,65 @@
             }
           }
         }
+      },
+      "TickSummaryDto": {
+        "required": [
+          "tickNumber",
+          "startUs",
+          "durationUs",
+          "eventCount",
+          "maxSystemDurationUs",
+          "activeSystemsBitmask"
+        ],
+        "type": "object",
+        "properties": {
+          "tickNumber": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint32"
+          },
+          "startUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "durationUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "eventCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint32"
+          },
+          "maxSystemDurationUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "float"
+          },
+          "activeSystemsBitmask": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
       }
     }
   },
@@ -1262,7 +2064,13 @@
       "name": "Resources"
     },
     {
+      "name": "Profiler"
+    },
+    {
       "name": "Files"
+    },
+    {
+      "name": "Fixtures"
     },
     {
       "name": "Health"

@@ -81,4 +81,50 @@ public sealed class FileSystemControllerTests
         var entry = JsonSerializer.Deserialize<FileEntryDto>(await resp.Content.ReadAsStringAsync(), Json)!;
         Assert.That(entry.Kind, Is.EqualTo("file"));
     }
+
+    // ── Bootstrap-token gate (T4-3) ───────────────────────────────────────────────────────────
+    // The /api/fs/* endpoints expose the user's filesystem. Per CLAUDE.md's threat model there's
+    // no path sandbox — a single user is the only client, and the bootstrap token is the sole
+    // defense against a malicious webpage fetching the user's files. Pin that contract so a
+    // regression that drops [RequireBootstrapToken] from the controller is caught immediately.
+
+    [Test]
+    public async Task Home_Unauthed_Returns401()
+    {
+        using var unauthed = _factory.CreateClient(); // no bootstrap-token handler
+        var resp = await unauthed.GetAsync("/api/fs/home");
+        Assert.That(resp.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+    }
+
+    [Test]
+    public async Task List_Unauthed_Returns401_EvenForNonexistentPath()
+    {
+        // Auth gate must fire BEFORE the 404 "path not found" path — otherwise a stranger could
+        // probe filesystem existence via differential timing on 401 vs 404.
+        using var unauthed = _factory.CreateClient();
+        var resp = await unauthed.GetAsync("/api/fs/list?path=/definitely-not-here-xyz");
+        Assert.That(resp.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+    }
+
+    [Test]
+    public async Task Stat_Unauthed_Returns401()
+    {
+        using var unauthed = _factory.CreateClient();
+        var path = Path.Combine(_fixtureDir, "data.typhon");
+        var resp = await unauthed.GetAsync($"/api/fs/stat?path={Uri.EscapeDataString(path)}");
+        Assert.That(resp.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+    }
+
+    [Test]
+    public async Task List_WrongToken_Returns401()
+    {
+        // A stranger who guesses the header name but not the value must still be blocked. Exact
+        // token comparison is documented as fixed-time in BootstrapTokenGate; this just proves
+        // the gate is actually consulting it.
+        using var unauthed = _factory.CreateClient();
+        var req = new HttpRequestMessage(HttpMethod.Get, $"/api/fs/list?path={Uri.EscapeDataString(_fixtureDir)}");
+        req.Headers.Add("X-Workbench-Token", "deadbeef");
+        var resp = await unauthed.SendAsync(req);
+        Assert.That(resp.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+    }
 }

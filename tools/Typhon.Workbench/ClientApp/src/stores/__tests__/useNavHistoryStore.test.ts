@@ -111,6 +111,72 @@ describe('useNavHistoryStore — ring buffer overflow', () => {
   });
 });
 
+describe('useNavHistoryStore — updateTopSelection', () => {
+  it('no-ops when the stack is empty', () => {
+    useNavHistoryStore.getState().updateTopSelection(null);
+    const s = useNavHistoryStore.getState();
+    expect(s.entries).toEqual([]);
+    expect(s.pointer).toBe(-1);
+  });
+
+  it('no-ops when the top entry is not a profiler-selected kind', () => {
+    useNavHistoryStore.getState().push(panelEntry('a'));
+    const before = useNavHistoryStore.getState().entries;
+    useNavHistoryStore.getState().updateTopSelection(null);
+    // entries array reference stable — no synthetic push, no mutation.
+    expect(useNavHistoryStore.getState().entries).toBe(before);
+  });
+
+  it('patches the top profiler-selected entry in place without moving the pointer', () => {
+    const entry: NavEntry = {
+      kind: 'profiler-selected',
+      selection: null,
+      viewRange: { startUs: 0, endUs: 1000 },
+      timestamp: 0,
+    };
+    useNavHistoryStore.getState().push(entry);
+
+    const newSelection = {
+      kind: 'span',
+      span: { kind: 10, name: 'x', threadSlot: 0, startUs: 0, endUs: 1, durationUs: 1 },
+    } as never;
+    useNavHistoryStore.getState().updateTopSelection(newSelection);
+
+    const after = useNavHistoryStore.getState();
+    expect(after.pointer).toBe(0);
+    expect(after.entries).toHaveLength(1);
+    const top = after.entries[0];
+    if (top.kind !== 'profiler-selected') throw new Error('kind changed unexpectedly');
+    expect(top.selection).toBe(newSelection);
+  });
+
+  it('no-ops during restore so a back/forward dispatch does not re-patch', () => {
+    // Push two profiler-selected entries, back() to the first, then try updateTopSelection.
+    // The back() dispatch temporarily sets isRestoring=true while it calls into the selection
+    // store; a naive selection-store subscriber that called updateTopSelection would otherwise
+    // churn the entry mid-restore. This test pins the isRestoring gate.
+    const e1: NavEntry = {
+      kind: 'profiler-selected', selection: null,
+      viewRange: { startUs: 0, endUs: 100 }, timestamp: 0,
+    };
+    const e2: NavEntry = {
+      kind: 'profiler-selected', selection: null,
+      viewRange: { startUs: 100, endUs: 200 }, timestamp: 0,
+    };
+    useNavHistoryStore.getState().push(e1);
+    useNavHistoryStore.getState().push(e2);
+
+    // Manually flip isRestoring to simulate the window inside back(); updateTopSelection must be
+    // a no-op during this window.
+    useNavHistoryStore.setState({ isRestoring: true });
+    const before = useNavHistoryStore.getState().entries;
+    const newSel = { kind: 'span', span: {} as never } as never;
+    useNavHistoryStore.getState().updateTopSelection(newSel);
+    expect(useNavHistoryStore.getState().entries).toBe(before);
+    useNavHistoryStore.setState({ isRestoring: false });
+  });
+});
+
 describe('useNavHistoryStore — restore dispatches to selection store', () => {
   it('back() on resource-selected entries updates useSelectedResourceStore', () => {
     useNavHistoryStore.getState().push(resourceEntry('r1'));

@@ -13,7 +13,9 @@ import SchemaLayoutPanel from '@/panels/SchemaInspector/SchemaLayoutPanel';
 import SchemaArchetypePanel from '@/panels/SchemaInspector/SchemaArchetypePanel';
 import SchemaIndexPanel from '@/panels/SchemaInspector/SchemaIndexPanel';
 import SchemaRelationshipsPanel from '@/panels/SchemaInspector/SchemaRelationshipsPanel';
+import ProfilerPanel from '@/panels/profiler/ProfilerPanel';
 import { registerDockApi } from './commands/openSchemaBrowser';
+import { registerProfilerDockApi } from './commands/profilerCommands';
 import MigrationRequiredBanner from './banners/MigrationRequiredBanner';
 import IncompatibleBanner from './banners/IncompatibleBanner';
 
@@ -31,9 +33,38 @@ const components: Record<string, React.FC<IDockviewPanelProps>> = {
   SchemaArchetypes: SchemaArchetypePanel,
   SchemaIndexes: SchemaIndexPanel,
   SchemaRelationships: SchemaRelationshipsPanel,
+  Profiler: ProfilerPanel,
 };
 
-function buildDefaultLayout(api: DockviewReadyEvent['api']) {
+function buildDefaultLayout(api: DockviewReadyEvent['api'], kind: 'none' | 'open' | 'attach' | 'trace') {
+  if (kind === 'trace' || kind === 'attach') {
+    // Trace + Attach sessions have no resource graph — skip the tree. Profiler takes the center,
+    // Detail docks to the right (so clicking a span/chunk/tick surfaces its metadata), Logs
+    // docks below the profiler for diagnostics.
+    const profiler = api.addPanel({
+      id: 'profiler',
+      component: 'Profiler',
+      title: 'Profiler',
+    });
+
+    const detail = api.addPanel({
+      id: 'detail',
+      component: 'Detail',
+      title: 'Detail',
+      position: { direction: 'right', referencePanel: profiler },
+    });
+    detail.api.setSize({ width: 320 });
+
+    api.addPanel({
+      id: 'logs',
+      component: 'Logs',
+      title: 'Logs',
+      position: { direction: 'below', referencePanel: profiler },
+    });
+    return;
+  }
+
+  // Open-mode default.
   const tree = api.addPanel({
     id: 'resource-tree',
     component: 'ResourceTree',
@@ -67,6 +98,7 @@ function buildDefaultLayout(api: DockviewReadyEvent['api']) {
 export default function DockHost() {
   const filePath = useSessionStore((s) => s.filePath);
   const sessionState = useSessionStore((s) => s.sessionState);
+  const kind = useSessionStore((s) => s.kind);
   const layoutKey = filePath ?? LAYOUT_KEY_DEFAULT;
   const getLayout = useDockLayoutStore((s) => s.get);
   const saveLayout = useDockLayoutStore((s) => s.save);
@@ -103,16 +135,28 @@ export default function DockHost() {
   function onReady(event: DockviewReadyEvent) {
     apiRef.current = event.api;
     registerDockApi(event.api);
+    registerProfilerDockApi(event.api);
     const saved = getLayout(layoutKey);
     if (saved) {
       try {
         event.api.fromJSON(saved as Parameters<typeof event.api.fromJSON>[0]);
       } catch {
         // Saved layout invalid (version skew) — fall through to default
-        buildDefaultLayout(event.api);
+        buildDefaultLayout(event.api, kind);
       }
     } else {
-      buildDefaultLayout(event.api);
+      buildDefaultLayout(event.api, kind);
+    }
+
+    // Trace-session safety net: if the restored layout predates the Profiler panel's existence (or
+    // the user explicitly closed it in a previous session), force-add it. Without this, reopening a
+    // trace file whose layout was saved under an older build leaves the user staring at an empty dock.
+    if (kind === 'trace' && !event.api.getPanel('profiler')) {
+      event.api.addPanel({
+        id: 'profiler',
+        component: 'Profiler',
+        title: 'Profiler',
+      });
     }
 
     event.api.onDidLayoutChange(() => {
