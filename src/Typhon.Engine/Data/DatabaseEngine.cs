@@ -11,6 +11,7 @@ using System.Threading;
 using System.Reflection;
 using System.Linq.Expressions;
 using Typhon.Engine.Profiler;
+using Typhon.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;

@@ -189,7 +189,8 @@ Typhon/
 │   ├── Typhon.MonitoringDemo/      # Observability demo
 │   └── AntHill/                    # Godot-based ant-colony demo (runtime + clusters + spatial tiers)
 ├── tools/
-│   └── Typhon.Profiler.Server/     # ASP.NET Core ingestion + React/Vite profiler viewer
+│   ├── Typhon.Workbench/           # Local dev UI — data browsing, schema, profiler (ASP.NET Core + React/Vite)
+│   └── Typhon.Workbench.Fixtures/  # Dev-only test fixture generators consumed by the Workbench DEBUG tabs
 ├── claude/                         # Architecture docs, ADRs, design specs
 └── benchmark/                      # Benchmark results
 ```

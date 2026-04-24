@@ -8,6 +8,20 @@
 
     <ItemGroup>
         <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+        <!-- Consumed by enum decorations (JetBrains.Annotations.UsedImplicitly) on the wire-format enums
+             and by [PublicAPI] markers on codec methods. Version matches Typhon.Engine for consistency. -->
+        <PackageReference Include="JetBrains.Annotations" Version="2025.2.4" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Engine's producer ref-structs (BTreeInsertEvent, TransactionCommitEvent, etc.) live in Typhon.Engine but
+             delegate their EncodeTo() methods to the matching XxxEventCodec.Encode() in this assembly. Those Encode
+             methods are intentionally `internal` — they're low-level wire-format helpers, not part of the public API
+             surface. InternalsVisibleTo lets the producer side inline them across the assembly boundary without
+             widening the public surface of Typhon.Profiler. -->
+        <InternalsVisibleTo Include="Typhon.Engine" />
+        <!-- Tests in Typhon.Engine.Tests also exercise internal Encode paths for round-trip verification. -->
+        <InternalsVisibleTo Include="Typhon.Engine.Tests" />
     </ItemGroup>
 
 </Project>

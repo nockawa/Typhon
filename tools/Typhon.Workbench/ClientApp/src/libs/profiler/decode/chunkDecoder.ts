@@ -1,5 +1,6 @@
 /**
- * Client-side binary decoder for a Typhon trace chunk — ports <c>Typhon.Profiler.Server/RecordDecoder.cs</c> to TypeScript.
+ * Client-side binary decoder for a Typhon trace chunk — originally ported from the retired
+ * <c>Typhon.Profiler.Server/RecordDecoder.cs</c>; now mirrors <c>tools/Typhon.Workbench/Sessions/Profiler/RecordDecoder.cs</c>.
  *
  * **Why.** The legacy /api/trace/chunk endpoint decompresses LZ4 chunks on the server, walks the records with RecordDecoder, and emits JSON
  * — round-tripping every record through two string encodings plus the server CPU cost of JSON encode. The new /api/trace/chunk-binary

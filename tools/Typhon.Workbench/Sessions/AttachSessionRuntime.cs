@@ -5,8 +5,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Typhon.Profiler;
 using Typhon.Workbench.Dtos.Profiler;
-using Typhon.Workbench.Sessions.Profiler;
-using ProfilerRecordDecoder = Typhon.Workbench.Sessions.Profiler.RecordDecoder;
+using ProfilerRecordDecoder = Typhon.Profiler.RecordDecoder;
 
 namespace Typhon.Workbench.Sessions;
 
@@ -35,7 +34,7 @@ namespace Typhon.Workbench.Sessions;
 /// <b>Known limitation — tick counter reset on reconnect.</b> When the TCP link drops and the runtime reconnects,
 /// the decoder is re-created (<c>_decoder = null</c> in the read loop's catch path) and the tick counter restarts
 /// from 1 after the next <c>Init</c> frame. Clients tracking absolute tick progression will see a discontinuity
-/// across the reconnect boundary. This matches the behaviour of the old <c>Typhon.Profiler.Server</c> —
+/// across the reconnect boundary. This matches the behaviour of the retired <c>Typhon.Profiler.Server</c> —
 /// preserving it keeps client expectations stable across the port. Fixing it properly requires the engine to
 /// include the current tick number in every <c>Init</c> frame (so the decoder can seed its counter on reconnect),
 /// which is a wire-protocol change out of scope for this PR.

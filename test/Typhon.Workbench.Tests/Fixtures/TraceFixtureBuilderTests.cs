@@ -46,8 +46,8 @@ public sealed class TraceFixtureBuilderTests
         // The end-to-end smoke test: fixture → TraceFileCacheBuilder → readable cache. If this passes,
         // every TraceSessionRuntime integration test has a viable input.
         var path = TraceFixtureBuilder.BuildMinimalTrace(_tempDir, tickCount: 3, instantsPerTick: 2);
-        var cachePath = Typhon.Workbench.Sessions.Profiler.TraceFileCacheBuilder.GetCachePathFor(path);
-        var result = Typhon.Workbench.Sessions.Profiler.TraceFileCacheBuilder.Build(path, cachePath);
+        var cachePath = Typhon.Profiler.TraceFileCacheBuilder.GetCachePathFor(path);
+        var result = Typhon.Profiler.TraceFileCacheBuilder.Build(path, cachePath);
 
         Assert.That(result.TickCount, Is.EqualTo(3));
         // Each tick emits: TickStart + 2 Instant + TickEnd = 4 records.

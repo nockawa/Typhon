@@ -153,14 +153,14 @@ public sealed class MockTcpProfilerServer : IAsyncDisposable
 
         // Record 0 — TickStart (12 B)
         BinaryPrimitives.WriteUInt16LittleEndian(records.AsSpan(0, 2), tickStartSize);
-        records[2] = (byte)Typhon.Engine.Profiler.TraceEventKind.TickStart;
+        records[2] = (byte)Typhon.Profiler.TraceEventKind.TickStart;
         records[3] = 0;
         BinaryPrimitives.WriteInt64LittleEndian(records.AsSpan(4, 8), ts);
 
         // Record 1 — TickEnd (14 B: common header + u8 overloadLevel + u8 tickMultiplier)
         var tickEndOffset = tickStartSize;
         BinaryPrimitives.WriteUInt16LittleEndian(records.AsSpan(tickEndOffset, 2), tickEndSize);
-        records[tickEndOffset + 2] = (byte)Typhon.Engine.Profiler.TraceEventKind.TickEnd;
+        records[tickEndOffset + 2] = (byte)Typhon.Profiler.TraceEventKind.TickEnd;
         records[tickEndOffset + 3] = 0;
         BinaryPrimitives.WriteInt64LittleEndian(records.AsSpan(tickEndOffset + 4, 8), ts + 50);
         records[tickEndOffset + commonHeaderSize] = 0;     // overloadLevel

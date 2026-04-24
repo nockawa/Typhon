@@ -15,7 +15,6 @@ profiling, and tracing in one professional-grade UI. Think **JetBrains DataGrip 
 
 - Kestrel: `:5200`
 - Vite dev server: `:5173` (proxies `/api`, `/openapi.json`, `/swagger`, `/health` to `:5200`)
-- Profiler.Server co-existence: `:5100` (kept free)
 
 ## Project layout
 

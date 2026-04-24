@@ -3,8 +3,8 @@ import type { TimeRange, TrackLayout, TrackState } from '@/libs/profiler/model/u
 import { appendGaugeTracks } from './gauges/region';
 
 /**
- * Pure layout composer for the main time area. Ported from the Phase 2b source
- * `tools/Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx::buildLayout()` (old ~90 LOC).
+ * Pure layout composer for the main time area. Originally ported from the retired
+ * `Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx::buildLayout()` (~90 LOC).
  *
  * Returns a flat `TrackLayout[]` — one entry per rendered track, top-to-bottom. Tracks are
  * either fixed-purpose ('ruler', 'phases', 'page-cache', 'disk-io', 'transactions', 'wal',

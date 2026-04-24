@@ -15,8 +15,8 @@ import {
 } from './timeArea';
 
 /**
- * Pure hit-test for the main time area. Ported from the inline logic in
- * `tools/Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx` (`onMouseMove`/`onMouseUp`,
+ * Pure hit-test for the main time area. Originally ported from inline logic in the retired
+ * `Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx` (`onMouseMove`/`onMouseUp`,
  * approximately lines 1816–2205).
  *
  * Takes everything it needs as arguments so it can be unit-tested against synthetic inputs.

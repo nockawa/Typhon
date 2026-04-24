@@ -1,4 +1,4 @@
-using Typhon.Workbench.Sessions.Profiler;
+using Typhon.Profiler;
 
 namespace Typhon.Workbench.Dtos.Profiler;
 

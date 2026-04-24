@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using NUnit.Framework;
 using Typhon.Workbench.Dtos.Profiler;
-using Typhon.Workbench.Sessions.Profiler;
+using Typhon.Profiler;
 
 namespace Typhon.Workbench.Tests.Fixtures;
 

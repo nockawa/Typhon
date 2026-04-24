@@ -24,8 +24,8 @@ import {
 } from './timeAreaLayout';
 
 /**
- * Pure draw for the main time area. Ported from
- * `tools/Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx::render()` (old ~700 LOC).
+ * Pure draw for the main time area. Originally ported from the retired
+ * `Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx::render()` (~700 LOC).
  *
  * **Every color comes from the `theme` argument — no bare hex in this file.** Identity palettes
  * (SPAN, TIMELINE, PHASE) reach through `theme.spans / theme.timelineBands / theme.phaseColor`;

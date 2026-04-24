@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
 

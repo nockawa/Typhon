@@ -1,7 +1,7 @@
 /**
- * Per-track "?" help lines — what each TimeArea section shows and how to read it. Ported verbatim
- * from `tools/Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx::getTrackHelpLines` so the
- * explanations match the old profiler exactly.
+ * Per-track "?" help lines — what each TimeArea section shows and how to read it. Originally
+ * ported verbatim from the retired `Typhon.Profiler.Server/ClientApp/src/GraphArea.tsx::getTrackHelpLines`
+ * so the explanations match the original profiler exactly.
  *
  * Data-only module, no React / canvas imports. Consumers:
  *   - `panels/profiler/sections/TimeArea.tsx` — renders the "?" glyph on each track's gutter and

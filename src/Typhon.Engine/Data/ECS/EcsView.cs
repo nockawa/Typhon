@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
 using Typhon.Engine.Profiler;
+using Typhon.Profiler;
 
 namespace Typhon.Engine;
 

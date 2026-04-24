@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Typhon.Workbench.Dtos.Profiler;
 using Typhon.Workbench.Sessions;
-using Typhon.Workbench.Sessions.Profiler;
+using Typhon.Profiler;
 using WbSession = Typhon.Workbench.Sessions.ISession;
 
 namespace Typhon.Workbench.Streams;

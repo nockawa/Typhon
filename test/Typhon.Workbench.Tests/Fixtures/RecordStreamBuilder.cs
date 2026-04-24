@@ -1,7 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using Typhon.Engine.Profiler;
+using Typhon.Profiler;
 
 namespace Typhon.Workbench.Tests.Fixtures;
 

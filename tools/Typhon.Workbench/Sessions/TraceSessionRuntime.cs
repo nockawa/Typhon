@@ -4,9 +4,8 @@ using Microsoft.Extensions.Logging;
 using Typhon.Engine.Profiler;
 using Typhon.Profiler;
 using Typhon.Workbench.Dtos.Profiler;
-using Typhon.Workbench.Sessions.Profiler;
-using ProfilerRecordDecoder = Typhon.Workbench.Sessions.Profiler.RecordDecoder;
-using ProfilerCacheBuilder = Typhon.Workbench.Sessions.Profiler.TraceFileCacheBuilder;
+using ProfilerRecordDecoder = Typhon.Profiler.RecordDecoder;
+using ProfilerCacheBuilder = Typhon.Profiler.TraceFileCacheBuilder;
 
 namespace Typhon.Workbench.Sessions;
 

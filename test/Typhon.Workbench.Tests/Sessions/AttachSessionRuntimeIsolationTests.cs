@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
 using Typhon.Workbench.Fixtures;
 using Typhon.Workbench.Sessions;
-using Typhon.Workbench.Sessions.Profiler;
+using Typhon.Profiler;
 
 namespace Typhon.Workbench.Tests.Sessions;
 
