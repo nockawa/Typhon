@@ -1,7 +1,8 @@
 using System;
 using NUnit.Framework;
 using Typhon.Engine.Profiler;
-using NewTickPhase = Typhon.Engine.Profiler.TickPhase;
+using Typhon.Profiler;
+using NewTickPhase = Typhon.Profiler.TickPhase;
 
 namespace Typhon.Engine.Tests.Profiler.Events;
 

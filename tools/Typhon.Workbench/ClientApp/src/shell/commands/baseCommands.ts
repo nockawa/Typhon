@@ -4,11 +4,13 @@ import { useThemeStore } from '@/stores/useThemeStore';
 import { refreshResourceGraph } from '@/hooks/useResourceIndex';
 import {
   openArchetypeBrowser,
+  openDetailPanel,
   openSchemaArchetypes,
   openSchemaBrowser,
   openSchemaIndexes,
   openSchemaRelationships,
 } from './openSchemaBrowser';
+import { buildProfilerPaletteCommands } from './profilerCommands';
 
 export interface CommandItem {
   id: string;
@@ -38,7 +40,9 @@ export function buildBaseCommands(): CommandItem[] {
     { id: 'schema-archetypes', label: 'Open Component Archetypes', keywords: 'schema archetypes cluster storage',           action: openSchemaArchetypes },
     { id: 'schema-indexes', label: 'Open Component Indexes',       keywords: 'schema indexes btree fields',                 action: openSchemaIndexes },
     { id: 'schema-relationships', label: 'Open Component Relationships', keywords: 'schema systems relationships',          action: openSchemaRelationships },
+    { id: 'open-detail',   label: 'Open Detail Panel',        keywords: 'detail inspector selection', action: openDetailPanel },
     { id: 'toggle-theme',  label: 'Toggle Dark / Light Mode', keywords: 'theme dark light',  action: toggleTheme },
+    ...buildProfilerPaletteCommands(),
     { id: 'reload',        label: 'Reload',                   keywords: 'refresh',           action: () => location.reload() },
     { id: 'about',         label: 'About Typhon Workbench',   keywords: 'version info',      action: () => {} },
   ];

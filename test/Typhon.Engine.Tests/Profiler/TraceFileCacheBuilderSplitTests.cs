@@ -5,7 +5,6 @@ using System.IO;
 using NUnit.Framework;
 using Typhon.Engine.Profiler;
 using Typhon.Profiler;
-using Typhon.Profiler.Server;
 
 namespace Typhon.Engine.Tests.Profiler;
 

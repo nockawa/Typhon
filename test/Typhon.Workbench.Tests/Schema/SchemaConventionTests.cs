@@ -79,4 +79,24 @@ public sealed class SchemaConventionTests
         var result = SchemaConvention.ResolveConventionally(typhon);
         Assert.That(result, Is.Empty);
     }
+
+    [Test]
+    public void Resolve_MissingDirectory_ReturnsEmpty()
+    {
+        // Path points into a non-existent directory — session creation should continue with
+        // "schemaless" status rather than propagate an I/O failure.
+        var ghost = Path.Combine(_tempDir, "does-not-exist", "db.typhon");
+        var result = SchemaConvention.ResolveConventionally(ghost);
+        Assert.That(result, Is.Empty);
+    }
+
+    [Test]
+    public void Resolve_NullOrEmptyInput_Throws()
+    {
+        // null → ArgumentNullException, "" / "  " → ArgumentException. Both derive from
+        // ArgumentException so the guard contract is uniform from the caller's POV.
+        Assert.That(() => SchemaConvention.ResolveConventionally(null), Throws.InstanceOf<ArgumentException>());
+        Assert.That(() => SchemaConvention.ResolveConventionally(""), Throws.InstanceOf<ArgumentException>());
+        Assert.That(() => SchemaConvention.ResolveConventionally("   "), Throws.InstanceOf<ArgumentException>());
+    }
 }

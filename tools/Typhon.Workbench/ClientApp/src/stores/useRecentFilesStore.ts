@@ -4,6 +4,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 const MAX_ENTRIES = 20;
 
 export type RecentFileState = 'Ready' | 'MigrationRequired' | 'Incompatible';
+export type RecentFileKind = 'db' | 'trace';
 
 export interface RecentFile {
   filePath: string;
@@ -11,6 +12,16 @@ export interface RecentFile {
   lastOpenedAt: string;
   lastState: RecentFileState;
   pinnedResourceIds?: string[];
+  /**
+   * Session kind this file was opened as. Optional for backwards-compatibility — legacy entries without
+   * this field are treated as <c>'db'</c> by {@link getRecentFileKind}.
+   */
+  kind?: RecentFileKind;
+}
+
+/** Returns the entry's {@link RecentFileKind}; legacy entries (pre-Phase 1b) default to <c>'db'</c>. */
+export function getRecentFileKind(entry: RecentFile): RecentFileKind {
+  return entry.kind ?? 'db';
 }
 
 interface RecentFilesStore {

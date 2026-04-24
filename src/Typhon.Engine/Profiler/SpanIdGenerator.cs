@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
 

@@ -187,7 +187,6 @@ print(json.dumps(s))
 ## Notes
 
 - `dotnet watch` hot-reloads C# changes; Vite HMR handles TypeScript/CSS changes.
-- Profiler.Server runs on `:5100` — kept free, no conflict.
 - Vite proxies `/api`, `/openapi.json`, `/swagger`, `/health` to `:5200` — only open `:5173` in the browser.
 - JSON state survives Claude Code session switches.
 - **Stale-PID trap after reboot**: PIDs can be reused. `status` cross-checks the listener PID against netstat; `stop` will blindly kill the recorded PIDs, so run `status` first after a reboot, or delete the state file if suspicious.

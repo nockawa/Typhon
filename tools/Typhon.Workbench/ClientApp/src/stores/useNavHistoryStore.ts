@@ -1,9 +1,19 @@
 import { create } from 'zustand';
+import type { TimeRange } from '@/libs/profiler/model/uiTypes';
+import { animateViewportToRange } from '../shell/commands/profilerCommands';
+import { useProfilerSelectionStore, type ProfilerSelection } from './useProfilerSelectionStore';
 import { useSelectedResourceStore, type SelectedResource } from './useSelectedResourceStore';
 
 export type NavEntry =
   | { kind: 'resource-selected'; resourceId: string; selected: SelectedResource; timestamp: number }
-  | { kind: 'panel-opened'; panelId: string; timestamp: number };
+  | { kind: 'panel-opened'; panelId: string; timestamp: number }
+  /**
+   * A profiler viewport snapshot with the selection that was active at that moment. Pushed on
+   * viewport-changing actions (pan, zoom, drag-to-zoom, Ctrl+Home, etc.), not on selection alone.
+   * Selection-only changes call {@link NavHistoryState.updateTopSelection} to patch the top entry
+   * in place, so back/forward restores the latest span that was active *at* that viewport.
+   */
+  | { kind: 'profiler-selected'; selection: ProfilerSelection | null; viewRange: TimeRange; timestamp: number };
 
 const CAPACITY = 100;
 
@@ -14,6 +24,13 @@ interface NavHistoryState {
   canForward: boolean;
   isRestoring: boolean;
   push: (entry: NavEntry) => void;
+  /**
+   * Patch the top entry's selection without adding a new history entry. Used when the user clicks
+   * a span/chunk at the current viewport — the viewport didn't change, so there's no new "place"
+   * to navigate to, but we want back() to restore whatever span they had highlighted last. No-op
+   * when the top entry is not `profiler-selected` or when the stack is empty.
+   */
+  updateTopSelection: (selection: ProfilerSelection | null) => void;
   back: () => void;
   forward: () => void;
   clear: () => void;
@@ -29,8 +46,23 @@ function deriveFlags(entries: NavEntry[], pointer: number) {
 function restoreSideEffect(entry: NavEntry) {
   if (entry.kind === 'resource-selected') {
     useSelectedResourceStore.getState().setSelected(entry.selected);
+  } else if (entry.kind === 'profiler-selected') {
+    // Restore both: the selection drives DetailPanel recency, the viewRange drives TimeArea's
+    // viewport + TickOverview's orange overlay. A null selection means "at this viewport the user
+    // hadn't selected anything yet" — clear() resets the selection store without planting a fake
+    // tick-0 entry.
+    if (entry.selection === null) {
+      useProfilerSelectionStore.getState().clear();
+    } else {
+      useProfilerSelectionStore.getState().setSelected(entry.selection);
+    }
+    // Animate the viewport to the target range so back/forward feels like the double-click zoom
+    // tween (800 ms ease-out). Falls back to a snap via `setViewRange` when the profiler panel
+    // isn't mounted. Selection update is synchronous above so DetailPanel reacts immediately; the
+    // viewport eases in over 800 ms.
+    animateViewportToRange(entry.viewRange);
   }
-  // Other kinds: no-op in Phase 5 (forward-compat).
+  // panel-opened: no-op in Phase 5 (forward-compat).
 }
 
 export const useNavHistoryStore = create<NavHistoryState>()((set, get) => ({
@@ -48,6 +80,22 @@ export const useNavHistoryStore = create<NavHistoryState>()((set, get) => ({
       const next = [...kept, entry].slice(-CAPACITY);
       const pointer = next.length - 1;
       return { entries: next, pointer, ...deriveFlags(next, pointer) };
+    }),
+
+  updateTopSelection: (selection) =>
+    set((s) => {
+      // Restore-dispatch already writes the target selection directly to the selection store, so a
+      // sync patch here would re-write the entry we're navigating to with itself — harmless but
+      // chatty. Skipping when `isRestoring` keeps the entries reference stable across back/forward.
+      if (s.isRestoring) return s;
+      if (s.pointer < 0) return s;
+      const top = s.entries[s.pointer];
+      if (top.kind !== 'profiler-selected') return s;
+      if (top.selection === selection) return s;
+      const patched: NavEntry = { ...top, selection };
+      const entries = s.entries.slice();
+      entries[s.pointer] = patched;
+      return { entries };
     }),
 
   back: () => {

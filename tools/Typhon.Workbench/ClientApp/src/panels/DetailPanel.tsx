@@ -4,15 +4,21 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { simplifyTypeName } from '@/libs/simplifyTypeName';
 import { useSelectedResourceStore } from '@/stores/useSelectedResourceStore';
 import { useSchemaInspectorStore } from '@/stores/useSchemaInspectorStore';
+import { useProfilerSelectionStore } from '@/stores/useProfilerSelectionStore';
 import { useComponentSchema } from '@/hooks/schema/useComponentSchema';
 import type { ComponentSchema, Field } from '@/hooks/schema/types';
+import ProfilerDetail from '@/panels/profiler/ProfilerDetail';
 
 /**
- * The Detail panel — a single "what's selected" surface. Two independent stores feed it:
- * <c>useSchemaInspectorStore.selectedField</c> (canvas click, arrow-nav, Index panel row click) and
- * <c>useSelectedResourceStore.selected</c> (resource-tree click). Whichever was touched most
- * recently wins — matches the IDE convention that the user's latest interaction drives what the
- * inspector shows. When nothing has ever been selected, the panel renders the empty state.
+ * The Detail panel — a single "what's selected" surface. Three independent stores feed it:
+ *  - `useSchemaInspectorStore.selectedField` (schema canvas click, arrow-nav, Index row click)
+ *  - `useSelectedResourceStore.selected` (resource-tree click)
+ *  - `useProfilerSelectionStore.selected` (profiler panel — span / chunk / tick / marker)
+ *
+ * Whichever was touched most recently wins — matches the IDE convention that the user's latest
+ * interaction drives what the inspector shows. Graceful fallback: if the winner's data isn't
+ * loaded (e.g., `schema` still fetching), fall back to the next non-empty source. Empty state
+ * fires only when nothing has ever been selected from any of the three.
  */
 export default function DetailPanel() {
   const selectedType = useSchemaInspectorStore((s) => s.selectedComponentType);
@@ -21,6 +27,8 @@ export default function DetailPanel() {
   const { schema } = useComponentSchema(selectedType);
   const resource = useSelectedResourceStore((s) => s.selected);
   const resourceTouchedAt = useSelectedResourceStore((s) => s.touchedAt);
+  const profilerSelected = useProfilerSelectionStore((s) => s.selected);
+  const profilerTouchedAt = useProfilerSelectionStore((s) => s.touchedAt);
 
   const field: Field | undefined =
     selectedFieldName && schema
@@ -29,28 +37,41 @@ export default function DetailPanel() {
 
   const fieldAvailable = !!field && !!schema;
   const resourceAvailable = !!resource;
-  const fieldWins = fieldAvailable && fieldTouchedAt >= resourceTouchedAt;
+  const profilerAvailable = profilerSelected !== null;
 
-  if (fieldWins) {
+  // 3-way arbitration by recency. Each candidate's `at` is 0 when unavailable so they drop out
+  // of the max comparison — that way a never-populated source can't accidentally win on a
+  // stale `touchedAt` tombstone.
+  const fieldAt    = fieldAvailable    ? fieldTouchedAt    : 0;
+  const resourceAt = resourceAvailable ? resourceTouchedAt : 0;
+  const profilerAt = profilerAvailable ? profilerTouchedAt : 0;
+  const winnerAt = Math.max(fieldAt, resourceAt, profilerAt);
+
+  if (winnerAt === 0) {
+    return (
+      <div className="flex h-full items-center justify-center bg-background">
+        <p className="text-density-sm text-muted-foreground">
+          Select a resource, component, field, or profiler element to see details
+        </p>
+      </div>
+    );
+  }
+
+  // Dispatch to the winning source. Graceful fallback chain if the winner's data isn't loaded.
+  if (profilerAt === winnerAt && profilerAvailable) {
+    return <ProfilerDetail selection={profilerSelected!} />;
+  }
+  if (fieldAt === winnerAt && fieldAvailable) {
     return <FieldDetail field={field!} schema={schema!} />;
   }
-  if (resourceAvailable) {
+  if (resourceAt === winnerAt && resourceAvailable) {
     return <ResourceDetail />;
   }
-  // Field selection exists but resource was more recent AND no resource row is currently loaded
-  // (e.g., resource was cleared). Fall back to field so we don't show an empty state when we
-  // have *something* to render.
-  if (fieldAvailable) {
-    return <FieldDetail field={field!} schema={schema!} />;
-  }
-
-  return (
-    <div className="flex h-full items-center justify-center bg-background">
-      <p className="text-density-sm text-muted-foreground">
-        Select a resource, component, or field to see details
-      </p>
-    </div>
-  );
+  // Fall-back: show whichever source has data, preferring profiler > field > resource.
+  if (profilerAvailable) return <ProfilerDetail selection={profilerSelected!} />;
+  if (fieldAvailable)    return <FieldDetail field={field!} schema={schema!} />;
+  if (resourceAvailable) return <ResourceDetail />;
+  return null;
 }
 
 function FieldDetail({ field, schema }: { field: Field; schema: ComponentSchema }) {

@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Typhon.Profiler;
 
 namespace Typhon.Engine;
 
@@ -1780,11 +1781,9 @@ public sealed partial class TyphonRuntime : IDisposable
     /// </summary>
     private void InspectorPhase(TickPhase phase, Action action)
     {
-        // Scheduler's TickPhase and profiler's TickPhase share byte values — reinterpret without a lookup table.
-        var profilerPhase = (Profiler.TickPhase)(byte)phase;
-        Profiler.TyphonEvent.EmitPhaseStart(profilerPhase, Stopwatch.GetTimestamp());
+        Profiler.TyphonEvent.EmitPhaseStart(phase, Stopwatch.GetTimestamp());
         action();
-        Profiler.TyphonEvent.EmitPhaseEnd(profilerPhase, Stopwatch.GetTimestamp());
+        Profiler.TyphonEvent.EmitPhaseEnd(phase, Stopwatch.GetTimestamp());
     }
 
     /// <summary>

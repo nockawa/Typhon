@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Diagnostics.Tracing;
+using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler.Gc;
 

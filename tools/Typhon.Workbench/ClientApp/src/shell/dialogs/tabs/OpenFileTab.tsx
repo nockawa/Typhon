@@ -22,7 +22,9 @@ export default function OpenFileTab({ onOpen, isOpening }: Props) {
  const [pastedPath, setPastedPath] = useState<string>('');
 
  // Pasted path wins when non-empty (explicit user intent). Otherwise fall back to tree selection.
- const effectivePath = pastedPath.trim().length > 0 ? pastedPath.trim() : selectedPath;
+ // Strip surrounding double quotes — Windows Explorer's "Copy as path" wraps the path in them.
+ const pastedTrimmed = pastedPath.trim().replace(/^"(.*)"$/, '$1');
+ const effectivePath = pastedTrimmed.length > 0 ? pastedTrimmed : selectedPath;
  const canOpen = !!effectivePath && !isOpening;
 
  return (

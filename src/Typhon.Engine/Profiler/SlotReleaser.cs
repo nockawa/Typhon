@@ -1,4 +1,5 @@
 using System.Runtime.ConstrainedExecution;
+using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
 

@@ -24,17 +24,33 @@ public static class ServiceExtensions
            .WithTags("Sessions");
         app.MapGet("/api/sessions/{sessionId:guid}/resources/stream", ResourceGraphStream.HandleAsync)
            .WithTags("Resources");
+        app.MapGet("/api/sessions/{sessionId:guid}/profiler/build-progress", ProfilerBuildProgressStream.HandleAsync)
+           .WithTags("Profiler");
+        app.MapGet("/api/sessions/{sessionId:guid}/profiler/stream", ProfilerLiveStream.HandleAsync)
+           .WithTags("Profiler");
         return app;
     }
 
     /// <summary>
     /// Registers a shutdown callback that disposes every live session — critical for releasing MMF
-    /// file handles before the process exits.
+    /// file handles before the process exits. Under DEBUG also disposes any leftover mock profiler
+    /// servers spun up via the Tier-0 E2E support endpoints.
     /// </summary>
     public static void RegisterSessionShutdownHook(this IServiceProvider services)
     {
         var lifetime = services.GetRequiredService<IHostApplicationLifetime>();
         var manager = services.GetRequiredService<SessionManager>();
         lifetime.ApplicationStopping.Register(manager.DisposeAll);
+#if DEBUG
+        lifetime.ApplicationStopping.Register(() =>
+        {
+            foreach (var kvp in Typhon.Workbench.Controllers.FixturesController.MockServers)
+            {
+                try { kvp.Value.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2)); }
+                catch { /* best-effort shutdown */ }
+            }
+            Typhon.Workbench.Controllers.FixturesController.MockServers.Clear();
+        });
+#endif
     }
 }

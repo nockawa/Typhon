@@ -3,7 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using NUnit.Framework;
 using Typhon.Engine.Profiler;
-using Typhon.Profiler.Server;
+using Typhon.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 

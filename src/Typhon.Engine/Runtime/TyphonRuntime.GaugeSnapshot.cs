@@ -1,4 +1,5 @@
 using Typhon.Engine.Profiler;
+using Typhon.Profiler;
 
 namespace Typhon.Engine;
 

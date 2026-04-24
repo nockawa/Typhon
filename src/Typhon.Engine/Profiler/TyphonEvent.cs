@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
 

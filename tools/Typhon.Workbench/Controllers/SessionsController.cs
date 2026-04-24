@@ -74,9 +74,22 @@ public sealed partial class SessionsController : ControllerBase
     }
 
     [HttpPost("attach")]
-    public ActionResult<SessionDto> CreateAttachSession([FromBody] CreateAttachSessionRequest request)
+    public async Task<ActionResult<SessionDto>> CreateAttachSession([FromBody] CreateAttachSessionRequest request, CancellationToken ct)
     {
-        var session = new AttachSession(Guid.NewGuid(), request.EndpointAddress);
+        if (string.IsNullOrWhiteSpace(request.EndpointAddress))
+        {
+            throw new WorkbenchException(400, "invalid_endpoint", "endpointAddress is required.");
+        }
+
+        // Single-session-per-endpoint invariant — matches the file/trace patterns. Reopening the same endpoint
+        // recycles the prior socket cleanly rather than racing two read loops.
+        _sessions.RemoveWhere(s => s is AttachSession a
+            && string.Equals(a.EndpointAddress, request.EndpointAddress, StringComparison.OrdinalIgnoreCase));
+
+        // AttachSessionRuntime.StartAsync does 3 × 2 s upfront TCP retry; throws WorkbenchException(503) on total failure.
+        var runtime = await AttachSessionRuntime.StartAsync(request.EndpointAddress, _logger, ct);
+
+        var session = new AttachSession(Guid.NewGuid(), request.EndpointAddress, runtime);
         _sessions.Create(session);
         LogSessionCreated(session.Id, "attach");
         return CreatedAtAction(nameof(GetSession), new { id = session.Id }, ToDto(session));
@@ -85,7 +98,26 @@ public sealed partial class SessionsController : ControllerBase
     [HttpPost("trace")]
     public ActionResult<SessionDto> CreateTraceSession([FromBody] CreateTraceSessionRequest request)
     {
-        var session = new TraceSession(Guid.NewGuid(), request.FilePath);
+        if (string.IsNullOrWhiteSpace(request.FilePath))
+        {
+            throw new WorkbenchException(400, "invalid_path", "filePath is required.");
+        }
+        var resolvedFile = Path.GetFullPath(request.FilePath);
+        if (!System.IO.File.Exists(resolvedFile))
+        {
+            throw new WorkbenchException(404, "trace_file_not_found", $"Trace file not found: {resolvedFile}");
+        }
+
+        // Validate file magic up-front — rejects sidecar caches ("TPCH") and any non-trace file immediately with
+        // 400 rather than creating a session that'll fault its background build and flood /metadata with 500s.
+        ValidateTraceFileMagic(resolvedFile);
+
+        // Single-session-per-file invariant matches the Open-mode pattern (above). Reopens are cheap because
+        // the sidecar cache is fingerprint-cached on disk.
+        _sessions.RemoveWhere(s => s is TraceSession ts && string.Equals(ts.FilePath, resolvedFile, StringComparison.OrdinalIgnoreCase));
+
+        var runtime = TraceSessionRuntime.Start(resolvedFile, _logger);
+        var session = new TraceSession(Guid.NewGuid(), resolvedFile, runtime);
         _sessions.Create(session);
         LogSessionCreated(session.Id, "trace");
         return CreatedAtAction(nameof(GetSession), new { id = session.Id }, ToDto(session));
@@ -145,4 +177,40 @@ public sealed partial class SessionsController : ControllerBase
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Session {SessionId} created via {Mode}")]
     private partial void LogSessionCreated(Guid sessionId, string mode);
+
+    /// <summary>
+    /// Checks the first 4 bytes of <paramref name="path"/> against <c>TraceFileHeader.MagicValue</c> ("TYTR"). Throws
+    /// 400 with a human-readable reason if the magic doesn't match — the most common hit is the user accidentally
+    /// pasting the <c>.typhon-trace-cache</c> sidecar (magic "TPCH") instead of the source trace.
+    /// </summary>
+    private static void ValidateTraceFileMagic(string path)
+    {
+        Span<byte> magicBytes = stackalloc byte[4];
+        try
+        {
+            using var fs = System.IO.File.OpenRead(path);
+            if (fs.Length < 4 || fs.Read(magicBytes) != 4)
+            {
+                throw new WorkbenchException(400, "invalid_trace_file", $"File is too small to be a valid trace: {path}");
+            }
+        }
+        catch (IOException ex)
+        {
+            throw new WorkbenchException(400, "invalid_trace_file", $"Cannot read trace file: {ex.Message}");
+        }
+
+        var magic = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(magicBytes);
+        if (magic == Typhon.Profiler.TraceFileHeader.MagicValue)
+        {
+            return;
+        }
+
+        // Decode the magic into a human-readable reason. Sidecar cache = "TPCH" (0x48435054) is the common mistake.
+        var asAscii = System.Text.Encoding.ASCII.GetString(magicBytes);
+        const uint TpchMagic = 0x48435054;
+        var hint = magic == TpchMagic
+            ? "This looks like a .typhon-trace-cache sidecar. Open the matching source .typhon-trace file instead."
+            : $"File magic is '{asAscii}' (0x{magic:X8}); expected 'TYTR' for a .typhon-trace file.";
+        throw new WorkbenchException(400, "invalid_trace_file", hint);
+    }
 }

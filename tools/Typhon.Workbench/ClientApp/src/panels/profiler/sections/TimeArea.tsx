@@ -1,0 +1,629 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { TickData } from '@/libs/profiler/model/traceModel';
+import type { TimeRange, TrackLayout, TrackState, Viewport } from '@/libs/profiler/model/uiTypes';
+import { computeGutterWidth, drawTimeArea } from '@/libs/profiler/canvas/timeArea';
+import { hitTestTimeArea, type TimeAreaHover } from '@/libs/profiler/canvas/timeAreaHitTest';
+import { buildLayout, deriveActiveSystems, deriveSlotInfo, getVisibleTicks } from '@/libs/profiler/canvas/timeAreaLayout';
+import { GAUGE_TRACK_ID_SET, getGaugeGroupSpec } from '@/libs/profiler/canvas/gauges/region';
+import { buildGaugeTooltipLines, type GaugeData } from '@/libs/profiler/canvas/gauges/renderers';
+import { getStudioThemeTokens } from '@/libs/profiler/canvas/theme';
+import { GaugeTooltip } from '@/panels/profiler/components/GaugeTooltip';
+import { HelpOverlay } from '@/panels/profiler/components/HelpOverlay';
+import { getTrackHelpLines } from '@/libs/profiler/canvas/trackHelpLines';
+import { buildHoverTooltipLines } from '@/libs/profiler/canvas/hoverTooltipLines';
+import { registerAnimateViewport } from '@/shell/commands/profilerCommands';
+import { useNavHistoryStore } from '@/stores/useNavHistoryStore';
+import { useProfilerSessionStore } from '@/stores/useProfilerSessionStore';
+import { useProfilerSelectionStore } from '@/stores/useProfilerSelectionStore';
+import { useProfilerViewStore } from '@/stores/useProfilerViewStore';
+import { useThemeStore } from '@/stores/useThemeStore';
+
+/**
+ * Main time area — renders the ruler + phases + thread-slot lanes (chunks + nested spans) +
+ * operation mini-rows (page-cache / disk-io / transactions / wal / checkpoint).
+ *
+ * Gauges are **deferred to 2c** — this component leaves a clean seam in `buildLayout` for 2c to
+ * inject the gauge tracks between the ruler and the slot lanes.
+ *
+ * Data source: `ticks` prop fed by the caller. The plan convention ("chunk cache is the only
+ * data access") lands in the companion data-loader hook; this component is purely presentational
+ * plus the React-wrapper concerns (pointer capture, native wheel, rAF, theme repaint).
+ */
+
+interface Props {
+  ticks: TickData[];
+  /** Gauge-region data bundle from `useProfilerCache`. */
+  gaugeData: GaugeData;
+  /** Pending-chunk µs-ranges from `useProfilerCache` — painted as a diagonal-stripe overlay. */
+  pendingRangesUs: readonly { startUs: number; endUs: number }[];
+  isLive?: boolean;
+  /** Reported back up to ProfilerPanel so sibling sections can align to the same gutter column. */
+  onGutterWidthChange?: (widthPx: number) => void;
+}
+
+const DRAG_THRESHOLD_PX = 3;
+const ZOOM_ANIMATION_MS = 800;
+
+export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = false, onGutterWidthChange }: Props): React.JSX.Element {
+  void isLive; // live-follow hooks land in 2c/2d once gauges are in
+
+  // `metadata` is read for `threadNames` (slot-label lookup) + gating the wheel handler before the
+  // session has any data. Not used to derive viewRange — that comes from the selection store.
+  const metadata = useProfilerSessionStore((s) => s.metadata);
+  const viewRange = useProfilerViewStore((s) => s.viewRange);
+  const setViewRange = useProfilerViewStore((s) => s.setViewRange);
+  const legendsVisible = useProfilerViewStore((s) => s.legendsVisible);
+  const gaugeRegionVisible = useProfilerViewStore((s) => s.gaugeRegionVisible);
+  const gaugeCollapse = useProfilerViewStore((s) => s.gaugeCollapse);
+  const setGaugeCollapse = useProfilerViewStore((s) => s.setGaugeCollapse);
+  const selection = useProfilerSelectionStore((s) => s.selected);
+  const setSelected = useProfilerSelectionStore((s) => s.setSelected);
+
+  // The view store's `viewRange` doubles as the TickOverview selection. `{0, 0}` = "no selection";
+  // in that state TimeArea shows an empty-state placeholder, not the full trace. A range only
+  // reaches the renderer once the user has made a selection (drag in overview, wheel-zoom, etc.).
+  const hasSelection = viewRange.endUs > viewRange.startUs;
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Viewport snapshot — mutated imperatively by wheel + drag handlers before the next rAF. `scrollY`
+  // is 0 while there's no vertical scrolling; when the layout's total height exceeds the container
+  // the wrapper will animate it but that's a 2d concern.
+  const vpRef = useRef<Viewport>({ offsetX: viewRange.startUs, scaleX: 0.5, scrollY: 0 });
+  const gutterWidthRef = useRef<number>(80);
+  const lastEmittedGutterRef = useRef<number>(-1);
+  const crosshairXRef = useRef<number>(-1);
+  const hoverRef = useRef<TimeAreaHover>(null);
+  const dragRef = useRef<
+    | { mode: 'select'; startX: number; currentX: number; moved: boolean }
+    | { mode: 'pan'; startClientX: number; startOffsetX: number; moved: boolean }
+    | null
+  >(null);
+  const zoomAnimRef = useRef<{ from: TimeRange; to: TimeRange; startTime: number } | null>(null);
+  const rafRef = useRef(0);
+  // Track collapse — component-local, session-scoped. The view store owns global toggles
+  // (legends, gauge region); per-track collapse is UI-only and resets with the session.
+  const [collapseState, setCollapseState] = useState<Record<string, TrackState>>({});
+  // Gauge tooltip — DOM overlay (not canvas) because multi-line coloured text is cleaner in
+  // HTML. Updated when the hit-test lands on a gauge track; cleared when cursor leaves.
+  const [gaugeTooltipState, setGaugeTooltipState] = useState<
+    { trackId: string; localY: number; trackHeight: number; cursorUs: number; clientX: number; clientY: number } | null
+  >(null);
+  // "?" help glyph tooltip — trackId identifies which track the overlay renders help for.
+  const [helpTooltipState, setHelpTooltipState] = useState<
+    { trackId: string; label: string; clientX: number; clientY: number } | null
+  >(null);
+  const helpHoverRef = useRef<string | null>(null);
+  // Hover tooltip for spans / chunks / phases / mini-row ops. Portaled DOM overlay via HelpOverlay
+  // — gauges have their own dedicated tooltip (gaugeTooltipState), help has its own (helpTooltip-
+  // State); anything else bar-shaped feeds this one.
+  const [hoverTooltipState, setHoverTooltipState] = useState<
+    { lines: readonly string[]; clientX: number; clientY: number } | null
+  >(null);
+
+  // Derive activeSlots + slotsWithChunks + spanMaxDepthBySlot from current ticks. Memoise on the
+  // ticks reference (the data loader guarantees a stable identity until the cache version changes).
+  const slotInfo = useMemo(() => deriveSlotInfo(ticks), [ticks]);
+  const activeSystems = useMemo(() => deriveActiveSystems(ticks), [ticks]);
+
+  const threadNames = (metadata as { threadNames?: Record<number, string> } | null)?.threadNames ?? null;
+  // `metadata.systems` is a DTO-level array; map to `{[systemIndex]: name}` for O(1) lookup.
+  const systemNames = useMemo(() => {
+    const systems = metadata?.systems;
+    if (!systems) return null;
+    const out: Record<number, string> = {};
+    for (const s of systems) {
+      const idx = typeof s.index === 'number' ? s.index : Number(s.index);
+      if (Number.isFinite(idx) && s.name) out[idx] = s.name;
+    }
+    return out;
+  }, [metadata]);
+  const perSystemLanesVisible = useProfilerViewStore((s) => s.perSystemLanesVisible);
+
+  // Build layout once per (slotInfo, collapseState). `layoutRef` stamps the result so pointer
+  // handlers read the same structure the draw loop saw.
+  const layoutRef = useRef<{ tracks: readonly TrackLayout[]; totalHeight: number }>({ tracks: [], totalHeight: 0 });
+  const layout = useMemo(() => {
+    const r = buildLayout({
+      activeSlots: slotInfo.activeSlots,
+      slotsWithChunks: slotInfo.slotsWithChunks,
+      spanMaxDepthBySlot: slotInfo.spanMaxDepthBySlot,
+      threadNames,
+      collapseState,
+      gaugeRegionVisible,
+      gaugeCollapse,
+      activeSystems,
+      systemNames,
+      perSystemLanesVisible,
+    });
+    layoutRef.current = r;
+    return r;
+  }, [slotInfo, collapseState, threadNames, gaugeRegionVisible, gaugeCollapse, activeSystems, systemNames, perSystemLanesVisible]);
+
+  const render = useCallback((): void => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Measure gutter width from the widest label — uses the same font the draw path sets.
+    const gutter = computeGutterWidth(ctx, layout.tracks, legendsVisible);
+    gutterWidthRef.current = gutter;
+    if (onGutterWidthChange && lastEmittedGutterRef.current !== gutter) {
+      lastEmittedGutterRef.current = gutter;
+      const cb = onGutterWidthChange;
+      const w = gutter;
+      queueMicrotask(() => cb(w));
+    }
+
+    // Advance zoom animation if one's in flight. Each frame interpolates vp toward the target and
+    // writes the intermediate range back into the store so sibling sections (TickOverview) follow.
+    const anim = zoomAnimRef.current;
+    if (anim) {
+      const elapsed = performance.now() - anim.startTime;
+      const rawT = Math.min(elapsed / ZOOM_ANIMATION_MS, 1);
+      const t = 1 - (1 - rawT) * (1 - rawT) * (1 - rawT); // ease-out cubic
+      const curStart = anim.from.startUs + (anim.to.startUs - anim.from.startUs) * t;
+      const curEnd = anim.from.endUs + (anim.to.endUs - anim.from.endUs) * t;
+      setViewRange({ startUs: curStart, endUs: curEnd });
+      if (rawT >= 1) {
+        zoomAnimRef.current = null;
+      } else {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = requestAnimationFrame(() => render());
+      }
+    }
+
+    const dragSelection = dragRef.current?.mode === 'select'
+      ? { x1: Math.min(dragRef.current.startX, dragRef.current.currentX), x2: Math.max(dragRef.current.startX, dragRef.current.currentX) }
+      : null;
+
+    drawTimeArea(canvas, {
+      visibleTicks: getVisibleTicks(ticks, viewRange),
+      ticks,
+      tracks: layout.tracks,
+      viewRange,
+      vp: vpRef.current,
+      gutterWidth: gutter,
+      legendsVisible,
+      selection,
+      dragSelection: dragSelection && dragSelection.x2 - dragSelection.x1 > DRAG_THRESHOLD_PX ? dragSelection : null,
+      crosshairX: crosshairXRef.current,
+      gaugeData,
+      helpHover: helpHoverRef.current,
+      pendingRangesUs,
+    }, getStudioThemeTokens());
+  }, [layout, ticks, viewRange, legendsVisible, selection, setViewRange, onGutterWidthChange, gaugeData, pendingRangesUs]);
+
+  const scheduleRender = useCallback((): void => {
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      try { render(); } catch (err) { console.error('TimeArea render failed:', err); }
+    });
+  }, [render]);
+
+  useEffect(() => {
+    scheduleRender();
+    const obs = new ResizeObserver(() => scheduleRender());
+    if (containerRef.current) obs.observe(containerRef.current);
+    return () => { obs.disconnect(); cancelAnimationFrame(rafRef.current); };
+  }, [scheduleRender]);
+
+  // Theme toggle fires a repaint — deps-list of the render callback doesn't cover CSS var changes.
+  const theme = useThemeStore((s) => s.theme);
+  useEffect(() => { scheduleRender(); }, [theme, scheduleRender]);
+
+  // Nav-history — viewport is the primary navigation event (matches the old profiler). Each entry
+  // captures `{viewRange, selection-at-that-moment}`. Pan/zoom/drag-to-zoom/Ctrl+Home/animateToRange
+  // all mutate `viewRange`, and the debounce below coalesces rapid wheel/pan bursts into one entry.
+  //
+  // Selection changes don't push a new entry — they patch the top entry in place via
+  // `updateTopSelection`. Rationale: selecting a span at the current viewport isn't "traveling
+  // somewhere else," it's marking what you were looking at. Walking back should restore both the
+  // viewport and the last span you had highlighted at that viewport.
+  //
+  // Restore detection: after back()/forward() writes viewRange, this effect re-fires. We compare
+  // the tip entry's viewRange to the current one — if they match (reference or value), skip push.
+  // `isRestoring` isn't reliable here because it's flipped back synchronously long before the
+  // 250 ms timer fires.
+  const selectionRef = useRef<typeof selection>(selection);
+  useEffect(() => { selectionRef.current = selection; }, [selection]);
+
+  useEffect(() => {
+    if (viewRange.endUs <= viewRange.startUs) return;
+    const timer = setTimeout(() => {
+      const nav = useNavHistoryStore.getState();
+      const top = nav.pointer >= 0 ? nav.entries[nav.pointer] : null;
+      if (top?.kind === 'profiler-selected'
+        && top.viewRange.startUs === viewRange.startUs
+        && top.viewRange.endUs === viewRange.endUs) {
+        return;
+      }
+      nav.push({
+        kind: 'profiler-selected',
+        selection: selectionRef.current,
+        viewRange,
+        timestamp: Date.now(),
+      });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [viewRange]);
+
+  // Selection change → patch the top entry so back/forward remembers what was highlighted here.
+  useEffect(() => {
+    useNavHistoryStore.getState().updateTopSelection(selection);
+  }, [selection]);
+
+  // Viewport sync — when viewRange changes externally (TickOverview selection, external nav),
+  // rewrite vp immediately so the next hit-test matches the drawn state.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const contentWidth = rect.width - gutterWidthRef.current;
+    const rangeUs = viewRange.endUs - viewRange.startUs;
+    if (rangeUs > 0 && contentWidth > 0) {
+      vpRef.current.offsetX = viewRange.startUs;
+      vpRef.current.scaleX = contentWidth / rangeUs;
+    }
+    scheduleRender();
+  }, [viewRange, scheduleRender]);
+
+  // ─── Animation helper ────────────────────────────────────────────────────────────────────────
+  const animateToRange = useCallback((target: TimeRange): void => {
+    zoomAnimRef.current = {
+      from: { startUs: viewRange.startUs, endUs: viewRange.endUs },
+      to: target,
+      startTime: performance.now(),
+    };
+    scheduleRender();
+  }, [viewRange, scheduleRender]);
+
+  // Expose the tween to the rest of the app (nav-history restore, etc.) via a module-level
+  // register slot. The wrapping useEffect re-registers whenever the callback identity changes so
+  // the registered closure always captures the latest `viewRange` + `scheduleRender`.
+  useEffect(() => {
+    registerAnimateViewport(animateToRange);
+    return () => registerAnimateViewport(null);
+  }, [animateToRange]);
+
+  // ─── Pointer handlers ────────────────────────────────────────────────────────────────────────
+  const getLocal = (e: { clientX: number; clientY: number }): { mx: number; my: number } | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    return { mx: e.clientX - rect.left, my: e.clientY - rect.top };
+  };
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>): void => {
+    const local = getLocal(e);
+    if (!local) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (e.button === 0) {
+      // Gutter chevron → toggle collapse
+      if (local.mx < gutterWidthRef.current) {
+        const hit = hitTestTimeArea({
+          mx: local.mx, my: local.my,
+          tracks: layoutRef.current.tracks, ticks, vp: vpRef.current,
+          gutterWidth: gutterWidthRef.current,
+          legendsVisible,
+        });
+        if (hit && hit.kind === 'gutter-chevron') {
+          if (GAUGE_TRACK_ID_SET.has(hit.trackId)) {
+            // Gauge tracks cycle 3 states (summary → expanded → double → summary). Persisted
+            // via the view store so the state survives reload.
+            const cur = gaugeCollapse[hit.trackId] ?? 'expanded';
+            const next: TrackState = cur === 'summary' ? 'expanded' : cur === 'expanded' ? 'double' : 'summary';
+            setGaugeCollapse(hit.trackId, next);
+          } else {
+            setCollapseState((prev) => {
+              const cur = prev[hit.trackId] ?? 'expanded';
+              const next: TrackState = cur === 'summary' ? 'expanded' : 'summary';
+              return { ...prev, [hit.trackId]: next };
+            });
+          }
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // Shift+left → pan; plain left → drag-to-zoom
+      const mode: 'select' | 'pan' = e.shiftKey ? 'pan' : 'select';
+      e.preventDefault();
+      if (mode === 'pan') {
+        dragRef.current = { mode: 'pan', startClientX: e.clientX, startOffsetX: vpRef.current.offsetX, moved: false };
+      } else {
+        dragRef.current = { mode: 'select', startX: local.mx, currentX: local.mx, moved: false };
+      }
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    } else if (e.button === 1) {
+      // Middle-drag → pan
+      e.preventDefault();
+      dragRef.current = { mode: 'pan', startClientX: e.clientX, startOffsetX: vpRef.current.offsetX, moved: false };
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    }
+  }, [ticks, gaugeCollapse, setGaugeCollapse, legendsVisible]);
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>): void => {
+    const local = getLocal(e);
+    if (!local) return;
+    crosshairXRef.current = local.mx;
+
+    const drag = dragRef.current;
+    if (drag) {
+      if (drag.mode === 'select') {
+        const dx = local.mx - drag.startX;
+        if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) {
+          scheduleRender();
+          return;
+        }
+        drag.moved = true;
+        drag.currentX = local.mx;
+      } else {
+        const dxClient = e.clientX - drag.startClientX;
+        if (!drag.moved && Math.abs(dxClient) < DRAG_THRESHOLD_PX) return;
+        drag.moved = true;
+        const deltaUs = -dxClient / vpRef.current.scaleX;
+        vpRef.current.offsetX = drag.startOffsetX + deltaUs;
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect();
+          const contentWidth = rect.width - gutterWidthRef.current;
+          setViewRange({
+            startUs: vpRef.current.offsetX,
+            endUs: vpRef.current.offsetX + contentWidth / vpRef.current.scaleX,
+          });
+        }
+      }
+      scheduleRender();
+      return;
+    }
+
+    // Hover → hit-test for tooltip + cursor shape feedback (cursor-change deferred to 2f)
+    const hover = hitTestTimeArea({
+      mx: local.mx, my: local.my,
+      tracks: layoutRef.current.tracks, ticks, vp: vpRef.current,
+      gutterWidth: gutterWidthRef.current,
+      legendsVisible,
+    });
+    hoverRef.current = hover;
+
+    // Gauge hovers feed the DOM-overlay tooltip; non-gauge hovers clear it.
+    if (hover && hover.kind === 'gauge') {
+      setGaugeTooltipState({
+        trackId: hover.trackId,
+        localY: hover.localY,
+        trackHeight: hover.trackHeight,
+        cursorUs: hover.cursorUs,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+    } else if (gaugeTooltipState !== null) {
+      setGaugeTooltipState(null);
+    }
+
+    // "?" help glyph — brighten the glyph on canvas + show the HelpOverlay.
+    if (hover && hover.kind === 'help') {
+      if (helpHoverRef.current !== hover.trackId) {
+        helpHoverRef.current = hover.trackId;
+      }
+      setHelpTooltipState({ trackId: hover.trackId, label: hover.label, clientX: e.clientX, clientY: e.clientY });
+    } else if (helpHoverRef.current !== null || helpTooltipState !== null) {
+      helpHoverRef.current = null;
+      setHelpTooltipState(null);
+    }
+
+    // Span / chunk / phase / mini-row-op hovers → generic multi-line tooltip. Gauge / help / other
+    // kinds return null from the builder, which clears the overlay.
+    const lines = buildHoverTooltipLines(hover);
+    if (lines) {
+      setHoverTooltipState({ lines, clientX: e.clientX, clientY: e.clientY });
+    } else if (hoverTooltipState !== null) {
+      setHoverTooltipState(null);
+    }
+    scheduleRender();
+  }, [ticks, scheduleRender, setViewRange, gaugeTooltipState, legendsVisible, helpTooltipState, hoverTooltipState]);
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>): void => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    const canvas = canvasRef.current;
+    try { canvas?.releasePointerCapture(e.pointerId); } catch { /* noop */ }
+    if (!drag) return;
+
+    if (drag.mode === 'select') {
+      if (drag.moved) {
+        // Drag-to-zoom — convert pixel range to time range, kick the 800 ms tween
+        const x1 = Math.min(drag.startX, drag.currentX);
+        const x2 = Math.max(drag.startX, drag.currentX);
+        const vp = vpRef.current;
+        const gutter = gutterWidthRef.current;
+        const startUs = vp.offsetX + (x1 - gutter) / vp.scaleX;
+        const endUs = vp.offsetX + (x2 - gutter) / vp.scaleX;
+        if (endUs > startUs) animateToRange({ startUs, endUs });
+      } else {
+        // Click-without-drag → selection
+        const local = getLocal(e);
+        if (!local) return;
+        const hit = hitTestTimeArea({
+          mx: local.mx, my: local.my,
+          tracks: layoutRef.current.tracks, ticks, vp: vpRef.current,
+          gutterWidth: gutterWidthRef.current,
+          legendsVisible,
+        });
+        if (hit) {
+          routeSelection(hit, setSelected);
+        }
+      }
+    }
+    scheduleRender();
+  }, [ticks, animateToRange, setSelected, scheduleRender, legendsVisible]);
+
+  const onPointerLeave = useCallback((): void => {
+    if (dragRef.current) return; // captured drag continues
+    crosshairXRef.current = -1;
+    hoverRef.current = null;
+    if (gaugeTooltipState !== null) setGaugeTooltipState(null);
+    if (helpHoverRef.current !== null || helpTooltipState !== null) {
+      helpHoverRef.current = null;
+      setHelpTooltipState(null);
+    }
+    if (hoverTooltipState !== null) setHoverTooltipState(null);
+    scheduleRender();
+  }, [scheduleRender, gaugeTooltipState, helpTooltipState, hoverTooltipState]);
+
+  // Double-click a chunk / span / phase / mini-row op → smooth-zoom the viewport to its bounds.
+  // Ported verbatim from the old profiler's `onDblClick`. Tick / gutter-chevron hits are ignored —
+  // nothing meaningful to zoom to there. The 800 ms ease-out tween lives in `animateToRange`.
+  const onDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>): void => {
+    const local = getLocal(e);
+    if (!local) return;
+    const hit = hitTestTimeArea({
+      mx: local.mx, my: local.my,
+      tracks: layoutRef.current.tracks, ticks, vp: vpRef.current,
+      gutterWidth: gutterWidthRef.current,
+      legendsVisible,
+    });
+    if (!hit) return;
+    switch (hit.kind) {
+      case 'chunk':       animateToRange({ startUs: hit.chunk.startUs, endUs: hit.chunk.endUs }); return;
+      case 'span':        animateToRange({ startUs: hit.span.startUs,  endUs: hit.span.endUs  }); return;
+      case 'phase':       animateToRange({ startUs: hit.phase.startUs, endUs: hit.phase.endUs }); return;
+      case 'mini-row-op': animateToRange({ startUs: hit.op.startUs,    endUs: hit.op.endUs    }); return;
+      default: return; // 'tick', 'gutter-chevron' — no-op
+    }
+  }, [ticks, animateToRange, legendsVisible]);
+
+  // ─── Native wheel listener ──────────────────────────────────────────────────────────────────
+  // React's synthetic wheel is passive — preventDefault on Ctrl+wheel would be ignored and the
+  // browser would zoom the page. Attach natively with {passive:false}.
+  const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  handleWheelRef.current = (e: WheelEvent) => {
+    if (ticks.length === 0 && !metadata) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const vp = vpRef.current;
+    const gutter = gutterWidthRef.current;
+    const contentWidth = rect.width - gutter;
+    const mouseX = Math.max(0, e.clientX - rect.left - gutter);
+
+    if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      // Horizontal pan
+      const delta = e.shiftKey ? e.deltaY : e.deltaX;
+      vp.offsetX += delta / vp.scaleX;
+    } else {
+      // Zoom around cursor
+      const usAtMouse = vp.offsetX + mouseX / vp.scaleX;
+      const factor = e.deltaY > 0 ? 0.85 : 1.18;
+      vp.scaleX = Math.max(0.001, Math.min(10000, vp.scaleX * factor));
+      vp.offsetX = usAtMouse - mouseX / vp.scaleX;
+    }
+    setViewRange({ startUs: vp.offsetX, endUs: vp.offsetX + contentWidth / vp.scaleX });
+    scheduleRender();
+  };
+
+  useEffect(() => {
+    // Re-run on `hasSelection` changes because the canvas is absent from the tree when no range
+    // is selected (empty-state placeholder instead). Without this dep the listener would miss
+    // the canvas's first mount after the user drags a selection in TickOverview.
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const listener = (e: WheelEvent): void => handleWheelRef.current(e);
+    canvas.addEventListener('wheel', listener, { passive: false });
+    return () => canvas.removeEventListener('wheel', listener);
+  }, [hasSelection]);
+
+  // ─── Render ──────────────────────────────────────────────────────────────────────────────────
+  if (!hasSelection) {
+    return (
+      <div
+        ref={containerRef}
+        className="flex h-full w-full items-center justify-center overflow-hidden select-none bg-background text-center text-[12px] text-muted-foreground"
+      >
+        <span>Drag a range in the tick overview above to show details.</span>
+      </div>
+    );
+  }
+  return (
+    <div ref={containerRef} className="relative h-full w-full overflow-hidden select-none">
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 h-full w-full touch-none"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onPointerLeave={onPointerLeave}
+        onDoubleClick={onDoubleClick}
+      />
+      {gaugeTooltipState && (
+        <GaugeTooltip
+          lines={buildGaugeTooltipLines(
+            ticks,
+            gaugeData,
+            gaugeTooltipState.trackId,
+            getGaugeGroupSpec(gaugeTooltipState.trackId)?.label ?? gaugeTooltipState.trackId,
+            gaugeTooltipState.cursorUs,
+            getStudioThemeTokens(),
+            gaugeTooltipState.localY,
+            gaugeTooltipState.trackHeight,
+          )}
+          clientX={gaugeTooltipState.clientX}
+          clientY={gaugeTooltipState.clientY}
+        />
+      )}
+      {helpTooltipState && (
+        <HelpOverlay
+          lines={getTrackHelpLines(helpTooltipState.trackId, helpTooltipState.label)}
+          clientX={helpTooltipState.clientX}
+          clientY={helpTooltipState.clientY}
+        />
+      )}
+      {hoverTooltipState && (
+        <HelpOverlay
+          lines={hoverTooltipState.lines}
+          clientX={hoverTooltipState.clientX}
+          clientY={hoverTooltipState.clientY}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Map a hit-test hover into a store mutation. Keeps the pointer handler readable.
+ */
+function routeSelection(
+  hit: NonNullable<TimeAreaHover>,
+  setSelected: (s: import('@/stores/useProfilerSelectionStore').ProfilerSelection) => void,
+): void {
+  switch (hit.kind) {
+    case 'chunk':
+      setSelected({ kind: 'chunk', chunk: hit.chunk });
+      return;
+    case 'span':
+      setSelected({ kind: 'span', span: hit.span });
+      return;
+    case 'tick':
+      setSelected({ kind: 'tick', tickNumber: hit.tickNumber });
+      return;
+    case 'phase':
+      // Phase selection isn't in the ProfilerSelection union (design doc keeps phase as a
+      // DetailPanel section under the tick selection). Route to the containing tick.
+      setSelected({ kind: 'tick', tickNumber: hit.tickNumber });
+      return;
+    case 'mini-row-op':
+      // Treat mini-row ops as spans (they ARE SpanData under the hood — stored in projection arrays).
+      setSelected({ kind: 'span', span: hit.op });
+      return;
+    case 'gutter-chevron':
+      // Already handled in pointerdown; never reaches here on click-without-drag
+      return;
+  }
+}
+

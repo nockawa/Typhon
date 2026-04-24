@@ -27,7 +27,7 @@
 
     <!-- Incremental client build: collect TS/TSX/CSS/HTML/JSON sources under ClientApp so MSBuild can compare their mtimes against
          the built wwwroot bundle. Without this, TypeScript edits are silently ignored on every subsequent `dotnet build` — the server
-         just keeps serving the stale bundle. This is the same pattern proven in tools/Typhon.Profiler.Server. -->
+         just keeps serving the stale bundle. -->
     <ItemGroup>
         <ClientAppSource Include="ClientApp\src\**\*.ts;ClientApp\src\**\*.tsx;ClientApp\src\**\*.css" />
         <ClientAppSource Include="ClientApp\index.html;ClientApp\package.json;ClientApp\tsconfig.json;ClientApp\vite.config.ts;ClientApp\tailwind.config.ts" />
