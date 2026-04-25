@@ -581,6 +581,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     var chunkFailed = false;
                     for (var chunk = 0; chunk < totalChunks; chunk++)
                     {
+                        SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
                         try
                         {
                             ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, totalChunks, 0);
@@ -596,6 +597,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                                 _systemFailed[succ] = true;
                             }
                         }
+                        finally
+                        {
+                            SystemAccessValidator.LeaveSystem();
+                        }
                     }
 
                     morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
@@ -609,6 +614,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             {
                 for (var chunk = 0; chunk < sys.TotalChunks; chunk++)
                 {
+                    SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
                     try
                     {
                         sys.PipelineChunkAction(chunk, sys.TotalChunks);
@@ -623,12 +629,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                             _systemFailed[succ] = true;
                         }
                     }
+                    finally
+                    {
+                        SystemAccessValidator.LeaveSystem();
+                    }
                 }
             }
             else // CallbackSystem or non-parallel QuerySystem — single invocation
             {
                 var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
                 var success = true;
+                SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
                 try
                 {
                     sys.CallbackAction(ctx);
@@ -644,6 +655,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     {
                         _systemFailed[succ] = true;
                     }
+                }
+                finally
+                {
+                    SystemAccessValidator.LeaveSystem();
                 }
 
                 SystemEndCallback?.Invoke(sysIdx, success);
@@ -830,6 +845,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         InspectorChunkStart(sysIdx, 0, workStart, 1);
 
         var success = true;
+        SystemAccessValidator.EnterSystem(Systems[sysIdx].Access, Systems[sysIdx].Name);
         try
         {
             Systems[sysIdx].CallbackAction(ctx);
@@ -843,6 +859,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         }
         finally
         {
+            SystemAccessValidator.LeaveSystem();
             // System lifecycle hook: commit/dispose per-system Transaction
             SystemEndCallback?.Invoke(sysIdx, success);
 
@@ -886,6 +903,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
             var workStart = Stopwatch.GetTimestamp();
             InspectorChunkStart(sysIdx, chunk, workStart, sys.TotalChunks);
+            SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
             try
             {
                 sys.PipelineChunkAction(chunk, sys.TotalChunks);
@@ -895,6 +913,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 _systemFailed[sysIdx] = true;
                 _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
                 LogSystemException(sysIdx, sys.Name, ex);
+            }
+            finally
+            {
+                SystemAccessValidator.LeaveSystem();
             }
 
             var workEnd = Stopwatch.GetTimestamp();
@@ -948,6 +970,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
             var workStart = Stopwatch.GetTimestamp();
             InspectorChunkStart(sysIdx, chunk, workStart, sys.TotalChunks);
+            SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
             try
             {
                 ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, sys.TotalChunks, workerId);
@@ -957,6 +980,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                 _systemFailed[sysIdx] = true;
                 _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
                 LogSystemException(sysIdx, sys.Name, ex);
+            }
+            finally
+            {
+                SystemAccessValidator.LeaveSystem();
             }
 
             var workEnd = Stopwatch.GetTimestamp();
@@ -1102,6 +1129,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         InspectorChunkStart(sysIdx, 0, workStart, 1);
 
         var success = true;
+        SystemAccessValidator.EnterSystem(Systems[sysIdx].Access, Systems[sysIdx].Name);
         try
         {
             Systems[sysIdx].CallbackAction(ctx);
@@ -1115,6 +1143,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         }
         finally
         {
+            SystemAccessValidator.LeaveSystem();
             SystemEndCallback?.Invoke(sysIdx, success);
 
             var workEnd = Stopwatch.GetTimestamp();

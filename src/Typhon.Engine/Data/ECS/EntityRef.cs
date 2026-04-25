@@ -132,6 +132,7 @@ public unsafe ref struct EntityRef
     public ref T Write<T>(Comp<T> comp) where T : unmanaged
     {
         Debug.Assert(_writable, "EntityRef opened as read-only — use OpenMut for writes");
+        SystemAccessValidator.AssertWrite<T>();
         byte slot = _archetype.GetSlot(comp._componentTypeId);
         Debug.Assert(slot < _archetype.ComponentCount);
         Debug.Assert((_enabledBits & (1 << slot)) != 0, $"Component at slot {slot} is disabled");
@@ -236,6 +237,7 @@ public unsafe ref struct EntityRef
     public ref T Write<T>() where T : unmanaged
     {
         Debug.Assert(_writable, "EntityRef opened as read-only — use OpenMut for writes");
+        SystemAccessValidator.AssertWrite<T>();
         int typeId = ArchetypeRegistry.GetComponentTypeId<T>();
         Debug.Assert(typeId >= 0, $"Component type {typeof(T).Name} not registered");
         byte slot = _archetype.GetSlot(typeId);
