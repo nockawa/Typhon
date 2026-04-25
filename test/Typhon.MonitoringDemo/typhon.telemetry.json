@@ -1,33 +1,18 @@
 {
+  "_comment": "MonitoringDemo telemetry config. Profiler + all observability sub-systems on for end-to-end demos. (Replaces a legacy file that exercised the now-removed Telemetry:* dead-family sub-sections plus a zombie SpanLevel field with no binding — none of those had functional effect in the current codebase.)",
   "Typhon": {
-    "Telemetry": {
+    "Profiler": {
       "Enabled": true,
-      "AccessControl": {
+      "GcTracing":         { "Enabled": true },
+      "MemoryAllocations": { "Enabled": true },
+      "Gauges":            { "Enabled": true },
+
+      "Scheduler": {
         "Enabled": true,
-        "TrackContention": true,
-        "TrackContentionDuration": true,
-        "TrackAccessPatterns": true
-      },
-      "PagedMMF": {
-        "Enabled": true,
-        "TrackPageAllocations": true,
-        "TrackPageEvictions": true,
-        "TrackIOOperations": true,
-        "TrackCacheHitRatio": true,
-        "SpanLevel": "All"
-      },
-      "BTree": {
-        "Enabled": true,
-        "TrackNodeSplits": true,
-        "TrackNodeMerges": true,
-        "TrackSearchDepth": true,
-        "TrackKeyComparisons": false
-      },
-      "Transaction": {
-        "Enabled": true,
-        "TrackCommitRollback": true,
-        "TrackConflicts": true,
-        "TrackDuration": true
+        "Gauges": {
+          "WorkerUtilization": { "Enabled": true },
+          "StragglerGap":      { "Enabled": true }
+        }
       }
     }
   }

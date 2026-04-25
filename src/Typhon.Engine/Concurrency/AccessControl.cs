@@ -5,6 +5,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 // ReSharper disable RedundantNullableFlowAttribute
 
@@ -68,6 +69,14 @@ public partial struct AccessControl
         return (elapsed * 1_000_000) / Stopwatch.Frequency;
     }
 
+    /// <summary>Cap an elapsed-us value to <see cref="ushort.MaxValue"/> (65,535 us ≈ 65 ms) for trace event payloads.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ushort ElapsedUsCapped(long startTicks)
+    {
+        var us = ComputeElapsedUs(startTicks);
+        return us >= ushort.MaxValue ? ushort.MaxValue : (ushort)us;
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowInvalidOperation(string message) => throw new InvalidOperationException(message);
 
@@ -82,11 +91,9 @@ public partial struct AccessControl
     /// Enters shared (reader) access. Multiple threads can hold shared access simultaneously.
     /// </summary>
     /// <param name="ctx">Reference to WaitContext for timeout/cancellation. Use <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
     /// <returns>True if access was acquired; false if timed out or cancelled.</returns>
-    public bool EnterSharedAccess(ref WaitContext ctx, IContentionTarget target = null)
+    public bool EnterSharedAccess(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         long waitStartTicks = 0;
         bool hadToWait = false;
 
@@ -111,19 +118,10 @@ public partial struct AccessControl
                     {
                         hadToWait = true;
                         waitStartTicks = Stopwatch.GetTimestamp();
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.SharedWaitStart, 0);
-                        }
                     }
 
                     if (!ld.WaitForIdleState(LockData.WaitFor.Shared))
                     {
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                        }
-
                         return false;
                     }
 
@@ -143,19 +141,10 @@ public partial struct AccessControl
                     {
                         hadToWait = true;
                         waitStartTicks = Stopwatch.GetTimestamp();
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.SharedWaitStart, 0);
-                        }
                     }
 
                     if (!ld.WaitForIdleState(LockData.WaitFor.Shared))
                     {
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                        }
-
                         return false;
                     }
 
@@ -168,26 +157,15 @@ public partial struct AccessControl
             {
                 if (ld.ShouldStop)
                 {
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.Canceled, hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                    }
-
                     return false;
                 }
 
                 continue;
             }
 
-            // Succeed - record telemetry
-            if (hadToWait && level >= TelemetryLevel.Light)
-            {
-                target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-            }
-            if (level >= TelemetryLevel.Deep)
-            {
-                target?.LogLockOperation(LockOperation.SharedAcquired, hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-            }
+            // Succeed — emit process-wide trace event (Tier-2 gated).
+            var elapsedUs = hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0;
+            TyphonEvent.EmitConcurrencyAccessControlSharedAcquire((ushort)Environment.CurrentManagedThreadId, hadToWait, elapsedUs);
 
             return true;
         }
@@ -196,10 +174,8 @@ public partial struct AccessControl
     /// <summary>
     /// Exits shared (reader) access.
     /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    public void ExitSharedAccess(IContentionTarget target = null)
+    public void ExitSharedAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         var ld = new LockData(ref _data);
 
         while (true)
@@ -231,12 +207,7 @@ public partial struct AccessControl
                 continue;
             }
 
-            // Record telemetry
-            if (level >= TelemetryLevel.Deep)
-            {
-                target?.LogLockOperation(LockOperation.SharedReleased, 0);
-            }
-
+            TyphonEvent.EmitConcurrencyAccessControlSharedRelease((ushort)Environment.CurrentManagedThreadId);
             return;
         }
     }
@@ -244,11 +215,9 @@ public partial struct AccessControl
     /// <summary>
     /// Tries to enter shared (reader) access without waiting.
     /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
     /// <returns>True if access was acquired; false if lock is not available.</returns>
-    public bool TryEnterSharedAccess(IContentionTarget target = null)
+    public bool TryEnterSharedAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         var ld = new LockData(ref _data);
 
         switch (ld.State)
@@ -278,11 +247,7 @@ public partial struct AccessControl
             return false;
         }
 
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.SharedAcquired, 0);
-        }
-
+        TyphonEvent.EmitConcurrencyAccessControlSharedAcquire((ushort)Environment.CurrentManagedThreadId, hadToWait: false, elapsedUs: 0);
         return true;
     }
 
@@ -290,11 +255,9 @@ public partial struct AccessControl
     /// Enters exclusive (writer) access. Only one thread can hold exclusive access.
     /// </summary>
     /// <param name="ctx">Reference to WaitContext for timeout/cancellation. Use <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
     /// <returns>True if access was acquired; false if timed out or cancelled.</returns>
-    public bool EnterExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null)
+    public bool EnterExclusiveAccess(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         long waitStartTicks = 0;
         bool hadToWait = false;
 
@@ -306,10 +269,8 @@ public partial struct AccessControl
             {
                 // Switch from Idle to Exclusive
                 case IdleState:
-                    // We can start shared only if there are no waiting promoters or exclusives
                     if (ld.CanExclusiveStart)
                     {
-                        // Switch from Idle to Exclusive
                         ld.State = ExclusiveState;
                         ld.ThreadId = Environment.CurrentManagedThreadId;
                         break;
@@ -320,76 +281,44 @@ public partial struct AccessControl
                     {
                         hadToWait = true;
                         waitStartTicks = Stopwatch.GetTimestamp();
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.ExclusiveWaitStart, 0);
-                        }
                     }
 
                     if (!ld.WaitForIdleState(LockData.WaitFor.Exclusive))
                     {
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                        }
-
                         return false;
                     }
 
-                    // Fetch the updated state after waiting
                     ld.Fetch();
                     continue;
 
                 // Shared access is active, wait for it to become idle then retry
                 case SharedState:
-                    // We have to wait our turn
                     if (!hadToWait)
                     {
                         hadToWait = true;
                         waitStartTicks = Stopwatch.GetTimestamp();
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.ExclusiveWaitStart, 0);
-                        }
                     }
 
                     if (!ld.WaitForIdleState(LockData.WaitFor.Exclusive))
                     {
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                        }
-
                         return false;
                     }
 
-                    // Fetch the updated state after waiting
                     ld.Fetch();
                     continue;
 
                 case ExclusiveState:
-                    // We have to wait our turn
                     if (!hadToWait)
                     {
                         hadToWait = true;
                         waitStartTicks = Stopwatch.GetTimestamp();
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.ExclusiveWaitStart, 0);
-                        }
                     }
 
                     if (!ld.WaitForIdleState(LockData.WaitFor.Exclusive))
                     {
-                        if (level >= TelemetryLevel.Deep)
-                        {
-                            target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                        }
-
                         return false;
                     }
 
-                    // Fetch the updated state after waiting
                     ld.Fetch();
                     continue;
             }
@@ -398,26 +327,15 @@ public partial struct AccessControl
             {
                 if (ld.ShouldStop)
                 {
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.Canceled, hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                    }
-
                     return false;
                 }
 
                 continue;
             }
 
-            // Succeed - record telemetry
-            if (hadToWait && level >= TelemetryLevel.Light)
-            {
-                target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-            }
-            if (level >= TelemetryLevel.Deep)
-            {
-                target?.LogLockOperation(LockOperation.ExclusiveAcquired, hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-            }
+            // Succeed — emit process-wide trace event (Tier-2 gated).
+            var elapsedUs = hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0;
+            TyphonEvent.EmitConcurrencyAccessControlExclusiveAcquire((ushort)Environment.CurrentManagedThreadId, hadToWait, elapsedUs);
 
             return true;
         }
@@ -426,11 +344,9 @@ public partial struct AccessControl
     /// <summary>
     /// Tries to enter exclusive (writer) access without waiting.
     /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
     /// <returns>True if access was acquired; false if lock is not available.</returns>
-    public bool TryEnterExclusiveAccess(IContentionTarget target = null)
+    public bool TryEnterExclusiveAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         var ld = new LockData(ref _data);
 
         if (ld.State != IdleState)
@@ -447,22 +363,15 @@ public partial struct AccessControl
             return false;
         }
 
-        // Record telemetry
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.ExclusiveAcquired, 0);
-        }
-
+        TyphonEvent.EmitConcurrencyAccessControlExclusiveAcquire((ushort)Environment.CurrentManagedThreadId, hadToWait: false, elapsedUs: 0);
         return true;
     }
 
     /// <summary>
     /// Exits exclusive (writer) access.
     /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    public void ExitExclusiveAccess(IContentionTarget target = null)
+    public void ExitExclusiveAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         var ld = new LockData(ref _data);
 
         while (true)
@@ -493,12 +402,7 @@ public partial struct AccessControl
                 continue;
             }
 
-            // Record telemetry
-            if (level >= TelemetryLevel.Deep)
-            {
-                target?.LogLockOperation(LockOperation.ExclusiveReleased, 0);
-            }
-
+            TyphonEvent.EmitConcurrencyAccessControlExclusiveRelease((ushort)Environment.CurrentManagedThreadId);
             return;
         }
     }
@@ -507,12 +411,10 @@ public partial struct AccessControl
     /// Tries to promote from shared to exclusive access.
     /// Caller must already hold shared access.
     /// </summary>
-    /// <param name="ctx">Reference to WaitContext for timeout/cancellation. Use <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
+    /// <param name="ctx">Reference to WaitContext for timeout/cancellation.</param>
     /// <returns>True if promotion succeeded; false if timed out or cancelled.</returns>
-    public bool TryPromoteToExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null)
+    public bool TryPromoteToExclusiveAccess(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         long waitStartTicks = 0;
         bool hadToWait = false;
         var ld = new LockData(ref _data, ref ctx);
@@ -531,23 +433,13 @@ public partial struct AccessControl
                 {
                     hadToWait = true;
                     waitStartTicks = Stopwatch.GetTimestamp();
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.PromoteToExclusiveStart, 0);
-                    }
                 }
 
                 if (!ld.WaitForIdleState(LockData.WaitFor.Promote))
                 {
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                    }
-
                     return false;
                 }
 
-                // Fetch the updated state after waiting
                 ld.Fetch();
                 continue;
             }
@@ -560,39 +452,26 @@ public partial struct AccessControl
             {
                 if (ld.ShouldStop)
                 {
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.Canceled, hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                    }
-
                     return false;
                 }
 
                 continue;
             }
 
-            // Succeed - record telemetry
-            if (hadToWait && level >= TelemetryLevel.Light)
-            {
-                target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-            }
-            if (level >= TelemetryLevel.Deep)
-            {
-                target?.LogLockOperation(LockOperation.PromoteToExclusiveAcquired, hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-            }
+            // Succeed — emit process-wide trace event (Tier-2 gated).
+            var elapsedUs = hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0;
+            // Variant 0 = promote
+            TyphonEvent.EmitConcurrencyAccessControlPromotion(elapsedUs, variant: 0);
 
             return true;
         }
     }
 
     /// <summary>
-    /// Demotes from exclusive to shared access.
-    /// Caller must hold exclusive access.
+    /// Demotes from exclusive to shared access. Caller must hold exclusive access.
     /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    public void DemoteFromExclusiveAccess(IContentionTarget target = null)
+    public void DemoteFromExclusiveAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         var ld = new LockData(ref _data);
 
         while (true)
@@ -623,12 +502,8 @@ public partial struct AccessControl
                 continue;
             }
 
-            // Record telemetry
-            if (level >= TelemetryLevel.Deep)
-            {
-                target?.LogLockOperation(LockOperation.DemoteToShared, 0);
-            }
-
+            // Variant 1 = demote
+            TyphonEvent.EmitConcurrencyAccessControlPromotion(elapsedUs: 0, variant: 1);
             return;
         }
     }

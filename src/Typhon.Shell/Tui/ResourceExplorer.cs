@@ -446,15 +446,6 @@ internal sealed class ResourceExplorer
         public void WriteDuration(string label, long lastUs, long avgUs, long maxUs) =>
             _sb.AppendLine($"   {label + ":",-16} last={FormatUs(lastUs)}  avg={FormatUs(avgUs)}  max={FormatUs(maxUs)}");
 
-        public void WriteContention(long waitCount, long totalWaitUs, long maxWaitUs, long timeoutCount)
-        {
-            _sb.AppendLine($"   Contention:  {waitCount:N0} waits, max={FormatUs(maxWaitUs)}");
-            if (timeoutCount > 0)
-            {
-                _sb.AppendLine($"                {timeoutCount:N0} timeouts");
-            }
-        }
-
         public void WriteDiskIO(long readOps, long writeOps, long readBytes, long writeBytes) =>
             _sb.AppendLine($"   Disk I/O:    R={readOps:N0} ({FormatBytes(readBytes)})  W={writeOps:N0} ({FormatBytes(writeBytes)})");
 

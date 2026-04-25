@@ -43,6 +43,12 @@ public class TelemetryToggleBenchmark
     private static readonly bool s_staticReadonlyDisabled = false;
     private static readonly bool s_staticReadonlyEnabled = true;
 
+    // Tier-2 gate (Phase 1) — mirrors the shape of TelemetryConfig.ConcurrencyAdaptiveWaiterStepActive et al.
+    // Disabled: JIT must fold the inlined factory to `return 0`.
+    // Enabled: JIT inlines the factory, falls through to the NoInlining prologue stand-in.
+    private static readonly bool s_tier2Disabled = false;
+    private static readonly bool s_tier2Enabled = true;
+
     // Regular static - cannot be eliminated by JIT
     private static bool s_staticDisabled = false;
     private static bool s_staticEnabled = true;
@@ -120,6 +126,45 @@ public class TelemetryToggleBenchmark
             {
                 RecordTelemetryOperation((byte)i);
             }
+            sum += DoActualWork(i);
+        }
+        s_sink = sum;
+        return sum;
+    }
+
+    /// <summary>
+    /// Tier-2 gate-shape (disabled). Mimics the eventual Phase 2 factory shape:
+    /// an aggressively-inlined method that checks a static-readonly Tier-2 flag, returns
+    /// <c>default</c> on miss, otherwise calls a NoInlining "prologue-shape" stand-in.
+    /// When the flag is false, JIT Tier-1 should fold the entire inlined call to
+    /// <c>return 0</c> — runtime should match <see cref="NoCheck_Baseline"/> within noise.
+    /// This is the Phase 1 D4 confirmation that the JIT-elim mechanism scales to factory shape.
+    /// </summary>
+    [Benchmark(OperationsPerInvoke = Iterations)]
+    public long Tier2GateShape_Disabled()
+    {
+        long sum = 0;
+        for (int i = 0; i < Iterations; i++)
+        {
+            sum += Tier2FactoryShape_Off(i);
+            sum += DoActualWork(i);
+        }
+        s_sink = sum;
+        return sum;
+    }
+
+    /// <summary>
+    /// Tier-2 gate-shape (enabled). Same pattern as <see cref="Tier2GateShape_Disabled"/> but the
+    /// flag is true, so the inlined factory falls through to the NoInlining prologue stand-in,
+    /// which records actual telemetry work. Represents the worst case for an active Tier-2 path.
+    /// </summary>
+    [Benchmark(OperationsPerInvoke = Iterations)]
+    public long Tier2GateShape_Enabled()
+    {
+        long sum = 0;
+        for (int i = 0; i < Iterations; i++)
+        {
+            sum += Tier2FactoryShape_On(i);
             sum += DoActualWork(i);
         }
         s_sink = sum;
@@ -315,6 +360,49 @@ public class TelemetryToggleBenchmark
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // TIER-2 FACTORY-SHAPE STAND-INS (Phase 1)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Mimics a Tier-2-gated <c>BeginFooEvent</c> factory with the gate flag disabled.
+    /// AggressiveInlining ensures the call site sees the gate as a constant; JIT folds the body to <c>ret 0</c>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long Tier2FactoryShape_Off(int i)
+    {
+        if (!s_tier2Disabled)
+        {
+            return 0;
+        }
+        return SimulatedPrologue(i);
+    }
+
+    /// <summary>
+    /// Mimics a Tier-2-gated <c>BeginFooEvent</c> factory with the gate flag enabled.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long Tier2FactoryShape_On(int i)
+    {
+        if (!s_tier2Enabled)
+        {
+            return 0;
+        }
+        return SimulatedPrologue(i);
+    }
+
+    /// <summary>
+    /// NoInlining stand-in for the eventual <c>BeginPrologue</c> call — represents the work that runs
+    /// on the hot path when the Tier-2 gate is open. Identical structure to <see cref="DoActualWork"/>
+    /// + a <see cref="RecordTelemetryOperation"/> call.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static long SimulatedPrologue(int i)
+    {
+        RecordTelemetryOperation((byte)i);
+        return i * 17L + 31;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // INTERFACE FOR NULL-CHECK PATTERN
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -390,7 +478,7 @@ public class TelemetryCompoundCheckBenchmark
     }
 
     /// <summary>
-    /// Pre-computed combined flag (like TelemetryConfig.AccessControlActive).
+    /// Pre-computed combined flag (like TelemetryConfig.ProfilerActive).
     /// Single static readonly check.
     /// </summary>
     [Benchmark(OperationsPerInvoke = Iterations)]

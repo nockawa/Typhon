@@ -1,37 +1,18 @@
 {
   "Typhon": {
-    "Telemetry": {
+    "Profiler": {
       "Enabled": false,
 
-      "AccessControl": {
-        "Enabled": false,
-        "TrackContention": true,
-        "TrackContentionDuration": true,
-        "TrackAccessPatterns": true
-      },
+      "GcTracing":         { "Enabled": false },
+      "MemoryAllocations": { "Enabled": false },
+      "Gauges":            { "Enabled": false },
 
-      "PagedMMF": {
+      "Scheduler": {
         "Enabled": false,
-        "TrackPageAllocations": true,
-        "TrackPageEvictions": true,
-        "TrackIOOperations": true,
-        "TrackCacheHitRatio": true,
-        "SpanLevel": "None"
-      },
-
-      "BTree": {
-        "Enabled": false,
-        "TrackNodeSplits": true,
-        "TrackNodeMerges": true,
-        "TrackSearchDepth": true,
-        "TrackKeyComparisons": false
-      },
-
-      "Transaction": {
-        "Enabled": false,
-        "TrackCommitRollback": true,
-        "TrackConflicts": true,
-        "TrackDuration": true
+        "Gauges": {
+          "WorkerUtilization": { "Enabled": true },
+          "StragglerGap":      { "Enabled": true }
+        }
       }
     }
   }

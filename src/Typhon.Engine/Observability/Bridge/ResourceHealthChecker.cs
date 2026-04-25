@@ -134,13 +134,6 @@ public sealed class ResourceHealthChecker : ITyphonHealthCheck
             data["unhealthy_resources"] = unhealthyResources;
         }
 
-        // Include contention hotspots
-        var hotspots = snapshot.FindContentionHotspots().Take(5).Select(n => n.Path).ToList();
-        if (hotspots.Count > 0)
-        {
-            data["contention_hotspots"] = hotspots;
-        }
-
         // Build description
         var description = worstStatus switch
         {

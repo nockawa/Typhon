@@ -28,12 +28,6 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
         public long? CapacityMaximum { get; private set; }
         public bool CapacityWritten => CapacityCurrent.HasValue;
 
-        public long? ContentionWaitCount { get; private set; }
-        public long? ContentionTotalWaitUs { get; private set; }
-        public long? ContentionMaxWaitUs { get; private set; }
-        public long? ContentionTimeoutCount { get; private set; }
-        public bool ContentionWritten => ContentionWaitCount.HasValue;
-
         public long? MemoryAllocatedBytes { get; private set; }
         public long? MemoryPeakBytes { get; private set; }
 
@@ -65,14 +59,6 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
             DiskWriteBytes = writeBytes;
         }
 
-        public void WriteContention(long waitCount, long totalWaitUs, long maxWaitUs, long timeoutCount)
-        {
-            ContentionWaitCount = waitCount;
-            ContentionTotalWaitUs = totalWaitUs;
-            ContentionMaxWaitUs = maxWaitUs;
-            ContentionTimeoutCount = timeoutCount;
-        }
-
         public void WriteThroughput(string name, long count) => ThroughputCounters.Add((name, count));
 
         public void WriteDuration(string name, long lastUs, long avgUs, long maxUs) => DurationMetrics.Add((name, lastUs, avgUs, maxUs));
@@ -81,10 +67,6 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
         {
             CapacityCurrent = null;
             CapacityMaximum = null;
-            ContentionWaitCount = null;
-            ContentionTotalWaitUs = null;
-            ContentionMaxWaitUs = null;
-            ContentionTimeoutCount = null;
             MemoryAllocatedBytes = null;
             MemoryPeakBytes = null;
             DiskReadOps = null;
@@ -110,7 +92,6 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
 
         Assert.That(componentTable, Is.InstanceOf<IResource>(), "ComponentTable should implement IResource");
         Assert.That(componentTable, Is.InstanceOf<IMetricSource>(), "ComponentTable should implement IMetricSource");
-        Assert.That(componentTable, Is.InstanceOf<IContentionTarget>(), "ComponentTable should implement IContentionTarget");
         Assert.That(componentTable, Is.InstanceOf<IDebugPropertiesProvider>(), "ComponentTable should implement IDebugPropertiesProvider");
     }
 
@@ -195,110 +176,6 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
 
     #endregion
 
-    #region IContentionTarget Tests
-
-    [Test]
-    public void ComponentTable_RecordContention_TracksWaitCount()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var componentTable = dbe.GetComponentTable<CompA>();
-        var contentionTarget = (IContentionTarget)componentTable;
-
-        // Record some contention events
-        contentionTarget.RecordContention(100);
-        contentionTarget.RecordContention(200);
-        contentionTarget.RecordContention(150);
-
-        var writer = new TestMetricWriter();
-        ((IMetricSource)componentTable).ReadMetrics(writer);
-
-        Assert.That(writer.ContentionWritten, Is.True, "Should write contention metrics");
-        Assert.That(writer.ContentionWaitCount, Is.EqualTo(3), "Wait count should be 3");
-        Assert.That(writer.ContentionTotalWaitUs, Is.EqualTo(450), "Total wait should be 100+200+150=450");
-    }
-
-    [Test]
-    public void ComponentTable_RecordContention_TracksMaxWaitUs()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var componentTable = dbe.GetComponentTable<CompA>();
-        var contentionTarget = (IContentionTarget)componentTable;
-
-        // Record contention with max in the middle
-        contentionTarget.RecordContention(100);
-        contentionTarget.RecordContention(500);  // Max
-        contentionTarget.RecordContention(200);
-
-        var writer = new TestMetricWriter();
-        ((IMetricSource)componentTable).ReadMetrics(writer);
-
-        Assert.That(writer.ContentionMaxWaitUs, Is.EqualTo(500),
-            "Max wait should track the highest value (500)");
-    }
-
-    [Test]
-    public void ComponentTable_ResetPeaks_ResetsMaxWaitUs()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var componentTable = dbe.GetComponentTable<CompA>();
-        var contentionTarget = (IContentionTarget)componentTable;
-        var metricSource = (IMetricSource)componentTable;
-
-        // Record some contention
-        contentionTarget.RecordContention(500);
-
-        var writer = new TestMetricWriter();
-        metricSource.ReadMetrics(writer);
-        Assert.That(writer.ContentionMaxWaitUs, Is.EqualTo(500), "Max should be 500 before reset");
-
-        // Reset peaks
-        metricSource.ResetPeaks();
-
-        writer.Reset();
-        metricSource.ReadMetrics(writer);
-
-        Assert.That(writer.ContentionMaxWaitUs, Is.EqualTo(0),
-            "Max wait should be 0 after ResetPeaks");
-        Assert.That(writer.ContentionWaitCount, Is.EqualTo(1),
-            "Wait count should NOT be reset (it's a cumulative counter)");
-        Assert.That(writer.ContentionTotalWaitUs, Is.EqualTo(500),
-            "Total wait should NOT be reset (it's a cumulative counter)");
-    }
-
-    [Test]
-    public void ComponentTable_TelemetryLevel_ReturnsLight()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var componentTable = dbe.GetComponentTable<CompA>();
-        var contentionTarget = (IContentionTarget)componentTable;
-
-        Assert.That(contentionTarget.TelemetryLevel, Is.EqualTo(TelemetryLevel.Light),
-            "ComponentTable should use Light telemetry level");
-    }
-
-    [Test]
-    public void ComponentTable_OwningResource_ReturnsSelf()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var componentTable = dbe.GetComponentTable<CompA>();
-        var contentionTarget = (IContentionTarget)componentTable;
-
-        Assert.That(contentionTarget.OwningResource, Is.SameAs(componentTable),
-            "OwningResource should return the ComponentTable itself");
-    }
-
-    #endregion
-
     #region IDebugPropertiesProvider Tests
 
     [Test]
@@ -322,10 +199,6 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
 
         Assert.That(props.ContainsKey("DefaultIndexSegment.AllocatedChunks"), Is.True);
         Assert.That(props.ContainsKey("DefaultIndexSegment.Capacity"), Is.True);
-
-        Assert.That(props.ContainsKey("Contention.WaitCount"), Is.True);
-        Assert.That(props.ContainsKey("Contention.TotalWaitUs"), Is.True);
-        Assert.That(props.ContainsKey("Contention.MaxWaitUs"), Is.True);
     }
 
     [Test]
@@ -375,27 +248,6 @@ class OwnerAggregatesTests : TestBase<OwnerAggregatesTests>
                 "Should include String64IndexSegment when present");
             Assert.That(props.ContainsKey("String64IndexSegment.Capacity"), Is.True);
         }
-    }
-
-    [Test]
-    public void ComponentTable_GetDebugProperties_ShowsContentionAfterRecording()
-    {
-        using var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
-        RegisterComponents(dbe);
-
-        var componentTable = dbe.GetComponentTable<CompA>();
-        var contentionTarget = (IContentionTarget)componentTable;
-        var debugProvider = (IDebugPropertiesProvider)componentTable;
-
-        // Record some contention
-        contentionTarget.RecordContention(100);
-        contentionTarget.RecordContention(300);
-
-        var props = debugProvider.GetDebugProperties();
-
-        Assert.That(props["Contention.WaitCount"], Is.EqualTo(2L));
-        Assert.That(props["Contention.TotalWaitUs"], Is.EqualTo(400L));
-        Assert.That(props["Contention.MaxWaitUs"], Is.EqualTo(300L));
     }
 
     #endregion

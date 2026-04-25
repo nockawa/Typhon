@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -31,10 +32,19 @@ internal readonly ref struct OlcLatch
     }
 
     /// <summary>
-    /// Validate version unchanged since snapshot.
+    /// Validate version unchanged since snapshot. On mismatch, emit a Concurrency:OlcLatch:ValidationFail trace event (Tier-2 gated).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool ValidateVersion(int expected) => _version == expected;
+    public bool ValidateVersion(int expected)
+    {
+        var actual = _version;
+        if (actual == expected)
+        {
+            return true;
+        }
+        TyphonEvent.EmitConcurrencyOlcLatchValidationFail((uint)expected, (uint)actual);
+        return false;
+    }
 
     /// <summary>
     /// After acquiring the write lock, validates that no other writer modified the node between our version snapshot and our lock acquisition.
@@ -43,12 +53,22 @@ internal readonly ref struct OlcLatch
     /// If v == expectedUnlockedVersion, nobody modified the node between our ReadVersion and our lock.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool ValidateVersionLocked(int expectedUnlockedVersion) => _version == (expectedUnlockedVersion | 1);
+    public bool ValidateVersionLocked(int expectedUnlockedVersion)
+    {
+        var actual = _version;
+        var expectedLocked = expectedUnlockedVersion | 1;
+        if (actual == expectedLocked)
+        {
+            return true;
+        }
+        TyphonEvent.EmitConcurrencyOlcLatchValidationFail((uint)expectedLocked, (uint)actual);
+        return false;
+    }
 
     // --- Writer API ---
 
     /// <summary>
-    /// Acquire exclusive write lock. Returns false on contention.
+    /// Acquire exclusive write lock. Returns false on contention; emits a Concurrency:OlcLatch:WriteLockAttempt trace event on failure.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryWriteLock()
@@ -56,9 +76,15 @@ internal readonly ref struct OlcLatch
         int v = _version;
         if ((v & 0b1) != 0)
         {
+            TyphonEvent.EmitConcurrencyOlcLatchWriteLockAttempt((uint)v, success: false);
             return false;
         }
-        return Interlocked.CompareExchange(ref _version, v | 0b1, v) == v;
+        if (Interlocked.CompareExchange(ref _version, v | 0b1, v) == v)
+        {
+            return true;
+        }
+        TyphonEvent.EmitConcurrencyOlcLatchWriteLockAttempt((uint)v, success: false);
+        return false;
     }
 
     /// <summary>
@@ -70,14 +96,20 @@ internal readonly ref struct OlcLatch
         // Increment version (bits 2-31), clear locked (bit 0), preserve obsolete (bit 1)
         // On x64 (TSO), stores are never reordered with other stores — no release barrier needed.
         int v = _version;
-        _version = ((v >> 2) + 1) << 2 | (v & 0b10);  // version++, keep obsolete, clear lock
+        var newV = ((v >> 2) + 1) << 2 | (v & 0b10);  // version++, keep obsolete, clear lock
+        _version = newV;
+        TyphonEvent.EmitConcurrencyOlcLatchWriteUnlock((uint)v, (uint)newV);
     }
 
     /// <summary>
     /// Mark node as obsolete. Must hold write lock.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void MarkObsolete() => _version |= 0b10;
+    public void MarkObsolete()
+    {
+        _version |= 0b10;
+        TyphonEvent.EmitConcurrencyOlcLatchMarkObsolete((uint)_version);
+    }
 
     /// <summary>
     /// Release write lock WITHOUT incrementing version. Used when a writer acquires the lock but decides to restart without modifying the

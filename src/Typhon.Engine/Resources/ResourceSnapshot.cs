@@ -133,32 +133,6 @@ public sealed class ResourceSnapshot
             .OrderByDescending(n => n.Capacity.Value.Utilization);
 
     /// <summary>
-    /// Find nodes where <see cref="ContentionMetrics.WaitCount"/> &gt; 0, sorted by TotalWaitUs descending.
-    /// </summary>
-    /// <returns>Nodes with contention, hottest first.</returns>
-    /// <remarks>
-    /// <para>
-    /// Useful for diagnosing concurrency issues: "Where are threads waiting?"
-    /// </para>
-    /// </remarks>
-    public IEnumerable<NodeSnapshot> FindContentionHotspots() =>
-        Nodes.Values
-            .Where(n => n.Contention.HasValue)
-            .Where(n => n.Contention.Value.WaitCount > 0)
-            .OrderByDescending(n => n.Contention.Value.TotalWaitUs);
-
-    /// <summary>
-    /// Find nodes with contention where wait time exceeds a threshold.
-    /// </summary>
-    /// <param name="minWaitUs">Minimum total wait time in microseconds.</param>
-    /// <returns>Nodes with total wait time exceeding the threshold, sorted descending.</returns>
-    public IEnumerable<NodeSnapshot> FindContentionHotspots(long minWaitUs) =>
-        Nodes.Values
-            .Where(n => n.Contention.HasValue)
-            .Where(n => n.Contention.Value.TotalWaitUs >= minWaitUs)
-            .OrderByDescending(n => n.Contention.Value.TotalWaitUs);
-
-    /// <summary>
     /// Get a specific node by path.
     /// </summary>
     /// <param name="nodePath">Path to the node.</param>

@@ -127,11 +127,6 @@ public sealed class ResourceMetricsExporter : IDisposable
             RegisterDiskIOInstruments();
         }
 
-        if (_options.ExportContentionMetrics)
-        {
-            RegisterContentionInstruments();
-        }
-
         if (_options.ExportThroughputMetrics)
         {
             RegisterThroughputInstruments();
@@ -213,37 +208,6 @@ public sealed class ResourceMetricsExporter : IDisposable
             EnumerateDiskIOWriteBytes,
             unit: "bytes",
             description: "Total bytes written to disk");
-    }
-
-    private void RegisterContentionInstruments()
-    {
-        // Contention.WaitCount - Counter
-        _meter.CreateObservableCounter(
-            BuildMetricName("contention.wait_count"),
-            EnumerateContentionWaitCount,
-            unit: "waits",
-            description: "Total times a thread had to wait for lock acquisition");
-
-        // Contention.TotalWaitUs - Counter
-        _meter.CreateObservableCounter(
-            BuildMetricName("contention.total_wait_us"),
-            EnumerateContentionTotalWaitUs,
-            unit: "us",
-            description: "Cumulative microseconds spent waiting for locks");
-
-        // Contention.MaxWaitUs - Gauge (high-water mark)
-        _meter.CreateObservableGauge(
-            BuildMetricName("contention.max_wait_us"),
-            EnumerateContentionMaxWaitUs,
-            unit: "us",
-            description: "Longest single wait observed (high-water mark)");
-
-        // Contention.TimeoutCount - Counter
-        _meter.CreateObservableCounter(
-            BuildMetricName("contention.timeout_count"),
-            EnumerateContentionTimeoutCount,
-            unit: "timeouts",
-            description: "Total waits that exceeded deadline");
     }
 
     private void RegisterThroughputInstruments() =>
@@ -405,63 +369,6 @@ public sealed class ResourceMetricsExporter : IDisposable
             {
                 yield return new Measurement<long>(
                     node.DiskIO.Value.WriteBytes,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    // Contention metric enumerators
-    private IEnumerable<Measurement<long>> EnumerateContentionWaitCount()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.WaitCount,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    private IEnumerable<Measurement<long>> EnumerateContentionTotalWaitUs()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.TotalWaitUs,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    private IEnumerable<Measurement<long>> EnumerateContentionMaxWaitUs()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.MaxWaitUs,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    private IEnumerable<Measurement<long>> EnumerateContentionTimeoutCount()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.TimeoutCount,
                     new KeyValuePair<string, object>("resource_path", node.Path));
             }
         }

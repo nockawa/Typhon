@@ -1438,6 +1438,636 @@ public static class TyphonEvent
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Concurrency tracing (Phase 2, #280) — instant Emit methods.
+    //
+    // All gate on a Tier-2 leaf flag from the TelemetryConfig.Concurrency*
+    // tree. Every method follows the EmitMemoryAlloc shape:
+    //   1. gate check (JIT-eliminated when off)
+    //   2. acquire ring slot
+    //   3. reserve ring space
+    //   4. encode via per-subtree codec
+    //   5. publish.
+    //
+    // Cost when Tier-2 disabled (proven by Phase 1 microbench): 0 ns.
+    // Cost when enabled, ring available: ~5 ns per emission.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    // ── AccessControl ──────────────────────────────────────────────────────
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlSharedAcquire"/> instant.
+    /// Gated on <see cref="TelemetryConfig.ConcurrencyAccessControlSharedAcquireActive"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlSharedAcquire(ushort threadId, bool hadToWait, ushort elapsedUs)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlSharedAcquireActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlEventCodec.AcquireSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlEventCodec.WriteAcquire(dst, TraceEventKind.ConcurrencyAccessControlSharedAcquire, (byte)slotIdx, Stopwatch.GetTimestamp(), 
+            threadId, hadToWait, elapsedUs);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlSharedRelease"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlSharedRelease(ushort threadId)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlSharedReleaseActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlEventCodec.ReleaseSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlEventCodec.WriteRelease(dst, TraceEventKind.ConcurrencyAccessControlSharedRelease, (byte)slotIdx, Stopwatch.GetTimestamp(), 
+            threadId);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlExclusiveAcquire"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlExclusiveAcquire(ushort threadId, bool hadToWait, ushort elapsedUs)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlExclusiveAcquireActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlEventCodec.AcquireSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlEventCodec.WriteAcquire(dst, TraceEventKind.ConcurrencyAccessControlExclusiveAcquire, (byte)slotIdx, Stopwatch.GetTimestamp(), 
+            threadId, hadToWait, elapsedUs);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlExclusiveRelease"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlExclusiveRelease(ushort threadId)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlExclusiveReleaseActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlEventCodec.ReleaseSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlEventCodec.WriteRelease(dst, TraceEventKind.ConcurrencyAccessControlExclusiveRelease, (byte)slotIdx, Stopwatch.GetTimestamp(), 
+            threadId);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlPromotion"/> instant. Variant: 0 = promote (shared→exclusive), 1 = demote.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlPromotion(ushort elapsedUs, byte variant)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlPromotionActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlEventCodec.PromotionSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlEventCodec.WritePromotion(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), elapsedUs, variant);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlContention"/> instant — fires when the contention flag is set, before the wait completes.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlContention()
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlContentionActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlEventCodec.ContentionSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlEventCodec.WriteContention(dst, (byte)slotIdx, Stopwatch.GetTimestamp());
+        ring.Publish();
+    }
+
+    // ── AccessControlSmall ─────────────────────────────────────────────────
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlSmallSharedAcquire"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlSmallSharedAcquire(ushort threadId)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlSmallSharedAcquireActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlSmallEventCodec.EventSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlSmallEventCodec.WriteEvent(dst, TraceEventKind.ConcurrencyAccessControlSmallSharedAcquire, (byte)slotIdx, Stopwatch.GetTimestamp(),
+            threadId);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlSmallSharedRelease"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlSmallSharedRelease(ushort threadId)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlSmallSharedReleaseActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlSmallEventCodec.EventSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlSmallEventCodec.WriteEvent(dst, TraceEventKind.ConcurrencyAccessControlSmallSharedRelease, (byte)slotIdx, Stopwatch.GetTimestamp(),
+            threadId);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlSmallExclusiveAcquire"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlSmallExclusiveAcquire(ushort threadId)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlSmallExclusiveAcquireActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlSmallEventCodec.EventSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlSmallEventCodec.WriteEvent(dst, TraceEventKind.ConcurrencyAccessControlSmallExclusiveAcquire, (byte)slotIdx, 
+            Stopwatch.GetTimestamp(), threadId);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlSmallExclusiveRelease"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlSmallExclusiveRelease(ushort threadId)
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlSmallExclusiveReleaseActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlSmallEventCodec.EventSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlSmallEventCodec.WriteEvent(dst, TraceEventKind.ConcurrencyAccessControlSmallExclusiveRelease, (byte)slotIdx, 
+            Stopwatch.GetTimestamp(), threadId);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAccessControlSmallContention"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAccessControlSmallContention()
+    {
+        if (!TelemetryConfig.ConcurrencyAccessControlSmallContentionActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAccessControlSmallEventCodec.ContentionSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAccessControlSmallEventCodec.WriteContention(dst, (byte)slotIdx, Stopwatch.GetTimestamp());
+        ring.Publish();
+    }
+
+    // ── ResourceAccessControl ──────────────────────────────────────────────
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyResourceAccessing"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyResourceAccessing(bool success, byte accessingCount, ushort elapsedUs)
+    {
+        if (!TelemetryConfig.ConcurrencyResourceAccessControlAccessingActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyResourceAccessControlEventCodec.AccessingSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyResourceAccessControlEventCodec.WriteAccessing(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), success, accessingCount, elapsedUs);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyResourceModify"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyResourceModify(bool success, ushort threadId, ushort elapsedUs)
+    {
+        if (!TelemetryConfig.ConcurrencyResourceAccessControlModifyActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyResourceAccessControlEventCodec.ModifySize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyResourceAccessControlEventCodec.WriteModify(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), success, threadId, elapsedUs);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyResourceDestroy"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyResourceDestroy(bool success, ushort elapsedUs)
+    {
+        if (!TelemetryConfig.ConcurrencyResourceAccessControlDestroyActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyResourceAccessControlEventCodec.DestroySize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyResourceAccessControlEventCodec.WriteDestroy(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), success, elapsedUs);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyResourceModifyPromotion"/> instant — fires from the slow path of TryPromoteToModify when waiting for accessors to drain.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyResourceModifyPromotion(ushort elapsedUs)
+    {
+        if (!TelemetryConfig.ConcurrencyResourceAccessControlModifyPromotionActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyResourceAccessControlEventCodec.ModifyPromotionSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyResourceAccessControlEventCodec.WriteModifyPromotion(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), elapsedUs);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyResourceContention"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyResourceContention()
+    {
+        if (!TelemetryConfig.ConcurrencyResourceAccessControlContentionActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyResourceAccessControlEventCodec.ContentionSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyResourceAccessControlEventCodec.WriteContention(dst, (byte)slotIdx, Stopwatch.GetTimestamp());
+        ring.Publish();
+    }
+
+    // ── Epoch ──────────────────────────────────────────────────────────────
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyEpochScopeEnter"/> instant — EpochGuard.Enter.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyEpochScopeEnter(uint epoch, byte depthBefore, bool isDormantToActive)
+    {
+        if (!TelemetryConfig.ConcurrencyEpochScopeEnterActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyEpochEventCodec.ScopeEnterSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyEpochEventCodec.WriteScopeEnter(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), epoch, depthBefore, isDormantToActive);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyEpochScopeExit"/> instant — EpochGuard.Dispose.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyEpochScopeExit(uint epoch, bool isOutermost)
+    {
+        if (!TelemetryConfig.ConcurrencyEpochScopeExitActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyEpochEventCodec.ScopeExitSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyEpochEventCodec.WriteScopeExit(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), epoch, isOutermost);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyEpochAdvance"/> instant — GlobalEpoch increment.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyEpochAdvance(uint newEpoch)
+    {
+        if (!TelemetryConfig.ConcurrencyEpochAdvanceActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyEpochEventCodec.AdvanceSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyEpochEventCodec.WriteAdvance(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), newEpoch);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyEpochRefresh"/> instant — RefreshScope mid-scope epoch bump.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyEpochRefresh(uint oldEpoch, uint newEpoch)
+    {
+        if (!TelemetryConfig.ConcurrencyEpochRefreshActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyEpochEventCodec.RefreshSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyEpochEventCodec.WriteRefresh(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), oldEpoch, newEpoch);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyEpochSlotClaim"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyEpochSlotClaim(ushort slotIndex, ushort threadId, ushort activeCount)
+    {
+        if (!TelemetryConfig.ConcurrencyEpochSlotClaimActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyEpochEventCodec.SlotClaimSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyEpochEventCodec.WriteSlotClaim(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), slotIndex, threadId, activeCount);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyEpochSlotReclaim"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyEpochSlotReclaim(ushort slotIndex, ushort oldOwner, ushort newOwner)
+    {
+        if (!TelemetryConfig.ConcurrencyEpochSlotReclaimActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyEpochEventCodec.SlotReclaimSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyEpochEventCodec.WriteSlotReclaim(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), slotIndex, oldOwner, newOwner);
+        ring.Publish();
+    }
+
+    // ── AdaptiveWaiter ─────────────────────────────────────────────────────
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyAdaptiveWaiterYieldOrSleep"/> instant — fires only when the current SpinOnce yielded or slept (NOT per-spin).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyAdaptiveWaiterYieldOrSleep(ushort spinCountBefore, AdaptiveWaiterTransitionKind kind)
+    {
+        if (!TelemetryConfig.ConcurrencyAdaptiveWaiterYieldOrSleepActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyAdaptiveWaiterEventCodec.EventSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyAdaptiveWaiterEventCodec.WriteYieldOrSleep(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), spinCountBefore, kind);
+        ring.Publish();
+    }
+
+    // ── OlcLatch ───────────────────────────────────────────────────────────
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyOlcLatchWriteLockAttempt"/> instant — fires on TryWriteLock failure path.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyOlcLatchWriteLockAttempt(uint versionBefore, bool success)
+    {
+        if (!TelemetryConfig.ConcurrencyOlcLatchWriteLockAttemptActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyOlcLatchEventCodec.WriteLockAttemptSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyOlcLatchEventCodec.WriteWriteLockAttempt(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), versionBefore, success);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyOlcLatchWriteUnlock"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyOlcLatchWriteUnlock(uint oldVersion, uint newVersion)
+    {
+        if (!TelemetryConfig.ConcurrencyOlcLatchWriteUnlockActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyOlcLatchEventCodec.WriteUnlockSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyOlcLatchEventCodec.WriteWriteUnlock(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), oldVersion, newVersion);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyOlcLatchMarkObsolete"/> instant.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyOlcLatchMarkObsolete(uint version)
+    {
+        if (!TelemetryConfig.ConcurrencyOlcLatchMarkObsoleteActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyOlcLatchEventCodec.MarkObsoleteSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyOlcLatchEventCodec.WriteMarkObsolete(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), version);
+        ring.Publish();
+    }
+
+    /// <summary>Emit a <see cref="TraceEventKind.ConcurrencyOlcLatchValidationFail"/> instant — fires on optimistic re-read mismatch.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitConcurrencyOlcLatchValidationFail(uint expectedVersion, uint actualVersion)
+    {
+        if (!TelemetryConfig.ConcurrencyOlcLatchValidationFailActive)
+        {
+            return;
+        }
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(ConcurrencyOlcLatchEventCodec.ValidationFailSize, out var dst))
+        {
+            return;
+        }
+        ConcurrencyOlcLatchEventCodec.WriteValidationFail(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), expectedVersion, actualVersion);
+        ring.Publish();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Thread-local control
     // ═══════════════════════════════════════════════════════════════════════
 

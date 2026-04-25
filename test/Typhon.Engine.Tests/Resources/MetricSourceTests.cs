@@ -40,13 +40,6 @@ public class MetricSourceTests
         public long? DiskWriteBytes { get; private set; }
         public bool DiskIOWritten => DiskReadOps.HasValue;
 
-        // Contention
-        public long? ContentionWaitCount { get; private set; }
-        public long? ContentionTotalWaitUs { get; private set; }
-        public long? ContentionMaxWaitUs { get; private set; }
-        public long? ContentionTimeoutCount { get; private set; }
-        public bool ContentionWritten => ContentionWaitCount.HasValue;
-
         // Throughput (multiple named counters)
         public List<(string Name, long Count)> ThroughputCounters { get; } = new();
 
@@ -73,14 +66,6 @@ public class MetricSourceTests
             DiskWriteBytes = writeBytes;
         }
 
-        public void WriteContention(long waitCount, long totalWaitUs, long maxWaitUs, long timeoutCount)
-        {
-            ContentionWaitCount = waitCount;
-            ContentionTotalWaitUs = totalWaitUs;
-            ContentionMaxWaitUs = maxWaitUs;
-            ContentionTimeoutCount = timeoutCount;
-        }
-
         public void WriteThroughput(string name, long count) => ThroughputCounters.Add((name, count));
 
         public void WriteDuration(string name, long lastUs, long avgUs, long maxUs) => DurationMetrics.Add((name, lastUs, avgUs, maxUs));
@@ -95,10 +80,6 @@ public class MetricSourceTests
             DiskWriteOps = null;
             DiskReadBytes = null;
             DiskWriteBytes = null;
-            ContentionWaitCount = null;
-            ContentionTotalWaitUs = null;
-            ContentionMaxWaitUs = null;
-            ContentionTimeoutCount = null;
             ThroughputCounters.Clear();
             DurationMetrics.Clear();
         }
@@ -117,10 +98,6 @@ public class MetricSourceTests
         public long WriteOps;
         public long ReadBytes;
         public long WriteBytes;
-        public long WaitCount;
-        public long TotalWaitUs;
-        public long MaxWaitUs;
-        public long TimeoutCount;
         public long CacheHits;
         public long CacheMisses;
         public long LastFlushUs;
@@ -135,7 +112,6 @@ public class MetricSourceTests
             writer.WriteMemory(AllocatedBytes, PeakBytes);
             writer.WriteCapacity(CurrentSlots, MaxSlots);
             writer.WriteDiskIO(ReadOps, WriteOps, ReadBytes, WriteBytes);
-            writer.WriteContention(WaitCount, TotalWaitUs, MaxWaitUs, TimeoutCount);
             writer.WriteThroughput("CacheHits", CacheHits);
             writer.WriteThroughput("CacheMisses", CacheMisses);
             writer.WriteDuration("Flush", LastFlushUs, AvgFlushUs, MaxFlushUs);
@@ -144,7 +120,6 @@ public class MetricSourceTests
         public void ResetPeaks()
         {
             PeakBytes = AllocatedBytes;
-            MaxWaitUs = 0;
             MaxFlushUs = LastFlushUs;
         }
     }
@@ -217,20 +192,6 @@ public class MetricSourceTests
     }
 
     [Test]
-    public void WriteContention_CapturesCorrectValues()
-    {
-        var writer = new TestMetricWriter();
-
-        writer.WriteContention(10, 5000, 1000, 2);
-
-        Assert.That(writer.ContentionWritten, Is.True);
-        Assert.That(writer.ContentionWaitCount, Is.EqualTo(10));
-        Assert.That(writer.ContentionTotalWaitUs, Is.EqualTo(5000));
-        Assert.That(writer.ContentionMaxWaitUs, Is.EqualTo(1000));
-        Assert.That(writer.ContentionTimeoutCount, Is.EqualTo(2));
-    }
-
-    [Test]
     public void WriteThroughput_SupportsNamedCounters()
     {
         var writer = new TestMetricWriter();
@@ -287,10 +248,6 @@ public class MetricSourceTests
             WriteOps = 5,
             ReadBytes = 8192,
             WriteBytes = 4096,
-            WaitCount = 3,
-            TotalWaitUs = 1500,
-            MaxWaitUs = 800,
-            TimeoutCount = 1,
             CacheHits = 100,
             CacheMisses = 10,
             LastFlushUs = 50,
@@ -309,10 +266,6 @@ public class MetricSourceTests
         Assert.That(writer.DiskWriteOps, Is.EqualTo(5));
         Assert.That(writer.DiskReadBytes, Is.EqualTo(8192));
         Assert.That(writer.DiskWriteBytes, Is.EqualTo(4096));
-        Assert.That(writer.ContentionWaitCount, Is.EqualTo(3));
-        Assert.That(writer.ContentionTotalWaitUs, Is.EqualTo(1500));
-        Assert.That(writer.ContentionMaxWaitUs, Is.EqualTo(800));
-        Assert.That(writer.ContentionTimeoutCount, Is.EqualTo(1));
         Assert.That(writer.ThroughputCounters, Has.Count.EqualTo(2));
         Assert.That(writer.DurationMetrics, Has.Count.EqualTo(1));
     }
@@ -324,7 +277,6 @@ public class MetricSourceTests
         {
             AllocatedBytes = 1000,
             PeakBytes = 5000,
-            MaxWaitUs = 800,
             LastFlushUs = 100,
             MaxFlushUs = 500
         };
@@ -332,7 +284,6 @@ public class MetricSourceTests
         resource.ResetPeaks();
 
         Assert.That(resource.PeakBytes, Is.EqualTo(1000), "Peak bytes should reset to current allocated");
-        Assert.That(resource.MaxWaitUs, Is.EqualTo(0), "Max wait should reset to 0");
         Assert.That(resource.MaxFlushUs, Is.EqualTo(100), "Max flush should reset to last flush");
     }
 
@@ -351,7 +302,6 @@ public class MetricSourceTests
         Assert.That(writer.MemoryWritten, Is.True);
         Assert.That(writer.CapacityWritten, Is.False);
         Assert.That(writer.DiskIOWritten, Is.False);
-        Assert.That(writer.ContentionWritten, Is.False);
         Assert.That(writer.ThroughputCounters, Is.Empty);
         Assert.That(writer.DurationMetrics, Is.Empty);
     }

@@ -11,7 +11,6 @@ using System.Threading;
 using System.Reflection;
 using System.Linq.Expressions;
 using Typhon.Engine.Profiler;
-using Typhon.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -1757,7 +1756,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         // High-migration-rate warning. Analogous to LogHighEscapeRate — surfaces potential viewport warps, teleport events, or unphysical entity speeds that
         // blow past cell boundaries en masse. 1K per tick is an arbitrary absolute threshold; revisit once AntHill provides realistic rates.
-        if (TelemetryConfig.SpatialActive && count >= 1000)
+        // To silence: configure Microsoft.Extensions.Logging filter for "Typhon.Engine.Data.SpatialMaintainer" at Error level.
+        if (count >= 1000)
         {
             SpatialMaintainer.LogHighMigrationRate(Logger, count, archetypeId, durationMs);
         }
@@ -2106,8 +2106,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             changeSet.SaveChanges();
         }
 
-        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB
-        if (TelemetryConfig.SpatialActive && dirtyCount > 0)
+        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB.
+        // To silence: configure Microsoft.Extensions.Logging filter for "Typhon.Engine.Data.SpatialMaintainer" at Error level.
+        if (dirtyCount > 0)
         {
             double escapeRate = (double)escapeCount / dirtyCount;
             if (escapeRate > 0.10)

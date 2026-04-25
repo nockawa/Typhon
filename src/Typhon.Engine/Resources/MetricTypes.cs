@@ -40,27 +40,6 @@ public readonly record struct DiskIOMetrics(
     long WriteBytes);
 
 /// <summary>
-/// Tracks lock/latch wait behavior for detecting concurrency bottlenecks.
-/// </summary>
-/// <param name="WaitCount">Times a thread had to wait (not immediate acquisition).</param>
-/// <param name="TotalWaitUs">Cumulative microseconds spent waiting.</param>
-/// <param name="MaxWaitUs">Longest single wait observed (high-water mark, resettable).</param>
-/// <param name="TimeoutCount">Waits that exceeded Deadline (not cancellation).</param>
-[PublicAPI]
-public readonly record struct ContentionMetrics(
-    long WaitCount,
-    long TotalWaitUs,
-    long MaxWaitUs,
-    long TimeoutCount)
-{
-    /// <summary>
-    /// Average wait time in microseconds, computed as TotalWaitUs / WaitCount.
-    /// Returns 0.0 if WaitCount is 0.
-    /// </summary>
-    public double AvgWaitUs => WaitCount > 0 ? (double)TotalWaitUs / WaitCount : 0.0;
-}
-
-/// <summary>
 /// A named throughput counter tracking monotonically increasing operations.
 /// </summary>
 /// <param name="Name">Counter name (e.g., "CacheHits", "Commits").</param>

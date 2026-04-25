@@ -7,7 +7,6 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Typhon.Engine.Profiler;
-using Typhon.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;

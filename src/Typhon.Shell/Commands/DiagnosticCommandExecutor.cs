@@ -1012,18 +1012,15 @@ internal sealed class DiagnosticCommandExecutor
         // Flat mode: enumerate all resources as a table
         var snapshot = _session.ResourceGraph.GetSnapshot();
         var sb = new StringBuilder();
-        sb.AppendLine("  [grey]Resource                            Type            Memory    Capacity   Contention[/]");
-        sb.AppendLine("  [grey]──────────────────────              ──────          ──────    ────────   ──────────[/]");
+        sb.AppendLine("  [grey]Resource                            Type            Memory    Capacity[/]");
+        sb.AppendLine("  [grey]──────────────────────              ──────          ──────    ────────[/]");
 
         foreach (var node in snapshot.Nodes.Values.OrderBy(n => n.Path))
         {
             var memStr = node.Memory.HasValue ? FormatBytes(node.Memory.Value.AllocatedBytes) : "--";
             var capStr = node.Capacity.HasValue ? $"{node.Capacity.Value.Utilization:P1}" : "--";
-            var contentionStr = node.Contention.HasValue && node.Contention.Value.WaitCount > 0
-                ? $"{node.Contention.Value.WaitCount} waits"
-                : "--";
 
-            sb.AppendLine($"  {Markup.Escape(node.Path),-35} {node.Type,-15} {memStr,-9} {capStr,-10} {contentionStr}");
+            sb.AppendLine($"  {Markup.Escape(node.Path),-35} {node.Type,-15} {memStr,-9} {capStr}");
         }
 
         return CommandResult.Markup(sb.ToString().TrimEnd());

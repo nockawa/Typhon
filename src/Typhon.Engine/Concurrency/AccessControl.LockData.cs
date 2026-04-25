@@ -215,6 +215,7 @@ public partial struct AccessControl
 
             // Set contention flag (sticky, atomic) - we had to wait, so contention occurred
             Interlocked.Or(ref Unsafe.As<ulong, long>(ref _data), (long)ContentionFlagMask);
+            Profiler.TyphonEvent.EmitConcurrencyAccessControlContention();
 
             // Enter the wait loop where we fetch the lock data and check for idle state
             var sw = new SpinWait();

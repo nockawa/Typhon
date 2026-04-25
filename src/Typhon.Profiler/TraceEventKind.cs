@@ -245,6 +245,115 @@ public enum TraceEventKind : byte
     /// <summary>Statistics rebuild for a ComponentTable. Required: <c>entityCount: i32</c>, <c>mutationCount: i32</c>, <c>samplingInterval: i32</c>.</summary>
     StatisticsRebuild = 89,
 
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+    // Concurrency tracing (Phase 2, #280) — INSTANT events 90–116, no span header extension.
+    // All gated on TelemetryConfig.Concurrency*Active leaf flags (Phase 1 Tier-2 mechanism).
+    // See claude/design/observability/07-tracing-instrumentation/02-concurrency.md for details.
+    //
+    // TODO: per-resource contention metrics regression. The pre-#280 IContentionTarget pathway fed
+    // ManagedPagedMMF/ComponentTable counters that surfaced as Contention.* columns in the resource
+    // graph + Workbench Schema Inspector. Phase 2 deleted the producer (per Q2). Consumer-side
+    // plumbing (IMetricWriter.WriteContention, ContentionMetrics, NodeSnapshot.Contention,
+    // ResourceSnapshot.FindContentionHotspots, ResourceMetricsExporter contention OTel exports,
+    // ResourceAlert.CascadingEffects, ResourceHealthChecker hotspot reporting) was removed in the
+    // same change. To restore: either (a) add a per-lock id field to the wire format below and
+    // build a trace-ring-fed aggregator, or (b) accept the loss as the new baseline. Tracked by
+    // the umbrella issue at #277.
+    // ═══════════════════════════════════════════════════════════════════════════════════════
+
+    // ── AccessControl (instant, large ref-counted lock) ──
+
+    /// <summary>AccessControl shared (reader) acquire success. Payload: <c>threadId: u16</c>, <c>hadToWait: u8</c>, <c>elapsedUs: u16</c>.</summary>
+    ConcurrencyAccessControlSharedAcquire = 90,
+
+    /// <summary>AccessControl shared (reader) release. Payload: <c>threadId: u16</c>.</summary>
+    ConcurrencyAccessControlSharedRelease = 91,
+
+    /// <summary>AccessControl exclusive (writer) acquire success. Payload: <c>threadId: u16</c>, <c>hadToWait: u8</c>, <c>elapsedUs: u16</c>.</summary>
+    ConcurrencyAccessControlExclusiveAcquire = 92,
+
+    /// <summary>AccessControl exclusive (writer) release. Payload: <c>threadId: u16</c>.</summary>
+    ConcurrencyAccessControlExclusiveRelease = 93,
+
+    /// <summary>AccessControl shared→exclusive promotion (or exclusive→shared demotion via variant byte). Payload: <c>elapsedUs: u16</c>, <c>variant: u8</c> (0=promote, 1=demote).</summary>
+    ConcurrencyAccessControlPromotion = 94,
+
+    /// <summary>AccessControl contention marker — flag-set instant, fires when a thread enters a wait. Payload: empty.</summary>
+    ConcurrencyAccessControlContention = 95,
+
+    // ── AccessControlSmall (instant, compact 4-byte lock) ──
+
+    /// <summary>AccessControlSmall shared acquire. Payload: <c>threadId: u16</c>.</summary>
+    ConcurrencyAccessControlSmallSharedAcquire = 96,
+
+    /// <summary>AccessControlSmall shared release. Payload: <c>threadId: u16</c>.</summary>
+    ConcurrencyAccessControlSmallSharedRelease = 97,
+
+    /// <summary>AccessControlSmall exclusive acquire. Payload: <c>threadId: u16</c>.</summary>
+    ConcurrencyAccessControlSmallExclusiveAcquire = 98,
+
+    /// <summary>AccessControlSmall exclusive release. Payload: <c>threadId: u16</c>.</summary>
+    ConcurrencyAccessControlSmallExclusiveRelease = 99,
+
+    /// <summary>AccessControlSmall contention marker. Payload: empty.</summary>
+    ConcurrencyAccessControlSmallContention = 100,
+
+    // ── ResourceAccessControl (instant, three-mode lock: Accessing/Modify/Destroy) ──
+
+    /// <summary>ResourceAccessControl Accessing-mode acquire (try or wait). Payload: <c>success: u8</c>, <c>accessingCount: u8</c>, <c>elapsedUs: u16</c>.</summary>
+    ConcurrencyResourceAccessing = 101,
+
+    /// <summary>ResourceAccessControl Modify-mode acquire (try or wait). Payload: <c>success: u8</c>, <c>threadId: u16</c>, <c>elapsedUs: u16</c>.</summary>
+    ConcurrencyResourceModify = 102,
+
+    /// <summary>ResourceAccessControl Destroy-mode acquire. Payload: <c>success: u8</c>, <c>elapsedUs: u16</c>.</summary>
+    ConcurrencyResourceDestroy = 103,
+
+    /// <summary>ResourceAccessControl Modify promotion slow path (wait for accessors to drain). Payload: <c>elapsedUs: u16</c>.</summary>
+    ConcurrencyResourceModifyPromotion = 104,
+
+    /// <summary>ResourceAccessControl contention marker. Payload: empty.</summary>
+    ConcurrencyResourceContention = 105,
+
+    // ── Epoch (instant, EBR scope lifecycle) ──
+
+    /// <summary>EpochGuard scope enter (PinCurrentThread). Payload: <c>currentEpoch: u32</c>, <c>depthBefore: u8</c>, <c>isDormantToActive: u8</c>.</summary>
+    ConcurrencyEpochScopeEnter = 106,
+
+    /// <summary>EpochGuard scope exit (Dispose). Payload: <c>newEpoch: u32</c>, <c>isOutermost: u8</c>.</summary>
+    ConcurrencyEpochScopeExit = 107,
+
+    /// <summary>GlobalEpoch advance (Interlocked.Increment in ExitScope/ExitScopeUnordered). Payload: <c>newEpoch: u32</c>.</summary>
+    ConcurrencyEpochAdvance = 108,
+
+    /// <summary>RefreshScope — bump epoch mid-scope to release retired memory while staying pinned. Payload: <c>oldEpoch: u32</c>, <c>newEpoch: u32</c>.</summary>
+    ConcurrencyEpochRefresh = 109,
+
+    /// <summary>EpochThreadRegistry slot claim. Payload: <c>slotIndex: u16</c>, <c>threadId: u16</c>, <c>activeCount: u16</c>.</summary>
+    ConcurrencyEpochSlotClaim = 110,
+
+    /// <summary>EpochThreadRegistry dead-thread slot reclaim. Payload: <c>slotIndex: u16</c>, <c>oldOwner: u16</c>, <c>newOwner: u16</c>.</summary>
+    ConcurrencyEpochSlotReclaim = 111,
+
+    // ── AdaptiveWaiter (instant, transition only) ──
+
+    /// <summary>AdaptiveWaiter Wait() call yielded or slept (transition only — NOT per-spin). Payload: <c>spinCountBefore: u16</c>, <c>kind: u8</c> (1=yield, 2=sleep).</summary>
+    ConcurrencyAdaptiveWaiterYieldOrSleep = 112,
+
+    // ── OlcLatch (instant, optimistic-latch coordinator) ──
+
+    /// <summary>OlcLatch.TryWriteLock failed (raced or write-locked). Payload: <c>versionBefore: u32</c>, <c>success: u8</c> (always 0 on emit).</summary>
+    ConcurrencyOlcLatchWriteLockAttempt = 113,
+
+    /// <summary>OlcLatch.WriteUnlock — version bumped from oldVersion to newVersion. Payload: <c>oldVersion: u32</c>, <c>newVersion: u32</c>.</summary>
+    ConcurrencyOlcLatchWriteUnlock = 114,
+
+    /// <summary>OlcLatch.MarkObsolete — node retired, future readers will fail validation. Payload: <c>version: u32</c>.</summary>
+    ConcurrencyOlcLatchMarkObsolete = 115,
+
+    /// <summary>OlcLatch.ValidateVersion failed — version mismatch detected on optimistic re-read. Payload: <c>expectedVersion: u32</c>, <c>actualVersion: u32</c>.</summary>
+    ConcurrencyOlcLatchValidationFail = 116,
+
     // ── Fallback ──
 
     /// <summary>User-defined span with inline UTF-8 null-terminated name. Used for dynamic-string call sites (tests, demo code). Payload: null-terminated UTF-8 bytes.</summary>
@@ -264,6 +373,26 @@ public static class TraceEventKindExtensions
     /// <see cref="TraceEventKind.PerTickSnapshot"/> is explicitly excluded: its numeric ID is ≥ 10 for category grouping with other metric
     /// records, but its wire shape is instant (no span header extension). Any future instant-style kind placed above 9 must be added to this
     /// exclusion — otherwise the consumer will misread the 25 bytes immediately after the common header as span metadata.
+    /// <para>
+    /// Concurrency tracing kinds 90–116 (Phase 2) are also instant-style and excluded as a contiguous range.
+    /// </para>
     /// </remarks>
-    public static bool IsSpan(this TraceEventKind kind) => (byte)kind >= 10 && kind != TraceEventKind.PerTickSnapshot && kind != TraceEventKind.ThreadInfo;
+    public static bool IsSpan(this TraceEventKind kind)
+    {
+        var v = (byte)kind;
+        if (v < 10)
+        {
+            return false;
+        }
+        if (kind == TraceEventKind.PerTickSnapshot || kind == TraceEventKind.ThreadInfo)
+        {
+            return false;
+        }
+        // Concurrency tracing instant range (Phase 2, #280): 90–116.
+        if (v >= 90 && v <= 116)
+        {
+            return false;
+        }
+        return true;
+    }
 }

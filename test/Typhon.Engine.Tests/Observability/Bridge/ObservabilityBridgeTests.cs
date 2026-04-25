@@ -36,9 +36,6 @@ public class ObservabilityBridgeTests
         public long PeakBytes;
         public long CapacityCurrent;
         public long CapacityMax;
-        public long ContentionWaitCount;
-        public long ContentionTotalWaitUs;
-        public long ContentionMaxWaitUs;
 #pragma warning disable CS0649 // Field is never assigned to, and will always have its default value
         public long DiskReadOps;
         public long DiskWriteOps;
@@ -66,11 +63,6 @@ public class ObservabilityBridgeTests
                 writer.WriteCapacity(CapacityCurrent, CapacityMax);
             }
 
-            if (ContentionWaitCount > 0)
-            {
-                writer.WriteContention(ContentionWaitCount, ContentionTotalWaitUs, ContentionMaxWaitUs, 0);
-            }
-
             if (DiskReadOps > 0 || DiskWriteOps > 0)
             {
                 writer.WriteDiskIO(DiskReadOps, DiskWriteOps, DiskReadBytes, DiskWriteBytes);
@@ -91,7 +83,6 @@ public class ObservabilityBridgeTests
         public void ResetPeaks()
         {
             PeakBytes = AllocatedBytes;
-            ContentionMaxWaitUs = 0;
             CheckpointMaxUs = 0;
         }
     }
@@ -425,27 +416,6 @@ public class ObservabilityBridgeTests
         Assert.That(result.Status, Is.EqualTo(HealthStatus.Degraded));
     }
 
-    [Test]
-    public void ResourceHealthChecker_GetDetailedResult_IncludesContentionHotspots()
-    {
-        var resource = new TestMetricResource("PageCache", _registry.Storage)
-        {
-            ContentionWaitCount = 100,
-            ContentionTotalWaitUs = 5000
-        };
-        _registry.Storage.RegisterChild(resource);
-
-        var options = new ObservabilityBridgeOptions();
-        using var exporter = new ResourceMetricsExporter(_graph, options);
-        var checker = new ResourceHealthChecker(exporter, options);
-
-        var result = checker.GetDetailedResult();
-
-        Assert.That(result.Data.ContainsKey("contention_hotspots"), Is.True);
-        var hotspots = (List<string>)result.Data["contention_hotspots"];
-        Assert.That(hotspots, Contains.Item("Root/Storage/PageCache"));
-    }
-
     #endregion
 
     #region ResourceAlertGenerator Tests
@@ -575,34 +545,6 @@ public class ObservabilityBridgeTests
         Assert.That(alerts.Any(a => a.SymptomPath.Contains("Degraded")), Is.True);
         Assert.That(alerts.Any(a => a.SymptomPath.Contains("Unhealthy")), Is.True);
         Assert.That(alerts.Any(a => a.SymptomPath.Contains("Healthy")), Is.False);
-    }
-
-    [Test]
-    public void ResourceAlertGenerator_GenerateAlert_IncludesCascadingEffects()
-    {
-        var resource = new TestMetricResource("PageCache", _registry.Storage)
-        {
-            CapacityCurrent = 85,
-            CapacityMax = 100
-        };
-        var hotspot = new TestMetricResource("Hotspot", _registry.Storage)
-        {
-            ContentionWaitCount = 100,
-            ContentionTotalWaitUs = 5000
-        };
-        _registry.Storage.RegisterChild(resource);
-        _registry.Storage.RegisterChild(hotspot);
-
-        var options = new ObservabilityBridgeOptions();
-        var generator = new ResourceAlertGenerator(options);
-        var snapshot = _graph.GetSnapshot();
-
-        var alert = generator.GenerateAlert(snapshot, "Root/Storage/PageCache");
-
-        Assert.That(alert, Is.Not.Null);
-        Assert.That(alert.CascadingEffects, Is.Not.Null);
-        // Hotspot should be listed as cascading effect (it has contention)
-        Assert.That(alert.CascadingEffects, Contains.Item("Root/Storage/Hotspot"));
     }
 
     #endregion
@@ -790,7 +732,6 @@ public class ObservabilityBridgeTests
         Assert.That(options.ExportMemoryMetrics, Is.True);
         Assert.That(options.ExportCapacityMetrics, Is.True);
         Assert.That(options.ExportDiskIOMetrics, Is.True);
-        Assert.That(options.ExportContentionMetrics, Is.True);
         Assert.That(options.ExportThroughputMetrics, Is.True);
         Assert.That(options.ExportDurationMetrics, Is.True);
         Assert.That(options.Thresholds, Is.Empty);

@@ -1,6 +1,5 @@
 // unset
 
-using System;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine;
