@@ -38,9 +38,9 @@ export default function SchemaRelationshipsPanel(_props: IDockviewPanelProps) {
         <StatusBadge
           tone="warn"
           className="ml-auto"
-          title="Write access is not tracked — see design doc §4.3"
+          title="System access details (RFC 07) become available once Workbench hosts a live TyphonRuntime — see issue #275"
         >
-          writes not tracked
+          access details pending runtime hosting
         </StatusBadge>
       </div>
 

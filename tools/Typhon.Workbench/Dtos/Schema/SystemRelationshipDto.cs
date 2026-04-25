@@ -1,8 +1,11 @@
 namespace Typhon.Workbench.Dtos.Schema;
 
 /// <summary>
-/// One system that reads or reacts to the focused component. Writes are NOT tracked — by design (see
-/// <c>claude/design/typhon-workbench/modules/03-schema-inspector.md</c> §4.3).
+/// One system that reads or reacts to the focused component. This DTO is reads-only for legacy compatibility — full system
+/// access (writes, fresh/snapshot reads, side-writes, events, named resources) is now tracked via
+/// <c>SystemAccessDescriptor</c> (RFC 07 — Unit 2 in the engine layer). Surfacing it through Workbench requires
+/// <c>OpenSession</c> to host a live <c>TyphonRuntime</c>, tracked in issue #275 (Unit 6). Once that lands, extend this record
+/// or create a sibling <c>SystemAccessDto</c> exposing the full access shape.
 /// </summary>
 /// <param name="Access">
 /// <c>"read"</c> — component is in the system's input view schema (implicit read set via query filter).

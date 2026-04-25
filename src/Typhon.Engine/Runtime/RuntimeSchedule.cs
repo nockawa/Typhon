@@ -45,6 +45,11 @@ public sealed class RuntimeSchedule
     /// <summary>
     /// Registers a CallbackSystem — lightweight single-invocation, no entity input.
     /// </summary>
+    /// <remarks>
+    /// This lambda-style overload does NOT support RFC 07 access declarations (<c>Reads&lt;T&gt;</c>, <c>Writes&lt;T&gt;</c>, <c>Phase</c>, etc.).
+    /// Systems registered here land in <see cref="RuntimeOptions.DefaultPhase"/> with an empty access descriptor — fine for systems
+    /// that don't need conflict detection or auto-DAG. For declared access, use a class-based system and <see cref="Add(CallbackSystem)"/>.
+    /// </remarks>
     public RuntimeSchedule CallbackSystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
     {
@@ -71,6 +76,11 @@ public sealed class RuntimeSchedule
     /// <summary>
     /// Registers a QuerySystem — single-worker entity iteration.
     /// </summary>
+    /// <remarks>
+    /// This lambda-style overload does NOT support RFC 07 access declarations.
+    /// See <see cref="CallbackSystem(string,Action{TickContext},string,string[],SystemPriority,Func{bool},int,int,bool)"/> for the same caveat —
+    /// use <see cref="Add(QuerySystem)"/> with a class-based system for declared access.
+    /// </remarks>
     public RuntimeSchedule QuerySystem(string name, Action<TickContext> action, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
         int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false, bool parallel = false, bool writesVersioned = false,
@@ -106,6 +116,10 @@ public sealed class RuntimeSchedule
     /// <summary>
     /// Registers a PipelineSystem — multi-worker chunk-parallel execution.
     /// </summary>
+    /// <remarks>
+    /// This lambda-style overload does NOT support RFC 07 access declarations. See the CallbackSystem lambda overload for the same caveat — declared access
+    /// requires the class-based API.
+    /// </remarks>
     public RuntimeSchedule PipelineSystem(string name, Action<int, int> chunkAction, int totalChunks, string after = null, string[] afterAll = null,
         SystemPriority priority = SystemPriority.Normal, Func<bool> runIf = null, Func<ViewBase> input = null, Type[] changeFilter = null,
         int tickDivisor = 1, int throttledTickDivisor = 1, bool canShed = false)
@@ -162,7 +176,11 @@ public sealed class RuntimeSchedule
             InputFactory = builder._inputFactory,
             ChangeFilter = builder._changeFilter,
             Parallel = builder._parallel,
-            WritesVersioned = builder._writesVersioned
+            WritesVersioned = builder._writesVersioned,
+            Phase = builder._phase,
+            PhaseSet = builder._phaseSet,
+            Before = builder._before,
+            Access = builder._access
         });
         return this;
     }
@@ -195,7 +213,11 @@ public sealed class RuntimeSchedule
             WritesVersioned = builder._writesVersioned,
             TierFilter = builder._tierFilter,
             CellAmortize = builder._cellAmortize,
-            Checkerboard = builder._checkerboard
+            Checkerboard = builder._checkerboard,
+            Phase = builder._phase,
+            PhaseSet = builder._phaseSet,
+            Before = builder._before,
+            Access = builder._access
         });
         return this;
     }
@@ -313,6 +335,16 @@ public sealed class RuntimeSchedule
     {
         ThrowIfBuilt();
 
+        // ── Resolve phase index map (RFC 07 / Q3) ──
+        var phaseIndexMap = BuildPhaseIndexMap(_options.Phases);
+
+        if (!phaseIndexMap.TryGetValue(_options.DefaultPhase.Name, out var defaultPhaseIndex))
+        {
+            throw new InvalidOperationException(
+                $"RuntimeOptions.DefaultPhase '{_options.DefaultPhase.Name}' must be present in RuntimeOptions.Phases. " +
+                "Either add it to Phases or set DefaultPhase to one of the listed phases.");
+        }
+
         // ── Build-time validation ──
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
         foreach (var reg in _registrations)
@@ -422,21 +454,69 @@ public sealed class RuntimeSchedule
             }
         }
 
-        // Phase 2: Add dependency edges
+        // Phase 1b: Resolve each registration's phase index up-front (RFC 07 / Q3 — needed by access-edge derivation).
+        // Systems that didn't call b.Phase(...) get RuntimeOptions.DefaultPhase so every system lands in some phase
+        // (RFC 07 / Unit 5 — closes the PhaseIndex==-1 escape hatch from Unit 1).
+        var regPhaseIndex = new Dictionary<string, int>(_registrations.Count, StringComparer.Ordinal);
+        foreach (var reg in _registrations)
+        {
+            if (!reg.PhaseSet)
+            {
+                regPhaseIndex[reg.Name] = defaultPhaseIndex;
+                continue;
+            }
+
+            if (!phaseIndexMap.TryGetValue(reg.Phase.Name, out var phaseIdx))
+            {
+                throw new InvalidOperationException(
+                    $"System '{reg.Name}' declares phase '{reg.Phase.Name}' which is not in RuntimeOptions.Phases. " +
+                    "Add it to options.Phases or use a phase already listed there.");
+            }
+
+            regPhaseIndex[reg.Name] = phaseIdx;
+        }
+
+        // Phase 2: Collect dependency edges (explicit, declared via .After/.AfterAll/.Before)
+        var explicitEdges = new List<(string From, string To)>();
         foreach (var reg in _registrations)
         {
             if (reg.After != null)
             {
-                dagBuilder.AddEdge(reg.After, reg.Name);
+                explicitEdges.Add((reg.After, reg.Name));
             }
 
             if (reg.AfterAll != null)
             {
                 foreach (var dep in reg.AfterAll)
                 {
-                    dagBuilder.AddEdge(dep, reg.Name);
+                    explicitEdges.Add((dep, reg.Name));
                 }
             }
+
+            if (reg.Before != null)
+            {
+                explicitEdges.Add((reg.Name, reg.Before));
+            }
+        }
+
+        // Phase 2b: Derive access-based edges + validate conflicts (RFC 07 — Unit 3)
+        var systemInfos = new List<AccessDagDeriver.SystemInfo>(_registrations.Count);
+        foreach (var reg in _registrations)
+        {
+            systemInfos.Add(new AccessDagDeriver.SystemInfo(reg.Name, regPhaseIndex[reg.Name], reg.Access));
+        }
+
+        var derivedEdges = AccessDagDeriver.DeriveAndValidate(systemInfos, explicitEdges);
+
+        // Phase 2c: Apply all edges (explicit + derived) to the DAG builder
+        foreach (var (from, to) in explicitEdges)
+        {
+            dagBuilder.AddEdge(from, to);
+        }
+
+        foreach (var (from, to) in derivedEdges)
+        {
+            dagBuilder.AddEdge(from, to);
         }
 
         // Phase 3: Build DAG (validates acyclicity, computes predecessors/successors)
@@ -521,10 +601,51 @@ public sealed class RuntimeSchedule
             systems[sysIdx].TierFilter = reg.TierFilter;
             systems[sysIdx].CellAmortize = reg.CellAmortize;
             systems[sysIdx].IsCheckerboard = reg.Checkerboard;
+
+            if (reg.Access != null)
+            {
+                systems[sysIdx].Access = reg.Access;
+            }
+        }
+
+        // Phase 5b: Stamp resolved phase + index onto each SystemDefinition (RFC 07 / Q3-Q5 — index already resolved in Phase 1b).
+        // Undeclared systems get RuntimeOptions.DefaultPhase via the same path.
+        foreach (var reg in _registrations)
+        {
+            if (!nameToIndex.TryGetValue(reg.Name, out var sysIdx))
+            {
+                continue;
+            }
+
+            systems[sysIdx].Phase = reg.PhaseSet ? reg.Phase : _options.DefaultPhase;
+            systems[sysIdx].PhaseIndex = regPhaseIndex[reg.Name];
         }
 
         // Phase 6: Create scheduler
         return new DagScheduler(systems, topologicalOrder, _options, parent, [.. _eventQueues], logger);
+    }
+
+    /// <summary>
+    /// Builds the phase-token → index map from <see cref="RuntimeOptions.Phases"/>. Validates that the list is non-empty and contains no duplicates.
+    /// </summary>
+    private static Dictionary<string, int> BuildPhaseIndexMap(Phase[] phases)
+    {
+        if (phases is null || phases.Length == 0)
+        {
+            throw new InvalidOperationException("RuntimeOptions.Phases must contain at least one phase. Default is RuntimeOptions.DefaultPhases.");
+        }
+
+        var map = new Dictionary<string, int>(phases.Length, StringComparer.Ordinal);
+        for (var i = 0; i < phases.Length; i++)
+        {
+            var name = phases[i].Name;
+            if (!map.TryAdd(name, i))
+            {
+                throw new InvalidOperationException($"Duplicate phase '{name}' in RuntimeOptions.Phases at index {i}. Each phase must appear at most once.");
+            }
+        }
+
+        return map;
     }
 
     private void ThrowIfBuilt()
@@ -560,5 +681,9 @@ public sealed class RuntimeSchedule
         public SimTier TierFilter = SimTier.All;
         public int CellAmortize;
         public bool Checkerboard;
+        public Phase Phase;
+        public bool PhaseSet;
+        public string Before;
+        public SystemAccessDescriptor Access;
     }
 }

@@ -22,6 +22,24 @@ public sealed class SystemDefinition
     /// <summary>Priority for overload management. Defined but not enforced until #201.</summary>
     public SystemPriority Priority { get; init; } = SystemPriority.Normal;
 
+    /// <summary>
+    /// The phase this system belongs to (RFC 07 / Q3). Set by <see cref="RuntimeSchedule.Build"/> from <see cref="SystemBuilder.Phase"/>.
+    /// Default-valued (zero <see cref="Phase"/>) when no phase was declared — pair with <see cref="PhaseIndex"/> = -1 to detect.
+    /// </summary>
+    public Phase Phase { get; internal set; }
+
+    /// <summary>
+    /// Index into <see cref="RuntimeOptions.Phases"/> for the resolved phase. -1 when no phase was declared (transitional; Unit 5 of the
+    /// auto-DAG migration will require a phase per system).
+    /// </summary>
+    public int PhaseIndex { get; internal set; } = -1;
+
+    /// <summary>
+    /// Declared read/write access for this system (RFC 07 — Unit 2). Populated from <see cref="SystemBuilder"/> declaration methods.
+    /// Storage only at the Unit 2 stage — Unit 3 will consume this for conflict detection and DAG-edge derivation.
+    /// </summary>
+    internal SystemAccessDescriptor Access { get; set; } = new();
+
     // ═══════════════════════════════════════════════════════════════
     // Execution delegates
     // ═══════════════════════════════════════════════════════════════

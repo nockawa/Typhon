@@ -38,4 +38,7 @@ public enum TyphonErrorCode
     WalClaimTooLarge                = 7002,
     WalWriteFailure                 = 7003,
     WalSegmentError                 = 7004,
+
+    // 8xxx — Runtime / Scheduler
+    InvalidSystemAccess             = 8001,
 }
