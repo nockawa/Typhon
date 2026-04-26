@@ -112,8 +112,12 @@ public abstract partial class BTree<TKey, TStore>
 
         private void MergeLeft(NodeWrapper right, ref ChunkAccessor<TStore> accessor)
         {
-            using var scope = TyphonEvent.BeginBTreeNodeMerge();
+            var scope = TyphonEvent.BeginBTreeNodeMerge();
+            // PROFILING-SPAN-NO-THROW-BEGIN — _storage.MergeLeft is engine-internal storage manipulation.
+            // If it gains a throw path, re-tag to variant B.
             _storage.MergeLeft(this, right, ref accessor);
+            // PROFILING-SPAN-NO-THROW-END
+            scope.Dispose();
         }
 
         public NodeWrapper GetChild(int index, ref ChunkAccessor<TStore> accessor) => _storage.GetChild(this, index, ref accessor);
@@ -615,9 +619,13 @@ public abstract partial class BTree<TKey, TStore>
 
         private NodeWrapper SplitRight(NodeStates states, ref ChunkAccessor<TStore> accessor)
         {
-            using var scope = TyphonEvent.BeginBTreeNodeSplit();
+            var scope = TyphonEvent.BeginBTreeNodeSplit();
+            // PROFILING-SPAN-NO-THROW-BEGIN — _storage.SplitRight is engine-internal storage manipulation;
+            // Interlocked.Increment cannot throw. If a future change breaks the no-throw contract, re-tag to variant B.
             var result = _storage.SplitRight(this, states, ref accessor);
             Interlocked.Increment(ref _storage.Owner._splitCount);
+            // PROFILING-SPAN-NO-THROW-END
+            scope.Dispose();
             return result;
         }
 

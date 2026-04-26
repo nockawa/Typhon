@@ -183,14 +183,21 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
     /// <param name="lsn">The LSN that must be durable before returning.</param>
     /// <param name="ctx">Wait context with timeout/cancellation.</param>
     /// <exception cref="WalWriteException">A fatal I/O error occurred — no further durable commits possible.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WaitForDurable(long lsn, ref WaitContext ctx)
     {
-        // Fast path: already durable
+        // Fast path: already durable, returns inline. The WalWait span and wait loop live in WaitForDurableSlow so this shim stays EH-free and inlinable into
+        // the per-commit caller (Transaction.PersistAndFinalize).
         if (Interlocked.Read(ref _durableLsn) >= lsn)
         {
             return;
         }
+        WaitForDurableSlow(lsn, ref ctx);
+    }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WaitForDurableSlow(long lsn, ref WaitContext ctx)
+    {
         // Check for fatal error
         if (_fatalError != null)
         {

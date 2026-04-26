@@ -1119,46 +1119,61 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
 
     public int Add(TKey key, int value, ref ChunkAccessor<TStore> accessor, out int bufferRootId)
     {
-        using var scope = TyphonEvent.BeginBTreeInsert();
+        // The outer `using var` was adding a second EH region on a per-key hot path; we keep the inner try/finally for accessor return and rely on the body
+        // being throw-free in practice.
+        var scope = TyphonEvent.BeginBTreeInsert();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
+        int elementId;
         try
         {
+            // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. AddOrUpdateCore + SyncHeader are engine-internal storage manipulation. If a future change
+            // adds a throw path here, this site MUST be re-tagged to variant B — a throw silently drops the span AND leaves CurrentOpenSpanId dangling,
+            // corrupting parent-linkage for every subsequent span on this thread.
             var args = new InsertArguments(key, value, Comparer, ref opAccessor, ref sibAccessor);
             AddOrUpdateCore(ref args);
             SyncHeader(ref opAccessor);
             bufferRootId = args.BufferRootId;
-            return args.ElementId;
+            elementId = args.ElementId;
+            // PROFILING-SPAN-NO-THROW-END
         }
         finally
         {
             _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
         }
+        scope.Dispose();
+        return elementId;
     }
 
     public bool Remove(TKey key, out int value, ref ChunkAccessor<TStore> accessor)
     {
-        using var scope = TyphonEvent.BeginBTreeDelete();
+        var scope = TyphonEvent.BeginBTreeDelete();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
+        bool removed;
         try
         {
+            // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. RemoveCore + SyncHeader are engine-internal storage manipulation. If a future change adds
+            // a throw path, re-tag to variant B.
             var args = new RemoveArguments(key, Comparer, ref opAccessor, ref sibAccessor);
             RemoveCore(ref args);
             SyncHeader(ref opAccessor);
             value = args.Value;
-            return args.Removed;
+            removed = args.Removed;
+            // PROFILING-SPAN-NO-THROW-END
         }
         finally
         {
             _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
         }
+        scope.Dispose();
+        return removed;
     }
 
     public override void CheckConsistency(ref ChunkAccessor<TStore> accessor)
@@ -1332,66 +1347,73 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
 
     public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor<TStore> accessor, bool preserveEmptyBuffer = false)
     {
-        using var scope = TyphonEvent.BeginBTreeDelete();
+        var scope = TyphonEvent.BeginBTreeDelete();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
         ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
+        bool result = true;
         try
         {
+            // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. FindLeaf, latch lock/unlock, _storage.* and RemoveCorePessimistic are all engine-internal
+            // storage manipulation.
             // FindLeaf traversal is safe under OLC: internal nodes are stable.
             var leaf = FindLeaf(key, out _, ref opAccessor);
             if (!leaf.IsValid)
             {
-                return false;
+                result = false;
             }
-
-            // WriteLock leaf for consistent index and to prevent concurrent OLC modification
-            leaf.PreDirtyForWrite(ref opAccessor);
-            SpinWriteLock(leaf.GetLatch(ref opAccessor));
-
-            // Re-find under lock (index might have shifted due to concurrent OLC fast path remove)
-            var index = leaf.Find(key, Comparer, ref opAccessor);
-            if (index < 0)
+            else
             {
-                leaf.GetLatch(ref opAccessor).WriteUnlock();
-                return false;
-            }
+                // WriteLock leaf for consistent index and to prevent concurrent OLC modification
+                leaf.PreDirtyForWrite(ref opAccessor);
+                SpinWriteLock(leaf.GetLatch(ref opAccessor));
 
-            var bufferId = leaf.GetItem(index, ref opAccessor).Value;
-            var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref sibAccessor);
-
-            // WriteUnlock leaf — buffer manipulation is done, version bumped for OLC readers
-            leaf.GetLatch(ref opAccessor).WriteUnlock();
-
-            if (res == -1)
-            {
-                return false;
-            }
-
-            // Remove the key if we no longer have values stored there.
-            // When preserveEmptyBuffer is true, keep the BTree key and empty HEAD buffer alive so that linked TAIL version-history buffers remain reachable
-            // for temporal queries.
-            if (res == 0 && !preserveEmptyBuffer)
-            {
-                var args = new RemoveArguments(key, Comparer, ref opAccessor, ref sibAccessor);
-                RemoveCorePessimistic(ref args);
-
-                if (args.Removed)
+                // Re-find under lock (index might have shifted due to concurrent OLC fast path remove)
+                var index = leaf.Find(key, Comparer, ref opAccessor);
+                if (index < 0)
                 {
-                    _storage.DeleteBuffer(args.Value, ref sibAccessor);
+                    leaf.GetLatch(ref opAccessor).WriteUnlock();
+                    result = false;
                 }
+                else
+                {
+                    var bufferId = leaf.GetItem(index, ref opAccessor).Value;
+                    var res = _storage.RemoveFromBuffer(bufferId, elementId, value, ref sibAccessor);
 
-                SyncHeader(ref opAccessor);
+                    // WriteUnlock leaf — buffer manipulation is done, version bumped for OLC readers
+                    leaf.GetLatch(ref opAccessor).WriteUnlock();
+
+                    if (res == -1)
+                    {
+                        result = false;
+                    }
+                    else if (res == 0 && !preserveEmptyBuffer)
+                    {
+                        // Remove the key if we no longer have values stored there.
+                        // When preserveEmptyBuffer is true, keep the BTree key and empty HEAD buffer alive so that linked TAIL version-history buffers
+                        // remain reachable for temporal queries.
+                        var args = new RemoveArguments(key, Comparer, ref opAccessor, ref sibAccessor);
+                        RemoveCorePessimistic(ref args);
+
+                        if (args.Removed)
+                        {
+                            _storage.DeleteBuffer(args.Value, ref sibAccessor);
+                        }
+
+                        SyncHeader(ref opAccessor);
+                    }
+                }
             }
+            // PROFILING-SPAN-NO-THROW-END
         }
         finally
         {
             _segment.ReturnWarmSiblingAccessor();
             _segment.ReturnWarmAccessor();
         }
-
-        return true;
+        scope.Dispose();
+        return result;
     }
 
     public VariableSizedBufferAccessor<int, TStore> TryGetMultiple(TKey key, ref ChunkAccessor<TStore> accessor)

@@ -82,33 +82,32 @@ public unsafe partial class Transaction : EntityAccessor
 
     public void Init(DatabaseEngine dbe, long tsn, UnitOfWork uow = null, bool readOnly = false)
     {
+        // Residual risk: _dbe.MMF.CreateChangeSet allocates and could throw OOM in extreme conditions, dropping the span.
+        // Per project policy this is acceptable for a hot per-tx path.
         var initScope = TyphonEvent.BeginDataTransactionInit(tsn, uow?.UowId ?? 0);
-        try
-        {
-            _dbe = dbe;
-            _epochManager = _dbe.EpochManager;
-            _dbe.LogTxInitPhase(tsn, "entering epoch");
-            _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
-            _dbe.LogTxInitPhase(tsn, "epoch entered");
-            _isDisposed = false;
-            IsReadOnly = readOnly;
-            OwningUnitOfWork = uow;
+        // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. EnterScope/CreateChangeSet/PushHead are engine-internal.
+        // If a future change adds a throw path, re-tag to variant B.
+        _dbe = dbe;
+        _epochManager = _dbe.EpochManager;
+        _dbe.LogTxInitPhase(tsn, "entering epoch");
+        _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
+        _dbe.LogTxInitPhase(tsn, "epoch entered");
+        _isDisposed = false;
+        IsReadOnly = readOnly;
+        OwningUnitOfWork = uow;
 #if DEBUG
-            _debugOwningThreadId = Environment.CurrentManagedThreadId;
+        _debugOwningThreadId = Environment.CurrentManagedThreadId;
 #endif
-            _committedOperationCount = null;
-            _deletedComponentCount = 0;
-            _entityOperationCount = 0;
-            _changeSet = readOnly ? null : (uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet());
-            State = TransactionState.Created;
-            TSN = tsn;
+        _committedOperationCount = null;
+        _deletedComponentCount = 0;
+        _entityOperationCount = 0;
+        _changeSet = readOnly ? null : (uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet());
+        State = TransactionState.Created;
+        TSN = tsn;
 
-            _dbe.TransactionChain.PushHead(this);
-        }
-        finally
-        {
-            initScope.Dispose();
-        }
+        _dbe.TransactionChain.PushHead(this);
+        // PROFILING-SPAN-NO-THROW-END
+        initScope.Dispose();
     }
 
     /// <summary>Reset all state for pooling reuse. Called by TransactionChain after unlinking.</summary>
@@ -133,9 +132,14 @@ public unsafe partial class Transaction : EntityAccessor
     /// <summary>Prepare for mutation via ArchetypeAccessor. Sets state to InProgress so Commit processes writes.</summary>
     internal override void PrepareForMutation()
     {
-        using var scope = TyphonEvent.BeginDataTransactionPrepare(TSN);
+        // Residual risk: EnsureMutable can throw on programmer-error (read-only tx mutated) — accepted per intentional-validation policy.
+        var scope = TyphonEvent.BeginDataTransactionPrepare(TSN);
+        // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw on the success path. EnsureMutable is intentional validation;
+        // its ThrowHelper paths terminate the operation, so dropping the span there is acceptable.
         EnsureMutable();
         State = TransactionState.InProgress;
+        // PROFILING-SPAN-NO-THROW-END
+        scope.Dispose();
     }
 
     /// <summary>Throws if the transaction cannot accept new operations (read-only or already finalized).</summary>
@@ -1327,8 +1331,11 @@ public unsafe partial class Transaction : EntityAccessor
     public bool Rollback(ref UnitOfWorkContext ctx) => Rollback(ref ctx, Typhon.Profiler.TransactionRollbackReason.Explicit);
 
     /// <summary>Phase 6: rollback with an explicit <paramref name="reason"/> threaded into the kind 21 payload (D3).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Rollback(ref UnitOfWorkContext ctx, Typhon.Profiler.TransactionRollbackReason reason)
     {
+        // The hot fast path here is read-only-tx auto-rollback on Dispose: state is already Created/Committed/Rollbacked, returns immediately. By keeping
+        // the holdoff `using` and span try/finally inside RollbackCore (slow), this fast-path shim stays EH-free and inlinable into Dispose.
         AssertThreadAffinity();
 
         // Nothing to do if the transaction is empty
@@ -1343,6 +1350,12 @@ public unsafe partial class Transaction : EntityAccessor
             return false;
         }
 
+        return RollbackCore(ref ctx, reason);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool RollbackCore(ref UnitOfWorkContext ctx, Typhon.Profiler.TransactionRollbackReason reason)
+    {
         // No yield point — rollback/cleanup must always complete
         using var holdoff = ctx.EnterHoldoff();
 

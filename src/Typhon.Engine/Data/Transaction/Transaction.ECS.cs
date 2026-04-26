@@ -143,17 +143,14 @@ public unsafe partial class Transaction
             $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
 
         var scope = TyphonEvent.BeginEcsSpawn(meta.ArchetypeId);
-        try
-        {
-            scope.Tsn = TSN;
-            var id = SpawnInternal(meta, values);
-            scope.EntityId = id.RawValue;
-            return id;
-        }
-        finally
-        {
-            scope.Dispose();
-        }
+        // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. SpawnInternal is engine-internal (allocation + B+Tree insert + MVCC).
+        // If a future change adds a user-callback path, re-tag to variant B.
+        scope.Tsn = TSN;
+        var id = SpawnInternal(meta, values);
+        scope.EntityId = id.RawValue;
+        // PROFILING-SPAN-NO-THROW-END
+        scope.Dispose();
+        return id;
     }
 
     /// <summary>
@@ -562,23 +559,20 @@ public unsafe partial class Transaction
         Debug.Assert(!id.IsNull, "Cannot destroy null entity");
 
         var scope = TyphonEvent.BeginEcsDestroy(id.RawValue);
-        try
-        {
-            scope.Tsn = TSN;
+        // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. DestroyInternal is engine-internal (cascade traversal + tombstone marking).
+        // If a future change adds a user-callback path, re-tag to variant B.
+        scope.Tsn = TSN;
 
-            int cascadeCount = 0;
-            DestroyInternal(id, 0, ref cascadeCount);
+        int cascadeCount = 0;
+        DestroyInternal(id, 0, ref cascadeCount);
 
-            // Only carry CascadeCount when the cascade actually extended beyond the root entity — saves 4 B per record on the common case.
-            if (cascadeCount > 1)
-            {
-                scope.CascadeCount = cascadeCount;
-            }
-        }
-        finally
+        // Only carry CascadeCount when the cascade actually extended beyond the root entity — saves 4 B per record on the common case.
+        if (cascadeCount > 1)
         {
-            scope.Dispose();
+            scope.CascadeCount = cascadeCount;
         }
+        // PROFILING-SPAN-NO-THROW-END
+        scope.Dispose();
     }
 
     /// <summary>Mark an entity link target for destruction.</summary>

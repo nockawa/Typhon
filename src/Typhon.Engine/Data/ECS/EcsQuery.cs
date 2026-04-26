@@ -71,46 +71,36 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             Math.Min(meta.ArchetypeId, ushort.MaxValue),
             (byte)(polymorphic ? 1 : 0),
             (byte)(_useLargeMask ? 1 : 0));  // 0 = Mask256, 1 = MaskLarge
-        try
+        // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. Pure bit math; if a callee changes, re-tag to variant B.
+        // Phase 7: ECS:Query:SubtreeExpand span — covers polymorphic subtree expansion (when applicable).
+        if (polymorphic && meta.SubtreeArchetypeIds != null)
         {
-            // Phase 7: ECS:Query:SubtreeExpand span — covers polymorphic subtree expansion (when applicable).
-            if (polymorphic && meta.SubtreeArchetypeIds != null)
+            var subtreeScope = TyphonEvent.BeginEcsQuerySubtreeExpand(
+                (ushort)Math.Min(meta.SubtreeArchetypeIds.Length, ushort.MaxValue),
+                Math.Min(meta.ArchetypeId, ushort.MaxValue));
+            if (_useLargeMask)
             {
-                var subtreeScope = TyphonEvent.BeginEcsQuerySubtreeExpand(
-                    (ushort)Math.Min(meta.SubtreeArchetypeIds.Length, ushort.MaxValue),
-                    Math.Min(meta.ArchetypeId, ushort.MaxValue));
-                try
-                {
-                    if (_useLargeMask)
-                    {
-                        _maskLarge = ArchetypeMaskLarge.FromSubtree(meta.SubtreeArchetypeIds, ArchetypeRegistry.MaxArchetypeId);
-                    }
-                    else
-                    {
-                        _mask256 = ArchetypeMask256.FromSubtree(meta.SubtreeArchetypeIds);
-                    }
-                }
-                finally
-                {
-                    subtreeScope.Dispose();
-                }
+                _maskLarge = ArchetypeMaskLarge.FromSubtree(meta.SubtreeArchetypeIds, ArchetypeRegistry.MaxArchetypeId);
             }
             else
             {
-                if (_useLargeMask)
-                {
-                    _maskLarge = ArchetypeMaskLarge.FromArchetype(meta.ArchetypeId, ArchetypeRegistry.MaxArchetypeId);
-                }
-                else
-                {
-                    _mask256 = ArchetypeMask256.FromArchetype(meta.ArchetypeId);
-                }
+                _mask256 = ArchetypeMask256.FromSubtree(meta.SubtreeArchetypeIds);
+            }
+            subtreeScope.Dispose();
+        }
+        else
+        {
+            if (_useLargeMask)
+            {
+                _maskLarge = ArchetypeMaskLarge.FromArchetype(meta.ArchetypeId, ArchetypeRegistry.MaxArchetypeId);
+            }
+            else
+            {
+                _mask256 = ArchetypeMask256.FromArchetype(meta.ArchetypeId);
             }
         }
-        finally
-        {
-            ctorScope.Dispose();
-        }
+        // PROFILING-SPAN-NO-THROW-END
+        ctorScope.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
