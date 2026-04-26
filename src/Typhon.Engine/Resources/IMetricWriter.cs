@@ -52,15 +52,6 @@ public interface IMetricWriter
     void WriteDiskIO(long readOps, long writeOps, long readBytes, long writeBytes);
 
     /// <summary>
-    /// Reports lock contention metrics for this node.
-    /// </summary>
-    /// <param name="waitCount">Times a thread had to wait (not immediate acquisition).</param>
-    /// <param name="totalWaitUs">Cumulative microseconds spent waiting.</param>
-    /// <param name="maxWaitUs">Longest single wait observed (high-water mark).</param>
-    /// <param name="timeoutCount">Waits that exceeded Deadline.</param>
-    void WriteContention(long waitCount, long totalWaitUs, long maxWaitUs, long timeoutCount);
-
-    /// <summary>
     /// Reports a named throughput counter.
     /// </summary>
     /// <param name="name">Counter name (e.g., "CacheHits", "Commits"). Must be a static string.</param>

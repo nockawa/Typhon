@@ -57,7 +57,7 @@ public unsafe class HashMap<TKey, TValue> : IDisposable where TKey : unmanaged, 
         _mask = _capacity - 1;
         _resizeThreshold = (int)(_capacity * MaxLoadFactor);
 
-        _pohArray = GC.AllocateArray<byte>(_capacity * _entryStride, pinned: true);
+        _pohArray = GC.AllocateArray<byte>(_capacity * _entryStride, true);
         _entries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(_pohArray));
     }
 
@@ -478,7 +478,7 @@ public unsafe class HashMap<TKey, TValue> : IDisposable where TKey : unmanaged, 
         int newSize = newCapacity * stride;
 
         // POH allocation: pre-zeroed pages from OS, nearly free for large buffers
-        var newPoh = GC.AllocateArray<byte>(newSize, pinned: true);
+        var newPoh = GC.AllocateArray<byte>(newSize, true);
         byte* newEntries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(newPoh));
 
         TValue[] newManagedValues = null;

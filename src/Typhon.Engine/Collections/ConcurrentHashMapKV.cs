@@ -80,7 +80,7 @@ public unsafe class ConcurrentHashMap<TKey, TValue> : IDisposable where TKey : u
             stripe.Mask = perStripeCapacity - 1;
             stripe.ResizeThreshold = (int)(perStripeCapacity * MaxLoadFactor);
             int size = perStripeCapacity * _entryStride;
-            stripe.PohArray = GC.AllocateArray<byte>(size, pinned: true);
+            stripe.PohArray = GC.AllocateArray<byte>(size, true);
             stripe.Entries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(stripe.PohArray));
 
             if (RuntimeHelpers.IsReferenceOrContainsReferences<TValue>())
@@ -679,7 +679,7 @@ public unsafe class ConcurrentHashMap<TKey, TValue> : IDisposable where TKey : u
         SpinWait spin = default;
         while (true)
         {
-            spin.SpinOnce(sleep1Threshold: -1);
+            spin.SpinOnce(-1);
             int v = stripe.OlcVersion;
             if ((v & 1) == 0 && Interlocked.CompareExchange(ref stripe.OlcVersion, v | 1, v) == v)
             {
@@ -751,7 +751,7 @@ public unsafe class ConcurrentHashMap<TKey, TValue> : IDisposable where TKey : u
     {
         int stride = _entryStride;
         int newSize = newCapacity * stride;
-        var newPoh = GC.AllocateArray<byte>(newSize, pinned: true);
+        var newPoh = GC.AllocateArray<byte>(newSize, true);
         byte* newEntries = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(newPoh));
         int newMask = newCapacity - 1;
 

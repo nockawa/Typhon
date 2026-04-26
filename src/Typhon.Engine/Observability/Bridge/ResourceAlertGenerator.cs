@@ -75,11 +75,6 @@ public sealed class ResourceAlert
     public double RootCauseUtilization { get; init; }
 
     /// <summary>
-    /// Other resources that may be affected due to contention or shared dependencies.
-    /// </summary>
-    public IReadOnlyList<string> CascadingEffects { get; init; }
-
-    /// <summary>
     /// When the alert was generated.
     /// </summary>
     public DateTime Timestamp { get; init; }
@@ -152,13 +147,6 @@ public sealed class ResourceAlertGenerator
         var rootCausePath = rootCauseNode?.Path ?? symptomPath;
         var rootCauseUtilization = rootCauseNode?.Capacity?.Utilization ?? utilization;
 
-        // Find cascading effects (other resources with high contention)
-        var cascadingEffects = snapshot.FindContentionHotspots()
-            .Where(n => n.Path != symptomPath && n.Path != rootCausePath)
-            .Take(5)
-            .Select(n => n.Path)
-            .ToList();
-
         return new ResourceAlert
         {
             Severity = severity,
@@ -167,7 +155,6 @@ public sealed class ResourceAlertGenerator
             SymptomUtilization = utilization,
             RootCausePath = rootCausePath,
             RootCauseUtilization = rootCauseUtilization,
-            CascadingEffects = cascadingEffects,
             Timestamp = snapshot.Timestamp
         };
     }

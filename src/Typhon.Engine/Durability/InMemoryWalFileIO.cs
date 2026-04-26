@@ -43,7 +43,7 @@ public sealed class InMemoryWalFileIO : IWalFileIO
         // Create a synthetic handle (not backed by a real file).
         // ownsHandle: false ensures Dispose() won't call CloseHandle on the fake pointer.
         var id = Interlocked.Increment(ref _nextHandleId);
-        var handle = new SafeFileHandle(new IntPtr(id), ownsHandle: false);
+        var handle = new SafeFileHandle(new IntPtr(id), false);
 
         // Track in-memory segment
         var segment = Segments.GetOrAdd(normalizedPath, _ => new MemorySegment(withFUA));
@@ -56,7 +56,7 @@ public sealed class InMemoryWalFileIO : IWalFileIO
     }
 
     /// <inheritdoc />
-    public SafeFileHandle OpenSegmentForRead(string path) => OpenSegment(path, withFUA: false);
+    public SafeFileHandle OpenSegmentForRead(string path) => OpenSegment(path, false);
 
     /// <inheritdoc />
     public void WriteAligned(SafeFileHandle handle, long offset, ReadOnlySpan<byte> data)

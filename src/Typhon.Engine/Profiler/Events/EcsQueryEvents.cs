@@ -59,7 +59,7 @@ public ref struct EcsQueryExecuteEvent : ITraceEventEncoder
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryExecute, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, found: false, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -97,7 +97,7 @@ public ref struct EcsQueryCountEvent : ITraceEventEncoder
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryCount, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, found: false, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -135,7 +135,7 @@ public ref struct EcsQueryAnyEvent : ITraceEventEncoder
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryAny, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, resultCount: 0, _scanMode, _found, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, 0, _scanMode, _found, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

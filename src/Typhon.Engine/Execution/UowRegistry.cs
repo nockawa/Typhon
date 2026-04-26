@@ -140,7 +140,7 @@ internal unsafe class UowRegistry : IDisposable
         _currentCapacity = ComputeCapacity(segment.Length);
 
         // Single pinned allocation for both bitmaps: 2 x 512 ulongs = 8192 bytes, cache-line aligned.
-        _bitmapBlock = allocator.AllocatePinned("UowRegistry-Bitmaps", parent, BitmapWords * sizeof(ulong) * 2, zeroed: true, alignment: 64);
+        _bitmapBlock = allocator.AllocatePinned("UowRegistry-Bitmaps", parent, BitmapWords * sizeof(ulong) * 2, true, 64);
         _allocationBitmap = (ulong*)_bitmapBlock.DataAsPointer;
         _committedBitmap = _allocationBitmap + BitmapWords;
     }

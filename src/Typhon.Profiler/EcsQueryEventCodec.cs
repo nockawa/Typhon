@@ -5,6 +5,17 @@ using System.Runtime.CompilerServices;
 namespace Typhon.Profiler;
 
 /// <summary>
+/// Phase 7 (D2): variant byte for the consolidated <see cref="TraceEventKind.EcsQueryExecute"/> wire format.
+/// New producers always emit kind 32 with this byte set so old separate kinds (33/34) can be retired.
+/// </summary>
+public enum EcsQueryVariant : byte
+{
+    Execute = 0,
+    Count   = 1,
+    Any     = 2,
+}
+
+/// <summary>
 /// Decoded form of an ECS query span event (Execute / Count / Any share this shape). Used by the reader, viewer DTO, and tests.
 /// </summary>
 /// <remarks>
@@ -37,16 +48,21 @@ public readonly struct EcsQueryEventData
     /// <summary>Optional — for <see cref="TraceEventKind.EcsQueryAny"/>, whether a match was found. Valid iff <see cref="HasFound"/> is <c>true</c>.</summary>
     public bool Found { get; }
 
+    /// <summary>Phase 7 (D2): variant byte for consolidated kind 32 producers. Valid iff <see cref="HasVariant"/> is <c>true</c>.</summary>
+    public EcsQueryVariant Variant { get; }
+
     public bool HasResultCount => (OptionalFieldMask & EcsQueryEventCodec.OptResultCount) != 0;
     public bool HasScanMode => (OptionalFieldMask & EcsQueryEventCodec.OptScanMode) != 0;
     public bool HasFound => (OptionalFieldMask & EcsQueryEventCodec.OptFound) != 0;
+    public bool HasVariant => (OptionalFieldMask & EcsQueryEventCodec.OptVariant) != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
     public EcsQueryEventData(
         TraceEventKind kind, byte threadSlot, long startTimestamp, long durationTicks,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         ushort archetypeTypeId, byte optionalFieldMask,
-        int resultCount, EcsQueryScanMode scanMode, bool found)
+        int resultCount, EcsQueryScanMode scanMode, bool found,
+        EcsQueryVariant variant = EcsQueryVariant.Execute)
     {
         Kind = kind;
         ThreadSlot = threadSlot;
@@ -61,6 +77,7 @@ public readonly struct EcsQueryEventData
         ResultCount = resultCount;
         ScanMode = scanMode;
         Found = found;
+        Variant = variant;
     }
 }
 
@@ -91,11 +108,17 @@ public static class EcsQueryEventCodec
     /// <summary>Optional-mask bit 2 — <c>Found</c> (Any). Encoded in the same 4 B slot as <see cref="OptResultCount"/>.</summary>
     public const byte OptFound = 0x04;
 
+    /// <summary>Phase 7 (D2) — Optional-mask bit 3 — <c>Variant</c> u8 (consolidated kind 32 producers).</summary>
+    public const byte OptVariant = 0x08;
+
     /// <summary>Size of the <c>ResultCount</c>/<c>Found</c> slot if present.</summary>
     private const int ResultCountSize = 4;
 
     /// <summary>Size of the <c>ScanMode</c> slot if present.</summary>
     private const int ScanModeSize = 1;
+
+    /// <summary>Phase 7 — size of the <c>Variant</c> u8 slot if present.</summary>
+    private const int VariantSize = 1;
 
     /// <summary>Required payload size — <c>ArchetypeTypeId</c> (u16) + <c>optMask</c> (u8) = 3 B.</summary>
     private const int RequiredPayloadSize = 3;
@@ -112,6 +135,10 @@ public static class EcsQueryEventCodec
         if ((optMask & OptScanMode) != 0)
         {
             size += ScanModeSize;
+        }
+        if ((optMask & OptVariant) != 0)
+        {
+            size += VariantSize;
         }
         return size;
     }
@@ -135,7 +162,8 @@ public static class EcsQueryEventCodec
         int resultCount,
         EcsQueryScanMode scanMode,
         bool found,
-        out int bytesWritten)
+        out int bytesWritten,
+        EcsQueryVariant variant = EcsQueryVariant.Execute)
     {
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSize(hasTraceContext, optMask);
@@ -173,6 +201,11 @@ public static class EcsQueryEventCodec
         {
             payload[cursor] = (byte)scanMode;
             cursor += ScanModeSize;
+        }
+        if ((optMask & OptVariant) != 0)
+        {
+            payload[cursor] = (byte)variant;
+            cursor += VariantSize;
         }
 
         bytesWritten = size;
@@ -220,8 +253,15 @@ public static class EcsQueryEventCodec
             cursor += ScanModeSize;
         }
 
+        var variant = EcsQueryVariant.Execute;
+        if ((optMask & OptVariant) != 0)
+        {
+            variant = (EcsQueryVariant)payload[cursor];
+            cursor += VariantSize;
+        }
+
         return new EcsQueryEventData(kind, threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            archetypeTypeId, optMask, resultCount, scanMode, found);
+            archetypeTypeId, optMask, resultCount, scanMode, found, variant);
     }
 }
 

@@ -333,9 +333,9 @@ internal sealed unsafe class SpatialInterestSystem
                     {
                         if (_clusterAccumScratch != null)
                         {
-                            System.Buffers.ArrayPool<long>.Shared.Return(_clusterAccumScratch);
+                            ArrayPool<long>.Shared.Return(_clusterAccumScratch);
                         }
-                        _clusterAccumScratch = System.Buffers.ArrayPool<long>.Shared.Rent(clMaxWords);
+                        _clusterAccumScratch = ArrayPool<long>.Shared.Rent(clMaxWords);
                     }
                     Array.Clear(_clusterAccumScratch, 0, clMaxWords);
                     int clAccumWords = ring.AccumulateDirty(startTick, endTick, _clusterAccumScratch);

@@ -201,7 +201,7 @@ internal static class SchemaEvolutionEngine
                 newSeg.ReserveChunk(chunkId);
 
                 var oldPtr = oldAccessor.GetChunkAddress(chunkId);
-                var newPtr = newAccessor.GetChunkAddress(chunkId, dirty: true);
+                var newPtr = newAccessor.GetChunkAddress(chunkId, true);
 
                 // Zero-fill the new chunk so added fields get default values (not stale memory)
                 new Span<byte>(newPtr, newSeg.Stride).Clear();
@@ -280,7 +280,7 @@ internal static class SchemaEvolutionEngine
 
                 newRevSeg.ReserveChunk(chunkId);
 
-                var newChunk = newAccessor.GetChunkAddress(chunkId, dirty: true);
+                var newChunk = newAccessor.GetChunkAddress(chunkId, true);
                 new Span<byte>(newChunk, ComponentRevisionManager.CompRevChunkSize).Clear();
 
                 ref var newHeader = ref Unsafe.AsRef<CompRevStorageHeader>(newChunk);
@@ -584,7 +584,7 @@ internal static class SchemaEvolutionEngine
                     // Reserve the same ChunkId in the new segment to preserve index references
                     newSeg.ReserveChunk(chunkId);
 
-                    var newPtr = newAccessor.GetChunkAddress(chunkId, dirty: true);
+                    var newPtr = newAccessor.GetChunkAddress(chunkId, true);
 
                     // Zero-fill the new chunk so added fields get default values (not stale memory)
                     new Span<byte>(newPtr, newSeg.Stride).Clear();

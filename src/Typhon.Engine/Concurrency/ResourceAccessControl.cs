@@ -7,6 +7,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -55,10 +56,6 @@ public struct ResourceAccessControl
     private const int MaxAccessingCount   = 255;
     private const int ThreadIdBitsMask    = 0xFFFF;       // 16 bits for thread ID
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // State Field
-    // ═══════════════════════════════════════════════════════════════════════
-
     private int _state;
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -86,14 +83,20 @@ public struct ResourceAccessControl
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetCurrentThreadIdBits() => Environment.CurrentManagedThreadId & ThreadIdBitsMask;
 
-    /// <summary>
-    /// Computes elapsed time in microseconds from a Stopwatch start tick.
-    /// </summary>
+    /// <summary>Computes elapsed time in microseconds from a Stopwatch start tick.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static long ComputeElapsedUs(long startTicks)
     {
         var elapsed = Stopwatch.GetTimestamp() - startTicks;
         return (elapsed * 1_000_000) / Stopwatch.Frequency;
+    }
+
+    /// <summary>Cap an elapsed-us value to <see cref="ushort.MaxValue"/> for trace event payloads.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ushort ElapsedUsCapped(long startTicks)
+    {
+        var us = ComputeElapsedUs(startTicks);
+        return us >= ushort.MaxValue ? ushort.MaxValue : (ushort)us;
     }
 
     [DoesNotReturn]
@@ -104,60 +107,51 @@ public struct ResourceAccessControl
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowTimeout() => ThrowHelper.ThrowLockTimeout("ResourceAccessControl", TimeSpan.Zero);
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // ACCESSING Mode - Multiple concurrent, prevents destruction
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>
-    /// Attempts to enter ACCESSING mode without blocking.
-    /// </summary>
-    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired, false if MODIFY_PENDING or DESTROY is set or max count reached.</returns>
-    public bool TryEnterAccessing(IContentionTarget target = null)
+    /// <summary>Set the contention flag if not already set; emit a Contention trace event the first time it transitions.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetContentionFlagAndEmit()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
+        var prior = Interlocked.Or(ref _state, ContentionFlag);
+        if ((prior & ContentionFlag) == 0)
+        {
+            TyphonEvent.EmitConcurrencyResourceContention();
+        }
+    }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    // ACCESSING Mode
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Attempts to enter ACCESSING mode without blocking.</summary>
+    public bool TryEnterAccessing()
+    {
         int state = _state;
 
-        // Check if blocked by pending/destroy
         if (HasPendingOrDestroy(state))
         {
             return false;
         }
 
-        // Check overflow
         int count = GetAccessingCount(state);
         if (count >= MaxAccessingCount)
         {
             ThrowInvalidOperation("Max ACCESSING count (1023) exceeded.");
         }
 
-        int newState = state + 1; // Increment ACCESSING count
+        int newState = state + 1;
 
         if (Interlocked.CompareExchange(ref _state, newState, state) != state)
         {
             return false;
         }
 
-        // Record telemetry on success
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.AccessingAcquired, 0);
-        }
-
+        TyphonEvent.EmitConcurrencyResourceAccessing(true, (byte)GetAccessingCount(newState), 0);
         return true;
     }
 
-    /// <summary>
-    /// Enters ACCESSING mode, spinning if necessary.
-    /// Spins while MODIFY_PENDING or DESTROY is set.
-    /// </summary>
-    /// <param name="ctx">Wait context (deadline + cancellation). Pass <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired, false if deadline expired or cancellation requested.</returns>
-    public bool EnterAccessing(ref WaitContext ctx, IContentionTarget target = null)
+    /// <summary>Enters ACCESSING mode, spinning if necessary.</summary>
+    public bool EnterAccessing(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         bool isNullRef = Unsafe.IsNullRef(ref ctx);
         SpinWait spin = default;
         long waitStartTicks = 0;
@@ -167,11 +161,8 @@ public struct ResourceAccessControl
         {
             if (!isNullRef && ctx.ShouldStop)
             {
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(hadToWait ? LockOperation.TimedOut : LockOperation.Canceled,
-                        hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                }
+                TyphonEvent.EmitConcurrencyResourceAccessing(false, 0,
+                    hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0);
                 return false;
             }
 
@@ -183,13 +174,7 @@ public struct ResourceAccessControl
                 {
                     hadToWait = true;
                     waitStartTicks = Stopwatch.GetTimestamp();
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.AccessingWaitStart, 0);
-                    }
-
-                    // Set contention flag (sticky, atomic) - we had to wait
-                    Interlocked.Or(ref _state, ContentionFlag);
+                    SetContentionFlagAndEmit();
                 }
                 spin.SpinOnce();
                 continue;
@@ -205,16 +190,8 @@ public struct ResourceAccessControl
 
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
-                // Success - record telemetry
-                if (hadToWait && level >= TelemetryLevel.Light)
-                {
-                    target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-                }
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.AccessingAcquired,
-                        hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                }
+                var elapsedUs = hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0;
+                TyphonEvent.EmitConcurrencyResourceAccessing(true, (byte)GetAccessingCount(newState), elapsedUs);
                 return true;
             }
 
@@ -222,13 +199,9 @@ public struct ResourceAccessControl
         }
     }
 
-    /// <summary>
-    /// Exits ACCESSING mode. Must be called once per successful enter.
-    /// </summary>
-    /// <param name="target">Optional telemetry target (should match Enter call).</param>
-    public void ExitAccessing(IContentionTarget target = null)
+    /// <summary>Exits ACCESSING mode.</summary>
+    public void ExitAccessing()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         SpinWait spin = default;
 
         while (true)
@@ -240,15 +213,14 @@ public struct ResourceAccessControl
                 ThrowInvalidOperation("ExitAccessing called without matching EnterAccessing.");
             }
 
-            int newState = state - 1; // Decrement ACCESSING count
+            int newState = state - 1;
 
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
-                // Record telemetry
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.AccessingReleased, 0);
-                }
+                // Exit is modelled as an Accessing event with success=false to indicate "released, count went down".
+                // Operationally distinct: the consumer correlates by (slot, timestamp) order to pair acquires with releases.
+                // No separate "Released" kind to keep wire-kind count small; the new accessingCount payload byte = post-release count.
+                TyphonEvent.EmitConcurrencyResourceAccessing(false, (byte)GetAccessingCount(newState), 0);
                 return;
             }
 
@@ -257,35 +229,15 @@ public struct ResourceAccessControl
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // MODIFY Mode - Single holder, compatible with ACCESSING
+    // MODIFY Mode
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Attempts to enter MODIFY mode without blocking.
-    /// </summary>
-    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired immediately, false if ACCESSING holders exist,
-    /// another MODIFY is held, or DESTROY is set.</returns>
-    public bool TryEnterModify(IContentionTarget target = null)
+    /// <summary>Attempts to enter MODIFY mode without blocking.</summary>
+    public bool TryEnterModify()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-
         int state = _state;
 
-        // Cannot acquire if destroyed
-        if (HasDestroyFlag(state))
-        {
-            return false;
-        }
-
-        // Cannot acquire if another thread holds MODIFY
-        if (IsModifyHeld(state))
-        {
-            return false;
-        }
-
-        // Cannot acquire if there are ACCESSING holders
-        if (GetAccessingCount(state) > 0)
+        if (HasDestroyFlag(state) || IsModifyHeld(state) || GetAccessingCount(state) > 0)
         {
             return false;
         }
@@ -298,26 +250,13 @@ public struct ResourceAccessControl
             return false;
         }
 
-        // Record telemetry on success
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.ModifyAcquired, 0);
-        }
-
+        TyphonEvent.EmitConcurrencyResourceModify(true, (ushort)threadId, 0);
         return true;
     }
 
-    /// <summary>
-    /// Enters MODIFY mode.
-    /// Sets MODIFY_PENDING and spins until ACCESSING count reaches zero.
-    /// Spins while DESTROY is set or another MODIFY is held.
-    /// </summary>
-    /// <param name="ctx">Wait context (deadline + cancellation). Pass <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired, false if deadline expired or cancellation requested.</returns>
-    public bool EnterModify(ref WaitContext ctx, IContentionTarget target = null)
+    /// <summary>Enters MODIFY mode.</summary>
+    public bool EnterModify(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         bool isNullRef = Unsafe.IsNullRef(ref ctx);
         SpinWait spin = default;
         int threadId = GetCurrentThreadIdBits();
@@ -329,77 +268,48 @@ public struct ResourceAccessControl
         {
             if (!isNullRef && ctx.ShouldStop)
             {
-                // If we set MODIFY_PENDING, try to clear it before returning
                 if (weSetPending)
                 {
                     TryClearModifyPending();
                 }
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(hadToWait ? LockOperation.TimedOut : LockOperation.Canceled,
-                        hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                }
+                TyphonEvent.EmitConcurrencyResourceModify(false, (ushort)threadId, hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0);
                 return false;
             }
 
             int state = _state;
 
-            // Cannot proceed if DESTROY is set
             if (HasDestroyFlag(state))
             {
                 if (!hadToWait)
                 {
                     hadToWait = true;
                     waitStartTicks = Stopwatch.GetTimestamp();
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.ModifyWaitStart, 0);
-                    }
-
-                    // Set contention flag (sticky, atomic) - we had to wait
-                    Interlocked.Or(ref _state, ContentionFlag);
+                    SetContentionFlagAndEmit();
                 }
                 spin.SpinOnce();
                 continue;
             }
 
-            // Cannot proceed if another MODIFY is held
             if (IsModifyHeld(state))
             {
                 if (!hadToWait)
                 {
                     hadToWait = true;
                     waitStartTicks = Stopwatch.GetTimestamp();
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.ModifyWaitStart, 0);
-                    }
-
-                    // Set contention flag (sticky, atomic) - we had to wait
-                    Interlocked.Or(ref _state, ContentionFlag);
+                    SetContentionFlagAndEmit();
                 }
                 spin.SpinOnce();
                 continue;
             }
 
-            // If ACCESSING count is zero, try to acquire directly
             if (GetAccessingCount(state) == 0)
             {
-                // Clear MODIFY_PENDING (if set) and set ThreadId
                 int newState = (state & ~(ModifyPendingFlag | ThreadIdMask)) | (threadId << ThreadIdShift);
 
                 if (Interlocked.CompareExchange(ref _state, newState, state) == state)
                 {
-                    // Success - record telemetry
-                    if (hadToWait && level >= TelemetryLevel.Light)
-                    {
-                        target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-                    }
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.ModifyAcquired,
-                            hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                    }
+                    var elapsedUs = hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0;
+                    TyphonEvent.EmitConcurrencyResourceModify(true, (ushort)threadId, elapsedUs);
                     return true;
                 }
 
@@ -412,13 +322,7 @@ public struct ResourceAccessControl
             {
                 hadToWait = true;
                 waitStartTicks = Stopwatch.GetTimestamp();
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.ModifyWaitStart, 0);
-                }
-
-                // Set contention flag (sticky, atomic) - we had to wait
-                Interlocked.Or(ref _state, ContentionFlag);
+                SetContentionFlagAndEmit();
             }
 
             if (!HasModifyPending(state))
@@ -434,13 +338,9 @@ public struct ResourceAccessControl
         }
     }
 
-    /// <summary>
-    /// Exits MODIFY mode.
-    /// </summary>
-    /// <param name="target">Optional telemetry target (should match Enter call).</param>
-    public void ExitModify(IContentionTarget target = null)
+    /// <summary>Exits MODIFY mode.</summary>
+    public void ExitModify()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         SpinWait spin = default;
         int expectedThreadId = GetCurrentThreadIdBits();
 
@@ -453,15 +353,11 @@ public struct ResourceAccessControl
                 ThrowInvalidOperation("ExitModify called by thread that doesn't hold MODIFY.");
             }
 
-            int newState = state & ~ThreadIdMask; // Clear ThreadId
+            int newState = state & ~ThreadIdMask;
 
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
-                // Record telemetry
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.ModifyReleased, 0);
-                }
+                TyphonEvent.EmitConcurrencyResourceModify(false, (ushort)expectedThreadId, 0);
                 return;
             }
 
@@ -470,20 +366,12 @@ public struct ResourceAccessControl
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Promotion/Demotion - ACCESSING ↔ MODIFY
+    // Promotion/Demotion
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Attempts to promote from ACCESSING to MODIFY.
-    /// Caller must hold ACCESSING. On success, caller holds MODIFY instead.
-    /// Sets MODIFY_PENDING to block new ACCESSING, waits for count to drain to 1.
-    /// </summary>
-    /// <param name="ctx">Wait context (deadline + cancellation). Pass <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if promoted, false if deadline expired, cancellation requested, or DESTROY is set.</returns>
-    public bool TryPromoteToModify(ref WaitContext ctx, IContentionTarget target = null)
+    /// <summary>Attempts to promote from ACCESSING to MODIFY.</summary>
+    public bool TryPromoteToModify(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         bool isNullRef = Unsafe.IsNullRef(ref ctx);
         SpinWait spin = default;
         int threadId = GetCurrentThreadIdBits();
@@ -495,15 +383,13 @@ public struct ResourceAccessControl
         {
             if (!isNullRef && ctx.ShouldStop)
             {
-                // If we set MODIFY_PENDING, try to clear it before returning
                 if (weSetPending)
                 {
                     TryClearModifyPending();
                 }
-                if (level >= TelemetryLevel.Deep)
+                if (hadToWait)
                 {
-                    target?.LogLockOperation(hadToWait ? LockOperation.TimedOut : LockOperation.Canceled,
-                        hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
+                    TyphonEvent.EmitConcurrencyResourceModifyPromotion(ElapsedUsCapped(waitStartTicks));
                 }
                 return false;
             }
@@ -511,16 +397,13 @@ public struct ResourceAccessControl
             int state = _state;
             int count = GetAccessingCount(state);
 
-            // Must hold ACCESSING to promote
             if (count == 0)
             {
                 ThrowInvalidOperation("TryPromoteToModify called without holding ACCESSING.");
             }
 
-            // Cannot promote if DESTROY is set
             if (HasDestroyFlag(state))
             {
-                // Clear MODIFY_PENDING if we set it
                 if (weSetPending)
                 {
                     TryClearModifyPending();
@@ -528,10 +411,8 @@ public struct ResourceAccessControl
                 return false;
             }
 
-            // Cannot promote if another MODIFY is held
             if (IsModifyHeld(state))
             {
-                // Clear MODIFY_PENDING if we set it
                 if (weSetPending)
                 {
                     TryClearModifyPending();
@@ -539,24 +420,15 @@ public struct ResourceAccessControl
                 return false;
             }
 
-            // If we're the only ACCESSING holder, promote
             if (count == 1)
             {
-                // Atomic: ACCESSING -= 1, ThreadId = current, clear MODIFY_PENDING
-                int newState = (state - 1) & ~(ModifyPendingFlag | ThreadIdMask) | (threadId << ThreadIdShift);     // Decrement ACCESSING
+                int newState = (state - 1) & ~(ModifyPendingFlag | ThreadIdMask) | (threadId << ThreadIdShift);
 
                 if (Interlocked.CompareExchange(ref _state, newState, state) == state)
                 {
-                    // Success - record telemetry
-                    if (hadToWait && level >= TelemetryLevel.Light)
-                    {
-                        target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-                    }
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.PromoteToModifyAcquired,
-                            hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                    }
+                    var elapsedUs = hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0;
+                    // Successful promotion fires Modify acquire event (the destination state).
+                    TyphonEvent.EmitConcurrencyResourceModify(true, (ushort)threadId, elapsedUs);
                     return true;
                 }
 
@@ -564,18 +436,12 @@ public struct ResourceAccessControl
                 continue;
             }
 
-            // Other ACCESSING holders exist - set MODIFY_PENDING and wait
             if (!hadToWait)
             {
                 hadToWait = true;
                 waitStartTicks = Stopwatch.GetTimestamp();
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.PromoteToModifyStart, 0);
-                }
-
-                // Set contention flag (sticky, atomic) - we had to wait
-                Interlocked.Or(ref _state, ContentionFlag);
+                SetContentionFlagAndEmit();
+                TyphonEvent.EmitConcurrencyResourceModifyPromotion(0);
             }
 
             if (!HasModifyPending(state))
@@ -591,19 +457,16 @@ public struct ResourceAccessControl
         }
     }
 
-    /// <summary>
-    /// Attempts to clear the MODIFY_PENDING flag (best-effort).
-    /// Used when a promotion or modify fails to avoid deadlock.
-    /// </summary>
+    /// <summary>Attempts to clear the MODIFY_PENDING flag (best-effort).</summary>
     private void TryClearModifyPending()
     {
         SpinWait spin = default;
-        for (int i = 0; i < 10; i++) // Limited retries
+        for (int i = 0; i < 10; i++)
         {
             int state = _state;
             if (!HasModifyPending(state))
             {
-                return; // Already cleared
+                return;
             }
 
             int newState = state & ~ModifyPendingFlag;
@@ -615,14 +478,9 @@ public struct ResourceAccessControl
         }
     }
 
-    /// <summary>
-    /// Demotes from MODIFY back to ACCESSING.
-    /// Caller must hold MODIFY. On return, caller holds ACCESSING instead.
-    /// </summary>
-    /// <param name="target">Optional telemetry target (should match Enter call).</param>
-    public void DemoteFromModify(IContentionTarget target = null)
+    /// <summary>Demotes from MODIFY back to ACCESSING.</summary>
+    public void DemoteFromModify()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         SpinWait spin = default;
         int expectedThreadId = GetCurrentThreadIdBits();
 
@@ -635,16 +493,13 @@ public struct ResourceAccessControl
                 ThrowInvalidOperation("DemoteFromModify called by thread that doesn't hold MODIFY.");
             }
 
-            // Atomic: clear ThreadId, increment ACCESSING
             int newState = (state & ~ThreadIdMask) + 1;
 
             if (Interlocked.CompareExchange(ref _state, newState, state) == state)
             {
-                // Record telemetry
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.DemoteToAccessing, 0);
-                }
+                // Demote = ModifyExit + AccessingAcquire by same thread.
+                TyphonEvent.EmitConcurrencyResourceModify(false, (ushort)expectedThreadId, 0);
+                TyphonEvent.EmitConcurrencyResourceAccessing(true, (byte)GetAccessingCount(newState), 0);
                 return;
             }
 
@@ -653,24 +508,12 @@ public struct ResourceAccessControl
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // DESTROY Mode - Exclusive, terminal
+    // DESTROY Mode
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Enters DESTROY mode.
-    /// Sets DESTROY flag and spins until ACCESSING=0 and MODIFY not held.
-    /// This is a terminal operation - the primitive cannot be reused after success.
-    /// </summary>
-    /// <param name="ctx">Wait context (deadline + cancellation). Pass <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target. Receives callbacks on contention.</param>
-    /// <returns>True if acquired, false if deadline expired or cancellation requested.</returns>
-    /// <remarks>
-    /// <para><b>Warning</b>: If cancelled after setting DESTROY, the flag remains set and the resource
-    /// is effectively dead. This is documented behavior - destruction was requested but couldn't complete.</para>
-    /// </remarks>
-    public bool EnterDestroy(ref WaitContext ctx, IContentionTarget target = null)
+    /// <summary>Enters DESTROY mode (terminal).</summary>
+    public bool EnterDestroy(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
         bool isNullRef = Unsafe.IsNullRef(ref ctx);
         SpinWait spin = default;
         long waitStartTicks = 0;
@@ -682,11 +525,7 @@ public struct ResourceAccessControl
         {
             if (!isNullRef && ctx.ShouldStop)
             {
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(hadToWait ? LockOperation.TimedOut : LockOperation.Canceled,
-                        hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                }
+                TyphonEvent.EmitConcurrencyResourceDestroy(false, hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0);
                 return false;
             }
 
@@ -694,21 +533,14 @@ public struct ResourceAccessControl
 
             if (HasDestroyFlag(state))
             {
-                destroyFlagSet = true;
-                break; // Already set (shouldn't happen in normal use but handle gracefully)
+                break;
             }
 
             if (!hadToWait)
             {
                 hadToWait = true;
                 waitStartTicks = Stopwatch.GetTimestamp();
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.DestroyWaitStart, 0);
-                }
-
-                // Set contention flag (sticky, atomic) - we had to wait
-                Interlocked.Or(ref _state, ContentionFlag);
+                SetContentionFlagAndEmit();
             }
 
             int newState = state | DestroyFlag;
@@ -730,14 +562,7 @@ public struct ResourceAccessControl
         {
             if (!isNullRef && ctx.ShouldStop)
             {
-                // Note: DESTROY flag remains set - primitive is now in a broken state
-                // This is acceptable as destruction was requested but couldn't complete
-                if (level >= TelemetryLevel.Deep)
-                {
-                    // Distinguish timeout vs cancellation for accurate telemetry
-                    var op = ctx.Token.IsCancellationRequested ? LockOperation.Canceled : LockOperation.TimedOut;
-                    target?.LogLockOperation(op, ComputeElapsedUs(waitStartTicks));
-                }
+                TyphonEvent.EmitConcurrencyResourceDestroy(false, ElapsedUsCapped(waitStartTicks));
                 return false;
             }
 
@@ -745,15 +570,8 @@ public struct ResourceAccessControl
 
             if (GetAccessingCount(state) == 0 && !IsModifyHeld(state))
             {
-                // Success - DESTROY complete, primitive is terminal
-                if (hadToWait && level >= TelemetryLevel.Light)
-                {
-                    target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-                }
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.DestroyAcquired, ComputeElapsedUs(waitStartTicks));
-                }
+                var elapsedUs = ElapsedUsCapped(waitStartTicks);
+                TyphonEvent.EmitConcurrencyResourceDestroy(true, elapsedUs);
                 return true;
             }
 
@@ -767,41 +585,29 @@ public struct ResourceAccessControl
     // Scoped Guards
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Enters ACCESSING and returns a disposable guard that exits on dispose.
-    /// </summary>
-    /// <param name="ctx">Wait context (deadline + cancellation). Pass <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target.</param>
-    /// <returns>A guard that calls ExitAccessing on dispose.</returns>
-    /// <exception cref="TimeoutException">If deadline expires before acquisition.</exception>
-    public unsafe AccessingGuard EnterAccessingScoped(ref WaitContext ctx, IContentionTarget target = null)
+    /// <summary>Enters ACCESSING and returns a disposable guard.</summary>
+    public unsafe AccessingGuard EnterAccessingScoped(ref WaitContext ctx)
     {
-        if (!EnterAccessing(ref ctx, target))
+        if (!EnterAccessing(ref ctx))
         {
             ThrowTimeout();
         }
         fixed (int* ptr = &_state)
         {
-            return new AccessingGuard(ptr, target);
+            return new AccessingGuard(ptr);
         }
     }
 
-    /// <summary>
-    /// Enters MODIFY and returns a disposable guard that exits on dispose.
-    /// </summary>
-    /// <param name="ctx">Wait context (deadline + cancellation). Pass <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target.</param>
-    /// <returns>A guard that calls ExitModify on dispose.</returns>
-    /// <exception cref="TimeoutException">If deadline expires before acquisition.</exception>
-    public unsafe ModifyGuard EnterModifyScoped(ref WaitContext ctx, IContentionTarget target = null)
+    /// <summary>Enters MODIFY and returns a disposable guard.</summary>
+    public unsafe ModifyGuard EnterModifyScoped(ref WaitContext ctx)
     {
-        if (!EnterModify(ref ctx, target))
+        if (!EnterModify(ref ctx))
         {
             ThrowTimeout();
         }
         fixed (int* ptr = &_state)
         {
-            return new ModifyGuard(ptr, target);
+            return new ModifyGuard(ptr);
         }
     }
 
@@ -809,17 +615,13 @@ public struct ResourceAccessControl
     // Lifecycle
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Resets the primitive to initial state.
-    /// WARNING: Only call when no threads are using this instance.
-    /// </summary>
+    /// <summary>Resets the primitive to initial state.</summary>
     public void Reset() => _state = 0;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Diagnostic Properties
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>True if MODIFY is held by the current thread.</summary>
     public bool IsModifyHeldByCurrentThread
     {
         get
@@ -829,25 +631,12 @@ public struct ResourceAccessControl
         }
     }
 
-    /// <summary>Thread ID holding MODIFY (truncated to 10 bits), or 0 if not held.</summary>
     public int ModifyHolderThreadId => GetThreadId(_state);
-
-    /// <summary>Current ACCESSING count.</summary>
     public int AccessingCount => GetAccessingCount(_state);
-
-    /// <summary>True if MODIFY_PENDING is set (a thread is waiting for MODIFY).</summary>
     public bool IsModifyPending => HasModifyPending(_state);
-
-    /// <summary>True if DESTROY has been acquired (terminal state).</summary>
     public bool IsDestroyed => HasDestroyFlag(_state);
-
-    /// <summary>
-    /// Returns true if this lock has ever experienced contention (a thread had to wait).
-    /// This flag is sticky - once set, it remains set until <see cref="Reset"/> is called.
-    /// </summary>
     public bool WasContended => (_state & ContentionFlag) != 0;
 
-    /// <summary>Gets a complete diagnostic state snapshot.</summary>
     public ResourceAccessControlState GetDiagnosticState()
     {
         int state = _state;
@@ -889,22 +678,16 @@ public struct ResourceAccessControl
     // Scoped Guard Structs
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// A disposable guard that holds ACCESSING mode and releases it on dispose.
-    /// </summary>
     [PublicAPI]
     public readonly unsafe ref struct AccessingGuard
     {
         private readonly int* _statePtr;
-        private readonly IContentionTarget _target;
 
-        internal AccessingGuard(int* state, IContentionTarget target)
+        internal AccessingGuard(int* state)
         {
             _statePtr = state;
-            _target = target;
         }
 
-        /// <summary>Releases the ACCESSING lock.</summary>
         public void Dispose()
         {
             if (_statePtr == null)
@@ -912,7 +695,6 @@ public struct ResourceAccessControl
                 return;
             }
 
-            var level = _target?.TelemetryLevel ?? TelemetryLevel.None;
             SpinWait spin = default;
 
             while (true)
@@ -928,10 +710,7 @@ public struct ResourceAccessControl
 
                 if (Interlocked.CompareExchange(ref *_statePtr, newState, state) == state)
                 {
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        _target?.LogLockOperation(LockOperation.AccessingReleased, 0);
-                    }
+                    TyphonEvent.EmitConcurrencyResourceAccessing(false, (byte)GetAccessingCount(newState), 0);
                     return;
                 }
 
@@ -940,22 +719,16 @@ public struct ResourceAccessControl
         }
     }
 
-    /// <summary>
-    /// A disposable guard that holds MODIFY mode and releases it on dispose.
-    /// </summary>
     [PublicAPI]
     public readonly unsafe ref struct ModifyGuard
     {
         private readonly int* _statePtr;
-        private readonly IContentionTarget _target;
 
-        internal ModifyGuard(int* state, IContentionTarget target)
+        internal ModifyGuard(int* state)
         {
             _statePtr = state;
-            _target = target;
         }
 
-        /// <summary>Releases the MODIFY lock.</summary>
         public void Dispose()
         {
             if (_statePtr == null)
@@ -963,7 +736,6 @@ public struct ResourceAccessControl
                 return;
             }
 
-            var level = _target?.TelemetryLevel ?? TelemetryLevel.None;
             SpinWait spin = default;
             int expectedThreadId = GetCurrentThreadIdBits();
 
@@ -980,10 +752,7 @@ public struct ResourceAccessControl
 
                 if (Interlocked.CompareExchange(ref *_statePtr, newState, state) == state)
                 {
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        _target?.LogLockOperation(LockOperation.ModifyReleased, 0);
-                    }
+                    TyphonEvent.EmitConcurrencyResourceModify(false, (ushort)expectedThreadId, 0);
                     return;
                 }
 
@@ -993,28 +762,16 @@ public struct ResourceAccessControl
     }
 }
 
-/// <summary>
-/// Diagnostic snapshot of a <see cref="ResourceAccessControl"/>'s state.
-/// </summary>
+/// <summary>Diagnostic snapshot of a <see cref="ResourceAccessControl"/>'s state.</summary>
 [PublicAPI]
 public readonly struct ResourceAccessControlState
 {
-    /// <summary>Current ACCESSING count.</summary>
     public int AccessingCount { get; init; }
-
-    /// <summary>Thread ID holding MODIFY (truncated to 10 bits), or 0 if not held.</summary>
     public int ModifyHolderThreadId { get; init; }
-
-    /// <summary>True if MODIFY_PENDING is set.</summary>
     public bool ModifyPending { get; init; }
-
-    /// <summary>True if DESTROY has been acquired.</summary>
     public bool Destroyed { get; init; }
-
-    /// <summary>Raw 32-bit state value.</summary>
     public int RawState { get; init; }
 
-    /// <inheritdoc />
     public override string ToString() =>
         $"Accessing={AccessingCount}, ModifyHolder={ModifyHolderThreadId}, " +
         $"ModifyPending={ModifyPending}, Destroyed={Destroyed}";

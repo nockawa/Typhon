@@ -243,7 +243,7 @@ public class ChunkBasedSegment<TStore> : LogicalSegment<TStore> where TStore : s
             var effectiveChangeSet = changeSet ?? _store.CreateChangeSet();
 
             // Grow the underlying logical segment (thread-safe, will allocate new pages)
-            base.Grow(newLength, clearNewPages: true, effectiveChangeSet);
+            base.Grow(newLength, true, effectiveChangeSet);
 
             // Clear the page metadata (bitmap) for newly allocated pages and protect against checkpoint race
             {
@@ -278,8 +278,12 @@ public class ChunkBasedSegment<TStore> : LogicalSegment<TStore> where TStore : s
             }
             newNextPage[newLength - 1] = EMPTY_PAGE;
 
+            var oldCapacity = _capacity;
             _nextPage = newNextPage;
             _capacity = ComputeCapacity(newLength);
+
+            // Phase 5: Storage:ChunkSegment:Grow event.
+            Profiler.TyphonEvent.EmitStorageChunkSegmentGrow(Stride, oldCapacity, _capacity);
 
             // Splice new pages at tail of existing list
             while (true)

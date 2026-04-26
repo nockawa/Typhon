@@ -49,7 +49,7 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
         // Match <see cref="FileExporter"/>'s capacity — 64 gives the socket-send path ~16 MB of slack, enough to absorb a single// gcChurn-class burst
         // without drop-newest firing. Previously 4, which was too tight for any workload with multi-tick-spanning// I/O pressure. See FileExporter ctor for
         // why not 256.
-        Queue = new ExporterQueue(boundedCapacity: 64);
+        Queue = new ExporterQueue(64);
     }
 
     /// <inheritdoc />
@@ -284,7 +284,7 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
         };
         ms.Write(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(in header, 1)));
 
-        using var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        using var bw = new BinaryWriter(ms, Encoding.UTF8, true);
 
         // System definitions
         bw.Write((ushort)_metadata.Systems.Length);

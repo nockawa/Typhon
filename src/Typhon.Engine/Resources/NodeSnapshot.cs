@@ -56,11 +56,6 @@ public sealed class NodeSnapshot
     public DiskIOMetrics? DiskIO { get; init; }
 
     /// <summary>
-    /// Lock contention metrics, if declared by this node.
-    /// </summary>
-    public ContentionMetrics? Contention { get; init; }
-
-    /// <summary>
     /// Named throughput counters, if declared by this node.
     /// Empty array if no throughput metrics.
     /// </summary>

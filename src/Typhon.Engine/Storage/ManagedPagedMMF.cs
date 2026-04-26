@@ -89,7 +89,7 @@ public class ManagedPagedMMFOptions : PagedMMFOptions
 /// </para>
 /// </remarks>
 [PublicAPI]
-public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarget, IDebugPropertiesProvider
+public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IDebugPropertiesProvider
 {
     #region Constants
 
@@ -124,11 +124,6 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     // Synchronization for occupancy map operations (replaces lock(_occupancyMap))
     private AccessControl _occupancyMapAccess;
 
-    // Contention tracking
-    private long _contentionWaitCount;
-    private long _contentionTotalWaitUs;
-    private long _contentionMaxWaitUs;
-
     // Throughput counters (supplement inherited _metrics)
     private long _evictionCount;
 
@@ -151,7 +146,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     public void AllocatePages(ref Span<int> pageIds, int startFrom = 0, ChangeSet changeSet = null)
     {
         var wc = WaitContext.FromTimeout(TimeoutOptions.Current.PageCacheLockTimeout);
-        if (!_occupancyMapAccess.EnterExclusiveAccess(ref wc, target: this))
+        if (!_occupancyMapAccess.EnterExclusiveAccess(ref wc))
         {
             ThrowHelper.ThrowLockTimeout("PageCache/AllocatePages", TimeoutOptions.Current.PageCacheLockTimeout);
         }
@@ -201,8 +196,11 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
         pages[length - 1] = _occupancyNextReservedPageIndex;
 
         _occupancySegment.CreateOrGrow(PageBlockType.OccupancyMap, pages, length - 1, ref _occupancyNextReservedMapPageIndex, true, changeSet);
+        var oldCap = _occupancyMap.Capacity;
         _occupancyMap.Grow();
-        
+        // Phase 5: Storage:OccupancyMap:Grow event.
+        Profiler.TyphonEvent.EmitStorageOccupancyMapGrow(oldCap, _occupancyMap.Capacity);
+
         // If CreateOrGrow uses the reserved page for map extension, the value after the call is 0, so we need to allocate a new one
         if (_occupancyNextReservedMapPageIndex == 0)
         {
@@ -212,7 +210,7 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
 
     public bool FreePages(ReadOnlySpan<int> pages, int startFrom = 0, ChangeSet changeSet = null)
     {
-        _occupancyMapAccess.EnterExclusiveAccess(ref WaitContext.Null, target: this);
+        _occupancyMapAccess.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {
             _occupancyMap.Free(pages, startFrom, changeSet);
@@ -680,9 +678,6 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             (long)metrics.ReadFromDiskCount * PageSize,
             (long)metrics.PageWrittenToDiskCount * PageSize);
 
-        // Contention
-        writer.WriteContention(_contentionWaitCount, _contentionTotalWaitUs, _contentionMaxWaitUs, 0);
-
         // Throughput
         writer.WriteThroughput("CacheHits", metrics.MemPageCacheHit);
         writer.WriteThroughput("CacheMisses", metrics.MemPageCacheMiss);
@@ -690,34 +685,9 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
     }
 
     /// <inheritdoc />
-    public void ResetPeaks() => _contentionMaxWaitUs = 0;
-
-    #endregion
-
-    #region IContentionTarget Implementation
-
-    /// <inheritdoc />
-    public TelemetryLevel TelemetryLevel => TelemetryLevel.Light;
-
-    /// <inheritdoc />
-    public IResource OwningResource => this;
-
-    /// <inheritdoc />
-    public void RecordContention(long waitUs)
+    /// <remarks>No high-water-mark fields on this resource — body intentionally empty.</remarks>
+    public void ResetPeaks()
     {
-        Interlocked.Increment(ref _contentionWaitCount);
-        Interlocked.Add(ref _contentionTotalWaitUs, waitUs);
-
-        if (waitUs > _contentionMaxWaitUs)
-        {
-            _contentionMaxWaitUs = waitUs;
-        }
-    }
-
-    /// <inheritdoc />
-    public void LogLockOperation(LockOperation operation, long durationUs)
-    {
-        // Deep telemetry not implemented for this resource - Light mode only
     }
 
     #endregion
@@ -742,9 +712,6 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IContentionTarge
             ["ClockSweep.MaxCounter"]           = extraInfo.MaxClockSweepCounter,
             ["Segments.Count"]                  = _segments?.Count ?? 0,
             ["OccupancyMap.Capacity"]           = _occupancyMap?.Capacity ?? 0,
-            ["Contention.WaitCount"]            = _contentionWaitCount,
-            ["Contention.TotalWaitUs"]          = _contentionTotalWaitUs,
-            ["Contention.MaxWaitUs"]            = _contentionMaxWaitUs,
         };
     }
 

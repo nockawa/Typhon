@@ -416,7 +416,7 @@ internal struct KWayMergeState : IDisposable
 
             if (_ownsStreamsArray)
             {
-                ArrayPool<ArchetypeSortedStream>.Shared.Return(_streams, clearArray: true);
+                ArrayPool<ArchetypeSortedStream>.Shared.Return(_streams, true);
             }
 
             _streams = null;

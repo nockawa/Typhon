@@ -112,7 +112,7 @@ internal sealed class WalSegmentManager : IDisposable
         _nextSegmentId = lastSegmentId + 1;
 
         // Create and open the first active segment
-        ActiveSegment = CreateSegment(_nextSegmentId, firstLSN, prevSegmentLsn: 0);
+        ActiveSegment = CreateSegment(_nextSegmentId, firstLSN, 0);
         _nextSegmentId++;
 
         // Pre-allocate additional segments
@@ -284,7 +284,7 @@ internal sealed class WalSegmentManager : IDisposable
     {
         // Create empty file and set its size, but don't write a header yet
         // (header is written during rotation when we know the firstLSN)
-        using var handle = _fileIO.OpenSegment(path, withFUA: false);
+        using var handle = _fileIO.OpenSegment(path, false);
         _fileIO.PreAllocate(handle, _segmentSize);
     }
 

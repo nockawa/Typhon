@@ -35,7 +35,7 @@ internal static unsafe class SpatialBackPointerHelper
     internal static void Write<TStore>(ref ChunkAccessor<TStore> accessor, int componentChunkId, int leafChunkId, short slotIndex, byte treeSelector)
         where TStore : struct, IPageStore
     {
-        byte* ptr = accessor.GetChunkAddress(componentChunkId, dirty: true);
+        byte* ptr = accessor.GetChunkAddress(componentChunkId, true);
         var bp = (SpatialBackPointer*)ptr;
         bp->LeafChunkId = leafChunkId;
         bp->SlotIndex = slotIndex;
@@ -46,7 +46,7 @@ internal static unsafe class SpatialBackPointerHelper
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void Clear<TStore>(ref ChunkAccessor<TStore> accessor, int componentChunkId) where TStore : struct, IPageStore
     {
-        byte* ptr = accessor.GetChunkAddress(componentChunkId, dirty: true);
+        byte* ptr = accessor.GetChunkAddress(componentChunkId, true);
         *(long*)ptr = 0;
     }
 }

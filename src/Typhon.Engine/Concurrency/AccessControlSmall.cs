@@ -2,11 +2,11 @@
 
 using JetBrains.Annotations;
 using System;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -61,16 +61,6 @@ public struct AccessControlSmall
     // Helper Methods
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Computes elapsed time in microseconds from a Stopwatch start tick.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long ComputeElapsedUs(long startTicks)
-    {
-        var elapsed = Stopwatch.GetTimestamp() - startTicks;
-        return (elapsed * 1_000_000) / Stopwatch.Frequency;
-    }
-
     [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowInvalidOperationException(string msg) => throw new InvalidOperationException(msg);
@@ -81,9 +71,7 @@ public struct AccessControlSmall
 
     private ref struct AtomicChange
     {
-        /// <summary>
-        /// Constructor for blocking operations that may need to wait (Enter, Promote).
-        /// </summary>
+        /// <summary>Constructor for blocking operations that may need to wait (Enter, Promote).</summary>
         public AtomicChange(ref int source, ref WaitContext ctx)
         {
             _source = ref source;
@@ -93,9 +81,7 @@ public struct AccessControlSmall
             Fetch();
         }
 
-        /// <summary>
-        /// Constructor for non-blocking operations (Exit, ForceCommit) that don't need WaitContext.
-        /// </summary>
+        /// <summary>Constructor for non-blocking operations (Exit, ForceCommit) that don't need WaitContext.</summary>
         public AtomicChange(ref int source)
         {
             _source = ref source;
@@ -113,10 +99,6 @@ public struct AccessControlSmall
         private readonly ref WaitContext _ctx;
         private readonly bool _isNullRef;
 
-        /// <summary>
-        /// True if the wait should stop: deadline expired OR cancellation requested.
-        /// Returns false (continue waiting) when NullRef is passed (infinite wait).
-        /// </summary>
         public bool ShouldStop
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -148,7 +130,6 @@ public struct AccessControlSmall
             }
 
             _spinWait.SpinOnce();
-
             Fetch();
             return true;
         }
@@ -179,15 +160,11 @@ public struct AccessControlSmall
     /// Enters shared (reader) access. Multiple threads can hold shared access simultaneously.
     /// </summary>
     /// <param name="ctx">Reference to WaitContext for timeout/cancellation. Use <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
     /// <returns>True if access was acquired; false if timed out or cancelled.</returns>
-    public bool EnterSharedAccess(ref WaitContext ctx, IContentionTarget target = null)
+    public bool EnterSharedAccess(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-        long waitStartTicks = 0;
-        bool hadToWait = false;
-
         var ac = new AtomicChange(ref _data, ref ctx);
+        bool hadToWait = false;
 
         while (true)
         {
@@ -197,23 +174,14 @@ public struct AccessControlSmall
                 if (!hadToWait)
                 {
                     hadToWait = true;
-                    waitStartTicks = Stopwatch.GetTimestamp();
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(LockOperation.SharedWaitStart, 0);
-                    }
 
                     // Set contention flag (sticky, atomic) - we had to wait
                     Interlocked.Or(ref _data, ContentionFlagMask);
+                    TyphonEvent.EmitConcurrencyAccessControlSmallContention();
                 }
 
                 if (!ac.WaitFor(d => (d >> ThreadIdShift) == 0))
                 {
-                    if (level >= TelemetryLevel.Deep)
-                    {
-                        target?.LogLockOperation(hadToWait ? LockOperation.TimedOut : LockOperation.Canceled,
-                            hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                    }
                     return false;
                 }
             }
@@ -226,16 +194,7 @@ public struct AccessControlSmall
             ac.NewValue = ac.Initial + 1;
             if (ac.Commit())
             {
-                // Success - record telemetry
-                if (hadToWait && level >= TelemetryLevel.Light)
-                {
-                    target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-                }
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.SharedAcquired,
-                        hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                }
+                TyphonEvent.EmitConcurrencyAccessControlSmallSharedAcquire((ushort)Environment.CurrentManagedThreadId);
                 return true;
             }
 
@@ -244,14 +203,9 @@ public struct AccessControlSmall
         }
     }
 
-    /// <summary>
-    /// Exits shared (reader) access.
-    /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    public void ExitSharedAccess(IContentionTarget target = null)
+    /// <summary>Exits shared (reader) access.</summary>
+    public void ExitSharedAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-
         var ac = new AtomicChange(ref _data);
         ac.ForceCommit(d =>
         {
@@ -263,27 +217,18 @@ public struct AccessControlSmall
             return d - 1;
         });
 
-        // Record telemetry
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.SharedReleased, 0);
-        }
+        TyphonEvent.EmitConcurrencyAccessControlSmallSharedRelease((ushort)Environment.CurrentManagedThreadId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Exclusive Access
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Enters exclusive (writer) access. Only one thread can hold exclusive access.
-    /// </summary>
-    /// <param name="ctx">Reference to WaitContext for timeout/cancellation. Use <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
+    /// <summary>Enters exclusive (writer) access. Only one thread can hold exclusive access.</summary>
+    /// <param name="ctx">Reference to WaitContext for timeout/cancellation.</param>
     /// <returns>True if access was acquired; false if timed out or cancelled.</returns>
-    public bool EnterExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null)
+    public bool EnterExclusiveAccess(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-
         var ct = Environment.CurrentManagedThreadId << ThreadIdShift;
         var ac = new AtomicChange(ref _data, ref ctx);
 
@@ -299,63 +244,36 @@ public struct AccessControlSmall
             ac.NewValue = ct | (ac.Initial & ContentionFlagMask);  // Preserve contention flag
             if (ac.Commit())
             {
-                // Success without waiting - record telemetry
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.ExclusiveAcquired, 0);
-                }
+                TyphonEvent.EmitConcurrencyAccessControlSmallExclusiveAcquire((ushort)Environment.CurrentManagedThreadId);
                 return true;
             }
         }
 
-        // Slow path - need to wait (hadToWait is always true from here on)
-        var waitStartTicks = Stopwatch.GetTimestamp();
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.ExclusiveWaitStart, 0);
-        }
-
-        // Set contention flag (sticky, atomic) - we had to wait
+        // Slow path - need to wait
         Interlocked.Or(ref _data, ContentionFlagMask);
+        TyphonEvent.EmitConcurrencyAccessControlSmallContention();
 
         while (true)
         {
             // Wait for idle state (ignoring contention flag)
             if (!ac.WaitFor(d => (d & ~ContentionFlagMask) == 0))
             {
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                }
                 return false;
             }
 
             ac.NewValue = ct | (ac.Initial & ContentionFlagMask);  // Preserve contention flag
             if (ac.Commit())
             {
-                // Success - record telemetry
-                if (level >= TelemetryLevel.Light)
-                {
-                    target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-                }
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.ExclusiveAcquired, ComputeElapsedUs(waitStartTicks));
-                }
+                TyphonEvent.EmitConcurrencyAccessControlSmallExclusiveAcquire((ushort)Environment.CurrentManagedThreadId);
                 return true;
             }
         }
     }
 
-    /// <summary>
-    /// Tries to enter exclusive (writer) access without waiting.
-    /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
+    /// <summary>Tries to enter exclusive (writer) access without waiting.</summary>
     /// <returns>True if access was acquired; false if lock is not available.</returns>
-    public bool TryEnterExclusiveAccess(IContentionTarget target = null)
+    public bool TryEnterExclusiveAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-
         var ct = Environment.CurrentManagedThreadId << ThreadIdShift;
         var ac = new AtomicChange(ref _data);
 
@@ -371,23 +289,13 @@ public struct AccessControlSmall
             return false;
         }
 
-        // Record telemetry
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.ExclusiveAcquired, 0);
-        }
-
+        TyphonEvent.EmitConcurrencyAccessControlSmallExclusiveAcquire((ushort)Environment.CurrentManagedThreadId);
         return true;
     }
 
-    /// <summary>
-    /// Exits exclusive (writer) access.
-    /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    public void ExitExclusiveAccess(IContentionTarget target = null)
+    /// <summary>Exits exclusive (writer) access.</summary>
+    public void ExitExclusiveAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-
         var ac = new AtomicChange(ref _data);
         var expectedThread = Environment.CurrentManagedThreadId << ThreadIdShift;
         ac.ForceCommit(d =>
@@ -399,11 +307,7 @@ public struct AccessControlSmall
             return d & ContentionFlagMask;  // Preserve only contention flag
         });
 
-        // Record telemetry
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.ExclusiveReleased, 0);
-        }
+        TyphonEvent.EmitConcurrencyAccessControlSmallExclusiveRelease((ushort)Environment.CurrentManagedThreadId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -411,16 +315,12 @@ public struct AccessControlSmall
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Tries to promote from shared to exclusive access.
-    /// Caller must already hold shared access.
+    /// Tries to promote from shared to exclusive access. Caller must already hold shared access.
     /// </summary>
-    /// <param name="ctx">Reference to WaitContext for timeout/cancellation. Use <c>ref WaitContext.Null</c> for infinite wait.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
+    /// <param name="ctx">Reference to WaitContext for timeout/cancellation.</param>
     /// <returns>True if promotion succeeded; false if timed out, cancelled, or other shared holders exist.</returns>
-    public bool TryPromoteToExclusiveAccess(ref WaitContext ctx, IContentionTarget target = null)
+    public bool TryPromoteToExclusiveAccess(ref WaitContext ctx)
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-        long waitStartTicks = 0;
         bool hadToWait = false;
 
         var ct = Environment.CurrentManagedThreadId << ThreadIdShift;
@@ -440,62 +340,36 @@ public struct AccessControlSmall
             if (counter != 1)
             {
                 // Other shared holders exist - cannot promote
-                if (hadToWait && level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                }
                 return false;
             }
 
             ac.NewValue = ct | (ac.Initial & ContentionFlagMask);  // Preserve contention flag
             if (ac.Commit())
             {
-                // Success - record telemetry
-                if (hadToWait && level >= TelemetryLevel.Light)
-                {
-                    target?.RecordContention(ComputeElapsedUs(waitStartTicks));
-                }
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.PromoteToExclusiveAcquired,
-                        hadToWait ? ComputeElapsedUs(waitStartTicks) : 0);
-                }
+                // Promotion success on AccessControlSmall is modelled as ExclusiveAcquire (no separate Promotion kind).
+                TyphonEvent.EmitConcurrencyAccessControlSmallExclusiveAcquire((ushort)Environment.CurrentManagedThreadId);
                 return true;
             }
 
             if (!hadToWait)
             {
                 hadToWait = true;
-                waitStartTicks = Stopwatch.GetTimestamp();
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.PromoteToExclusiveStart, 0);
-                }
 
                 // Set contention flag (sticky, atomic) - we had to wait
                 Interlocked.Or(ref _data, ContentionFlagMask);
+                TyphonEvent.EmitConcurrencyAccessControlSmallContention();
             }
 
             if (!ac.Wait())
             {
-                if (level >= TelemetryLevel.Deep)
-                {
-                    target?.LogLockOperation(LockOperation.TimedOut, ComputeElapsedUs(waitStartTicks));
-                }
                 return false;
             }
         }
     }
 
-    /// <summary>
-    /// Demotes from exclusive to shared access.
-    /// Caller must hold exclusive access.
-    /// </summary>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    public void DemoteFromExclusiveAccess(IContentionTarget target = null)
+    /// <summary>Demotes from exclusive to shared access. Caller must hold exclusive access.</summary>
+    public void DemoteFromExclusiveAccess()
     {
-        var level = target?.TelemetryLevel ?? TelemetryLevel.None;
-
         var ac = new AtomicChange(ref _data);
         var expectedThread = Environment.CurrentManagedThreadId << ThreadIdShift;
 
@@ -509,41 +383,30 @@ public struct AccessControlSmall
             return 1;
         });
 
-        // Record telemetry
-        if (level >= TelemetryLevel.Deep)
-        {
-            target?.LogLockOperation(LockOperation.DemoteToShared, 0);
-        }
+        // Demote = ExclusiveRelease + SharedAcquire by same thread (atomic on the lock, two events on the wire).
+        var threadId = (ushort)Environment.CurrentManagedThreadId;
+        TyphonEvent.EmitConcurrencyAccessControlSmallExclusiveRelease(threadId);
+        TyphonEvent.EmitConcurrencyAccessControlSmallSharedAcquire(threadId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Convenience Methods
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Enters either shared or exclusive access based on the parameter.
-    /// </summary>
-    /// <param name="exclusive">True for exclusive, false for shared.</param>
-    /// <param name="ctx">Reference to WaitContext for timeout/cancellation.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    /// <returns>True if access was acquired; false if timed out or cancelled.</returns>
-    public bool Enter(bool exclusive, ref WaitContext ctx, IContentionTarget target = null)
-        => exclusive ? EnterExclusiveAccess(ref ctx, target) : EnterSharedAccess(ref ctx, target);
+    /// <summary>Enters either shared or exclusive access based on the parameter.</summary>
+    public bool Enter(bool exclusive, ref WaitContext ctx)
+        => exclusive ? EnterExclusiveAccess(ref ctx) : EnterSharedAccess(ref ctx);
 
-    /// <summary>
-    /// Exits either shared or exclusive access based on the parameter.
-    /// </summary>
-    /// <param name="exclusive">True for exclusive, false for shared.</param>
-    /// <param name="target">Optional telemetry target for contention tracking.</param>
-    public void Exit(bool exclusive, IContentionTarget target = null)
+    /// <summary>Exits either shared or exclusive access based on the parameter.</summary>
+    public void Exit(bool exclusive)
     {
         if (exclusive)
         {
-            ExitExclusiveAccess(target);
+            ExitExclusiveAccess();
         }
         else
         {
-            ExitSharedAccess(target);
+            ExitSharedAccess();
         }
     }
 

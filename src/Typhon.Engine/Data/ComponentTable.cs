@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Threading;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -169,7 +168,7 @@ public enum ComponentTableFlags
 /// </para>
 /// </remarks>
 [PublicAPI]
-public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTarget, IDebugPropertiesProvider
+public unsafe class ComponentTable : ResourceNode, IMetricSource, IDebugPropertiesProvider
 {
     private const int ComponentSegmentStartingSize = 4;
     private const int MainIndexSegmentStartingSize = 4;
@@ -308,40 +307,6 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
     /// </summary>
     internal int MutationsSinceRebuild;
 
-    // Contention tracking (aggregated from all latches)
-    private long _contentionWaitCount;
-    private long _contentionTotalWaitUs;
-    private long _contentionMaxWaitUs;
-    
-    #region IContentionTarget Implementation
-
-    /// <inheritdoc />
-    public TelemetryLevel TelemetryLevel => TelemetryLevel.Light;
-
-    /// <inheritdoc />
-    public IResource OwningResource => this;
-
-    /// <inheritdoc />
-    public void RecordContention(long waitUs)
-    {
-        Interlocked.Increment(ref _contentionWaitCount);
-        Interlocked.Add(ref _contentionTotalWaitUs, waitUs);
-
-        // Plain check-and-write for high-water mark (occasional lost max is acceptable)
-        if (waitUs > _contentionMaxWaitUs)
-        {
-            _contentionMaxWaitUs = waitUs;
-        }
-    }
-
-    /// <inheritdoc />
-    public void LogLockOperation(LockOperation operation, long durationUs)
-    {
-        // Light mode only - no operation logging
-    }
-
-    #endregion
-
     #region IMetricSource Implementation
 
     /// <inheritdoc />
@@ -369,17 +334,13 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
             (TailIndexSegment?.ChunkCapacity ?? 0);
 
         writer.WriteCapacity(totalAllocatedChunks, totalCapacityChunks);
-
-        // Report contention from latches
-        writer.WriteContention(
-            _contentionWaitCount,
-            _contentionTotalWaitUs,
-            _contentionMaxWaitUs,
-            0);  // No timeout tracking yet
     }
 
     /// <inheritdoc />
-    public void ResetPeaks() => _contentionMaxWaitUs = 0;
+    /// <remarks>No high-water-mark fields on this resource — body intentionally empty.</remarks>
+    public void ResetPeaks()
+    {
+    }
 
     #endregion
 
@@ -392,11 +353,6 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IContentionTar
         {
             ["StorageMode"] = StorageMode,
             ["ComponentSegment.ChunkSize"] = ComponentTotalSize,
-
-            // Contention details
-            ["Contention.WaitCount"] = _contentionWaitCount,
-            ["Contention.TotalWaitUs"] = _contentionTotalWaitUs,
-            ["Contention.MaxWaitUs"] = _contentionMaxWaitUs,
         };
 
         // Persistent segments (Versioned / SingleVersion)

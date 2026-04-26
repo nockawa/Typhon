@@ -1,6 +1,7 @@
 using JetBrains.Annotations;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -14,10 +15,6 @@ public sealed class EpochManager : ResourceNode, IMetricSource
 {
     private long _globalEpoch;
     private readonly EpochThreadRegistry _registry;
-
-    // === Metrics (non-atomic ++ is intentional: accuracy traded for hot-path performance) ===
-    private long _epochAdvances;
-    private long _scopeEnters;
 
     public EpochManager(string id, IResource parent) : base(id, ResourceType.Synchronization, parent)
     {
@@ -34,18 +31,10 @@ public sealed class EpochManager : ResourceNode, IMetricSource
     /// </summary>
     public long MinActiveEpoch => _registry.ComputeMinActiveEpoch(_globalEpoch);
 
-    /// <summary>Total number of epoch advances since creation.</summary>
-    public long EpochAdvances => _epochAdvances;
-
-    /// <summary>Total number of scope entries since creation.</summary>
-    public long ScopeEnters => _scopeEnters;
-
     /// <summary>Number of active (pinned) slots in the thread registry.</summary>
     public int ActiveSlotCount => _registry.ActiveSlotCount;
 
-    /// <summary>
-    /// Returns true if the current thread is inside an epoch scope (depth &gt; 0).
-    /// </summary>
+    /// <summary>Returns true if the current thread is inside an epoch scope (depth &gt; 0).</summary>
     public bool IsCurrentThreadInScope => _registry.IsCurrentThreadInScope;
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -58,11 +47,7 @@ public sealed class EpochManager : ResourceNode, IMetricSource
     /// </summary>
     /// <returns>The depth before entering (0 for outermost scope).</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal int EnterScope()
-    {
-        _scopeEnters++;
-        return _registry.PinCurrentThread(_globalEpoch);
-    }
+    internal int EnterScope() => _registry.PinCurrentThread(_globalEpoch);
 
     /// <summary>
     /// Exit an epoch scope on the current thread. If this is the outermost scope,
@@ -75,26 +60,21 @@ public sealed class EpochManager : ResourceNode, IMetricSource
         if (_registry.UnpinCurrentThread(expectedDepth))
         {
             // Outermost scope exited — advance the global epoch
-            Interlocked.Increment(ref _globalEpoch);
-            _epochAdvances++;
+            var newEpoch = Interlocked.Increment(ref _globalEpoch);
+            TyphonEvent.EmitConcurrencyEpochAdvance((uint)newEpoch);
         }
     }
 
     /// <summary>
     /// Advance the current thread's pinned epoch without unpinning.
-    /// Pages stamped with older epochs become evictable once no thread holds those epochs.
-    /// The thread remains continuously protected at the new epoch.
     /// </summary>
-    /// <remarks>
-    /// Unlike <see cref="ExitScopeUnordered"/> + <see cref="EnterScope"/>, this has no brief unpinned window
-    /// where MinActiveEpoch could spike and allow aggressive eviction of pages the thread still references.
-    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal long RefreshScope()
     {
+        var oldEpoch = _globalEpoch;
         var newEpoch = Interlocked.Increment(ref _globalEpoch);
         _registry.RefreshPinnedEpoch(newEpoch);
-        _epochAdvances++;
+        TyphonEvent.EmitConcurrencyEpochRefresh((uint)oldEpoch, (uint)newEpoch);
         return newEpoch;
     }
 
@@ -109,8 +89,8 @@ public sealed class EpochManager : ResourceNode, IMetricSource
         if (_registry.UnpinCurrentThreadUnordered())
         {
             // Outermost scope exited — advance the global epoch
-            Interlocked.Increment(ref _globalEpoch);
-            _epochAdvances++;
+            var newEpoch = Interlocked.Increment(ref _globalEpoch);
+            TyphonEvent.EmitConcurrencyEpochAdvance((uint)newEpoch);
         }
     }
 
@@ -118,12 +98,7 @@ public sealed class EpochManager : ResourceNode, IMetricSource
     // IMetricSource
     // ═══════════════════════════════════════════════════════════════════════
 
-    public void ReadMetrics(IMetricWriter writer)
-    {
-        writer.WriteThroughput("EpochAdvances", _epochAdvances);
-        writer.WriteThroughput("ScopeEnters", _scopeEnters);
-        writer.WriteCapacity(_registry.ActiveSlotCount, EpochThreadRegistry.MaxSlots);
-    }
+    public void ReadMetrics(IMetricWriter writer) => writer.WriteCapacity(_registry.ActiveSlotCount, EpochThreadRegistry.MaxSlots);
 
     public void ResetPeaks()
     {

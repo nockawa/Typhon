@@ -191,8 +191,7 @@ public unsafe struct ChunkAccessor<TStore> : IDisposable where TStore : struct, 
     /// Get read-only reference to chunk. Safe for the lifetime of the enclosing <see cref="EpochGuard"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
-    public ref readonly T GetChunkReadOnly<T>(int chunkId) where T : unmanaged
-        => ref GetChunk<T>(chunkId, dirty: false);
+    public ref readonly T GetChunkReadOnly<T>(int chunkId) where T : unmanaged => ref GetChunk<T>(chunkId, false);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
     public Span<byte> GetChunkAsSpan(int index, bool dirtyPage = false) => new(GetChunkAddress(index, dirtyPage), _stride);
@@ -205,7 +204,7 @@ public unsafe struct ChunkAccessor<TStore> : IDisposable where TStore : struct, 
     /// Used by B+Tree to pre-dirty pages before OLC TryWriteLock, ensuring ACW blocks checkpoint.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void PreDirtyChunk(int chunkId) => GetChunkAddress(chunkId, dirty: true);
+    internal void PreDirtyChunk(int chunkId) => GetChunkAddress(chunkId, true);
 
     internal void ClearChunk(int index)
     {

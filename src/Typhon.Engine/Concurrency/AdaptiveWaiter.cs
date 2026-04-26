@@ -2,6 +2,8 @@ using JetBrains.Annotations;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
+using Typhon.Profiler;
 
 namespace Typhon.Engine;
 
@@ -37,7 +39,7 @@ public struct AdaptiveWaiter
             return false;
         }
 
-        _spinner.SpinOnce();
+        SpinOnceWithEmit();
         return true;
     }
 
@@ -45,7 +47,24 @@ public struct AdaptiveWaiter
     /// Perform one adaptive wait step without deadline/cancellation checking. Use when the caller checks <see cref="WaitContext.ShouldStop"/> in the outer loop.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Wait() => _spinner.SpinOnce();
+    public void Wait() => SpinOnceWithEmit();
+
+    /// <summary>
+    /// Run one <see cref="SpinWait.SpinOnce"/> and emit a Concurrency:AdaptiveWaiter:YieldOrSleep transition event
+    /// the FIRST time the spinner crosses into yield mode (NOT every spin). The Tier-2 gate inside
+    /// <c>EmitConcurrencyAdaptiveWaiterYieldOrSleep</c> dead-code-eliminates the entire branch when off.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SpinOnceWithEmit()
+    {
+        var willYieldBefore = _spinner.NextSpinWillYield;
+        _spinner.SpinOnce();
+        // Emit on transition (spin → yield); a single emit per Wait sequence at the moment yielding kicks in.
+        if (!willYieldBefore && _spinner.NextSpinWillYield)
+        {
+            TyphonEvent.EmitConcurrencyAdaptiveWaiterYieldOrSleep((ushort)_spinner.Count, AdaptiveWaiterTransitionKind.Yield);
+        }
+    }
 
     /// <summary>Number of times <see cref="Wait()"/> has been called.</summary>
     public int Count => _spinner.Count;

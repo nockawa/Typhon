@@ -216,7 +216,6 @@ public sealed class ResourceGraph : IResourceGraph
         private MemoryMetrics? _memory;
         private CapacityMetrics? _capacity;
         private DiskIOMetrics? _diskIO;
-        private ContentionMetrics? _contention;
         private readonly List<ThroughputMetric> _throughput = new(8);
         private readonly List<DurationMetric> _duration = new(4);
 
@@ -225,7 +224,6 @@ public sealed class ResourceGraph : IResourceGraph
             _memory = null;
             _capacity = null;
             _diskIO = null;
-            _contention = null;
             _throughput.Clear();
             _duration.Clear();
         }
@@ -236,9 +234,6 @@ public sealed class ResourceGraph : IResourceGraph
 
         public void WriteDiskIO(long readOps, long writeOps, long readBytes, long writeBytes) =>
             _diskIO = new DiskIOMetrics(readOps, writeOps, readBytes, writeBytes);
-
-        public void WriteContention(long waitCount, long totalWaitUs, long maxWaitUs, long timeoutCount) =>
-            _contention = new ContentionMetrics(waitCount, totalWaitUs, maxWaitUs, timeoutCount);
 
         public void WriteThroughput(string name, long count) => _throughput.Add(new ThroughputMetric(name, count));
 
@@ -253,7 +248,6 @@ public sealed class ResourceGraph : IResourceGraph
                 Memory = _memory,
                 Capacity = _capacity,
                 DiskIO = _diskIO,
-                Contention = _contention,
                 Throughput = (_throughput.Count > 0) ? _throughput.ToArray() : [],
                 Duration = (_duration.Count > 0) ? _duration.ToArray() : []
             };

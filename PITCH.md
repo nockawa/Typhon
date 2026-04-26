@@ -205,12 +205,12 @@ Telemetry that costs nothing when you don't need it:
 
 ```csharp
 // This field is static readonly — JIT evaluates it once at startup
-if (TelemetryConfig.BTreeActive)
+if (TelemetryConfig.ProfilerActive)
 {
     span = TyphonActivitySource.StartActivity("BTree.Insert");
     span?.SetTag("index.name", indexName);
 }
-// When BTreeActive is false, JIT eliminates the entire block.
+// When ProfilerActive is false, JIT eliminates the entire block.
 // Not "branch not taken." ELIMINATED. The instructions don't exist.
 ```
 

@@ -72,12 +72,6 @@ public class ObservabilityBridgeOptions
     public bool ExportDiskIOMetrics { get; set; } = true;
 
     /// <summary>
-    /// Export <see cref="ContentionMetrics"/> (WaitCount, TotalWaitUs, MaxWaitUs, TimeoutCount) to OTel.
-    /// Default: true.
-    /// </summary>
-    public bool ExportContentionMetrics { get; set; } = true;
-
-    /// <summary>
     /// Export <see cref="ThroughputMetric"/> counters to OTel.
     /// Default: true.
     /// </summary>

@@ -149,6 +149,19 @@ public sealed class DagBuilder
     /// <exception cref="InvalidOperationException">The graph contains a cycle.</exception>
     public (SystemDefinition[] Systems, int[] TopologicalOrder) Build()
     {
+        var graphSpan = Profiler.TyphonEvent.BeginSchedulerGraphBuild();
+        try
+        {
+            return BuildCore(ref graphSpan);
+        }
+        finally
+        {
+            graphSpan.Dispose();
+        }
+    }
+
+    private (SystemDefinition[] Systems, int[] TopologicalOrder) BuildCore(ref Profiler.SchedulerGraphBuildEvent graphSpan)
+    {
         var count = _systems.Count;
         if (count == 0)
         {
@@ -209,6 +222,10 @@ public sealed class DagBuilder
         {
             throw new InvalidOperationException("DAG contains a cycle.");
         }
+
+        graphSpan.SysCount = (ushort)Math.Min(count, ushort.MaxValue);
+        graphSpan.EdgeCount = (ushort)Math.Min(_edges.Count, ushort.MaxValue);
+        graphSpan.TopoLen = (ushort)Math.Min(topologicalOrder.Length, ushort.MaxValue);
 
         return ([.. _systems], topologicalOrder);
     }

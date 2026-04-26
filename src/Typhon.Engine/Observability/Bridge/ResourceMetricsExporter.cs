@@ -127,11 +127,6 @@ public sealed class ResourceMetricsExporter : IDisposable
             RegisterDiskIOInstruments();
         }
 
-        if (_options.ExportContentionMetrics)
-        {
-            RegisterContentionInstruments();
-        }
-
         if (_options.ExportThroughputMetrics)
         {
             RegisterThroughputInstruments();
@@ -149,15 +144,15 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableGauge(
             BuildMetricName("memory.allocated_bytes"),
             EnumerateMemoryAllocatedBytes,
-            unit: "bytes",
-            description: "Current memory allocation in bytes");
+            "bytes",
+            "Current memory allocation in bytes");
 
         // Memory.PeakBytes - Gauge (high-water mark)
         _meter.CreateObservableGauge(
             BuildMetricName("memory.peak_bytes"),
             EnumerateMemoryPeakBytes,
-            unit: "bytes",
-            description: "Peak memory allocation (high-water mark) in bytes");
+            "bytes",
+            "Peak memory allocation (high-water mark) in bytes");
     }
 
     private void RegisterCapacityInstruments()
@@ -166,22 +161,22 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableGauge(
             BuildMetricName("capacity.current"),
             EnumerateCapacityCurrent,
-            unit: "slots",
-            description: "Current slots/entries in use");
+            "slots",
+            "Current slots/entries in use");
 
         // Capacity.Maximum - Gauge
         _meter.CreateObservableGauge(
             BuildMetricName("capacity.maximum"),
             EnumerateCapacityMaximum,
-            unit: "slots",
-            description: "Maximum slots/entries available");
+            "slots",
+            "Maximum slots/entries available");
 
         // Capacity.Utilization - Gauge (0.0-1.0)
         _meter.CreateObservableGauge(
             BuildMetricName("capacity.utilization"),
             EnumerateCapacityUtilization,
-            unit: "ratio",
-            description: "Capacity utilization ratio (0.0-1.0)");
+            "ratio",
+            "Capacity utilization ratio (0.0-1.0)");
     }
 
     private void RegisterDiskIOInstruments()
@@ -190,60 +185,29 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.read_ops"),
             EnumerateDiskIOReadOps,
-            unit: "ops",
-            description: "Total disk read operations");
+            "ops",
+            "Total disk read operations");
 
         // DiskIO.WriteOps - Counter
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.write_ops"),
             EnumerateDiskIOWriteOps,
-            unit: "ops",
-            description: "Total disk write operations");
+            "ops",
+            "Total disk write operations");
 
         // DiskIO.ReadBytes - Counter
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.read_bytes"),
             EnumerateDiskIOReadBytes,
-            unit: "bytes",
-            description: "Total bytes read from disk");
+            "bytes",
+            "Total bytes read from disk");
 
         // DiskIO.WriteBytes - Counter
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.write_bytes"),
             EnumerateDiskIOWriteBytes,
-            unit: "bytes",
-            description: "Total bytes written to disk");
-    }
-
-    private void RegisterContentionInstruments()
-    {
-        // Contention.WaitCount - Counter
-        _meter.CreateObservableCounter(
-            BuildMetricName("contention.wait_count"),
-            EnumerateContentionWaitCount,
-            unit: "waits",
-            description: "Total times a thread had to wait for lock acquisition");
-
-        // Contention.TotalWaitUs - Counter
-        _meter.CreateObservableCounter(
-            BuildMetricName("contention.total_wait_us"),
-            EnumerateContentionTotalWaitUs,
-            unit: "us",
-            description: "Cumulative microseconds spent waiting for locks");
-
-        // Contention.MaxWaitUs - Gauge (high-water mark)
-        _meter.CreateObservableGauge(
-            BuildMetricName("contention.max_wait_us"),
-            EnumerateContentionMaxWaitUs,
-            unit: "us",
-            description: "Longest single wait observed (high-water mark)");
-
-        // Contention.TimeoutCount - Counter
-        _meter.CreateObservableCounter(
-            BuildMetricName("contention.timeout_count"),
-            EnumerateContentionTimeoutCount,
-            unit: "timeouts",
-            description: "Total waits that exceeded deadline");
+            "bytes",
+            "Total bytes written to disk");
     }
 
     private void RegisterThroughputInstruments() =>
@@ -252,8 +216,8 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableCounter(
             BuildMetricName("throughput.count"),
             EnumerateThroughputCounts,
-            unit: "ops",
-            description: "Total operations (throughput counter)");
+            "ops",
+            "Total operations (throughput counter)");
 
     private void RegisterDurationInstruments()
     {
@@ -261,22 +225,22 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableGauge(
             BuildMetricName("duration.last_us"),
             EnumerateDurationLastUs,
-            unit: "us",
-            description: "Duration of most recent operation");
+            "us",
+            "Duration of most recent operation");
 
         // Duration.AvgUs - Gauge
         _meter.CreateObservableGauge(
             BuildMetricName("duration.avg_us"),
             EnumerateDurationAvgUs,
-            unit: "us",
-            description: "Average operation duration");
+            "us",
+            "Average operation duration");
 
         // Duration.MaxUs - Gauge (high-water mark)
         _meter.CreateObservableGauge(
             BuildMetricName("duration.max_us"),
             EnumerateDurationMaxUs,
-            unit: "us",
-            description: "Maximum operation duration observed");
+            "us",
+            "Maximum operation duration observed");
     }
 
     private string BuildMetricName(string suffix) => $"{_options.MetricNamePrefix}.{suffix}";
@@ -405,63 +369,6 @@ public sealed class ResourceMetricsExporter : IDisposable
             {
                 yield return new Measurement<long>(
                     node.DiskIO.Value.WriteBytes,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    // Contention metric enumerators
-    private IEnumerable<Measurement<long>> EnumerateContentionWaitCount()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.WaitCount,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    private IEnumerable<Measurement<long>> EnumerateContentionTotalWaitUs()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.TotalWaitUs,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    private IEnumerable<Measurement<long>> EnumerateContentionMaxWaitUs()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.MaxWaitUs,
-                    new KeyValuePair<string, object>("resource_path", node.Path));
-            }
-        }
-    }
-
-    private IEnumerable<Measurement<long>> EnumerateContentionTimeoutCount()
-    {
-        var snapshot = CurrentSnapshot;
-        foreach (var node in snapshot.Nodes.Values)
-        {
-            if (node.Contention.HasValue)
-            {
-                yield return new Measurement<long>(
-                    node.Contention.Value.TimeoutCount,
                     new KeyValuePair<string, object>("resource_path", node.Path));
             }
         }

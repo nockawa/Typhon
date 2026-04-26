@@ -35,9 +35,6 @@ public class ResourceSnapshotTests
         public long PeakBytes;
         public long CapacityCurrent;
         public long CapacityMax;
-        public long ContentionWaitCount;
-        public long ContentionTotalWaitUs;
-        public long ContentionMaxWaitUs;
         public long CacheHits;
         public long CacheMisses;
 
@@ -52,9 +49,6 @@ public class ResourceSnapshotTests
             if (CapacityMax > 0)
                 writer.WriteCapacity(CapacityCurrent, CapacityMax);
 
-            if (ContentionWaitCount > 0)
-                writer.WriteContention(ContentionWaitCount, ContentionTotalWaitUs, ContentionMaxWaitUs, 0);
-
             // Always write throughput metrics (even if zero) to enable rate computation
             writer.WriteThroughput("CacheHits", CacheHits);
             writer.WriteThroughput("CacheMisses", CacheMisses);
@@ -63,7 +57,6 @@ public class ResourceSnapshotTests
         public void ResetPeaks()
         {
             PeakBytes = AllocatedBytes;
-            ContentionMaxWaitUs = 0;
         }
     }
 
@@ -157,7 +150,6 @@ public class ResourceSnapshotTests
         var node = snapshot.Nodes["Root/DataEngine/GroupingNode"];
         Assert.That(node.Memory.HasValue, Is.False);
         Assert.That(node.Capacity.HasValue, Is.False);
-        Assert.That(node.Contention.HasValue, Is.False);
         Assert.That(node.DiskIO.HasValue, Is.False);
         Assert.That(node.Throughput, Is.Empty);
         Assert.That(node.Duration, Is.Empty);
@@ -361,78 +353,6 @@ public class ResourceSnapshotTests
         Assert.That(mostUtilized, Is.Null);
     }
 
-    [Test]
-    public void FindContentionHotspots_ReturnsSortedByTotalWaitUs()
-    {
-        var resource1 = new TestMetricResource("LowContention", _registry.Storage)
-        {
-            ContentionWaitCount = 5,
-            ContentionTotalWaitUs = 100
-        };
-        var resource2 = new TestMetricResource("HighContention", _registry.Storage)
-        {
-            ContentionWaitCount = 10,
-            ContentionTotalWaitUs = 1000
-        };
-        var resource3 = new TestMetricResource("MediumContention", _registry.Storage)
-        {
-            ContentionWaitCount = 7,
-            ContentionTotalWaitUs = 500
-        };
-
-        _registry.Storage.RegisterChild(resource1);
-        _registry.Storage.RegisterChild(resource2);
-        _registry.Storage.RegisterChild(resource3);
-
-        var snapshot = _graph.GetSnapshot();
-        var hotspots = snapshot.FindContentionHotspots().ToList();
-
-        Assert.That(hotspots, Has.Count.EqualTo(3));
-        Assert.That(hotspots[0].Id, Is.EqualTo("HighContention"));
-        Assert.That(hotspots[1].Id, Is.EqualTo("MediumContention"));
-        Assert.That(hotspots[2].Id, Is.EqualTo("LowContention"));
-    }
-
-    [Test]
-    public void FindContentionHotspots_WithThreshold_FiltersCorrectly()
-    {
-        var resource1 = new TestMetricResource("Low", _registry.Storage)
-        {
-            ContentionWaitCount = 1,
-            ContentionTotalWaitUs = 50
-        };
-        var resource2 = new TestMetricResource("High", _registry.Storage)
-        {
-            ContentionWaitCount = 10,
-            ContentionTotalWaitUs = 500
-        };
-
-        _registry.Storage.RegisterChild(resource1);
-        _registry.Storage.RegisterChild(resource2);
-
-        var snapshot = _graph.GetSnapshot();
-        var hotspots = snapshot.FindContentionHotspots(100).ToList();
-
-        Assert.That(hotspots, Has.Count.EqualTo(1));
-        Assert.That(hotspots[0].Id, Is.EqualTo("High"));
-    }
-
-    [Test]
-    public void FindContentionHotspots_ExcludesZeroWaitCount()
-    {
-        var resource = new TestMetricResource("NoWait", _registry.Storage)
-        {
-            ContentionWaitCount = 0,
-            ContentionTotalWaitUs = 0
-        };
-        _registry.Storage.RegisterChild(resource);
-
-        var snapshot = _graph.GetSnapshot();
-        var hotspots = snapshot.FindContentionHotspots().ToList();
-
-        Assert.That(hotspots.Any(h => h.Id == "NoWait"), Is.False);
-    }
-
     #endregion
 
     #region IResourceGraph Tests
@@ -485,14 +405,12 @@ public class ResourceSnapshotTests
         var resource1 = new TestMetricResource("R1", _registry.Storage)
         {
             AllocatedBytes = 100,
-            PeakBytes = 500,
-            ContentionMaxWaitUs = 1000
+            PeakBytes = 500
         };
         var resource2 = new TestMetricResource("R2", _registry.DataEngine)
         {
             AllocatedBytes = 200,
-            PeakBytes = 800,
-            ContentionMaxWaitUs = 2000
+            PeakBytes = 800
         };
         _registry.Storage.RegisterChild(resource1);
         _registry.DataEngine.RegisterChild(resource2);
@@ -500,9 +418,7 @@ public class ResourceSnapshotTests
         _graph.ResetAllPeaks();
 
         Assert.That(resource1.PeakBytes, Is.EqualTo(100), "Peak should reset to current");
-        Assert.That(resource1.ContentionMaxWaitUs, Is.EqualTo(0), "Max wait should reset to 0");
         Assert.That(resource2.PeakBytes, Is.EqualTo(200), "Peak should reset to current");
-        Assert.That(resource2.ContentionMaxWaitUs, Is.EqualTo(0), "Max wait should reset to 0");
     }
 
     #endregion

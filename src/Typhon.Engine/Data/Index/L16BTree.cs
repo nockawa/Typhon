@@ -12,7 +12,7 @@ using System.Threading;
 
 namespace Typhon.Engine;
 
-[DebuggerTypeProxy(typeof(Index16Chunk.DebugView))]
+[DebuggerTypeProxy(typeof(DebugView))]
 [DebuggerDisplay("Count: {Count}, Start: {Start}, Flags: {StateFlags}")]
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 unsafe public struct Index16Chunk

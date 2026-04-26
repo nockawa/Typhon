@@ -175,6 +175,11 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         }
 
         _nextTickTimestamp += _tickIntervalTicks * _tickMultiplier;
+
+        // Phase 4: Scheduler:Overload:TickMultiplier instant — emitted per tick (Tier-2-gated, leaf default OFF).
+        var mult = (byte)Math.Min(_tickMultiplier, byte.MaxValue);
+        TyphonEvent.EmitSchedulerOverloadTickMultiplier(_currentTickNumber, mult, mult);
+
         return _nextTickTimestamp;
     }
 
@@ -563,32 +568,72 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var startTick = Stopwatch.GetTimestamp();
             _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick = startTick;
 
-            if (sys.IsParallelQuery)
+            // Phase 4: Scheduler:System:SingleThreaded span — wraps the per-system synchronous tick body. ChunkCount filled once known.
+            var stScope = TyphonEvent.BeginSchedulerSystemSingleThreaded(
+                (ushort)sysIdx,
+                sys.IsParallelQuery ? (byte)1 : (byte)0,
+                0);
+            try
             {
-                // Issue #234: do/while loop supports checkerboard two-phase dispatch. For non-checkerboard systems, cleanup returns false on
-                // the first iteration → loop executes exactly once → zero overhead.
-                bool morePhases;
-                do
-                {
-                    var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
-                    if (totalChunks <= 0)
-                    {
-                        morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
-                        continue;
-                    }
 
-                    Systems[sysIdx].TotalChunks = totalChunks;
-                    var chunkFailed = false;
-                    for (var chunk = 0; chunk < totalChunks; chunk++)
+                if (sys.IsParallelQuery)
+                {
+                    // Issue #234: do/while loop supports checkerboard two-phase dispatch. For non-checkerboard systems, cleanup returns false on
+                    // the first iteration → loop executes exactly once → zero overhead.
+                    bool morePhases;
+                    do
+                    {
+                        var totalChunks = ParallelQueryPrepareCallback?.Invoke(sysIdx) ?? 0;
+                        if (totalChunks <= 0)
+                        {
+                            morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+                            continue;
+                        }
+
+                        Systems[sysIdx].TotalChunks = totalChunks;
+                        var chunkFailed = false;
+                        for (var chunk = 0; chunk < totalChunks; chunk++)
+                        {
+                            SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
+                            try
+                            {
+                                ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, totalChunks, 0);
+                            }
+                            catch (Exception ex)
+                            {
+                                chunkFailed = true;
+                                _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
+                                _systemFailed[sysIdx] = true;
+                                LogSystemException(sysIdx, sys.Name, ex);
+                                foreach (var succ in sys.Successors)
+                                {
+                                    _systemFailed[succ] = true;
+                                }
+                            }
+                            finally
+                            {
+                                SystemAccessValidator.LeaveSystem();
+                            }
+                        }
+
+                        morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
+                        if (chunkFailed)
+                        {
+                            morePhases = false; // Abort remaining phases on failure
+                        }
+                    } while (morePhases);
+                }
+                else if (sys.Type == SystemType.PipelineSystem)
+                {
+                    for (var chunk = 0; chunk < sys.TotalChunks; chunk++)
                     {
                         SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
                         try
                         {
-                            ParallelQueryChunkCallback?.Invoke(sysIdx, chunk, totalChunks, 0);
+                            sys.PipelineChunkAction(chunk, sys.TotalChunks);
                         }
                         catch (Exception ex)
                         {
-                            chunkFailed = true;
                             _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
                             _systemFailed[sysIdx] = true;
                             LogSystemException(sysIdx, sys.Name, ex);
@@ -602,28 +647,23 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                             SystemAccessValidator.LeaveSystem();
                         }
                     }
-
-                    morePhases = ParallelQueryCleanupCallback?.Invoke(sysIdx) ?? false;
-                    if (chunkFailed)
-                    {
-                        morePhases = false; // Abort remaining phases on failure
-                    }
-                } while (morePhases);
-            }
-            else if (sys.Type == SystemType.PipelineSystem)
-            {
-                for (var chunk = 0; chunk < sys.TotalChunks; chunk++)
+                }
+                else // CallbackSystem or non-parallel QuerySystem — single invocation
                 {
+                    var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
+                    var success = true;
                     SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
                     try
                     {
-                        sys.PipelineChunkAction(chunk, sys.TotalChunks);
+                        sys.CallbackAction(ctx);
                     }
                     catch (Exception ex)
                     {
+                        success = false;
                         _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
                         _systemFailed[sysIdx] = true;
                         LogSystemException(sysIdx, sys.Name, ex);
+                        // Propagate failure to successors
                         foreach (var succ in sys.Successors)
                         {
                             _systemFailed[succ] = true;
@@ -633,40 +673,20 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     {
                         SystemAccessValidator.LeaveSystem();
                     }
+
+                    SystemEndCallback?.Invoke(sysIdx, success);
                 }
+
+                var endTick = Stopwatch.GetTimestamp();
+                _currentTickSystemMetrics[sysIdx].LastChunkDoneTick = endTick;
+                _currentTickSystemMetrics[sysIdx].WorkersTouched = sys.IsParallelQuery ? sys.TotalChunks : 1;
+
+                stScope.ChunkCount = (ushort)Math.Min(sys.IsParallelQuery ? sys.TotalChunks : 1, ushort.MaxValue);
             }
-            else // CallbackSystem or non-parallel QuerySystem — single invocation
+            finally
             {
-                var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
-                var success = true;
-                SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
-                try
-                {
-                    sys.CallbackAction(ctx);
-                }
-                catch (Exception ex)
-                {
-                    success = false;
-                    _currentTickSystemMetrics[sysIdx].SkipReason = SkipReason.Exception;
-                    _systemFailed[sysIdx] = true;
-                    LogSystemException(sysIdx, sys.Name, ex);
-                    // Propagate failure to successors
-                    foreach (var succ in sys.Successors)
-                    {
-                        _systemFailed[succ] = true;
-                    }
-                }
-                finally
-                {
-                    SystemAccessValidator.LeaveSystem();
-                }
-
-                SystemEndCallback?.Invoke(sysIdx, success);
+                stScope.Dispose();
             }
-
-            var endTick = Stopwatch.GetTimestamp();
-            _currentTickSystemMetrics[sysIdx].LastChunkDoneTick = endTick;
-            _currentTickSystemMetrics[sysIdx].WorkersTouched = sys.IsParallelQuery ? sys.TotalChunks : 1;
         }
 
         // Tick end hook
@@ -701,14 +721,29 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             // ═══ Between-tick: kernel wait on signal ═══
             // Workers block here with zero CPU cost. The timer thread signals _tickStartSignal when the next tick fires. Wake latency is ~1-5µs
             // (kernel transition) — negligible against a 16ms tick gap.
+            var betweenTickSpan = TyphonEvent.BeginSchedulerWorkerBetweenTick((byte)workerId);
+            var btStart = Stopwatch.GetTimestamp();
             while (_tickGeneration == lastGen)
             {
                 if (_workerShutdown != 0)
                 {
+                    betweenTickSpan.WakeReason = 1; // shutdown
+                    var btEnd = Stopwatch.GetTimestamp();
+                    var btUs1 = (btEnd - btStart) * 1_000_000L / Stopwatch.Frequency;
+                    betweenTickSpan.WaitUs = (uint)Math.Min(btUs1, uint.MaxValue);
+                    betweenTickSpan.Dispose();
                     return;
                 }
 
                 _tickStartSignal.Wait(TimeSpan.FromMilliseconds(50));
+            }
+            {
+                var btEnd = Stopwatch.GetTimestamp();
+                var btUs2 = (btEnd - btStart) * 1_000_000L / Stopwatch.Frequency;
+                betweenTickSpan.WakeReason = 0; // signal
+                betweenTickSpan.WaitUs = (uint)Math.Min(btUs2, uint.MaxValue);
+                betweenTickSpan.Dispose();
+                TyphonEvent.EmitSchedulerWorkerWake((byte)workerId, (uint)Math.Min(btUs2, uint.MaxValue));
             }
 
             if (_workerShutdown != 0)
@@ -727,11 +762,28 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             var trackUtilization = TelemetryConfig.SchedulerActive && TelemetryConfig.SchedulerTrackWorkerUtilization;
 
             var idleSpins = 0;
+            // Worker:Idle span lifecycle — tracks the contiguous "spell" of being idle (consecutive FindReadySystem returning -1).
+            // Started when idleSpins first goes from 0 → 1; ended when work is found.
+            var idleSpan = default(SchedulerWorkerIdleEvent);
+            var idleSpellStart = 0L;
             while (_tickInProgress == 1 && _systemsRemaining.Value > 0)
             {
                 var sysIdx = FindReadySystem();
                 if (sysIdx >= 0)
                 {
+                    if (idleSpins > 0)
+                    {
+                        // End of idle spell — close the span if one was started.
+                        if (idleSpellStart != 0)
+                        {
+                            var idleEnd = Stopwatch.GetTimestamp();
+                            var idleUs = (idleEnd - idleSpellStart) * 1_000_000L / Stopwatch.Frequency;
+                            idleSpan.SpinCount = (ushort)Math.Min(idleSpins, ushort.MaxValue);
+                            idleSpan.IdleUs = (uint)Math.Min(idleUs, uint.MaxValue);
+                            idleSpan.Dispose();
+                            idleSpellStart = 0L;
+                        }
+                    }
                     idleSpins = 0;
                     ProcessSystem(sysIdx, workerId, trackUtilization);
                 }
@@ -740,6 +792,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                     // D5: spin briefly, then yield.
                     // First ~100 iterations (~1µs) spin with PAUSE for lowest latency.
                     // After that, yield the core — there's genuinely no work and spinning wastes CPU on narrow DAGs. Adds ~1µs dispatch latency but saves a core.
+                    if (idleSpins == 0 && idleSpellStart == 0)
+                    {
+                        // First idle iter — start the Idle span.
+                        idleSpan = TyphonEvent.BeginSchedulerWorkerIdle((byte)workerId);
+                        idleSpellStart = Stopwatch.GetTimestamp();
+                    }
                     idleSpins++;
                     if (idleSpins <= 100)
                     {
@@ -768,6 +826,16 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                         }
                     }
                 }
+            }
+
+            // Tick ended — close any pending idle span left from end-of-tick idle.
+            if (idleSpellStart != 0)
+            {
+                var idleEnd = Stopwatch.GetTimestamp();
+                var idleUs = (idleEnd - idleSpellStart) * 1_000_000L / Stopwatch.Frequency;
+                idleSpan.SpinCount = (ushort)Math.Min(idleSpins, ushort.MaxValue);
+                idleSpan.IdleUs = (uint)Math.Min(idleUs, uint.MaxValue);
+                idleSpan.Dispose();
             }
         }
     }
@@ -836,6 +904,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         {
             return;
         }
+        TyphonEvent.EmitSchedulerDispense((ushort)sysIdx, 0, (byte)workerId);
 
         // runIf was already evaluated at dispatch time (OnSystemComplete or root marking).
         // System lifecycle hook: create per-system Transaction (called on the worker thread)
@@ -895,6 +964,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             {
                 break;
             }
+            TyphonEvent.EmitSchedulerDispense((ushort)sysIdx, chunk, (byte)workerId);
 
             if (chunk == 0)
             {
@@ -962,6 +1032,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             {
                 break;
             }
+            TyphonEvent.EmitSchedulerDispense((ushort)sysIdx, chunk, (byte)workerId);
 
             if (chunk == 0)
             {
@@ -1055,68 +1126,84 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         // D2: any-worker dispatch — iterate successors
         var successors = Systems[sysIdx].Successors;
-        foreach (var succIdx in successors)
+        var fanOutSpan = TyphonEvent.BeginSchedulerDependencyFanOut((ushort)sysIdx);
+        var fanOutSkipped = (ushort)0;
+        try
         {
-            // Propagate failure: writing true to a bool is idempotent and atomic on x86
-            if (_systemFailed[sysIdx])
+            foreach (var succIdx in successors)
             {
-                _systemFailed[succIdx] = true;
-            }
+                // Propagate failure: writing true to a bool is idempotent and atomic on x86
+                if (_systemFailed[sysIdx])
+                {
+                    _systemFailed[succIdx] = true;
+                }
 
-            var depsLeft = Interlocked.Decrement(ref _remainingDeps[succIdx].Value);
-            if (depsLeft == 0)
-            {
-                var readyTs = Stopwatch.GetTimestamp();
-                _currentTickSystemMetrics[succIdx].ReadyTick = readyTs;
-                InspectorSystemReady(succIdx, readyTs);
-                var succ = Systems[succIdx];
+                var depsLeft = Interlocked.Decrement(ref _remainingDeps[succIdx].Value);
+                if (depsLeft == 0)
+                {
+                    var readyTs = Stopwatch.GetTimestamp();
+                    _currentTickSystemMetrics[succIdx].ReadyTick = readyTs;
+                    InspectorSystemReady(succIdx, readyTs);
+                    TyphonEvent.EmitSchedulerDependencyReady((ushort)sysIdx, (ushort)succIdx, (ushort)successors.Length, 0);
+                    var succ = Systems[succIdx];
 
-                // Check if any predecessor failed — skip this system entirely
-                if (_systemFailed[succIdx])
-                {
-                    _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.DependencyFailed;
-                    InspectorSystemSkipped(succIdx, SkipReason.DependencyFailed, Stopwatch.GetTimestamp());
-                    OnSystemComplete(succIdx, workerId, trackUtilization);
-                }
-                // Evaluate runIf here — before any worker can grab chunks.
-                // This is thread-safe: only one thread decrements the last dependency to zero.
-                else if (succ.RunIf != null && !succ.RunIf())
-                {
-                    _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.RunIfFalse;
-                    InspectorSystemSkipped(succIdx, SkipReason.RunIfFalse, Stopwatch.GetTimestamp());
-                    OnSystemComplete(succIdx, workerId, trackUtilization);
-                }
-                else if (succ.ReactiveSkip != null && succ.ReactiveSkip())
-                {
-                    _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.EmptyInput;
-                    InspectorSystemSkipped(succIdx, SkipReason.EmptyInput, Stopwatch.GetTimestamp());
-                    OnSystemComplete(succIdx, workerId, trackUtilization);
-                }
-                else
-                {
-                    var overloadSkip = CheckOverloadSkip(succIdx);
-                    if (overloadSkip != SkipReason.NotSkipped)
+                    // Check if any predecessor failed — skip this system entirely
+                    if (_systemFailed[succIdx])
                     {
-                        _currentTickSystemMetrics[succIdx].SkipReason = overloadSkip;
-                        InspectorSystemSkipped(succIdx, overloadSkip, Stopwatch.GetTimestamp());
+                        _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.DependencyFailed;
+                        InspectorSystemSkipped(succIdx, SkipReason.DependencyFailed, Stopwatch.GetTimestamp());
+                        fanOutSkipped++;
                         OnSystemComplete(succIdx, workerId, trackUtilization);
                     }
-                    else if (succ.IsParallelQuery)
+                    // Evaluate runIf here — before any worker can grab chunks.
+                    // This is thread-safe: only one thread decrements the last dependency to zero.
+                    else if (succ.RunIf != null && !succ.RunIf())
                     {
-                        // Parallel QuerySystem: prepare entity set, then mark ready for multi-worker chunk grab
-                        DispatchParallelQuery(succIdx, workerId, trackUtilization);
+                        _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.RunIfFalse;
+                        InspectorSystemSkipped(succIdx, SkipReason.RunIfFalse, Stopwatch.GetTimestamp());
+                        fanOutSkipped++;
+                        OnSystemComplete(succIdx, workerId, trackUtilization);
                     }
-                    else if (succ.Type == SystemType.CallbackSystem || succ.Type == SystemType.QuerySystem)
+                    else if (succ.ReactiveSkip != null && succ.ReactiveSkip())
                     {
-                        // D3: inline continuation for single-invocation successors
-                        ExecuteInline(succIdx, workerId, trackUtilization);
+                        _currentTickSystemMetrics[succIdx].SkipReason = SkipReason.EmptyInput;
+                        InspectorSystemSkipped(succIdx, SkipReason.EmptyInput, Stopwatch.GetTimestamp());
+                        fanOutSkipped++;
+                        OnSystemComplete(succIdx, workerId, trackUtilization);
                     }
                     else
                     {
-                        MarkSystemReady(succIdx);
+                        var overloadSkip = CheckOverloadSkip(succIdx);
+                        if (overloadSkip != SkipReason.NotSkipped)
+                        {
+                            _currentTickSystemMetrics[succIdx].SkipReason = overloadSkip;
+                            InspectorSystemSkipped(succIdx, overloadSkip, Stopwatch.GetTimestamp());
+                            fanOutSkipped++;
+                            OnSystemComplete(succIdx, workerId, trackUtilization);
+                        }
+                        else if (succ.IsParallelQuery)
+                        {
+                            // Parallel QuerySystem: prepare entity set, then mark ready for multi-worker chunk grab
+                            DispatchParallelQuery(succIdx, workerId, trackUtilization);
+                        }
+                        else if (succ.Type == SystemType.CallbackSystem || succ.Type == SystemType.QuerySystem)
+                        {
+                            // D3: inline continuation for single-invocation successors
+                            ExecuteInline(succIdx, workerId, trackUtilization);
+                        }
+                        else
+                        {
+                            MarkSystemReady(succIdx);
+                        }
                     }
                 }
             }
+        }
+        finally
+        {
+            fanOutSpan.SuccCount = (ushort)Math.Min(successors.Length, ushort.MaxValue);
+            fanOutSpan.SkippedCount = fanOutSkipped;
+            fanOutSpan.Dispose();
         }
     }
 
@@ -1177,6 +1264,7 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         // Baseline TickDivisor (active even at Normal load)
         if (sys.TickDivisor > 1 && _currentTickNumber % sys.TickDivisor != 0)
         {
+            TyphonEvent.EmitSchedulerOverloadSystemShed((ushort)sysIdx, (byte)_overloadDetector.CurrentLevel, (ushort)sys.TickDivisor, 1);
             return SkipReason.Throttled;
         }
 
@@ -1189,12 +1277,14 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         // Level 1+: Shed Low-priority systems with CanShed
         if (sys.Priority == SystemPriority.Low && sys.CanShed)
         {
+            TyphonEvent.EmitSchedulerOverloadSystemShed((ushort)sysIdx, (byte)level, 0, 2);
             return SkipReason.Shed;
         }
 
         // Level 1+: Throttle Normal-priority systems via ThrottledTickDivisor
         if (sys.Priority == SystemPriority.Normal && sys.ThrottledTickDivisor > 1 && _currentTickNumber % sys.ThrottledTickDivisor != 0)
         {
+            TyphonEvent.EmitSchedulerOverloadSystemShed((ushort)sysIdx, (byte)level, (ushort)sys.ThrottledTickDivisor, 1);
             return SkipReason.Throttled;
         }
 
@@ -1220,12 +1310,36 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private void MarkSystemReady(int sysIdx) => _isReady[sysIdx].Value = 1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void RecordFirstChunkGrab(int sysIdx, long timestamp) =>
-        Interlocked.CompareExchange(ref _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick, timestamp, 0);
+    private void RecordFirstChunkGrab(int sysIdx, long timestamp)
+    {
+        var prior = Interlocked.CompareExchange(ref _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick, timestamp, 0);
+        if (prior == 0)
+        {
+            // Only emit on the first successful grab (CompareExchange replaced 0 with timestamp).
+            TyphonEvent.EmitSchedulerSystemStartExecution((ushort)sysIdx);
+            var readyTs = _currentTickSystemMetrics[sysIdx].ReadyTick;
+            if (readyTs > 0)
+            {
+                var queueWaitTicks = timestamp - readyTs;
+                var queueWaitUs = (uint)Math.Min((queueWaitTicks * 1_000_000L) / Stopwatch.Frequency, uint.MaxValue);
+                TyphonEvent.EmitSchedulerSystemQueueWait((ushort)sysIdx, queueWaitUs);
+            }
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void RecordSystemDone(int sysIdx, long timestamp) =>
+    private void RecordSystemDone(int sysIdx, long timestamp)
+    {
         _currentTickSystemMetrics[sysIdx].LastChunkDoneTick = timestamp;
+        if (TelemetryConfig.SchedulerSystemCompletionActive)
+        {
+            var startTs = _currentTickSystemMetrics[sysIdx].FirstChunkGrabTick;
+            var durationTicks = startTs > 0 ? timestamp - startTs : 0;
+            var durationUs = (uint)Math.Min((durationTicks * 1_000_000L) / Stopwatch.Frequency, uint.MaxValue);
+            var reason = (byte)_currentTickSystemMetrics[sysIdx].SkipReason;
+            TyphonEvent.EmitSchedulerSystemCompletion((ushort)sysIdx, reason, durationUs);
+        }
+    }
 
     private void ResetTickState()
     {

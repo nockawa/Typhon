@@ -59,7 +59,7 @@ public partial class ManagedPagedMMF
             var epoch = _segment.Store.EpochManager.GlobalEpoch;
             var page = _segment.GetPageExclusive(pageIndex, epoch, out var memPageIdx);
             var dataOffset = page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0;
-            var data = page.RawData<long>(dataOffset, (PagedMMF.PageRawDataSize - dataOffset) / sizeof(long));
+            var data = page.RawData<long>(dataOffset, (PageRawDataSize - dataOffset) / sizeof(long));
             {
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
                 if ((prevL0 & l0Mask) != 0)
@@ -112,7 +112,7 @@ public partial class ManagedPagedMMF
             var epoch = _segment.Store.EpochManager.GlobalEpoch;
             var page = _segment.GetPageExclusive(pageIndex, epoch, out var memPageIdx);
             var dataOffset = page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0;
-            var data = page.RawData<long>(dataOffset, (PagedMMF.PageRawDataSize - dataOffset) / sizeof(long));
+            var data = page.RawData<long>(dataOffset, (PageRawDataSize - dataOffset) / sizeof(long));
             {
                 var prevL0 = Interlocked.Or(ref data[pageOffset], l0Mask);
 
@@ -167,7 +167,7 @@ public partial class ManagedPagedMMF
             var epoch = _segment.Store.EpochManager.GlobalEpoch;
             var page = _segment.GetPageExclusive(pageIndex, epoch, out var memPageIdx);
             var dataOff = page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0;
-            var data = page.RawData<long>(dataOff, (PagedMMF.PageRawDataSize - dataOff) / sizeof(long));
+            var data = page.RawData<long>(dataOff, (PageRawDataSize - dataOff) / sizeof(long));
             {
                 var prevL0 = Interlocked.And(ref data[pageOffset], l0ClearMask);
                 if ((prevL0 & l0SetMask) != 0)
@@ -212,7 +212,7 @@ public partial class ManagedPagedMMF
             var epoch = _segment.Store.EpochManager.GlobalEpoch;
             var page = _segment.GetPage(pageIndex, epoch, out _);
             var dataOff = page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0;
-            var data = page.RawDataReadOnly<long>(dataOff, (PagedMMF.PageRawDataSize - dataOff) / sizeof(long));
+            var data = page.RawDataReadOnly<long>(dataOff, (PageRawDataSize - dataOff) / sizeof(long));
             return (data[pageOffset] & mask) != 0L;
         }
 
@@ -247,7 +247,7 @@ public partial class ManagedPagedMMF
                         {
                             var page = _segment.GetPage(pageId, epoch, out _);
                             var dataOff = page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0;
-                            curDataSpan = page.RawDataReadOnly<long>(dataOff, (PagedMMF.PageRawDataSize - dataOff) / sizeof(long));
+                            curDataSpan = page.RawDataReadOnly<long>(dataOff, (PageRawDataSize - dataOff) / sizeof(long));
                             curPageId = pageId;
                         }
                         var data = curDataSpan;

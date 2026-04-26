@@ -52,6 +52,12 @@ internal class ViewRegistry
     {
         lock (_writeLock)
         {
+            // Phase 7: ECS:View:Registry:Register instant — emitted once per RegisterView call.
+            // fieldIdx = first dependency field for context; regCount = total view count after this registration.
+            Profiler.TyphonEvent.EmitEcsViewRegistryRegister(
+                (ushort)Math.Min(view.ViewId, ushort.MaxValue),
+                fieldIndices.Length > 0 ? (ushort)Math.Min(fieldIndices[0], ushort.MaxValue) : (ushort)0,
+                (ushort)Math.Min(_viewCount + 1, ushort.MaxValue));
             for (var i = 0; i < fieldIndices.Length; i++)
             {
                 var fieldIndex = fieldIndices[i];
@@ -92,6 +98,8 @@ internal class ViewRegistry
     {
         lock (_writeLock)
         {
+            // Phase 7: ECS:View:Registry:Deregister instant.
+            Profiler.TyphonEvent.EmitEcsViewRegistryDeregister((ushort)Math.Min(view.ViewId, ushort.MaxValue), 0, (ushort)Math.Min(Math.Max(_viewCount - 1, 0), ushort.MaxValue));
             var removedAny = false;
 
             // Scan all field slots to find and remove ALL registrations for this view (may have multiple tags)

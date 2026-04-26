@@ -22,6 +22,22 @@ internal sealed class AdvancedSelectivityEstimator : ISelectivityEstimator
 
     public long EstimateCardinality(ComponentTable table, int fieldIndex, CompareOp op, long threshold)
     {
+        // Phase 7: Query:Estimate span — covers selectivity estimation for one predicate.
+        var estimateScope = Profiler.TyphonEvent.BeginQueryEstimate((ushort)Math.Min(fieldIndex, ushort.MaxValue), 0);
+        try
+        {
+            var result = EstimateCardinalityCore(table, fieldIndex, op, threshold);
+            estimateScope.Cardinality = result;
+            return result;
+        }
+        finally
+        {
+            estimateScope.Dispose();
+        }
+    }
+
+    private static long EstimateCardinalityCore(ComponentTable table, int fieldIndex, CompareOp op, long threshold)
+    {
         var stats = table.IndexStats[fieldIndex];
         var entryCount = stats.EntryCount;
         if (entryCount == 0)

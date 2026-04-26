@@ -202,6 +202,9 @@ internal ref struct ComponentRevisionManager
     {
         ref var firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
 
+        // Phase 6: Data:MVCC:VersionCleanup span — covers the compaction work for one entity's revision chain.
+        var versionCleanupScope = Profiler.TyphonEvent.BeginDataMvccVersionCleanup(firstChunkHeader.EntityPK);
+
         // Create a temporary chunk to store the cleaned-up content of the first chunk (we can't overwrite the first chunk right away)
         Span<byte> tempChunk = stackalloc byte[CompRevChunkSize];
         tempChunk.Clear();
@@ -365,6 +368,10 @@ internal ref struct ComponentRevisionManager
         tempChunk.Slice(0, sizeof(int)).CopyTo(destSpan.Slice(0, sizeof(int)));
         tempChunk.Slice(controlFieldEnd).CopyTo(destSpan.Slice(controlFieldEnd));
         firstChunkHeader = ref compRevTableAccessor.GetChunk<CompRevStorageHeader>(firstChunkId);
+
+        // Phase 6: capture entries freed (== skipCount, capped at u16) before disposing the span.
+        versionCleanupScope.EntriesFreed = (ushort)Math.Min(skipCount, ushort.MaxValue);
+        versionCleanupScope.Dispose();
 
         // Is the component totally deleted? Return true, otherwise false
         return (tempFirstHeader[0].ItemCount == 1 && tempElements[0].ComponentChunkId == 0);

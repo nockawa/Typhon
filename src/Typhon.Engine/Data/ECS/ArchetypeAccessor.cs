@@ -76,7 +76,7 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
 
     /// <summary>Open an entity for read-only access.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public EntityRef Open(EntityId id) => Resolve(id, writable: false);
+    public EntityRef Open(EntityId id) => Resolve(id, false);
 
     /// <summary>Open an entity for read-write access.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -87,7 +87,7 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
             _accessor.PrepareForMutation();
             _mutationPrepared = true;
         }
-        return Resolve(id, writable: true);
+        return Resolve(id, true);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -185,7 +185,7 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
                 continue;
             }
 
-            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, _tsn, skipTimeout: true);
+            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, _tsn, true);
             if (chainResult.IsFailure)
             {
                 continue;
@@ -227,7 +227,7 @@ public unsafe ref struct ArchetypeAccessor<TArch> where TArch : class
                 continue;
             }
 
-            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, _tsn, skipTimeout: true);
+            var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, _tsn, true);
             if (chainResult.IsFailure)
             {
                 continue;

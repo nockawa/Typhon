@@ -56,6 +56,9 @@ internal sealed class TierClusterIndex
         Debug.Assert(Interlocked.CompareExchange(ref _rebuildInProgress, 1, 0) == 0,
             "TierClusterIndex.Rebuild called concurrently — this must run single-threaded from BuildTierIndexesAtTickStart.");
 
+        // Phase 3: Spatial:TierIndex:Rebuild span. ClusterCount/NewVersion filled at exit.
+        var rebuildScope = Profiler.TyphonEvent.BeginSpatialTierIndexRebuild((ushort)Math.Min(state.ArchetypeId, ushort.MaxValue));
+        rebuildScope.OldVersion = _lastClusterSetVersion;
         try
         {
             // Reset counts (but keep buffers).
@@ -114,9 +117,20 @@ internal sealed class TierClusterIndex
             _lastGridTierVersion = grid.TierVersion;
             _lastClusterSetVersion = state.ClusterSetVersion;
             RebuildCount++;
+
+            // Sum cluster counts across all tiers for the span payload.
+            int total = 0;
+            for (int t = 0; t < TierExtensions.TierCount; t++)
+            {
+                total += _tierClusterCounts[t];
+            }
+
+            rebuildScope.ClusterCount = total;
+            rebuildScope.NewVersion = state.ClusterSetVersion;
         }
         finally
         {
+            rebuildScope.Dispose();
             Interlocked.Exchange(ref _rebuildInProgress, 0);
         }
     }
@@ -127,6 +141,9 @@ internal sealed class TierClusterIndex
     {
         if (grid.TierVersion == _lastGridTierVersion && state.ClusterSetVersion == _lastClusterSetVersion)
         {
+            // Phase 3: Spatial:TierIndex:VersionSkip instant — fast path, no rebuild needed.
+            // reason: 0=both unchanged, 1=grid only, 2=cluster set only (here both unchanged).
+            Profiler.TyphonEvent.EmitSpatialTierIndexVersionSkip((ushort)Math.Min(state.ArchetypeId, ushort.MaxValue), _lastClusterSetVersion, 0);
             return;
         }
         Rebuild(grid, state);

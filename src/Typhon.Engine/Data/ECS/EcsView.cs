@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
+using System.Diagnostics;
 using Typhon.Engine.Profiler;
 using Typhon.Profiler;
 
@@ -179,35 +180,56 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             bool overflow = DeltaBuffer.HasOverflow;
             if (overflow)
             {
+                // Phase 7: ECS:View:DeltaBuffer:Overflow instant — operationally critical, fires at the moment overflow is detected.
+                // currentTsn = transaction snapshot, tailTsn = last refresh, marginPagesLost = 0 (no per-page accounting at this layer).
+                TyphonEvent.EmitEcsViewDeltaBufferOverflow(tx.TSN, LastRefreshTSN, 0);
                 SetOverflowDetected(true);
-                if (IsOrMode) { RefreshFullOr(tx); } else { RefreshFull(tx); }
+                if (IsOrMode)
+                {
+                    RefreshFullOr(tx);
+                }
+                else
+                {
+                    RefreshFull(tx);
+                }
                 BuildEntityIdCaches();
                 scope.Mode = EcsViewRefreshMode.Overflow;
                 scope.ResultCount = _entityIds.Count;
                 return;
             }
 
-            var targetTSN = tx.TSN;
-            var deltaCount = 0;
-            while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
+            // Phase 7: ECS:View:IncrementalDrain span — covers the per-tick delta drain loop. Overflow=0 because we'd have taken the branch above.
+            var drainScope = TyphonEvent.BeginEcsViewIncrementalDrain();
+            try
             {
-                DeltaBuffer.Advance();
-                if (IsOrMode)
+                var targetTSN = tx.TSN;
+                var deltaCount = 0;
+                while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
                 {
-                    ProcessEntryOr(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
+                    DeltaBuffer.Advance();
+                    if (IsOrMode)
+                    {
+                        ProcessEntryOr(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
+                    }
+                    else
+                    {
+                        ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
+                    }
+                    SetLastRefreshTSN(tsn);
+                    deltaCount++;
                 }
-                else
-                {
-                    ProcessEntry(ref entry, flags & 0x3F, (flags & 0x40) != 0, (flags & 0x80) != 0, tx);
-                }
-                SetLastRefreshTSN(tsn);
-                deltaCount++;
-            }
+                drainScope.DeltaCount = deltaCount;
+                drainScope.Overflow = 0;
 
-            BuildEntityIdCaches();
-            scope.Mode = EcsViewRefreshMode.Incremental;
-            scope.ResultCount = _entityIds.Count;
-            scope.DeltaCount = deltaCount;
+                BuildEntityIdCaches();
+                scope.Mode = EcsViewRefreshMode.Incremental;
+                scope.ResultCount = _entityIds.Count;
+                scope.DeltaCount = deltaCount;
+            }
+            finally
+            {
+                drainScope.Dispose();
+            }
         }
         finally
         {
@@ -221,37 +243,46 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
     private void RefreshPull(Transaction tx)
     {
-        _query.UpdateTransaction(tx);
-        var newSet = _query.Execute();
-
-        // Compute deltas: Added/Removed
-        foreach (var id in newSet)
+        // Phase 7: ECS:View:RefreshPull span. queryNs/archetypeMaskBits left at 0 — no per-call accounting at this layer.
+        var pullScope = TyphonEvent.BeginEcsViewRefreshPull(0, 0);
+        try
         {
-            var pk = (long)id.RawValue;
-            if (_entityIds.TryAdd(pk))
+            _query.UpdateTransaction(tx);
+            var newSet = _query.Execute();
+
+            // Compute deltas: Added/Removed
+            foreach (var id in newSet)
             {
-                CompactDelta(pk, DeltaKind.Added);
+                var pk = (long)id.RawValue;
+                if (_entityIds.TryAdd(pk))
+                {
+                    CompactDelta(pk, DeltaKind.Added);
+                }
             }
-        }
 
-        // Check for removals (reuse scratch list to avoid per-refresh allocation)
-        _pullRemoveScratch ??= [];
-        _pullRemoveScratch.Clear();
-        foreach (var pk in _entityIds)
-        {
-            if (!newSet.Contains(EntityId.FromRaw(pk)))
+            // Check for removals (reuse scratch list to avoid per-refresh allocation)
+            _pullRemoveScratch ??= [];
+            _pullRemoveScratch.Clear();
+            foreach (var pk in _entityIds)
             {
-                _pullRemoveScratch.Add(pk);
+                if (!newSet.Contains(EntityId.FromRaw(pk)))
+                {
+                    _pullRemoveScratch.Add(pk);
+                }
             }
-        }
 
-        for (var i = 0; i < _pullRemoveScratch.Count; i++)
+            for (var i = 0; i < _pullRemoveScratch.Count; i++)
+            {
+                _entityIds.TryRemove(_pullRemoveScratch[i]);
+                CompactDelta(_pullRemoveScratch[i], DeltaKind.Removed);
+            }
+
+            SetLastRefreshTSN(tx.TSN);
+        }
+        finally
         {
-            _entityIds.TryRemove(_pullRemoveScratch[i]);
-            CompactDelta(_pullRemoveScratch[i], DeltaKind.Removed);
+            pullScope.Dispose();
         }
-
-        SetLastRefreshTSN(tx.TSN);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -325,44 +356,58 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
     private void RefreshFull(Transaction tx)
     {
-        var oldEntities = _entityIds.Clone();
-
-        DeltaBuffer.Reset(tx.TSN);
-        _entityIds.Clear();
-
-        if (HasCachedPlanInternal && _fieldReader != null)
+        var oldCount = _entityIds.Count;
+        // Phase 7: ECS:View:RefreshFull span — overflow-recovery full re-query. NewCount + RequeryNs filled at exit.
+        var fullScope = TyphonEvent.BeginEcsViewRefreshFull(oldCount, 0, 0);
+        try
         {
-            // Use PipelineExecutor with cached plan for fast re-population
-            _fieldReader.ExecuteFullScan(CachedPlan, CachedPlan.OrderedEvaluators, _componentTable, tx, _entityIds);
-        }
-        else if (_fieldReader != null)
-        {
-            // Fallback: broad scan via EcsQuery + per-entity field evaluation
-            _query.UpdateTransaction(tx);
-            foreach (var id in _query.Execute())
+            var oldEntities = _entityIds.Clone();
+
+            DeltaBuffer.Reset(tx.TSN);
+            _entityIds.Clear();
+
+            var requeryStart = Stopwatch.GetTimestamp();
+            if (HasCachedPlanInternal && _fieldReader != null)
             {
-                var pk = (long)id.RawValue;
-                if (_fieldReader.EvaluateAllFields(pk, _evaluators, tx))
+                // Use PipelineExecutor with cached plan for fast re-population
+                _fieldReader.ExecuteFullScan(CachedPlan, CachedPlan.OrderedEvaluators, _componentTable, tx, _entityIds);
+            }
+            else if (_fieldReader != null)
+            {
+                // Fallback: broad scan via EcsQuery + per-entity field evaluation
+                _query.UpdateTransaction(tx);
+                foreach (var id in _query.Execute())
                 {
-                    _entityIds.TryAdd(pk);
+                    var pk = (long)id.RawValue;
+                    if (_fieldReader.EvaluateAllFields(pk, _evaluators, tx))
+                    {
+                        _entityIds.TryAdd(pk);
+                    }
                 }
             }
-        }
-        else
-        {
-            // Pull mode: just re-query
-            _query.UpdateTransaction(tx);
-            foreach (var id in _query.Execute())
+            else
             {
-                _entityIds.TryAdd((long)id.RawValue);
+                // Pull mode: just re-query
+                _query.UpdateTransaction(tx);
+                foreach (var id in _query.Execute())
+                {
+                    _entityIds.TryAdd((long)id.RawValue);
+                }
             }
+            fullScope.RequeryNs = (uint)Math.Min((Stopwatch.GetTimestamp() - requeryStart) * 1_000_000_000L / Stopwatch.Frequency, uint.MaxValue);
+
+            DrainBufferAfterRefreshFull(tx.TSN);
+            ComputeRefreshFullDeltas(oldEntities);
+
+            SetOverflowDetected(false);
+            SetLastRefreshTSN(tx.TSN);
+
+            fullScope.NewCount = _entityIds.Count;
         }
-
-        DrainBufferAfterRefreshFull(tx.TSN);
-        ComputeRefreshFullDeltas(oldEntities);
-
-        SetOverflowDetected(false);
-        SetLastRefreshTSN(tx.TSN);
+        finally
+        {
+            fullScope.Dispose();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -482,38 +527,50 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
 
     private void RefreshFullOr(Transaction tx)
     {
-        var oldEntities = _entityIds.Clone();
-        DeltaBuffer.Reset(tx.TSN);
-        _entityIds.Clear();
-        _branchBitmaps.Clear();
-
+        var oldCount = _entityIds.Count;
         var plans = CachedPlans;
-        if (plans != null)
+        // Phase 7: ECS:View:RefreshFullOr span — OR-mode overflow recovery.
+        var fullOrScope = TyphonEvent.BeginEcsViewRefreshFullOr(oldCount, 0, (byte)Math.Min(plans?.Length ?? 0, byte.MaxValue));
+        try
         {
-            for (var b = 0; b < plans.Length; b++)
-            {
-                var branchResult = new HashMap<long>();
-                _fieldReader.ExecuteFullScan(plans[b], plans[b].OrderedEvaluators, _componentTable, tx, branchResult);
-                var bit = (ushort)(1 << b);
-                foreach (var pk in branchResult)
-                {
-                    var eid = EntityId.FromRaw(pk);
-                    if (!_query.MaskTestPublic(eid.ArchetypeId))
-                    {
-                        continue;
-                    }
+            var oldEntities = _entityIds.Clone();
+            DeltaBuffer.Reset(tx.TSN);
+            _entityIds.Clear();
+            _branchBitmaps.Clear();
 
-                    _entityIds.TryAdd(pk);
-                    ref var bitmapRef = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_branchBitmaps, pk, out _);
-                    bitmapRef |= bit;
+            if (plans != null)
+            {
+                for (var b = 0; b < plans.Length; b++)
+                {
+                    var branchResult = new HashMap<long>();
+                    _fieldReader.ExecuteFullScan(plans[b], plans[b].OrderedEvaluators, _componentTable, tx, branchResult);
+                    var bit = (ushort)(1 << b);
+                    foreach (var pk in branchResult)
+                    {
+                        var eid = EntityId.FromRaw(pk);
+                        if (!_query.MaskTestPublic(eid.ArchetypeId))
+                        {
+                            continue;
+                        }
+
+                        _entityIds.TryAdd(pk);
+                        ref var bitmapRef = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_branchBitmaps, pk, out _);
+                        bitmapRef |= bit;
+                    }
                 }
             }
-        }
 
-        DrainBufferAfterRefreshFull(tx.TSN);
-        ComputeRefreshFullDeltas(oldEntities);
-        SetOverflowDetected(false);
-        SetLastRefreshTSN(tx.TSN);
+            DrainBufferAfterRefreshFull(tx.TSN);
+            ComputeRefreshFullDeltas(oldEntities);
+            SetOverflowDetected(false);
+            SetLastRefreshTSN(tx.TSN);
+
+            fullOrScope.NewCount = _entityIds.Count;
+        }
+        finally
+        {
+            fullOrScope.Dispose();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using Typhon.Engine.Profiler;
-using Typhon.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -84,10 +83,10 @@ public unsafe partial class Transaction
     /// Create a polymorphic query matching <typeparamref name="TArchetype"/> and all descendants.
     /// Supports Tier 1 (.With, .Without, .Exclude), Tier 2 (.Enabled, .Disabled), and execution (.Execute, .Count, .Any, foreach).
     /// </summary>
-    public EcsQuery<TArchetype> Query<TArchetype>() where TArchetype : class => new(this, polymorphic: true);
+    public EcsQuery<TArchetype> Query<TArchetype>() where TArchetype : class => new(this, true);
 
     /// <summary>Create an exact query matching only <typeparamref name="TArchetype"/>, no descendants.</summary>
-    public EcsQuery<TArchetype> QueryExact<TArchetype>() where TArchetype : class => new(this, polymorphic: false);
+    public EcsQuery<TArchetype> QueryExact<TArchetype>() where TArchetype : class => new(this, false);
 
     /// <summary>
     /// Create a zero-allocation spatial query handle for component type <typeparamref name="T"/>.
@@ -144,17 +143,14 @@ public unsafe partial class Transaction
             $"Archetype {typeof(TArch).Name} EntityMap not initialized — call DatabaseEngine.InitializeArchetypes first");
 
         var scope = TyphonEvent.BeginEcsSpawn(meta.ArchetypeId);
-        try
-        {
-            scope.Tsn = TSN;
-            var id = SpawnInternal(meta, values);
-            scope.EntityId = id.RawValue;
-            return id;
-        }
-        finally
-        {
-            scope.Dispose();
-        }
+        // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. SpawnInternal is engine-internal (allocation + B+Tree insert + MVCC).
+        // If a future change adds a user-callback path, re-tag to variant B.
+        scope.Tsn = TSN;
+        var id = SpawnInternal(meta, values);
+        scope.EntityId = id.RawValue;
+        // PROFILING-SPAN-NO-THROW-END
+        scope.Dispose();
+        return id;
     }
 
     /// <summary>
@@ -485,7 +481,7 @@ public unsafe partial class Transaction
     {
         EnsureMutable();
         State = TransactionState.InProgress;
-        var entity = ResolveEntity(id, writable: true);
+        var entity = ResolveEntity(id, true);
         if (!entity.IsValid)
         {
             throw new InvalidOperationException($"Entity {id} not found or not visible at TSN {TSN}");
@@ -563,23 +559,20 @@ public unsafe partial class Transaction
         Debug.Assert(!id.IsNull, "Cannot destroy null entity");
 
         var scope = TyphonEvent.BeginEcsDestroy(id.RawValue);
-        try
-        {
-            scope.Tsn = TSN;
+        // PROFILING-SPAN-NO-THROW-BEGIN — body MUST NOT throw. DestroyInternal is engine-internal (cascade traversal + tombstone marking).
+        // If a future change adds a user-callback path, re-tag to variant B.
+        scope.Tsn = TSN;
 
-            int cascadeCount = 0;
-            DestroyInternal(id, 0, ref cascadeCount);
+        int cascadeCount = 0;
+        DestroyInternal(id, 0, ref cascadeCount);
 
-            // Only carry CascadeCount when the cascade actually extended beyond the root entity — saves 4 B per record on the common case.
-            if (cascadeCount > 1)
-            {
-                scope.CascadeCount = cascadeCount;
-            }
-        }
-        finally
+        // Only carry CascadeCount when the cascade actually extended beyond the root entity — saves 4 B per record on the common case.
+        if (cascadeCount > 1)
         {
-            scope.Dispose();
+            scope.CascadeCount = cascadeCount;
         }
+        // PROFILING-SPAN-NO-THROW-END
+        scope.Dispose();
     }
 
     /// <summary>Mark an entity link target for destruction.</summary>
@@ -1089,7 +1082,7 @@ public unsafe partial class Transaction
             cri.Operations |= ComponentInfo.OperationType.Updated;
 
             // AddCompRev: allocates NEW chunk, adds revision entry with IsolationFlag=true
-            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, isDelete: false);
+            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, false);
 
             // Copy old data to new chunk
             byte* oldPtr = info.CompContentAccessor.GetChunkAddress(oldChunkId);
@@ -2525,7 +2518,7 @@ public unsafe partial class Transaction
         // Create tombstone revision only on first mutation (same guard as UpdateComponent)
         if (!cached || (cri.Operations & ComponentInfo.OperationType.Read) != 0)
         {
-            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, isDelete: true);
+            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, true);
         }
     }
 

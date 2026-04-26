@@ -29,12 +29,16 @@ public readonly struct PageCacheEventData
 
     public byte OptionalFieldMask { get; }
 
+    /// <summary>Phase 5: dirty-bit for <see cref="TraceEventKind.PageEvicted"/> (1 if the displaced page was dirty, 0 otherwise).</summary>
+    public byte DirtyBit { get; }
+
     public bool HasPageCount => (OptionalFieldMask & PageCacheEventCodec.OptPageCount) != 0;
+    public bool HasDirtyBit => (OptionalFieldMask & PageCacheEventCodec.OptDirtyBit) != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
     public PageCacheEventData(TraceEventKind kind, byte threadSlot, long startTimestamp, long durationTicks,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int filePageIndex, int pageCount, byte optionalFieldMask)
+        int filePageIndex, int pageCount, byte optionalFieldMask, byte dirtyBit = 0)
     {
         Kind = kind;
         ThreadSlot = threadSlot;
@@ -47,6 +51,7 @@ public readonly struct PageCacheEventData
         FilePageIndex = filePageIndex;
         PageCount = pageCount;
         OptionalFieldMask = optionalFieldMask;
+        DirtyBit = dirtyBit;
     }
 }
 
@@ -121,28 +126,39 @@ public static class PageCacheBackpressureCodec
 
 /// <summary>
 /// Shared wire codec for all five page-cache event kinds. Every kind writes a 4-byte "primary value" slot (<c>FilePageIndex</c> for most,
-/// <c>PageCount</c> for Flush) plus a 1-byte <c>optMask</c>, plus an optional 4-byte secondary <c>PageCount</c> for DiskWrite.
+/// <c>PageCount</c> for Flush) plus a 1-byte <c>optMask</c>, plus optional trailing fields keyed by the mask bits.
 /// </summary>
+/// <remarks>
+/// <b>Phase 5 wire-additive extension:</b> <see cref="OptDirtyBit"/> (0x02) appends one trailing byte for the
+/// <see cref="TraceEventKind.PageEvicted"/> dirty flag (1 = displaced page was dirty, 0 = clean). Old decoders see an
+/// unknown mask bit and stop reading at the cursor they expect; the record-size header in the common header tells
+/// them where the next record begins, so wire compatibility is preserved.
+/// </remarks>
 public static class PageCacheEventCodec
 {
     /// <summary>Optional-mask bit 0 — <c>PageCount</c> on DiskWrite (contiguous run length).</summary>
     public const byte OptPageCount = 0x01;
 
+    /// <summary>Optional-mask bit 1 (Phase 5) — trailing 1-byte <c>dirtyBit</c> on <see cref="TraceEventKind.PageEvicted"/>.</summary>
+    public const byte OptDirtyBit = 0x02;
+
     private const int FilePageIndexSize = 4;
     private const int OptMaskSize = 1;
     private const int PageCountSize = 4;
+    private const int DirtyBitSize = 1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int ComputeSize(TraceEventKind kind, bool hasTraceContext, byte optMask)
     {
         var size = TraceRecordHeader.SpanHeaderSize(hasTraceContext) + FilePageIndexSize + OptMaskSize;
         if ((optMask & OptPageCount) != 0) size += PageCountSize;
+        if ((optMask & OptDirtyBit) != 0) size += DirtyBitSize;
         return size;
     }
 
     internal static void Encode(Span<byte> destination, long endTimestamp, TraceEventKind kind, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int filePageIndex, int pageCount, byte optMask, out int bytesWritten)
+        int filePageIndex, int pageCount, byte optMask, out int bytesWritten, byte dirtyBit = 0)
     {
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSize(kind, hasTraceContext, optMask);
@@ -167,6 +183,12 @@ public static class PageCacheEventCodec
         {
             BinaryPrimitives.WriteInt32LittleEndian(payload[cursor..], pageCount);
             cursor += PageCountSize;
+        }
+
+        if ((optMask & OptDirtyBit) != 0)
+        {
+            payload[cursor] = dirtyBit;
+            cursor += DirtyBitSize;
         }
 
         bytesWritten = size;
@@ -197,8 +219,15 @@ public static class PageCacheEventCodec
             cursor += PageCountSize;
         }
 
+        byte dirtyBit = 0;
+        if ((optMask & OptDirtyBit) != 0)
+        {
+            dirtyBit = payload[cursor];
+            cursor += DirtyBitSize;
+        }
+
         return new PageCacheEventData(kind, threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            filePageIndex, pageCount, optMask);
+            filePageIndex, pageCount, optMask, dirtyBit);
     }
 }
 

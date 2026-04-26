@@ -38,13 +38,24 @@ public partial class DagScheduler
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void InspectorTickEnd(long tickNumber, long timestamp) => TyphonEvent.EmitTickEnd(timestamp, overloadLevel: 0, tickMultiplier: 1);
+    private void InspectorTickEnd(long tickNumber, long timestamp) => TyphonEvent.EmitTickEnd(timestamp, 0, 1);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void InspectorSystemReady(int sysIdx, long timestamp) => TyphonEvent.EmitSystemReady((ushort)sysIdx, predecessorCount: 0, timestamp);
+    private void InspectorSystemReady(int sysIdx, long timestamp) => TyphonEvent.EmitSystemReady((ushort)sysIdx, 0, timestamp);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void InspectorSystemSkipped(int sysIdx, SkipReason reason, long timestamp) => TyphonEvent.EmitSystemSkipped((ushort)sysIdx, (byte)reason, timestamp);
+    private void InspectorSystemSkipped(int sysIdx, SkipReason reason, long timestamp)
+    {
+        // Phase 4 (#282): wire-additive payload extension carries `wouldBeChunkCount` and
+        // `successorsUnblocked`. wouldBeChunkCount = chunks the system would have processed
+        // (TotalChunks for parallel queries, 1 for callback/single-invocation systems, 0 if
+        // a parallel-query's TotalChunks hasn't been published yet for this tick).
+        // successorsUnblocked = direct successor count freed from waiting on this skip.
+        var sys = Systems[sysIdx];
+        var wouldBe = sys.IsParallelQuery ? sys.TotalChunks : 1;
+        var unblocked = sys.Successors.Length;
+        TyphonEvent.EmitSystemSkipped((ushort)sysIdx, (byte)reason, timestamp, (ushort)Math.Min(wouldBe, ushort.MaxValue), (ushort)Math.Min(unblocked, ushort.MaxValue));
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void InspectorChunkStart(int sysIdx, int chunkIndex, long timestamp, int totalChunks)

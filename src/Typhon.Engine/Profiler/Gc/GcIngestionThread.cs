@@ -75,7 +75,7 @@ internal sealed class GcIngestionThread
         _slotReady.Wait(TimeSpan.FromSeconds(5));
     }
 
-    private readonly ManualResetEventSlim _slotReady = new(initialState: false);
+    private readonly ManualResetEventSlim _slotReady = new(false);
 
     public void Stop()
     {

@@ -333,10 +333,10 @@ public class EpochManagerTests
         var writer = new TestMetricWriter();
         manager.ReadMetrics(writer);
 
-        // 3 total scope entries (g1, g2, g3)
-        Assert.That(writer.Throughputs.ContainsKey("EpochAdvances"), Is.True);
-        Assert.That(writer.Throughputs["EpochAdvances"], Is.EqualTo(2)); // 2 outermost exits
-        Assert.That(writer.Throughputs["ScopeEnters"], Is.EqualTo(3));   // 3 total entries
+        // Phase 2 (#280) retired the non-atomic _epochAdvances / _scopeEnters counters — the same
+        // data is now derivable from ConcurrencyEpochAdvance / ConcurrencyEpochScopeEnter trace
+        // events when Profiler:Concurrency:Epoch:* is enabled. ReadMetrics now reports only the
+        // slot-capacity gauge.
         Assert.That(writer.CapacityMaximum, Is.EqualTo(EpochThreadRegistry.MaxSlots));
     }
 
@@ -414,7 +414,6 @@ public class EpochManagerTests
         public void WriteMemory(long allocatedBytes, long peakBytes) { }
         public void WriteCapacity(long current, long maximum) { CapacityCurrent = current; CapacityMaximum = maximum; }
         public void WriteDiskIO(long readOps, long writeOps, long readBytes, long writeBytes) { }
-        public void WriteContention(long waitCount, long totalWaitUs, long maxWaitUs, long timeoutCount) { }
         public void WriteThroughput(string name, long count) => Throughputs[name] = count;
         public void WriteDuration(string name, long lastUs, long avgUs, long maxUs) { }
     }

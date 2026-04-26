@@ -245,11 +245,12 @@ internal sealed class EpochThreadRegistry : IDisposable
             _slots[index].Depth = 0;
             _threadSlotIndex = index;
             _threadRegistry = this;
-            Interlocked.Increment(ref _activeSlotCount);
+            var newCount = Interlocked.Increment(ref _activeSlotCount);
 
             // Register finalizer for thread death cleanup.
             // Store in [ThreadStatic] field to root the handle for the thread's lifetime.
             _threadSlotHandle = new EpochSlotHandle(this, index);
+            Profiler.TyphonEvent.EmitConcurrencyEpochSlotClaim((ushort)index, (ushort)thread.ManagedThreadId, (ushort)newCount);
             return true;
         }
 
@@ -272,6 +273,7 @@ internal sealed class EpochThreadRegistry : IDisposable
 
             // Root the handle for this thread
             _threadSlotHandle = new EpochSlotHandle(this, index);
+            Profiler.TyphonEvent.EmitConcurrencyEpochSlotReclaim((ushort)index, (ushort)oldOwner.ManagedThreadId, (ushort)newOwner.ManagedThreadId);
             return true;
         }
 

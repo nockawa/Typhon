@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Typhon.Engine.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -123,11 +124,27 @@ internal sealed class WalRecovery : IDisposable
         var startTicks = Stopwatch.GetTimestamp();
         var result = new WalRecoveryResult();
 
+        // Phase 8: Recovery:Start instant — fires once at recovery entry. Reason byte: 0 = normal startup recovery.
+        TyphonEvent.EmitDurabilityRecoveryStart(checkpointLSN, 0);
+
         // ═══════════════════════════════════════════════════════════
         // Phase 1: Discover segments
         // ═══════════════════════════════════════════════════════════
 
-        var segmentPaths = DiscoverSegments();
+        // Phase 8: Recovery:Discover span — covers segment enumeration. Stats filled in after the call.
+        List<string> segmentPaths;
+        var discoverScope = TyphonEvent.BeginDurabilityRecoveryDiscover(0, 0, 0);
+        try
+        {
+            segmentPaths = DiscoverSegments();
+            discoverScope.SegCount = segmentPaths.Count;
+            // TotalBytes/FirstSegId left at 0 — DiscoverSegments doesn't currently expose those; fillable in a follow-up.
+        }
+        finally
+        {
+            discoverScope.Dispose();
+        }
+
         if (segmentPaths.Count == 0)
         {
             // No WAL segments — void all remaining Pending entries
@@ -148,43 +165,58 @@ internal sealed class WalRecovery : IDisposable
 
         using var reader = new WalSegmentReader(_fileIO);
 
+        var segIndex = 0;
         foreach (var segmentPath in segmentPaths)
         {
             if (!reader.OpenSegment(segmentPath))
             {
+                segIndex++;
                 continue; // Invalid segment header — skip
             }
 
             result.SegmentsScanned++;
 
-            while (reader.TryReadNext(out var chunkHeader, out var body))
+            // Phase 8: Recovery:Segment span — per-segment scan. RecCount/Bytes filled at the end of each segment.
+            var segScope = TyphonEvent.BeginDurabilityRecoverySegment(segIndex);
+            try
             {
-                result.RecordsScanned++;
-
-                switch ((WalChunkType)chunkHeader.ChunkType)
+                var beforeRecords = result.RecordsScanned;
+                while (reader.TryReadNext(out var chunkHeader, out var body))
                 {
-                    case WalChunkType.FullPageImage:
-                        CollectFpiChunk(fpiMap, body);
-                        break;
+                    result.RecordsScanned++;
 
-                    case WalChunkType.Transaction:
-                        ProcessTransactionChunk(uowStates, body, checkpointLSN);
-                        break;
+                    switch ((WalChunkType)chunkHeader.ChunkType)
+                    {
+                        case WalChunkType.FullPageImage:
+                            CollectFpiChunk(fpiMap, body);
+                            break;
 
-                    case WalChunkType.TickFence:
-                        CollectTickFenceChunk(tickFenceEntries, body);
-                        break;
+                        case WalChunkType.Transaction:
+                            ProcessTransactionChunk(uowStates, body, checkpointLSN);
+                            break;
 
-                    case WalChunkType.ClusterTickFence:
-                        CollectClusterTickFenceChunk(clusterTickFenceEntries, body);
-                        break;
+                        case WalChunkType.TickFence:
+                            CollectTickFenceChunk(tickFenceEntries, body);
+                            break;
+
+                        case WalChunkType.ClusterTickFence:
+                            CollectClusterTickFenceChunk(clusterTickFenceEntries, body);
+                            break;
+                    }
                 }
+                segScope.RecCount = result.RecordsScanned - beforeRecords;
+                segScope.Truncated = (byte)(reader.WasTruncated ? 1 : 0);
+            }
+            finally
+            {
+                segScope.Dispose();
             }
 
             if (reader.WasTruncated)
             {
                 break; // Stop at truncation point
             }
+            segIndex++;
         }
 
         result.LastValidLSN = reader.LastValidLSN;
@@ -202,10 +234,20 @@ internal sealed class WalRecovery : IDisposable
             }
         }
 
-        // Void all remaining Pending entries
-        var voidCountBefore = registry.VoidEntryCount;
-        registry.VoidRemainingPending();
-        result.UowsVoided = registry.VoidEntryCount - voidCountBefore;
+        // Phase 8: Recovery:Undo span — covers voiding pending entries.
+        var undoScope = TyphonEvent.BeginDurabilityRecoveryUndo(0);
+        try
+        {
+            // Void all remaining Pending entries
+            var voidCountBefore = registry.VoidEntryCount;
+            registry.VoidRemainingPending();
+            result.UowsVoided = registry.VoidEntryCount - voidCountBefore;
+            undoScope.VoidedUowCount = result.UowsVoided;
+        }
+        finally
+        {
+            undoScope.Dispose();
+        }
 
         // ═══════════════════════════════════════════════════════════
         // Phase 4: FPI torn-page repair (BEFORE replay)
@@ -213,37 +255,51 @@ internal sealed class WalRecovery : IDisposable
 
         if (_mmf != null && fpiMap.Count > 0)
         {
-            var pageBuffer = new byte[PagedMMF.PageSize];
-            foreach (var kvp in fpiMap)
+            // Phase 8: Recovery:FPI span — covers torn-page repair.
+            var fpiScope = TyphonEvent.BeginDurabilityRecoveryFpi(fpiMap.Count);
+            try
             {
-                var filePageIndex = kvp.Key;
-                var fpiEntry = kvp.Value;
-
-                // Read the current page from disk
-                _mmf.ReadPageDirect(filePageIndex, pageBuffer);
-
-                // Read stored CRC; if 0 the page was never checkpointed — skip
-                var storedCrc = MemoryMarshal.Read<uint>(pageBuffer.AsSpan(PageBaseHeader.PageChecksumOffset));
-                if (storedCrc == 0)
+                var pageBuffer = new byte[PagedMMF.PageSize];
+                int mismatches = 0;
+                foreach (var kvp in fpiMap)
                 {
-                    continue;
+                    var filePageIndex = kvp.Key;
+                    var fpiEntry = kvp.Value;
+
+                    // Read the current page from disk
+                    _mmf.ReadPageDirect(filePageIndex, pageBuffer);
+
+                    // Read stored CRC; if 0 the page was never checkpointed — skip
+                    var storedCrc = MemoryMarshal.Read<uint>(pageBuffer.AsSpan(PageBaseHeader.PageChecksumOffset));
+                    if (storedCrc == 0)
+                    {
+                        continue;
+                    }
+
+                    // Compute CRC; if it matches the page is consistent — skip
+                    var computedCrc = WalCrc.ComputeSkipping(pageBuffer, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
+                    if (computedCrc == storedCrc)
+                    {
+                        continue;
+                    }
+
+                    // CRC mismatch — page is torn, restore from FPI
+                    mismatches++;
+                    _mmf.WritePageDirect(filePageIndex, fpiEntry.PageData);
+                    result.FpiRecordsApplied++;
                 }
 
-                // Compute CRC; if it matches the page is consistent — skip
-                var computedCrc = WalCrc.ComputeSkipping(pageBuffer, PageBaseHeader.PageChecksumOffset, PageBaseHeader.PageChecksumSize);
-                if (computedCrc == storedCrc)
+                if (result.FpiRecordsApplied > 0)
                 {
-                    continue;
+                    _mmf.FlushToDisk();
                 }
 
-                // CRC mismatch — page is torn, restore from FPI
-                _mmf.WritePageDirect(filePageIndex, fpiEntry.PageData);
-                result.FpiRecordsApplied++;
+                fpiScope.RepairedCount = result.FpiRecordsApplied;
+                fpiScope.Mismatches = mismatches;
             }
-
-            if (result.FpiRecordsApplied > 0)
+            finally
             {
-                _mmf.FlushToDisk();
+                fpiScope.Dispose();
             }
         }
 
@@ -253,20 +309,35 @@ internal sealed class WalRecovery : IDisposable
 
         if (dbe != null)
         {
-            foreach (var kvp in uowStates)
+            // Phase 8: Recovery:Redo span — covers committed transaction record replay.
+            var redoScope = TyphonEvent.BeginDurabilityRecoveryRedo();
+            try
             {
-                if (!kvp.Value.HasCommit)
+                int uowsReplayed = 0;
+                var redoStart = Stopwatch.GetTimestamp();
+                foreach (var kvp in uowStates)
                 {
-                    continue; // Skip voided UoWs
-                }
+                    if (!kvp.Value.HasCommit)
+                    {
+                        continue; // Skip voided UoWs
+                    }
 
-                // Replay records in LSN order
-                foreach (var (recordHeader, recordPayload) in kvp.Value.Records.OrderBy(r => r.Header.LSN))
-                {
-                    var header = recordHeader;
-                    WalReplayHelper.ReplayRecord(dbe, ref header, recordPayload);
-                    result.RecordsReplayed++;
+                    // Replay records in LSN order
+                    foreach (var (recordHeader, recordPayload) in kvp.Value.Records.OrderBy(r => r.Header.LSN))
+                    {
+                        var header = recordHeader;
+                        WalReplayHelper.ReplayRecord(dbe, ref header, recordPayload);
+                        result.RecordsReplayed++;
+                    }
+                    uowsReplayed++;
                 }
+                redoScope.RecordsReplayed = result.RecordsReplayed;
+                redoScope.UowsReplayed = uowsReplayed;
+                redoScope.DurUs = (uint)Math.Min((Stopwatch.GetTimestamp() - redoStart) * 1_000_000L / Stopwatch.Frequency, uint.MaxValue);
+            }
+            finally
+            {
+                redoScope.Dispose();
             }
         }
 
@@ -274,14 +345,28 @@ internal sealed class WalRecovery : IDisposable
         // Phase 6: Replay TickFence entries (SV crash recovery)
         // ═══════════════════════════════════════════════════════════
 
-        if (dbe != null && tickFenceEntries.Count > 0)
+        if (dbe != null && (tickFenceEntries.Count > 0 || clusterTickFenceEntries.Count > 0))
         {
-            ReplayTickFences(dbe, tickFenceEntries, ref result);
-        }
-
-        if (dbe != null && clusterTickFenceEntries.Count > 0)
-        {
-            ReplayClusterTickFences(dbe, clusterTickFenceEntries, ref result);
+            // Phase 8: Recovery:TickFence span — covers SV/cluster TickFence replay.
+            var tfScope = TyphonEvent.BeginDurabilityRecoveryTickFence();
+            try
+            {
+                if (tickFenceEntries.Count > 0)
+                {
+                    ReplayTickFences(dbe, tickFenceEntries, ref result);
+                }
+                if (clusterTickFenceEntries.Count > 0)
+                {
+                    ReplayClusterTickFences(dbe, clusterTickFenceEntries, ref result);
+                }
+                tfScope.TickFenceCount = result.TickFenceChunksProcessed;
+                tfScope.Entries = result.TickFenceEntriesReplayed;
+                tfScope.TickNumber = 0;  // No single tick number — chunks span multiple ticks; left at 0.
+            }
+            finally
+            {
+                tfScope.Dispose();
+            }
         }
 
         // ═══════════════════════════════════════════════════════════

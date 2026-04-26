@@ -398,7 +398,7 @@ function renderGcGroup(cx: GaugeRenderContext): void {
   const gcSuspensions = cx.gaugeData.gcSuspensions;
 
   if (gcEvents.length === 0 && gcSuspensions.length === 0) {
-    drawNoDataMessage(cx.ctx, cx.layout, `${cx.spec.label} — no GC activity captured (enable Typhon:Telemetry:Profiler:GC)`, cx.theme);
+    drawNoDataMessage(cx.ctx, cx.layout, `${cx.spec.label} — no GC activity captured (enable Typhon:Profiler:GcTracing:Enabled)`, cx.theme);
     return;
   }
 

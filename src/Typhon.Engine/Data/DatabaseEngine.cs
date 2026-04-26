@@ -11,7 +11,6 @@ using System.Threading;
 using System.Reflection;
 using System.Linq.Expressions;
 using Typhon.Engine.Profiler;
-using Typhon.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -1034,7 +1033,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup. Only Dynamic mode is updated.
                 if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
                 {
-                    DetectClusterMigrations(clusterState, engineState, dirtyBits, ref accessor);
+                    DetectClusterMigrations(clusterState, engineState, meta.ArchetypeId, dirtyBits, ref accessor);
 
                     // Issue #229 Phase 3: drain the per-archetype migration queue populated by detection above.
                     // ExecuteMigrations runs BEFORE the cluster tick fence WAL publish so the WAL chunks reflect post-migration cluster state (source slots
@@ -1299,7 +1298,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// spatial index. The contract is: upstream systems MUST write finite positions. Consistent with Phase 1+2's
     /// spawn-time <see cref="SpatialGrid.WorldToCellKey"/> guard.</para>
     /// </remarks>
-    private unsafe void DetectClusterMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, long[] dirtyBits,
+    private unsafe void DetectClusterMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ushort archetypeId, long[] dirtyBits,
         ref ChunkAccessor<PersistentStore> clusterAccessor)
     {
         ref var ss = ref clusterState.SpatialSlot;
@@ -1399,13 +1398,22 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     var newCellKey = grid.WorldToCellKey(posX, posY);
                     if (newCellKey != currentCellKey)
                     {
+                        TyphonEvent.EmitSpatialClusterMigrationDetect(archetypeId, clusterChunkId, currentCellKey, newCellKey);
                         clusterState.EnqueueMigration(clusterChunkId, slotIndex, newCellKey);
+                        TyphonEvent.EmitSpatialClusterMigrationQueue(archetypeId, clusterChunkId, (ushort)Math.Min(clusterState.PendingMigrationCount, ushort.MaxValue));
                     }
                 }
                 else if (posX < curCellMinX || posX > curCellMaxX || posY < curCellMinY || posY > curCellMaxY)
                 {
                     // Entity crossed the raw cell boundary but is still within the hysteresis dead-zone. No migration. Count for tuning telemetry.
                     hysteresisAbsorbedCount++;
+                    if (TelemetryConfig.SpatialClusterMigrationHysteresisActive)
+                    {
+                        // Approximate escape distance: max-axis overflow squared.
+                        float ex = posX < curCellMinX ? (curCellMinX - posX) : (posX > curCellMaxX ? (posX - curCellMaxX) : 0f);
+                        float ey = posY < curCellMinY ? (curCellMinY - posY) : (posY > curCellMaxY ? (posY - curCellMaxY) : 0f);
+                        TyphonEvent.EmitSpatialClusterMigrationHysteresis(archetypeId, clusterChunkId, ex * ex + ey * ey);
+                    }
                 }
             }
         }
@@ -1757,7 +1765,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         // High-migration-rate warning. Analogous to LogHighEscapeRate — surfaces potential viewport warps, teleport events, or unphysical entity speeds that
         // blow past cell boundaries en masse. 1K per tick is an arbitrary absolute threshold; revisit once AntHill provides realistic rates.
-        if (TelemetryConfig.SpatialActive && count >= 1000)
+        // To silence: configure Microsoft.Extensions.Logging filter for "Typhon.Engine.Data.SpatialMaintainer" at Error level.
+        if (count >= 1000)
         {
             SpatialMaintainer.LogHighMigrationRate(Logger, count, archetypeId, durationMs);
         }
@@ -2026,8 +2035,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             if (index.AllowMultiple)
             {
                 int elementId = *(int*)(chunkPtr + ifi.OffsetToIndexElementId);
-                int newElementId = index.MoveValue(&oldKey, newFieldPtr, elementId, entry.ChunkId, ref idxAccessor, out _, out _,
-                    preserveEmptyBuffer: false);
+                int newElementId = index.MoveValue(&oldKey, newFieldPtr, elementId, entry.ChunkId, ref idxAccessor, out _, out _);
                 // Write back new element ID — page is already dirty from the mutation that triggered shadowing
                 *(int*)(chunkPtr + ifi.OffsetToIndexElementId) = newElementId;
             }
@@ -2106,8 +2114,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             changeSet.SaveChanges();
         }
 
-        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB
-        if (TelemetryConfig.SpatialActive && dirtyCount > 0)
+        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB.
+        // To silence: configure Microsoft.Extensions.Logging filter for "Typhon.Engine.Data.SpatialMaintainer" at Error level.
+        if (dirtyCount > 0)
         {
             double escapeRate = (double)escapeCount / dirtyCount;
             if (escapeRate > 0.10)
@@ -2173,7 +2182,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             occupancyMap = PagedHashMap<long, int, PersistentStore>.Open(hmSegment);
         }
 
-        var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, load: true);
+        var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, true);
         tree.BackPointerSegment = backPtrSegment;
 
         var sf = table.Definition.SpatialField;
@@ -3269,8 +3278,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         }
                     }
                 }
-                meta.ClusterLayout = ArchetypeClusterInfo.Compute(meta.ComponentCount, componentSizes, multipleIndexedFieldCount: multipleIndexedFieldCount,
-                    versionedSlotMask: versionedSlotMask, transientSlotMask: transientSlotMask);
+                meta.ClusterLayout = ArchetypeClusterInfo.Compute(meta.ComponentCount, componentSizes, multipleIndexedFieldCount,
+                    versionedSlotMask, transientSlotMask);
 
                 // Override entity record size: base 19 bytes + 4 bytes per Versioned component slot
                 meta._entityRecordSize = ClusterEntityRecordAccessor.RecordSize(meta.VersionedSlotCount);

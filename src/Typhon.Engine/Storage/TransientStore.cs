@@ -243,12 +243,7 @@ public unsafe struct TransientStore : IPageStore, IDisposable
             {
                 // Need a new block
                 var blockSize = _pagesPerBlock * PagedMMF.PageSize;
-                var block = _allocator.AllocatePinned(
-                    $"TransientBlock-{blockIndex}",
-                    _parent,
-                    blockSize,
-                    zeroed: true,
-                    alignment: 64); // cache-line aligned
+                var block = _allocator.AllocatePinned($"TransientBlock-{blockIndex}", _parent, blockSize, true, 64); // cache-line aligned
                 _blocks.Add(block);
             }
 

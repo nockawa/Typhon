@@ -38,7 +38,7 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
     public FileExporter(string filePath, IResource parent) : base("FileExporter", ResourceType.Service, parent ?? throw new ArgumentNullException(nameof(parent)))
     {
         _filePath = filePath ?? throw new ArgumentNullException(nameof(filePath));
-        Queue = new ExporterQueue(boundedCapacity: 64);
+        Queue = new ExporterQueue(64);
     }
 
     /// <inheritdoc />
@@ -52,7 +52,7 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
             throw new ArgumentNullException(nameof(metadata));
         }
 
-        _stream = new FileStream(_filePath, FileMode.Create, FileAccess.Write, FileShare.Read, bufferSize: 64 * 1024);
+        _stream = new FileStream(_filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024);
         _writer = new TraceFileWriter(_stream);
 
         var header = new TraceFileHeader

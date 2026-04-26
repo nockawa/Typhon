@@ -82,12 +82,14 @@ public sealed partial class DagScheduler
 
         // Update overload state machine
         var previousLevel = _overloadDetector.CurrentLevel;
+        var previousMul = _tickMultiplier;
         var levelChanged = _overloadDetector.Update(overrunRatio, queueDepth);
         _tickMultiplier = _overloadDetector.TickMultiplier;
 
         if (levelChanged)
         {
             LogOverloadLevelChanged(previousLevel, _overloadDetector.CurrentLevel, _currentTickNumber);
+            Profiler.TyphonEvent.EmitSchedulerOverloadLevelChange((byte)previousLevel, (byte)_overloadDetector.CurrentLevel, overrunRatio, queueDepth, (byte)previousMul, (byte)_tickMultiplier);
 
             if (_overloadDetector.CurrentLevel == OverloadLevel.PlayerShedding && previousLevel != OverloadLevel.PlayerShedding)
             {

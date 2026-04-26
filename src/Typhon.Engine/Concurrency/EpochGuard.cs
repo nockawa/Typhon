@@ -1,5 +1,6 @@
 using JetBrains.Annotations;
 using System.Runtime.CompilerServices;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -39,7 +40,9 @@ public ref struct EpochGuard
     public static EpochGuard Enter(EpochManager manager)
     {
         var depth = manager.EnterScope();
-        return new EpochGuard(manager, depth, manager.GlobalEpoch);
+        var epoch = manager.GlobalEpoch;
+        TyphonEvent.EmitConcurrencyEpochScopeEnter((uint)epoch, (byte)depth, depth == 0);
+        return new EpochGuard(manager, depth, epoch);
     }
 
     /// <summary>
@@ -52,6 +55,7 @@ public ref struct EpochGuard
         {
             _disposed = true;
             _manager.ExitScope(_expectedDepth);
+            TyphonEvent.EmitConcurrencyEpochScopeExit((uint)_manager.GlobalEpoch, _expectedDepth == 0);
         }
     }
 }

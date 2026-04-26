@@ -35,7 +35,7 @@ internal static class RevisionChainReader
             if (header.ItemCount == 1)
             {
                 // Single entry — read it directly from the root chunk
-                var chunkContent = compRevTableAccessor.GetChunkAsSpan(compRevFirstChunkId, false);
+                var chunkContent = compRevTableAccessor.GetChunkAsSpan(compRevFirstChunkId);
                 var elements = chunkContent.Slice(Unsafe.SizeOf<CompRevStorageHeader>()).Cast<byte, CompRevStorageElement>();
                 ref var element = ref elements[header.FirstItemIndex];
 
@@ -122,8 +122,18 @@ internal static class RevisionChainReader
             readCommitSequence = readCommitSequence - totalCommitted + visibleOrdinal;
         }
 
+        // Phase 6: chain length is approximated from the first chunk's ChainLength header. Cap at byte max for the wire payload.
+        // The leaf-gate read here lets the JIT fold the entire ChainWalk emit path away when MVCC tracing is disabled — the
+        // GetChunk read itself is not free on this hot path (called per-entity-read).
+        byte chainLenForEvent = 0;
+        if (TelemetryConfig.DataMvccChainWalkActive)
+        {
+            chainLenForEvent = (byte)Math.Min(compRevTableAccessor.GetChunk<CompRevStorageHeader>(compRevFirstChunkId).ChainLength, byte.MaxValue);
+        }
+
         if (curCompRevisionIndex == -1)
         {
+            Profiler.TyphonEvent.EmitDataMvccChainWalk(transactionTSN, chainLenForEvent, 1);
             return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(RevisionReadStatus.SnapshotInvisible);
         }
 
@@ -143,9 +153,11 @@ internal static class RevisionChainReader
             // Tombstoned entity: carry the value (callers like UpdateComponent need revision metadata) but signal Deleted
             if (curCompChunkId == 0)
             {
+                Profiler.TyphonEvent.EmitDataMvccChainWalk(transactionTSN, chainLenForEvent, 2);
                 return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo, RevisionReadStatus.Deleted);
             }
 
+            Profiler.TyphonEvent.EmitDataMvccChainWalk(transactionTSN, chainLenForEvent, 0);
             return new Result<ComponentInfo.CompRevInfo, RevisionReadStatus>(compRevInfo);
         }
     }

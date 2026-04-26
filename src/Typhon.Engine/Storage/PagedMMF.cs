@@ -264,6 +264,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// </summary>
     internal Action OnBackpressure { get; set; }
 
+    /// <summary>Stable identifier of the backing file path (hash of the path string), recorded on Storage:FileHandle events.</summary>
+    private int _filePathId;
+
     /// <summary>
     /// Atomically advances <see cref="_fileSize"/> to at least <paramref name="newSize"/>.
     /// No-op if the tracked size is already &gt;= <paramref name="newSize"/>.
@@ -281,6 +284,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             }
         } while (Interlocked.CompareExchange(ref _fileSize, newSize, oldSize) != oldSize);
     }
+
+    /// <summary>
+    /// Current backing-file size in bytes (last value tracked by <see cref="TrackFileGrowth"/>). Read by the per-tick gauge collector;
+    /// no synchronization needed because <see cref="long"/> reads are atomic on x64.
+    /// </summary>
+    public long FileSize => _fileSize;
 
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
     public EpochManager EpochManager { get; private set; }
@@ -526,9 +535,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         _fileHandle = File.OpenHandle(filePathName, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, FileOptions.Asynchronous | FileOptions.RandomAccess);
         _fileSize = 0L;
+        _filePathId = filePathName.GetHashCode(StringComparison.Ordinal);
+
+        TyphonEvent.EmitStorageFileHandle(0, _filePathId, (byte)FileMode.Create);
 
         Logger.LogInformation("Create Database '{DatabaseName}' in file '{FilePathName}'", Options.DatabaseName, filePathName);
-        
+
         OnFileCreating();
     }
 
@@ -547,7 +559,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             var fi = new FileInfo(filePathName);
             _fileSize = fi.Length;
         }
-        
+        _filePathId = filePathName.GetHashCode(StringComparison.Ordinal);
+
+        TyphonEvent.EmitStorageFileHandle(0, _filePathId, (byte)FileMode.Open);
+
         OnFileLoading();
     }
 
@@ -573,6 +588,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             Logger.LogInformation("Disposing Virtual Disk Manager");
             if (_fileHandle != null)
             {
+                TyphonEvent.EmitStorageFileHandle(1, _filePathId, 0);
                 _fileHandle.Dispose();
                 _fileHandle = null;
             }
@@ -707,71 +723,71 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// <remarks>
     /// This method will enter a wait cycle if the Memory Page is not allocated and there are no free Memory Pages available.
     /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool FetchPageToMemory(int filePageIndex, out int memPageIndex, long timeout = Timeout.Infinite, CancellationToken cancellationToken = default)
     {
-        // Get the memory page from the cache, if it fails we allocate a new one
-        if (_memPageIndexByFilePageIndex.TryGetValue(filePageIndex, out memPageIndex) == false)
-        {
-            ++_metrics.MemPageCacheMiss;
-            LogMemPageCacheMiss();
-
-            // Synchronous span brackets only the kickoff, not the async disk-read tail. Same tradeoff as PageCacheDiskWrite in SavePageInternal:
-            // the raw async wait isn't captured, but in return we get (a) zero allocations on the fetch path, (b) no closure/display-class
-            // capture of scopes, (c) no cross-thread TLS leak (Dispose always runs on the begin thread, so PublishEvent restores
-            // CurrentOpenSpanId cleanly). If someone needs true async-tail attribution, it should come from a dedicated instant-event emit
-            // on the completion thread, not from a span whose scope straddles an await.
-            using var fetchScope = TyphonEvent.BeginPageCacheFetch(filePageIndex);
-
-            // Page is not cached, we assign an available Memory Page to it
-            if (!AllocateMemoryPage(filePageIndex, out memPageIndex, timeout, cancellationToken))
-            {
-                return false;
-            }
-
-            // Reset CRC verification flag — page is freshly loaded, needs re-verification
-            _memPagesInfo[memPageIndex].CrcVerified = false;
-
-            // Load the page from disk, if it's stored there already. (won't be the case for new pages)
-            // The load is async and not part of the returned task but stored in the PageInfo
-            var pageOffset = filePageIndex * (long)PageSize;
-            var loadPage = (pageOffset + PageSize) <= _fileSize;
-            if (loadPage)
-            {
-                LogAllocatePageLoad();
-                ++_metrics.ReadFromDiskCount;
-
-                using var diskReadScope = TyphonEvent.BeginPageCacheDiskRead(filePageIndex);
-
-                var pi = _memPagesInfo[memPageIndex];
-                var readTask = RandomAccess.ReadAsync(_fileHandle, MemPages.DataAsMemory.Slice(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken);
-
-                // Async-completion tracking: opt-in via UnsuppressKind(PageCacheDiskReadCompleted). When the DiskRead kickoff span was itself
-                // suppressed (SpanId == 0), there's nothing to correlate with, so skip the wrap. When the completion kind is suppressed,
-                // skip the wrap — producer hot path stays allocation-free by default.
-                if (diskReadScope.SpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted))
-                {
-                    var state = new PageCacheReadCompletionState(diskReadScope.SpanId, diskReadScope.StartTimestamp, filePageIndex);
-                    var wrapped = readTask.AsTask().ContinueWith(SReadCompletionHandler, state, CancellationToken.None, 
-                        TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                    pi.SetIOReadTask(new ValueTask<int>(wrapped));
-                }
-                else
-                {
-                    pi.SetIOReadTask(readTask);
-                }
-            }
-        }
-        else
+        // Hot path: cache hit. Kept EH-free + small so the JIT inlines this into RequestPageEpoch / RequestPageEpochUnchecked.
+        // The cache-miss branch lives in FetchPageToMemoryOnMiss to keep its `using var` (try/finally) out of this method's IL —
+        // see claude/scratch/jit-using.md for the EH-region-defeats-inlining mechanism.
+        if (_memPageIndexByFilePageIndex.TryGetValue(filePageIndex, out memPageIndex))
         {
             ++_metrics.MemPageCacheHit;
-            LogMemPageCacheHit();
+            return true;
         }
 
-#if TELEMETRY
-        using var logMemPageIndex = LogContext.PushProperty("MemPageIndex", memPageIndex);
-#endif
+        return FetchPageToMemoryOnMiss(filePageIndex, out memPageIndex, timeout, cancellationToken);
+    }
 
-        LogRequestPageFound();
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool FetchPageToMemoryOnMiss(int filePageIndex, out int memPageIndex, long timeout, CancellationToken cancellationToken)
+    {
+        ++_metrics.MemPageCacheMiss;
+
+        // Synchronous span brackets only the kickoff, not the async disk-read tail. Same tradeoff as PageCacheDiskWrite in SavePageInternal:
+        // the raw async wait isn't captured, but in return we get (a) zero allocations on the fetch path, (b) no closure/display-class
+        // capture of scopes, (c) no cross-thread TLS leak (Dispose always runs on the begin thread, so PublishEvent restores
+        // CurrentOpenSpanId cleanly). If someone needs true async-tail attribution, it should come from a dedicated instant-event emit
+        // on the completion thread, not from a span whose scope straddles an await.
+        using var fetchScope = TyphonEvent.BeginPageCacheFetch(filePageIndex);
+
+        // Page is not cached, we assign an available Memory Page to it
+        if (!AllocateMemoryPage(filePageIndex, out memPageIndex, timeout, cancellationToken))
+        {
+            return false;
+        }
+
+        // Reset CRC verification flag — page is freshly loaded, needs re-verification
+        _memPagesInfo[memPageIndex].CrcVerified = false;
+
+        // Load the page from disk, if it's stored there already. (won't be the case for new pages)
+        // The load is async and not part of the returned task but stored in the PageInfo
+        var pageOffset = filePageIndex * (long)PageSize;
+        var loadPage = (pageOffset + PageSize) <= _fileSize;
+        if (loadPage)
+        {
+            ++_metrics.ReadFromDiskCount;
+
+            using var diskReadScope = TyphonEvent.BeginPageCacheDiskRead(filePageIndex);
+
+            var pi = _memPagesInfo[memPageIndex];
+            var readTask = RandomAccess.ReadAsync(_fileHandle, MemPages.DataAsMemory.Slice(memPageIndex * PageSize, PageSize), pageOffset, cancellationToken);
+
+            // Async-completion tracking: opt-in via UnsuppressKind(PageCacheDiskReadCompleted). When the DiskRead kickoff span was itself
+            // suppressed (SpanId == 0), there's nothing to correlate with, so skip the wrap. When the completion kind is suppressed,
+            // skip the wrap — producer hot path stays allocation-free by default.
+            if (diskReadScope.SpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted))
+            {
+                var state = new PageCacheReadCompletionState(diskReadScope.SpanId, diskReadScope.StartTimestamp, filePageIndex);
+                var wrapped = readTask.AsTask().ContinueWith(SReadCompletionHandler, state, CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                pi.SetIOReadTask(new ValueTask<int>(wrapped));
+            }
+            else
+            {
+                pi.SetIOReadTask(readTask);
+            }
+        }
+
         return true;
     }
 
@@ -811,7 +827,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     {
         var bpCtx = new BackpressureContext("Storage/PagedMMF/AllocateMemoryPage", TimeoutOptions.Current.PageCacheBackpressureTimeout);
 
-        LogAllocatePageEnter();
         while (true)
         {
             if (cancellationToken.IsCancellationRequested)
@@ -838,7 +853,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
                 evictedFilePageIndex = pi.FilePageIndex;
                 if (TryAcquire(pi, minActiveEpoch))
                 {
-                    LogAllocatePageSequential();
                     found = true;
                 }
             }
@@ -961,14 +975,15 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             pi.FilePageIndex = filePageIndex;
 
             ++_metrics.TotalMemPageAllocatedCount;
-            LogAllocatePageFound(memPageIndex);
 
             // Record the eviction as a zero-duration marker span, parented under the enclosing PageCacheAllocatePage scope via TLS. Default-
             // suppressed alongside the other PageCache.* kinds — when the profiler is off or this kind is suppressed the whole call
             // dead-code-eliminates in Tier 1. evictedFilePageIndex < 0 means we claimed a slot that was previously Free (no displacement).
             if (evictedFilePageIndex >= 0)
             {
-                TyphonEvent.EmitPageEvicted(evictedFilePageIndex);
+                // Phase 5: dirtyBit reflects whether the displaced page was dirty at eviction time (still under the lock that gates clean reuse).
+                var dirtyBit = (byte)(pi.DirtyCounter > 0 ? 1 : 0);
+                TyphonEvent.EmitPageEvicted(evictedFilePageIndex, dirtyBit);
             }
 
             if (Options.PagesDebugPattern)
@@ -1900,38 +1915,6 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void DecrementSlotRefCount(int memPageIndex) => Interlocked.Decrement(ref _memPagesInfo[memPageIndex].SlotRefCount);
-
-    #region Logging helpers
-
-    [Conditional("TELEMETRY")]
-    private void LogMemPageCacheHit() => Logger.LogTrace(11, "MemPage Cache Hit");
-
-    [Conditional("TELEMETRY")]
-    private void LogMemPageCacheMiss() => Logger.LogTrace(12, "MemPage Cache Miss");
-
-    [Conditional("TELEMETRY")]
-    private void LogRequestPageFound() => Logger.LogTrace(13, "Request Page Found");
-
-    [Conditional("TELEMETRY")]
-    private void LogRequestPageRace() => Logger.LogTrace(14, "Request Page Race Condition (reallocation)");
-
-    [Conditional("TELEMETRY")]
-    private void LogAllocatePageEnter() => Logger.LogTrace(20, "Allocate Page Enter");
-
-    [Conditional("TELEMETRY")]
-    private void LogAllocatePageSequential() => Logger.LogTrace(22, "Allocate Page Sequential");
-
-    [Conditional("TELEMETRY")]
-    private void LogAllocatePageFound(int memPageIndex) => Logger.LogTrace(24, "Allocate Page Found {MemPageId}", memPageIndex);
-
-    [Conditional("TELEMETRY")]
-    private void LogAllocatePageLoad() => Logger.LogTrace(25, "Allocate Page Load From Disk");
-
-    [Conditional("TELEMETRY")]
-    private void LogReset() =>
-        Logger.LogTrace(44, "Resetting PagedFile instance !!!");
-
-    #endregion
 
     // ═══════════════════════════════════════════════════════════════════════
     // State Snapshot (test infrastructure)

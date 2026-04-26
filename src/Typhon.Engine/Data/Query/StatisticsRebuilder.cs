@@ -228,8 +228,7 @@ internal static class StatisticsRebuilder
     /// <summary>
     /// Convenience API: full scan (no sampling). Suitable for tests and explicit rebuilds.
     /// </summary>
-    internal static void RebuildStatistics(ComponentTable table, EpochManager epochManager) =>
-        RebuildAll(table, epochManager, pageInterval: 1);
+    internal static void RebuildStatistics(ComponentTable table, EpochManager epochManager) => RebuildAll(table, epochManager);
 
     /// <summary>
     /// Transforms IEEE 754 float/double bit patterns into order-preserving integer representations.

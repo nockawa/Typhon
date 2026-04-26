@@ -1,6 +1,7 @@
 using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -99,7 +100,7 @@ internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, ID
 
         // Allocate contiguous buffer region: poolCapacity × 8KB, 4096-byte aligned
         var totalSize = _poolCapacity * BufferSize;
-        _memoryBlock = allocator.AllocatePinned("StagingBufferPool", this, totalSize, zeroed: true, alignment: BufferAlignment);
+        _memoryBlock = allocator.AllocatePinned("StagingBufferPool", this, totalSize, true, BufferAlignment);
         _basePointer = _memoryBlock.DataAsPointer;
 
         // Initialize free-list bitmap: all bits set = all free
@@ -152,8 +153,26 @@ internal sealed unsafe class StagingBufferPool : ResourceNode, IMetricSource, ID
     {
         ThrowIfDisposed();
 
-        // Block until a buffer is available (back-pressure)
-        _available.Wait(cancellationToken);
+        // Phase 8: Durability:Checkpoint:Backpressure span — covers the wait when the pool is exhausted.
+        // The span's TraceContext (parent span) attributes the backpressure to the calling pipeline
+        // (Checkpoint or Backup). Exhausted=1 only when the wait actually blocked (semaphore had no
+        // free slot at entry).
+        var poolWasExhausted = _available.CurrentCount == 0;
+        var bpStart = poolWasExhausted ? Stopwatch.GetTimestamp() : 0L;
+        var bpScope = poolWasExhausted ? Profiler.TyphonEvent.BeginDurabilityCheckpointBackpressure(0, 1) : default;
+        try
+        {
+            // Block until a buffer is available (back-pressure)
+            _available.Wait(cancellationToken);
+        }
+        finally
+        {
+            if (poolWasExhausted)
+            {
+                bpScope.WaitMs = (uint)Math.Min((Stopwatch.GetTimestamp() - bpStart) * 1000L / Stopwatch.Frequency, uint.MaxValue);
+                bpScope.Dispose();
+            }
+        }
 
         // Find and claim a free slot via bitmap scan
         var slotIndex = AcquireFreeSlot();

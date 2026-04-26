@@ -131,48 +131,6 @@ public class MetricTypesTests
 
     #endregion
 
-    #region ContentionMetrics Tests
-
-    [Test]
-    public void ContentionMetrics_StoresValues()
-    {
-        var metrics = new ContentionMetrics(10, 5000, 1000, 2);
-
-        Assert.That(metrics.WaitCount, Is.EqualTo(10));
-        Assert.That(metrics.TotalWaitUs, Is.EqualTo(5000));
-        Assert.That(metrics.MaxWaitUs, Is.EqualTo(1000));
-        Assert.That(metrics.TimeoutCount, Is.EqualTo(2));
-    }
-
-    [Test]
-    public void ContentionMetrics_AvgWaitUs_ComputesCorrectly()
-    {
-        var metrics = new ContentionMetrics(10, 5000, 1000, 0);
-
-        Assert.That(metrics.AvgWaitUs, Is.EqualTo(500.0).Within(0.0001));
-    }
-
-    [Test]
-    public void ContentionMetrics_AvgWaitUs_ZeroWaitCount_ReturnsZero()
-    {
-        var metrics = new ContentionMetrics(0, 0, 0, 0);
-
-        Assert.That(metrics.AvgWaitUs, Is.EqualTo(0.0));
-    }
-
-    [Test]
-    public void ContentionMetrics_ValueEquality()
-    {
-        var a = new ContentionMetrics(10, 5000, 1000, 2);
-        var b = new ContentionMetrics(10, 5000, 1000, 2);
-        var c = new ContentionMetrics(10, 5000, 1000, 3);
-
-        Assert.That(a, Is.EqualTo(b));
-        Assert.That(a, Is.Not.EqualTo(c));
-    }
-
-    #endregion
-
     #region ThroughputMetric Tests
 
     [Test]
@@ -303,7 +261,6 @@ public class MetricTypesTests
         Assert.That(typeof(MemoryMetrics).IsValueType, Is.True);
         Assert.That(typeof(CapacityMetrics).IsValueType, Is.True);
         Assert.That(typeof(DiskIOMetrics).IsValueType, Is.True);
-        Assert.That(typeof(ContentionMetrics).IsValueType, Is.True);
         Assert.That(typeof(ThroughputMetric).IsValueType, Is.True);
         Assert.That(typeof(DurationMetric).IsValueType, Is.True);
     }
@@ -315,7 +272,6 @@ public class MetricTypesTests
         var memory = new MemoryMetrics(100, 200);
         var capacity = new CapacityMetrics(50, 100);
         var diskIO = new DiskIOMetrics(10, 20, 30, 40);
-        var contention = new ContentionMetrics(5, 1000, 200, 0);
         var throughput = new ThroughputMetric("Test", 100);
         var duration = new DurationMetric("Test", 50, 60, 100);
 
@@ -323,7 +279,6 @@ public class MetricTypesTests
         AssertMemoryMetrics(memory);
         AssertCapacityMetrics(capacity);
         AssertDiskIOMetrics(diskIO);
-        AssertContentionMetrics(contention);
         AssertThroughputMetric(throughput);
         AssertDurationMetric(duration);
     }
@@ -331,7 +286,6 @@ public class MetricTypesTests
     private static void AssertMemoryMetrics(MemoryMetrics m) => Assert.That(m.AllocatedBytes, Is.GreaterThanOrEqualTo(0));
     private static void AssertCapacityMetrics(CapacityMetrics m) => Assert.That(m.Utilization, Is.InRange(0.0, 1.0));
     private static void AssertDiskIOMetrics(DiskIOMetrics m) => Assert.That(m.ReadOps, Is.GreaterThanOrEqualTo(0));
-    private static void AssertContentionMetrics(ContentionMetrics m) => Assert.That(m.AvgWaitUs, Is.GreaterThanOrEqualTo(0));
     private static void AssertThroughputMetric(ThroughputMetric m) => Assert.That(m.Name, Is.Not.Null);
     private static void AssertDurationMetric(DurationMetric m) => Assert.That(m.Name, Is.Not.Null);
 

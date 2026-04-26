@@ -1,19 +1,10 @@
 {
   "Typhon": {
-    "Telemetry": {
+    "Profiler": {
       "Enabled": true,
-      "Profiler": {
-        "Enabled": true,
-        "GcTracing": {
-          "Enabled": true
-        },
-        "MemoryAllocations": {
-          "Enabled": true
-        },
-        "Gauges": {
-          "Enabled": true
-        }
-      }
+      "GcTracing":         { "Enabled": true },
+      "MemoryAllocations": { "Enabled": true },
+      "Gauges":            { "Enabled": true }
     }
   }
 }

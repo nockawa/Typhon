@@ -1,37 +1,30 @@
 {
   "Typhon": {
-    "Telemetry": {
+    "Profiler": {
       "Enabled": false,
 
-      "AccessControl": {
+      "GcTracing":         { "Enabled": false },
+      "MemoryAllocations": { "Enabled": false },
+      "Gauges":            { "Enabled": false },
+
+      "Scheduler": {
         "Enabled": false,
-        "TrackContention": true,
-        "TrackContentionDuration": true,
-        "TrackAccessPatterns": true
+        "Gauges": {
+          "WorkerUtilization": { "Enabled": true },
+          "StragglerGap":      { "Enabled": true }
+        }
       },
 
-      "PagedMMF": {
+      "Spatial": {
         "Enabled": false,
-        "TrackPageAllocations": true,
-        "TrackPageEvictions": true,
-        "TrackIOOperations": true,
-        "TrackCacheHitRatio": true,
-        "SpanLevel": "None"
-      },
-
-      "BTree": {
-        "Enabled": false,
-        "TrackNodeSplits": true,
-        "TrackNodeMerges": true,
-        "TrackSearchDepth": true,
-        "TrackKeyComparisons": false
-      },
-
-      "Transaction": {
-        "Enabled": false,
-        "TrackCommitRollback": true,
-        "TrackConflicts": true,
-        "TrackDuration": true
+        "Query":            { "Enabled": false },
+        "RTree":            { "Enabled": false },
+        "Grid":             { "Enabled": false },
+        "Cell":             { "Enabled": false },
+        "ClusterMigration": { "Enabled": false, "Execute": { "Enabled": true } },
+        "TierIndex":        { "Enabled": false },
+        "Maintain":         { "Enabled": false },
+        "Trigger":          { "Enabled": false }
       }
     }
   }

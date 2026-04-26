@@ -85,15 +85,28 @@ public static class InstantEventCodec
         bytesWritten = size;
     }
 
-    /// <summary>System skipped — payload: <c>u16 systemIdx</c>, <c>u8 skipReason</c>. Size = 15 B.</summary>
-    public static void WriteSystemSkipped(Span<byte> destination, byte threadSlot, long timestamp, ushort systemIndex, byte skipReason, out int bytesWritten)
+    /// <summary>
+    /// System skipped — payload: <c>u16 systemIdx</c>, <c>u8 skipReason</c>, <c>u16 wouldBeChunkCount</c>, <c>u16 successorsUnblocked</c>. Size = 19 B.
+    /// </summary>
+    /// <remarks>
+    /// Phase 4 (#282) extended the payload from 3 B to 7 B (wire-additive). Decoders must respect the record's size header — older
+    /// <c>.typhon-trace</c> files with the 3-byte payload still decode correctly; the new fields default to 0 in <see cref="Decode"/>.
+    /// </remarks>
+    public static void WriteSystemSkipped(Span<byte> destination, byte threadSlot, long timestamp, ushort systemIndex, byte skipReason,
+        ushort wouldBeChunkCount, ushort successorsUnblocked, out int bytesWritten)
     {
-        const int size = TraceRecordHeader.CommonHeaderSize + 3;
+        const int size = TraceRecordHeader.CommonHeaderSize + 7;
         TraceRecordHeader.WriteCommonHeader(destination, size, TraceEventKind.SystemSkipped, threadSlot, timestamp);
-        BinaryPrimitives.WriteUInt16LittleEndian(destination[TraceRecordHeader.CommonHeaderSize..], systemIndex);
-        destination[TraceRecordHeader.CommonHeaderSize + 2] = skipReason;
+        var p = destination[TraceRecordHeader.CommonHeaderSize..];
+        BinaryPrimitives.WriteUInt16LittleEndian(p, systemIndex);
+        p[2] = skipReason;
+        BinaryPrimitives.WriteUInt16LittleEndian(p[3..], wouldBeChunkCount);
+        BinaryPrimitives.WriteUInt16LittleEndian(p[5..], successorsUnblocked);
         bytesWritten = size;
     }
+
+    /// <summary>The Phase-4 extended record size for <see cref="TraceEventKind.SystemSkipped"/>. Use this for ring-buffer reservation.</summary>
+    public const int SystemSkippedSize = TraceRecordHeader.CommonHeaderSize + 7;
 
     /// <summary>Generic instant marker — payload: <c>i32 nameId</c>, <c>i32 payload</c>. Size = 20 B.</summary>
     public static void WriteInstant(Span<byte> destination, byte threadSlot, long timestamp, int nameId, int payload, out int bytesWritten)

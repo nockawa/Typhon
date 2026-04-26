@@ -54,7 +54,7 @@ internal sealed class WalSegmentReader : IDisposable
         ArgumentNullException.ThrowIfNull(fileIO);
         _fileIO = fileIO;
         _readBufferSize = 256 * 1024; // 256KB read buffer
-        _readBuffer = GC.AllocateArray<byte>(_readBufferSize, pinned: true);
+        _readBuffer = GC.AllocateArray<byte>(_readBufferSize, true);
     }
 
     /// <summary>

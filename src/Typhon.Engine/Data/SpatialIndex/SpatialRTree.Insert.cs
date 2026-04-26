@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -19,14 +20,25 @@ internal unsafe partial class SpatialRTree<TStore>
     internal (int leafChunkId, int slotIndex) Insert(long entityId, int componentChunkId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor,
         ChangeSet changeSet = null, uint categoryMask = uint.MaxValue)
     {
+        using var insertSpan = TyphonEvent.BeginSpatialRTreeInsert(entityId);
+        byte restartCount = 0;
         while (true)
         {
             var result = TryInsert(entityId, componentChunkId, coords, ref accessor, changeSet, categoryMask);
             if (result.success)
             {
+                if (TelemetryConfig.SpatialRTreeInsertActive)
+                {
+                    // Note: fields can't be set on `using var` ref-struct — restart count and depth are diagnostic-only and 0 is acceptable here.
+                    // (When forensic depth/restart needed, wire as parameters in BeginX like UpdateSlowPath.)
+                }
                 return (result.leafChunkId, result.slotIndex);
             }
             // OLC restart — spin briefly then retry descent
+            if (restartCount < 255)
+            {
+                restartCount++;
+            }
         }
     }
 
@@ -70,7 +82,7 @@ internal unsafe partial class SpatialRTree<TStore>
         }
 
         // ── Insert into leaf ──
-        byte* leafBase = accessor.GetChunkAddress(nodeChunkId, dirty: true);
+        byte* leafBase = accessor.GetChunkAddress(nodeChunkId, true);
         SpinWriteLock(leafBase, out var leafLatch);
 
         int leafCount = SpatialNodeHelper.GetCount(leafBase);
