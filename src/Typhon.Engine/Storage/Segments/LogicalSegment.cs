@@ -216,12 +216,16 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
                 return;
             }
 
+            var oldLen = curPages.Length;
             var newPages = new int[newLength];
             var newPagesAsSpan = newPages.AsSpan();
             curPages.CopyTo(newPagesAsSpan);
             _store.AllocatePages(ref newPagesAsSpan, curPages.Length, changeSet);
 
             CreateOrGrow(PageBlockType.None, newPages, curPages.Length, ref NoNextMap, clearNewPages, changeSet);
+
+            // Phase 5: Storage:Segment:Grow event. Use the first page id as a stable segment identifier.
+            Profiler.TyphonEvent.EmitStorageSegmentGrow(newPages[0], oldLen, newLength);
         }
     }
 
@@ -269,7 +273,14 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
     private static int NoNextMap;
 
     internal virtual bool Create(PageBlockType type, Span<int> filePageIndices, bool clear, ChangeSet changeSet = null)
-        => CreateOrGrow(type, filePageIndices, 0, ref NoNextMap, clear, changeSet);
+    {
+        // Phase 5: Storage:Segment:Create event. First page id doubles as the segment identifier.
+        if (filePageIndices.Length > 0)
+        {
+            Profiler.TyphonEvent.EmitStorageSegmentCreate(filePageIndices[0], filePageIndices.Length);
+        }
+        return CreateOrGrow(type, filePageIndices, 0, ref NoNextMap, clear, changeSet);
+    }
 
     internal unsafe bool CreateOrGrow(PageBlockType type, Span<int> filePageIndices, int growFrom, ref int nextMap, bool clear, ChangeSet changeSet)
     {
@@ -543,6 +554,9 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
         }
 
         _pages = pages.ToArray();
+
+        // Phase 5: Storage:Segment:Load event.
+        Profiler.TyphonEvent.EmitStorageSegmentLoad(filePageIndex, _pages.Length);
 
         return true;
     }

@@ -247,7 +247,7 @@ public partial struct AccessControl
             return false;
         }
 
-        TyphonEvent.EmitConcurrencyAccessControlSharedAcquire((ushort)Environment.CurrentManagedThreadId, hadToWait: false, elapsedUs: 0);
+        TyphonEvent.EmitConcurrencyAccessControlSharedAcquire((ushort)Environment.CurrentManagedThreadId, false, 0);
         return true;
     }
 
@@ -363,7 +363,7 @@ public partial struct AccessControl
             return false;
         }
 
-        TyphonEvent.EmitConcurrencyAccessControlExclusiveAcquire((ushort)Environment.CurrentManagedThreadId, hadToWait: false, elapsedUs: 0);
+        TyphonEvent.EmitConcurrencyAccessControlExclusiveAcquire((ushort)Environment.CurrentManagedThreadId, false, 0);
         return true;
     }
 
@@ -461,7 +461,7 @@ public partial struct AccessControl
             // Succeed — emit process-wide trace event (Tier-2 gated).
             var elapsedUs = hadToWait ? ElapsedUsCapped(waitStartTicks) : (ushort)0;
             // Variant 0 = promote
-            TyphonEvent.EmitConcurrencyAccessControlPromotion(elapsedUs, variant: 0);
+            TyphonEvent.EmitConcurrencyAccessControlPromotion(elapsedUs, 0);
 
             return true;
         }
@@ -503,7 +503,7 @@ public partial struct AccessControl
             }
 
             // Variant 1 = demote
-            TyphonEvent.EmitConcurrencyAccessControlPromotion(elapsedUs: 0, variant: 1);
+            TyphonEvent.EmitConcurrencyAccessControlPromotion(0, 1);
             return;
         }
     }

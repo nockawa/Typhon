@@ -33,11 +33,11 @@ public sealed class EcsMetricsExporter : IDisposable
 
     private void RegisterInstruments()
     {
-        _meter.CreateObservableGauge("typhon.ecs.entity_count", EnumerateEntityCount, unit: "{entities}", description: "Live entity count per archetype");
-        _meter.CreateObservableGauge("typhon.ecs.entitymap.load_factor", EnumerateLoadFactor, unit: "1", description: "EntityMap hash table load factor per archetype (0.0-1.0)");
-        _meter.CreateObservableCounter("typhon.ecs.entitymap.splits_total", EnumerateSplitCount, unit: "{splits}", description: "Cumulative EntityMap bucket splits per archetype");
-        _meter.CreateObservableGauge("typhon.ecs.transient.allocated_bytes", EnumerateTransientAllocatedBytes, unit: "bytes", description: "Transient heap memory allocated per component type");
-        _meter.CreateObservableGauge("typhon.ecs.transient.utilization", EnumerateTransientUtilization, unit: "1", description: "Transient chunk utilization per component type (allocated/capacity)");
+        _meter.CreateObservableGauge("typhon.ecs.entity_count", EnumerateEntityCount, "{entities}", "Live entity count per archetype");
+        _meter.CreateObservableGauge("typhon.ecs.entitymap.load_factor", EnumerateLoadFactor, "1", "EntityMap hash table load factor per archetype (0.0-1.0)");
+        _meter.CreateObservableCounter("typhon.ecs.entitymap.splits_total", EnumerateSplitCount, "{splits}", "Cumulative EntityMap bucket splits per archetype");
+        _meter.CreateObservableGauge("typhon.ecs.transient.allocated_bytes", EnumerateTransientAllocatedBytes, "bytes", "Transient heap memory allocated per component type");
+        _meter.CreateObservableGauge("typhon.ecs.transient.utilization", EnumerateTransientUtilization, "1", "Transient chunk utilization per component type (allocated/capacity)");
     }
 
     private IEnumerable<Measurement<long>> EnumerateEntityCount()

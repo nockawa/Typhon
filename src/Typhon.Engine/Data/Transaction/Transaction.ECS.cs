@@ -83,10 +83,10 @@ public unsafe partial class Transaction
     /// Create a polymorphic query matching <typeparamref name="TArchetype"/> and all descendants.
     /// Supports Tier 1 (.With, .Without, .Exclude), Tier 2 (.Enabled, .Disabled), and execution (.Execute, .Count, .Any, foreach).
     /// </summary>
-    public EcsQuery<TArchetype> Query<TArchetype>() where TArchetype : class => new(this, polymorphic: true);
+    public EcsQuery<TArchetype> Query<TArchetype>() where TArchetype : class => new(this, true);
 
     /// <summary>Create an exact query matching only <typeparamref name="TArchetype"/>, no descendants.</summary>
-    public EcsQuery<TArchetype> QueryExact<TArchetype>() where TArchetype : class => new(this, polymorphic: false);
+    public EcsQuery<TArchetype> QueryExact<TArchetype>() where TArchetype : class => new(this, false);
 
     /// <summary>
     /// Create a zero-allocation spatial query handle for component type <typeparamref name="T"/>.
@@ -484,7 +484,7 @@ public unsafe partial class Transaction
     {
         EnsureMutable();
         State = TransactionState.InProgress;
-        var entity = ResolveEntity(id, writable: true);
+        var entity = ResolveEntity(id, true);
         if (!entity.IsValid)
         {
             throw new InvalidOperationException($"Entity {id} not found or not visible at TSN {TSN}");
@@ -1088,7 +1088,7 @@ public unsafe partial class Transaction
             cri.Operations |= ComponentInfo.OperationType.Updated;
 
             // AddCompRev: allocates NEW chunk, adds revision entry with IsolationFlag=true
-            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, isDelete: false);
+            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, false);
 
             // Copy old data to new chunk
             byte* oldPtr = info.CompContentAccessor.GetChunkAddress(oldChunkId);
@@ -2524,7 +2524,7 @@ public unsafe partial class Transaction
         // Create tombstone revision only on first mutation (same guard as UpdateComponent)
         if (!cached || (cri.Operations & ComponentInfo.OperationType.Read) != 0)
         {
-            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, isDelete: true);
+            ComponentRevisionManager.AddCompRev(info, ref cri, TSN, UowId, true);
         }
     }
 

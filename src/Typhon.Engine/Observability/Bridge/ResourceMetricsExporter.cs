@@ -144,15 +144,15 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableGauge(
             BuildMetricName("memory.allocated_bytes"),
             EnumerateMemoryAllocatedBytes,
-            unit: "bytes",
-            description: "Current memory allocation in bytes");
+            "bytes",
+            "Current memory allocation in bytes");
 
         // Memory.PeakBytes - Gauge (high-water mark)
         _meter.CreateObservableGauge(
             BuildMetricName("memory.peak_bytes"),
             EnumerateMemoryPeakBytes,
-            unit: "bytes",
-            description: "Peak memory allocation (high-water mark) in bytes");
+            "bytes",
+            "Peak memory allocation (high-water mark) in bytes");
     }
 
     private void RegisterCapacityInstruments()
@@ -161,22 +161,22 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableGauge(
             BuildMetricName("capacity.current"),
             EnumerateCapacityCurrent,
-            unit: "slots",
-            description: "Current slots/entries in use");
+            "slots",
+            "Current slots/entries in use");
 
         // Capacity.Maximum - Gauge
         _meter.CreateObservableGauge(
             BuildMetricName("capacity.maximum"),
             EnumerateCapacityMaximum,
-            unit: "slots",
-            description: "Maximum slots/entries available");
+            "slots",
+            "Maximum slots/entries available");
 
         // Capacity.Utilization - Gauge (0.0-1.0)
         _meter.CreateObservableGauge(
             BuildMetricName("capacity.utilization"),
             EnumerateCapacityUtilization,
-            unit: "ratio",
-            description: "Capacity utilization ratio (0.0-1.0)");
+            "ratio",
+            "Capacity utilization ratio (0.0-1.0)");
     }
 
     private void RegisterDiskIOInstruments()
@@ -185,29 +185,29 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.read_ops"),
             EnumerateDiskIOReadOps,
-            unit: "ops",
-            description: "Total disk read operations");
+            "ops",
+            "Total disk read operations");
 
         // DiskIO.WriteOps - Counter
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.write_ops"),
             EnumerateDiskIOWriteOps,
-            unit: "ops",
-            description: "Total disk write operations");
+            "ops",
+            "Total disk write operations");
 
         // DiskIO.ReadBytes - Counter
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.read_bytes"),
             EnumerateDiskIOReadBytes,
-            unit: "bytes",
-            description: "Total bytes read from disk");
+            "bytes",
+            "Total bytes read from disk");
 
         // DiskIO.WriteBytes - Counter
         _meter.CreateObservableCounter(
             BuildMetricName("disk_io.write_bytes"),
             EnumerateDiskIOWriteBytes,
-            unit: "bytes",
-            description: "Total bytes written to disk");
+            "bytes",
+            "Total bytes written to disk");
     }
 
     private void RegisterThroughputInstruments() =>
@@ -216,8 +216,8 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableCounter(
             BuildMetricName("throughput.count"),
             EnumerateThroughputCounts,
-            unit: "ops",
-            description: "Total operations (throughput counter)");
+            "ops",
+            "Total operations (throughput counter)");
 
     private void RegisterDurationInstruments()
     {
@@ -225,22 +225,22 @@ public sealed class ResourceMetricsExporter : IDisposable
         _meter.CreateObservableGauge(
             BuildMetricName("duration.last_us"),
             EnumerateDurationLastUs,
-            unit: "us",
-            description: "Duration of most recent operation");
+            "us",
+            "Duration of most recent operation");
 
         // Duration.AvgUs - Gauge
         _meter.CreateObservableGauge(
             BuildMetricName("duration.avg_us"),
             EnumerateDurationAvgUs,
-            unit: "us",
-            description: "Average operation duration");
+            "us",
+            "Average operation duration");
 
         // Duration.MaxUs - Gauge (high-water mark)
         _meter.CreateObservableGauge(
             BuildMetricName("duration.max_us"),
             EnumerateDurationMaxUs,
-            unit: "us",
-            description: "Maximum operation duration observed");
+            "us",
+            "Maximum operation duration observed");
     }
 
     private string BuildMetricName(string suffix) => $"{_options.MetricNamePrefix}.{suffix}";

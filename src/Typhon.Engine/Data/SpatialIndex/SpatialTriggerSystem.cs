@@ -147,6 +147,7 @@ internal sealed unsafe class SpatialTriggerSystem
         _occupants[index] = new RegionOccupantState { StaticCacheVersion = -1 };
         _activeCount++;
 
+        Profiler.TyphonEvent.EmitSpatialTriggerRegion(0, (ushort)index, categoryMask);
         return new SpatialRegionHandle(index, config.Generation);
     }
 
@@ -155,6 +156,7 @@ internal sealed unsafe class SpatialTriggerSystem
         ValidateHandle(handle);
 
         ref var config = ref _configs[handle.Index];
+        Profiler.TyphonEvent.EmitSpatialTriggerRegion(1, (ushort)handle.Index, config.CategoryMask);
         config.Active = 0;
 
         // Return pooled arrays
@@ -219,205 +221,229 @@ internal sealed unsafe class SpatialTriggerSystem
         }
         config.LastEvaluatedTick = currentTick;
 
-        var occ = _occupants[handle.Index];
-        int coordCount = _spatialState.Descriptor.CoordCount;
-
-        // Estimate max chunkId from component segment allocation count
-        int maxChunkId = _table.ComponentSegment.AllocatedChunkCount;
-
-        int wordCount = (maxChunkId + 63) >> 6;
-        if (wordCount == 0)
-        {
-            wordCount = 1;
-        }
-
-        EnsureScratchCapacity(wordCount, maxChunkId);
-
-        // Clear scratch bitmap
-        Array.Clear(_scratchBitmap, 0, wordCount);
-
-        // Build query coords
-        Span<double> queryCoords = stackalloc double[coordCount];
-        BuildQueryCoords(in config, queryCoords, coordCount);
-
-        // Query tree(s) and populate scratch bitmap + entity lookup
-        HashSet<long> clusterOccupants = null;
-        var guard = EpochGuard.Enter(_table.DBE.EpochManager);
+        // Phase 3: Spatial:Trigger:Eval span. Stats filled at exit.
+        var evalScope = Profiler.TyphonEvent.BeginSpatialTriggerEval((ushort)Math.Min(handle.Index, ushort.MaxValue));
         try
         {
-            // Dynamic tree
-            if (config.TargetTree != TargetTreeMode.StaticOnly && _spatialState.DynamicTree != null)
+            var occ = _occupants[handle.Index];
+            int coordCount = _spatialState.Descriptor.CoordCount;
+
+            // Estimate max chunkId from component segment allocation count
+            int maxChunkId = _table.ComponentSegment.AllocatedChunkCount;
+
+            int wordCount = (maxChunkId + 63) >> 6;
+            if (wordCount == 0)
             {
-                QueryAndPopulateBitmap(_spatialState.DynamicTree, queryCoords, config.CategoryMask, wordCount);
+                wordCount = 1;
             }
 
-            // Per-archetype cluster spatial index fan-out (issue #230 Phase 3 Option B).
-            // Cluster entities are tracked by EntityId in a HashSet, NOT by bitmap, because the per-table bitmap's chunkId namespace is not meaningful for
-            // cluster-archetype results (cluster storage has its own clusterChunkId namespace that would collide with the per-table ComponentChunkId namespace).
-            // Under Option B, cluster spatial archetypes require a configured SpatialGrid (enforced at init time in DatabaseEngine.InitializeArchetypes). The
-            // enumerator's two-pass cell walk visits DynamicIndex and StaticIndex for each cell, so the caller doesn't need to branch on mode.
-            if (_spatialState.ClusterArchetypes != null)
+            EnsureScratchCapacity(wordCount, maxChunkId);
+
+            // Clear scratch bitmap
+            Array.Clear(_scratchBitmap, 0, wordCount);
+
+            // Build query coords
+            Span<double> queryCoords = stackalloc double[coordCount];
+            BuildQueryCoords(in config, queryCoords, coordCount);
+
+            // Query tree(s) and populate scratch bitmap + entity lookup
+            HashSet<long> clusterOccupants = null;
+            var guard = EpochGuard.Enter(_table.DBE.EpochManager);
+            try
             {
-                var grid = _table.DBE.SpatialGrid;
-                float qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ;
-                if (coordCount == 4)
+                // Dynamic tree
+                if (config.TargetTree != TargetTreeMode.StaticOnly && _spatialState.DynamicTree != null)
                 {
-                    // 2D region — [minX, minY, maxX, maxY]. Use infinite Z bounds so 2D cluster archetypes (which have empty-sentinel Z) and 3D cluster
-                    // archetypes (which have meaningful Z) both pass the Z overlap test trivially.
-                    qMinX = (float)queryCoords[0];
-                    qMinY = (float)queryCoords[1];
-                    qMinZ = float.NegativeInfinity;
-                    qMaxX = (float)queryCoords[2];
-                    qMaxY = (float)queryCoords[3];
-                    qMaxZ = float.PositiveInfinity;
-                }
-                else
-                {
-                    // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
-                    qMinX = (float)queryCoords[0];
-                    qMinY = (float)queryCoords[1];
-                    qMinZ = (float)queryCoords[2];
-                    qMaxX = (float)queryCoords[3];
-                    qMaxY = (float)queryCoords[4];
-                    qMaxZ = (float)queryCoords[5];
+                    QueryAndPopulateBitmap(_spatialState.DynamicTree, queryCoords, config.CategoryMask, wordCount);
                 }
 
-                foreach (var cs in _spatialState.ClusterArchetypes)
+                // Per-archetype cluster spatial index fan-out (issue #230 Phase 3 Option B).
+                // Cluster entities are tracked by EntityId in a HashSet, NOT by bitmap, because the per-table bitmap's chunkId namespace is not meaningful for
+                // cluster-archetype results (cluster storage has its own clusterChunkId namespace that would collide with the per-table ComponentChunkId namespace).
+                // Under Option B, cluster spatial archetypes require a configured SpatialGrid (enforced at init time in DatabaseEngine.InitializeArchetypes). The
+                // enumerator's two-pass cell walk visits DynamicIndex and StaticIndex for each cell, so the caller doesn't need to branch on mode.
+                if (_spatialState.ClusterArchetypes != null)
                 {
-                    if (!cs.SpatialSlot.HasSpatialIndex)
+                    var grid = _table.DBE.SpatialGrid;
+                    float qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ;
+                    if (coordCount == 4)
                     {
-                        continue;
-                    }
-                    if (clusterOccupants == null)
-                    {
-                        // Double-buffer: reuse the scratch set from the previous evaluation cycle to avoid per-call HashSet allocation.
-                        clusterOccupants = occ.ClusterOccupantsScratch ?? new HashSet<long>();
-                        clusterOccupants.Clear();
-                    }
-                    foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
-                    {
-                        clusterOccupants.Add(hit.EntityId);
-                    }
-                }
-            }
-
-            // Static tree
-            if (config.TargetTree != TargetTreeMode.DynamicOnly && _spatialState.StaticTree != null)
-            {
-                var staticTree = _spatialState.StaticTree;
-                if (occ.StaticCacheVersion != staticTree.MutationVersion)
-                {
-                    RebuildStaticCache(occ, staticTree, queryCoords, config.CategoryMask, maxChunkId);
-                }
-                // OR static cache into scratch bitmap
-                int staticWords = Math.Min(occ.StaticCacheWordCount, wordCount);
-                for (int w = 0; w < staticWords; w++)
-                {
-                    _scratchBitmap[w] |= occ.StaticCacheBitmap[w];
-                }
-                // Merge static entity lookups into current
-                int staticLookupSize = Math.Min(occ.StaticCacheEntityLookupSize, _entityLookup.Length);
-                for (int i = 0; i < staticLookupSize; i++)
-                {
-                    if (occ.StaticCacheEntityLookup[i] != 0)
-                    {
-                        _entityLookup[i] = occ.StaticCacheEntityLookup[i];
-                    }
-                }
-            }
-        }
-        finally
-        {
-            guard.Dispose();
-        }
-
-        // Diff: XOR + AND, extract enter/leave
-        int enteredCount = 0;
-        int leftCount = 0;
-        int stayCount = 0;
-
-        int prevWordCount = occ.PreviousWordCount;
-        long[] prevBitmap = occ.PreviousBitmap;
-        int diffWords = Math.Max(wordCount, prevWordCount);
-
-        for (int w = 0; w < diffWords; w++)
-        {
-            long curWord = w < wordCount ? _scratchBitmap[w] : 0L;
-            long prevWord = prevBitmap != null && w < prevWordCount ? prevBitmap[w] : 0L;
-            long diff = curWord ^ prevWord;
-
-            if (diff == 0)
-            {
-                stayCount += BitOperations.PopCount((ulong)curWord);
-                continue;
-            }
-
-            long entered = diff & curWord;
-            long left = diff & prevWord;
-            long stayed = curWord & prevWord;
-            stayCount += BitOperations.PopCount((ulong)stayed);
-
-            // Extract entered bits → resolve EntityId from current lookup
-            while (entered != 0)
-            {
-                int bit = BitOperations.TrailingZeroCount((ulong)entered);
-                int chunkId = w * 64 + bit;
-                EnsureResultCapacity(ref _resultEntered, enteredCount);
-                _resultEntered[enteredCount++] = _entityLookup[chunkId];
-                entered &= entered - 1;
-            }
-
-            // Extract left bits → resolve EntityId from PREVIOUS lookup
-            while (left != 0)
-            {
-                int bit = BitOperations.TrailingZeroCount((ulong)left);
-                int chunkId = w * 64 + bit;
-                EnsureResultCapacity(ref _resultLeft, leftCount);
-                long entityId = occ.PreviousEntityLookup != null && chunkId < occ.PreviousEntityLookupSize ? occ.PreviousEntityLookup[chunkId] : 0;
-                _resultLeft[leftCount++] = entityId;
-                left &= left - 1;
-            }
-        }
-
-        // Cluster entity enter/leave via HashSet diff (avoids bitmap namespace collision with per-table ComponentChunkIds)
-        if (clusterOccupants != null || occ.PreviousClusterOccupants != null)
-        {
-            var prev = occ.PreviousClusterOccupants;
-            if (clusterOccupants != null)
-            {
-                foreach (long eid in clusterOccupants)
-                {
-                    if (prev == null || !prev.Contains(eid))
-                    {
-                        EnsureResultCapacity(ref _resultEntered, enteredCount);
-                        _resultEntered[enteredCount++] = eid;
+                        // 2D region — [minX, minY, maxX, maxY]. Use infinite Z bounds so 2D cluster archetypes (which have empty-sentinel Z) and 3D cluster
+                        // archetypes (which have meaningful Z) both pass the Z overlap test trivially.
+                        qMinX = (float)queryCoords[0];
+                        qMinY = (float)queryCoords[1];
+                        qMinZ = float.NegativeInfinity;
+                        qMaxX = (float)queryCoords[2];
+                        qMaxY = (float)queryCoords[3];
+                        qMaxZ = float.PositiveInfinity;
                     }
                     else
                     {
-                        stayCount++;
+                        // 3D region — [minX, minY, minZ, maxX, maxY, maxZ].
+                        qMinX = (float)queryCoords[0];
+                        qMinY = (float)queryCoords[1];
+                        qMinZ = (float)queryCoords[2];
+                        qMaxX = (float)queryCoords[3];
+                        qMaxY = (float)queryCoords[4];
+                        qMaxZ = (float)queryCoords[5];
                     }
-                }
-            }
-            if (prev != null)
-            {
-                foreach (long eid in prev)
-                {
-                    if (clusterOccupants == null || !clusterOccupants.Contains(eid))
+
+                    foreach (var cs in _spatialState.ClusterArchetypes)
                     {
-                        EnsureResultCapacity(ref _resultLeft, leftCount);
-                        _resultLeft[leftCount++] = eid;
+                        if (!cs.SpatialSlot.HasSpatialIndex)
+                        {
+                            continue;
+                        }
+                        if (clusterOccupants == null)
+                        {
+                            // Double-buffer: reuse the scratch set from the previous evaluation cycle to avoid per-call HashSet allocation.
+                            clusterOccupants = occ.ClusterOccupantsScratch ?? new HashSet<long>();
+                            clusterOccupants.Clear();
+                        }
+                        foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ, config.CategoryMask))
+                        {
+                            clusterOccupants.Add(hit.EntityId);
+                        }
+                    }
+                }
+
+                // Static tree
+                if (config.TargetTree != TargetTreeMode.DynamicOnly && _spatialState.StaticTree != null)
+                {
+                    var staticTree = _spatialState.StaticTree;
+                    if (occ.StaticCacheVersion != staticTree.MutationVersion)
+                    {
+                        // Phase 3: Spatial:Trigger:Cache:Invalidate instant — static-tree mutation observed.
+                        Profiler.TyphonEvent.EmitSpatialTriggerCacheInvalidate((ushort)Math.Min(handle.Index, ushort.MaxValue), occ.StaticCacheVersion, staticTree.MutationVersion);
+                        RebuildStaticCache(occ, staticTree, queryCoords, config.CategoryMask, maxChunkId);
+                    }
+                    // OR static cache into scratch bitmap
+                    int staticWords = Math.Min(occ.StaticCacheWordCount, wordCount);
+                    for (int w = 0; w < staticWords; w++)
+                    {
+                        _scratchBitmap[w] |= occ.StaticCacheBitmap[w];
+                    }
+                    // Merge static entity lookups into current
+                    int staticLookupSize = Math.Min(occ.StaticCacheEntityLookupSize, _entityLookup.Length);
+                    for (int i = 0; i < staticLookupSize; i++)
+                    {
+                        if (occ.StaticCacheEntityLookup[i] != 0)
+                        {
+                            _entityLookup[i] = occ.StaticCacheEntityLookup[i];
+                        }
                     }
                 }
             }
-            // Double-buffer swap: current becomes previous, old previous becomes scratch for next cycle.
-            occ.ClusterOccupantsScratch = occ.PreviousClusterOccupants;
-            occ.PreviousClusterOccupants = clusterOccupants;
+            finally
+            {
+                guard.Dispose();
+            }
+
+            // Diff: XOR + AND, extract enter/leave
+            int enteredCount = 0;
+            int leftCount = 0;
+            int stayCount = 0;
+
+            int prevWordCount = occ.PreviousWordCount;
+            long[] prevBitmap = occ.PreviousBitmap;
+            int diffWords = Math.Max(wordCount, prevWordCount);
+
+            for (int w = 0; w < diffWords; w++)
+            {
+                long curWord = w < wordCount ? _scratchBitmap[w] : 0L;
+                long prevWord = prevBitmap != null && w < prevWordCount ? prevBitmap[w] : 0L;
+                long diff = curWord ^ prevWord;
+
+                if (diff == 0)
+                {
+                    stayCount += BitOperations.PopCount((ulong)curWord);
+                    continue;
+                }
+
+                long entered = diff & curWord;
+                long left = diff & prevWord;
+                long stayed = curWord & prevWord;
+                stayCount += BitOperations.PopCount((ulong)stayed);
+
+                // Extract entered bits → resolve EntityId from current lookup
+                while (entered != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount((ulong)entered);
+                    int chunkId = w * 64 + bit;
+                    EnsureResultCapacity(ref _resultEntered, enteredCount);
+                    _resultEntered[enteredCount++] = _entityLookup[chunkId];
+                    entered &= entered - 1;
+                }
+
+                // Extract left bits → resolve EntityId from PREVIOUS lookup
+                while (left != 0)
+                {
+                    int bit = BitOperations.TrailingZeroCount((ulong)left);
+                    int chunkId = w * 64 + bit;
+                    EnsureResultCapacity(ref _resultLeft, leftCount);
+                    long entityId = occ.PreviousEntityLookup != null && chunkId < occ.PreviousEntityLookupSize ? occ.PreviousEntityLookup[chunkId] : 0;
+                    _resultLeft[leftCount++] = entityId;
+                    left &= left - 1;
+                }
+            }
+
+            // Cluster entity enter/leave via HashSet diff (avoids bitmap namespace collision with per-table ComponentChunkIds)
+            if (clusterOccupants != null || occ.PreviousClusterOccupants != null)
+            {
+                var prev = occ.PreviousClusterOccupants;
+                if (clusterOccupants != null)
+                {
+                    foreach (long eid in clusterOccupants)
+                    {
+                        if (prev == null || !prev.Contains(eid))
+                        {
+                            EnsureResultCapacity(ref _resultEntered, enteredCount);
+                            _resultEntered[enteredCount++] = eid;
+                        }
+                        else
+                        {
+                            stayCount++;
+                        }
+                    }
+                }
+                if (prev != null)
+                {
+                    foreach (long eid in prev)
+                    {
+                        if (clusterOccupants == null || !clusterOccupants.Contains(eid))
+                        {
+                            EnsureResultCapacity(ref _resultLeft, leftCount);
+                            _resultLeft[leftCount++] = eid;
+                        }
+                    }
+                }
+                // Double-buffer swap: current becomes previous, old previous becomes scratch for next cycle.
+                occ.ClusterOccupantsScratch = occ.PreviousClusterOccupants;
+                occ.PreviousClusterOccupants = clusterOccupants;
+            }
+
+            // Swap entity lookup arrays for next evaluation's "left" resolution
+            SwapPreviousState(occ, wordCount, maxChunkId);
+
+            // Phase 3: Spatial:Trigger:Occupant:Diff stats instant (no bitmap, just counts).
+            // More precisely: prevCount = stayCount + leftCount; currCount = stayCount + enteredCount.
+            Profiler.TyphonEvent.EmitSpatialTriggerOccupantDiff(
+                (ushort)Math.Min(handle.Index, ushort.MaxValue),
+                (ushort)Math.Min(stayCount + leftCount, ushort.MaxValue),
+                (ushort)Math.Min(stayCount + enteredCount, ushort.MaxValue),
+                (ushort)Math.Min(enteredCount, ushort.MaxValue),
+                (ushort)Math.Min(leftCount, ushort.MaxValue));
+
+            evalScope.OccupantCount = (ushort)Math.Min(stayCount + enteredCount, ushort.MaxValue);
+            evalScope.EnterCount = (ushort)Math.Min(enteredCount, ushort.MaxValue);
+            evalScope.LeaveCount = (ushort)Math.Min(leftCount, ushort.MaxValue);
+
+            return new SpatialTriggerResult(_resultEntered.AsSpan(0, enteredCount), _resultLeft.AsSpan(0, leftCount), stayCount);
         }
-
-        // Swap entity lookup arrays for next evaluation's "left" resolution
-        SwapPreviousState(occ, wordCount, maxChunkId);
-
-        return new SpatialTriggerResult(_resultEntered.AsSpan(0, enteredCount), _resultLeft.AsSpan(0, leftCount), stayCount);
+        finally
+        {
+            evalScope.Dispose();
+        }
     }
 
     // ── Private helpers ──────────────────────────────────────────────────

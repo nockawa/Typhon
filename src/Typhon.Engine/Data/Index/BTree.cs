@@ -445,7 +445,7 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
     private readonly ChunkBasedSegment<TStore> _segment;
     private readonly BaseNodeStorage _storage;
     // Lightweight mutex protecting DeferredNodeList, which is accessed by concurrent merge operations.
-    private SpinLock _deferredLock = new(enableThreadOwnerTracking: false);
+    private SpinLock _deferredLock = new(false);
 
     // Per-instance count and root tracking used for ALL runtime operations.
     // Multiple BTrees can share the same ChunkBasedSegment<TStore> (e.g., PK index and secondary indexes share DefaultIndexSegment). Runtime code MUST use these
@@ -1522,7 +1522,7 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
         do
         {
             Interlocked.Increment(ref _writeLockFailures);
-            spin.SpinOnce(sleep1Threshold: -1);
+            spin.SpinOnce(-1);
         }
         while (!latch.TryWriteLock());
         return false; // contention detected
@@ -1540,7 +1540,7 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
         }
         finally
         {
-            _deferredLock.Exit(useMemoryBarrier: false);
+            _deferredLock.Exit(false);
         }
     }
 
@@ -1556,7 +1556,7 @@ public abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TKey
         }
         finally
         {
-            _deferredLock.Exit(useMemoryBarrier: false);
+            _deferredLock.Exit(false);
         }
     }
 

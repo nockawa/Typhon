@@ -201,9 +201,22 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
         {
             while (!_shutdown)
             {
-                // Sleep until woken by: timer expiry, ForceCheckpoint, or shutdown
-                _wakeEvent.Wait(_resourceOptions.CheckpointIntervalMs);
-                _wakeEvent.Reset();
+                // Phase 8: Durability:Checkpoint:Sleep span — covers the inter-cycle wait.
+                // wakeReason: 0=timer, 1=force, 2=shutdown.
+                var sleepMs = (uint)Math.Max(_resourceOptions.CheckpointIntervalMs, 0);
+                var sleepScope = TyphonEvent.BeginDurabilityCheckpointSleep(sleepMs, 0);
+                try
+                {
+                    // Sleep until woken by: timer expiry, ForceCheckpoint, or shutdown
+                    _wakeEvent.Wait(_resourceOptions.CheckpointIntervalMs);
+                    _wakeEvent.Reset();
+
+                    sleepScope.WakeReason = _shutdown ? (byte)2 : (_forceRequested ? (byte)1 : (byte)0);
+                }
+                finally
+                {
+                    sleepScope.Dispose();
+                }
 
                 if (_shutdown)
                 {
@@ -268,7 +281,17 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             int[] dirtyPages;
             {
                 using var collectScope = TyphonEvent.BeginCheckpointCollect();
-                dirtyPages = _mmf.CollectDirtyMemPageIndices();
+                // Phase 5: Storage:PageCache:DirtyWalk span — inner span over the bitmap walk. rangeStart/rangeLen filled in after the walk.
+                var dirtyWalkScope = TyphonEvent.BeginStoragePageCacheDirtyWalk(0, 0);
+                try
+                {
+                    dirtyPages = _mmf.CollectDirtyMemPageIndices();
+                    dirtyWalkScope.RangeLen = dirtyPages.Length;
+                }
+                finally
+                {
+                    dirtyWalkScope.Dispose();
+                }
             }
             cycleScope.DirtyPageCount = dirtyPages.Length;
 
@@ -277,13 +300,17 @@ internal sealed class CheckpointManager : ResourceNode, IMetricSource
             if (dirtyPages.Length > 0)
             {
                 var writeScope = TyphonEvent.BeginCheckpointWrite();
+                // Phase 8: Durability:Checkpoint:WriteBatch span — covers the staging-buffered batch write.
+                var writeBatchScope = TyphonEvent.BeginDurabilityCheckpointWriteBatch(dirtyPages.Length, _stagingPool.PoolCapacity);
                 try
                 {
                     _mmf.WritePagesForCheckpoint(dirtyPages, _stagingPool, out writtenCount);
                     writeScope.WrittenCount = writtenCount;
+                    writeBatchScope.StagingAllocated = writtenCount;
                 }
                 finally
                 {
+                    writeBatchScope.Dispose();
                     writeScope.Dispose();
                 }
             }

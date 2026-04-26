@@ -130,7 +130,7 @@ public sealed class UnitOfWork : IDisposable
     private void TransitionToWalDurable()
     {
         _state = UnitOfWorkState.WalDurable;
-        _dbe.UowRegistry?.RecordCommit(_uowId, maxTSN: 0);
+        _dbe.UowRegistry?.RecordCommit(_uowId, 0);
     }
 
     /// <summary>

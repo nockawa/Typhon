@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
+using Typhon.Engine.Profiler;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -34,12 +35,15 @@ internal static unsafe partial class SpatialMaintainer
         var tree = state.ActiveTree;
         var desc = state.Descriptor;
 
+        using var maintainSpan = TyphonEvent.BeginSpatialMaintainInsert(entityPK, table.WalTypeId);
+
         // Read tight bounds from component data
         byte* compPtr = compAccessor.GetChunkAddress(componentChunkId);
         Span<double> coords = stackalloc double[desc.CoordCount];
 
         if (!ReadAndValidateBounds(compPtr, fi, coords, entityPK, table, "insert"))
         {
+            TyphonEvent.EmitSpatialMaintainAabbValidate(entityPK, table.WalTypeId, 0);
             return;
         }
 
@@ -57,6 +61,7 @@ internal static unsafe partial class SpatialMaintainer
             try
             {
                 SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, leafChunkId, (short)slotIndex, (byte)state.FieldInfo.Mode);
+                TyphonEvent.EmitSpatialMaintainBackPointerWrite(componentChunkId, leafChunkId, (ushort)slotIndex);
             }
             finally
             {
@@ -117,6 +122,7 @@ internal static unsafe partial class SpatialMaintainer
 
         if (!ReadAndValidateBounds(compPtr, fi, tightCoords, entityPK, table, "update"))
         {
+            TyphonEvent.EmitSpatialMaintainAabbValidate(entityPK, table.WalTypeId, 1);
             return false;
         }
 
@@ -138,6 +144,21 @@ internal static unsafe partial class SpatialMaintainer
         }
 
         // Slow path: remove + reinsert
+        // Compute escape distance squared (sum of axis-overflow magnitudes) for diagnostic payload.
+        float escapeDistSq = 0f;
+        if (TelemetryConfig.SpatialMaintainUpdateSlowPathActive)
+        {
+            int half = desc.CoordCount / 2;
+            for (int i = 0; i < half; i++)
+            {
+                double underflow = fatCoords[i] - tightCoords[i];
+                double overflow = tightCoords[i + half] - fatCoords[i + half];
+                if (underflow > 0) escapeDistSq += (float)(underflow * underflow);
+                if (overflow > 0) escapeDistSq += (float)(overflow * overflow);
+            }
+        }
+        using var slowPathSpan = TyphonEvent.BeginSpatialMaintainUpdateSlowPath(entityPK, table.WalTypeId, escapeDistSq);
+
         long swappedEntityId = tree.Remove(bp.LeafChunkId, bp.SlotIndex, ref treeAccessor);
 
         if (swappedEntityId != 0 && swappedEntityId != entityPK)
@@ -148,6 +169,7 @@ internal static unsafe partial class SpatialMaintainer
         EnlargeCoords(tightCoords, fi.Margin, desc);
         var (newLeaf, newSlot) = tree.Insert(entityPK, componentChunkId, tightCoords, ref treeAccessor, changeSet);
         SpatialBackPointerHelper.Write(ref bpAccessor, componentChunkId, newLeaf, (short)newSlot, bp.TreeSelector);
+        TyphonEvent.EmitSpatialMaintainBackPointerWrite(componentChunkId, newLeaf, (ushort)newSlot);
 
         return true; // Escaped fat AABB → reinserted
     }
@@ -165,6 +187,7 @@ internal static unsafe partial class SpatialMaintainer
             var bp = SpatialBackPointerHelper.Read(ref bpAccessor, componentChunkId);
             if (bp.LeafChunkId == 0)
             {
+                TyphonEvent.EmitSpatialMaintainAabbValidate(entityPK, table.WalTypeId, 2);
                 return; // Never inserted (degenerate bounds)
             }
 
@@ -569,10 +592,12 @@ internal static unsafe partial class SpatialMaintainer
             if (map.TryGet(cellKey, out int count, ref accessor))
             {
                 map.Upsert(cellKey, count + 1, ref accessor, changeSet);
+                TyphonEvent.EmitSpatialGridOccupancyChange((int)cellKey, 1, (ushort)count, (ushort)(count + 1));
             }
             else
             {
                 map.Insert(cellKey, 1, ref accessor, changeSet);
+                TyphonEvent.EmitSpatialGridOccupancyChange((int)cellKey, 1, 0, 1);
             }
         }
         finally
@@ -599,10 +624,12 @@ internal static unsafe partial class SpatialMaintainer
                 if (count <= 1)
                 {
                     map.Remove(cellKey, out _, ref accessor, changeSet);
+                    TyphonEvent.EmitSpatialGridOccupancyChange((int)cellKey, -1, (ushort)count, 0);
                 }
                 else
                 {
                     map.Upsert(cellKey, count - 1, ref accessor, changeSet);
+                    TyphonEvent.EmitSpatialGridOccupancyChange((int)cellKey, -1, (ushort)count, (ushort)(count - 1));
                 }
             }
         }

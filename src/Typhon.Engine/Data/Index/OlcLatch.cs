@@ -76,14 +76,14 @@ internal readonly ref struct OlcLatch
         int v = _version;
         if ((v & 0b1) != 0)
         {
-            TyphonEvent.EmitConcurrencyOlcLatchWriteLockAttempt((uint)v, success: false);
+            TyphonEvent.EmitConcurrencyOlcLatchWriteLockAttempt((uint)v, false);
             return false;
         }
         if (Interlocked.CompareExchange(ref _version, v | 0b1, v) == v)
         {
             return true;
         }
-        TyphonEvent.EmitConcurrencyOlcLatchWriteLockAttempt((uint)v, success: false);
+        TyphonEvent.EmitConcurrencyOlcLatchWriteLockAttempt((uint)v, false);
         return false;
     }
 

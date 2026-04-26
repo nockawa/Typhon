@@ -82,25 +82,33 @@ public unsafe partial class Transaction : EntityAccessor
 
     public void Init(DatabaseEngine dbe, long tsn, UnitOfWork uow = null, bool readOnly = false)
     {
-        _dbe = dbe;
-        _epochManager = _dbe.EpochManager;
-        _dbe.LogTxInitPhase(tsn, "entering epoch");
-        _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
-        _dbe.LogTxInitPhase(tsn, "epoch entered");
-        _isDisposed = false;
-        IsReadOnly = readOnly;
-        OwningUnitOfWork = uow;
+        var initScope = TyphonEvent.BeginDataTransactionInit(tsn, uow?.UowId ?? 0);
+        try
+        {
+            _dbe = dbe;
+            _epochManager = _dbe.EpochManager;
+            _dbe.LogTxInitPhase(tsn, "entering epoch");
+            _ = _epochManager.EnterScope(); // Depth unused: Transaction uses ExitScopeUnordered (not LIFO)
+            _dbe.LogTxInitPhase(tsn, "epoch entered");
+            _isDisposed = false;
+            IsReadOnly = readOnly;
+            OwningUnitOfWork = uow;
 #if DEBUG
-        _debugOwningThreadId = Environment.CurrentManagedThreadId;
+            _debugOwningThreadId = Environment.CurrentManagedThreadId;
 #endif
-        _committedOperationCount = null;
-        _deletedComponentCount = 0;
-        _entityOperationCount = 0;
-        _changeSet = readOnly ? null : (uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet());
-        State = TransactionState.Created;
-        TSN = tsn;
+            _committedOperationCount = null;
+            _deletedComponentCount = 0;
+            _entityOperationCount = 0;
+            _changeSet = readOnly ? null : (uow?.ChangeSet ?? _dbe.MMF.CreateChangeSet());
+            State = TransactionState.Created;
+            TSN = tsn;
 
-        _dbe.TransactionChain.PushHead(this);
+            _dbe.TransactionChain.PushHead(this);
+        }
+        finally
+        {
+            initScope.Dispose();
+        }
     }
 
     /// <summary>Reset all state for pooling reuse. Called by TransactionChain after unlinking.</summary>
@@ -125,6 +133,7 @@ public unsafe partial class Transaction : EntityAccessor
     /// <summary>Prepare for mutation via ArchetypeAccessor. Sets state to InProgress so Commit processes writes.</summary>
     internal override void PrepareForMutation()
     {
+        using var scope = TyphonEvent.BeginDataTransactionPrepare(TSN);
         EnsureMutable();
         State = TransactionState.InProgress;
     }
@@ -219,12 +228,13 @@ public unsafe partial class Transaction : EntityAccessor
         ExitEpochAndRemove();
     }
 
-    /// <summary>Auto-rollback if not yet committed.</summary>
+    /// <summary>Auto-rollback if not yet committed. Phase 6: tagged with <see cref="Typhon.Profiler.TransactionRollbackReason.AutoOnDispose"/>.</summary>
     private void EnsureCompleted()
     {
         if (State != TransactionState.Committed)
         {
-            Rollback();
+            var ctx = UnitOfWorkContext.None;
+            Rollback(ref ctx, Typhon.Profiler.TransactionRollbackReason.AutoOnDispose);
         }
     }
 
@@ -880,11 +890,17 @@ public unsafe partial class Transaction : EntityAccessor
         // Record conflict for observability
         dbe?.RecordConflict();
 
+        // Phase 6: Data:Transaction:Conflict instant. componentTypeId left as 0 — the enclosing
+        // TransactionCommitComponent span (kind 22) carries the typeId, so the viewer correlates by parent.
+        // conflictType encodes which detection path fired: 0 = handler-based (sequence/lcri), 1 = index-based fallback.
+        var conflictType = (byte)(conflictSolver != null ? 0 : 1);
+        TyphonEvent.EmitDataTransactionConflict(tsn, pk, 0, conflictType);
+
         // Save the orphan index before AddCompRev changes CurRevisionIndex
         var conflictOrphanIndex = compRevInfo.CurRevisionIndex;
 
         // Create a new revision for the resolved data (under existing lock when handler is provided)
-        ComponentRevisionManager.AddCompRev(info, ref compRevInfo, tsn, uowId, false, lockAlreadyHeld: lockHeld);
+        ComponentRevisionManager.AddCompRev(info, ref compRevInfo, tsn, uowId, false, lockHeld);
 
         // Copy the dirty-write data to the new revision as starting point
         var dstChunk = info.CompContentAccessor.GetChunkAddress(compRevInfo.CurCompContentChunkId, true);
@@ -931,7 +947,7 @@ public unsafe partial class Transaction : EntityAccessor
         var oldContentChunkId = compRevInfo.CurCompContentChunkId;
 
         // Create new entry at end of chain (under existing lock)
-        ComponentRevisionManager.AddCompRev(info, ref compRevInfo, tsn, uowId, false, lockAlreadyHeld: true);
+        ComponentRevisionManager.AddCompRev(info, ref compRevInfo, tsn, uowId, false, true);
 
         // Copy our data to the new content chunk
         var srcAddr = info.CompContentAccessor.GetChunkAddress(oldContentChunkId);
@@ -1308,7 +1324,10 @@ public unsafe partial class Transaction : EntityAccessor
         }
     }
 
-    public bool Rollback(ref UnitOfWorkContext ctx)
+    public bool Rollback(ref UnitOfWorkContext ctx) => Rollback(ref ctx, Typhon.Profiler.TransactionRollbackReason.Explicit);
+
+    /// <summary>Phase 6: rollback with an explicit <paramref name="reason"/> threaded into the kind 21 payload (D3).</summary>
+    public bool Rollback(ref UnitOfWorkContext ctx, Typhon.Profiler.TransactionRollbackReason reason)
     {
         AssertThreadAffinity();
 
@@ -1329,6 +1348,7 @@ public unsafe partial class Transaction : EntityAccessor
 
         var scope = TyphonEvent.BeginTransactionRollback(TSN);
         scope.ComponentCount = _componentInfos.Count;
+        scope.Reason = reason;
         // Cumulative rollback counter — monotonic, sampled by the profiler's per-tick gauge snapshot to derive per-tick rollback rate.
         _dbe.TransactionChain.IncrementRollbackTotal();
         try
@@ -1385,6 +1405,7 @@ public unsafe partial class Transaction : EntityAccessor
             // Flush batched deferred enqueue entries (non-tail path: single lock acquire for all entities)
             if (_deferredEnqueueBatch is { Count: > 0 })
             {
+                using var cleanupScope = TyphonEvent.BeginDataTransactionCleanup(TSN, _deferredEnqueueBatch.Count);
                 _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
                 _deferredEnqueueBatch.Clear();
             }
@@ -1554,6 +1575,9 @@ public unsafe partial class Transaction : EntityAccessor
 
             _dbe.LogCommitPhase(TSN, "CommitComponentCore");
 
+            // Phase 6: Data:Transaction:Validate span over the per-component-type validation pass.
+            using var validateScope = TyphonEvent.BeginDataTransactionValidate(TSN, _componentInfos.Count);
+
             // Process every Component Type and their components (old CRUD path — Versioned only)
             var commitAction = new CommitAction { Tx = this };
             foreach (var kvp in _componentInfos)
@@ -1572,46 +1596,56 @@ public unsafe partial class Transaction : EntityAccessor
                 _dbe.LogCommitComponentEntries(TSN, kvp.Key.Name, info.EntryCount);
 
                 // Start a sub-span for this component type. The int ID comes from the archetype registry — -1 means "unregistered"
-                // (can happen for schema-less tests), which is fine to carry through as a placeholder.
-                using var componentScope = TyphonEvent.BeginTransactionCommitComponent(TSN, ArchetypeRegistry.GetComponentTypeId(kvp.Key));
-
-                // Hoist accessor creation for batch index maintenance
-                var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
-                _batchIndexAccessors = new ChunkAccessor<PersistentStore>[indexedFieldInfos.Length];
-                for (int i = 0; i < indexedFieldInfos.Length; i++)
-                {
-                    _batchIndexAccessors[i] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
-                }
-                var tailVSBS = info.ComponentTable.TailVSBS;
-                _batchTailAccessor = tailVSBS != null ? tailVSBS.Segment.CreateChunkAccessor(_changeSet) : default;
-                _batchIndexActive = true;
-                _batchEntityCount = 0;
-                ChunkBasedSegment<PersistentStore>.EnterBatchMode();
-
+                // (can happen for schema-less tests), which is fine to carry through as a placeholder. Phase 6: rowCount field
+                // is wire-additive on kind 22 — set from info.EntryCount before the loop runs. We use try/finally instead of
+                // `using var` because setting fields on a `using var` ref struct is forbidden by the language (CS1654).
+                var componentScope = TyphonEvent.BeginTransactionCommitComponent(TSN, ArchetypeRegistry.GetComponentTypeId(kvp.Key));
+                componentScope.RowCount = info.EntryCount;
                 try
                 {
-                    kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+
+                    // Hoist accessor creation for batch index maintenance
+                    var indexedFieldInfos = info.ComponentTable.IndexedFieldInfos;
+                    _batchIndexAccessors = new ChunkAccessor<PersistentStore>[indexedFieldInfos.Length];
+                    for (int i = 0; i < indexedFieldInfos.Length; i++)
+                    {
+                        _batchIndexAccessors[i] = indexedFieldInfos[i].PersistentIndex.Segment.CreateChunkAccessor(_changeSet);
+                    }
+                    var tailVSBS = info.ComponentTable.TailVSBS;
+                    _batchTailAccessor = tailVSBS != null ? tailVSBS.Segment.CreateChunkAccessor(_changeSet) : default;
+                    _batchIndexActive = true;
+                    _batchEntityCount = 0;
+                    ChunkBasedSegment<PersistentStore>.EnterBatchMode();
+
+                    try
+                    {
+                        kvp.Value.ForEachMutableEntry(ref context, ref commitAction);
+                    }
+                    finally
+                    {
+                        // Exit batch mode + dispose hoisted accessors
+                        ChunkBasedSegment<PersistentStore>.ExitBatchMode();
+                        _batchIndexActive = false;
+                        for (int i = 0; i < _batchIndexAccessors.Length; i++)
+                        {
+                            _batchIndexAccessors[i].Dispose();
+                        }
+                        if (tailVSBS != null)
+                        {
+                            _batchTailAccessor.Dispose();
+                        }
+                        _batchIndexAccessors = null;
+
+                        // Dispose cluster commit accessors between component types — the next type may target a different archetype
+                        DisposeClusterCommitAccessors();
+                    }
+
+                    _dbe.LogCommitComponentDone(TSN, kvp.Key.Name);
                 }
                 finally
                 {
-                    // Exit batch mode + dispose hoisted accessors
-                    ChunkBasedSegment<PersistentStore>.ExitBatchMode();
-                    _batchIndexActive = false;
-                    for (int i = 0; i < _batchIndexAccessors.Length; i++)
-                    {
-                        _batchIndexAccessors[i].Dispose();
-                    }
-                    if (tailVSBS != null)
-                    {
-                        _batchTailAccessor.Dispose();
-                    }
-                    _batchIndexAccessors = null;
-
-                    // Dispose cluster commit accessors between component types — the next type may target a different archetype
-                    DisposeClusterCommitAccessors();
+                    componentScope.Dispose();
                 }
-
-                _dbe.LogCommitComponentDone(TSN, kvp.Key.Name);
             }
 
             _dbe.LogCommitPhase(TSN, "DeferredCleanup");
@@ -1620,6 +1654,7 @@ public unsafe partial class Transaction : EntityAccessor
             // Processing happens in Dispose (after cached indices are no longer relevant) or via FlushDeferredCleanups.
             if (_deferredEnqueueBatch is { Count: > 0 })
             {
+                using var cleanupScope = TyphonEvent.BeginDataTransactionCleanup(TSN, _deferredEnqueueBatch.Count);
                 _dbe.DeferredCleanupManager.EnqueueBatch(context.TailTSN, _deferredEnqueueBatch);
                 _deferredEnqueueBatch.Clear();
             }

@@ -165,7 +165,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     private int AllocNode(bool isLeaf, int parentChunkId, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet = null)
     {
         int chunkId = _segment.AllocateChunk(false, changeSet);
-        byte* nodeBase = accessor.GetChunkAddress(chunkId, dirty: true);
+        byte* nodeBase = accessor.GetChunkAddress(chunkId, true);
 
         // Zero the entire chunk (stride bytes)
         new Span<byte>(nodeBase, _desc.Stride).Clear();
@@ -185,7 +185,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     {
         lock (_metadataLock)
         {
-            byte* meta = accessor.GetChunkAddress(0, dirty: true);
+            byte* meta = accessor.GetChunkAddress(0, true);
             *(int*)(meta + MetaRootOffset) = _rootChunkId;
             *(int*)(meta + MetaNodeCountOffset) = _nodeCount;
             *(int*)(meta + MetaEntityCountOffset) = _entityCount;
@@ -246,7 +246,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// </summary>
     internal void SetEntryCategoryMask(int leafChunkId, int slotIndex, uint mask, ref ChunkAccessor<TStore> accessor)
     {
-        byte* leafBase = accessor.GetChunkAddress(leafChunkId, dirty: true);
+        byte* leafBase = accessor.GetChunkAddress(leafChunkId, true);
         SpinWriteLock(leafBase, out var latch);
         SpatialNodeHelper.WriteLeafCategoryMask(leafBase, slotIndex, mask, _desc);
         SpatialNodeHelper.RefitLeafMBR(leafBase, _desc); // recomputes leaf union mask
@@ -282,7 +282,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
                 break;
             }
 
-            byte* parentBase = accessor.GetChunkAddress(parentChunkId, dirty: true);
+            byte* parentBase = accessor.GetChunkAddress(parentChunkId, true);
             SpinWriteLock(parentBase, out var parentLatch);
 
             // Refit the parent's internal entry for this child
@@ -319,7 +319,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
             int parentChunkId = path.ChunkIds[level];
             int childIdx = path.ChildIndices[level];
 
-            byte* parentBase = accessor.GetChunkAddress(parentChunkId, dirty: true);
+            byte* parentBase = accessor.GetChunkAddress(parentChunkId, true);
             SpinWriteLock(parentBase, out var parentLatch);
 
             // Read child's current NodeMBR and update the parent's entry for that child

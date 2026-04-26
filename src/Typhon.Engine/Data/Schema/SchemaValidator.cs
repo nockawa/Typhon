@@ -48,9 +48,7 @@ internal static class SchemaValidator
             if (!runtimeById.TryGetValue(fieldId, out var rField))
             {
                 // Field removed in runtime
-                fieldChanges.Add(new FieldChange(
-                    FieldChangeKind.Removed, pName, fieldId, CompatibilityLevel.Compatible,
-                    oldType: pField.Type));
+                fieldChanges.Add(new FieldChange(FieldChangeKind.Removed, pName, fieldId, CompatibilityLevel.Compatible, pField.Type));
                 continue;
             }
 
@@ -59,15 +57,11 @@ internal static class SchemaValidator
             {
                 if (IsCompatibleWidening(pField.Type, rField.Type))
                 {
-                    fieldChanges.Add(new FieldChange(
-                        FieldChangeKind.TypeWidened, rField.Name, fieldId, CompatibilityLevel.CompatibleWidening,
-                        oldType: pField.Type, newType: rField.Type));
+                    fieldChanges.Add(new FieldChange(FieldChangeKind.TypeWidened, rField.Name, fieldId, CompatibilityLevel.CompatibleWidening, pField.Type, rField.Type));
                 }
                 else
                 {
-                    fieldChanges.Add(new FieldChange(
-                        FieldChangeKind.TypeChanged, rField.Name, fieldId, CompatibilityLevel.Breaking,
-                        oldType: pField.Type, newType: rField.Type));
+                    fieldChanges.Add(new FieldChange(FieldChangeKind.TypeChanged, rField.Name, fieldId, CompatibilityLevel.Breaking, pField.Type, rField.Type));
                 }
             }
 

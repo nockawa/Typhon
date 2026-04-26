@@ -264,6 +264,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     /// </summary>
     internal Action OnBackpressure { get; set; }
 
+    /// <summary>Stable identifier of the backing file path (hash of the path string), recorded on Storage:FileHandle events.</summary>
+    private int _filePathId;
+
     /// <summary>
     /// Atomically advances <see cref="_fileSize"/> to at least <paramref name="newSize"/>.
     /// No-op if the tracked size is already &gt;= <paramref name="newSize"/>.
@@ -281,6 +284,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             }
         } while (Interlocked.CompareExchange(ref _fileSize, newSize, oldSize) != oldSize);
     }
+
+    /// <summary>
+    /// Current backing-file size in bytes (last value tracked by <see cref="TrackFileGrowth"/>). Read by the per-tick gauge collector;
+    /// no synchronization needed because <see cref="long"/> reads are atomic on x64.
+    /// </summary>
+    public long FileSize => _fileSize;
 
     private readonly ConcurrentDictionary<int, int> _memPageIndexByFilePageIndex;
     public EpochManager EpochManager { get; private set; }
@@ -526,9 +535,12 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         _fileHandle = File.OpenHandle(filePathName, FileMode.Create, FileAccess.ReadWrite, FileShare.Read, FileOptions.Asynchronous | FileOptions.RandomAccess);
         _fileSize = 0L;
+        _filePathId = filePathName.GetHashCode(StringComparison.Ordinal);
+
+        TyphonEvent.EmitStorageFileHandle(0, _filePathId, (byte)FileMode.Create);
 
         Logger.LogInformation("Create Database '{DatabaseName}' in file '{FilePathName}'", Options.DatabaseName, filePathName);
-        
+
         OnFileCreating();
     }
 
@@ -547,7 +559,10 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             var fi = new FileInfo(filePathName);
             _fileSize = fi.Length;
         }
-        
+        _filePathId = filePathName.GetHashCode(StringComparison.Ordinal);
+
+        TyphonEvent.EmitStorageFileHandle(0, _filePathId, (byte)FileMode.Open);
+
         OnFileLoading();
     }
 
@@ -573,6 +588,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             Logger.LogInformation("Disposing Virtual Disk Manager");
             if (_fileHandle != null)
             {
+                TyphonEvent.EmitStorageFileHandle(1, _filePathId, 0);
                 _fileHandle.Dispose();
                 _fileHandle = null;
             }
@@ -968,7 +984,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // dead-code-eliminates in Tier 1. evictedFilePageIndex < 0 means we claimed a slot that was previously Free (no displacement).
             if (evictedFilePageIndex >= 0)
             {
-                TyphonEvent.EmitPageEvicted(evictedFilePageIndex);
+                // Phase 5: dirtyBit reflects whether the displaced page was dirty at eviction time (still under the lock that gates clean reuse).
+                var dirtyBit = (byte)(pi.DirtyCounter > 0 ? 1 : 0);
+                TyphonEvent.EmitPageEvicted(evictedFilePageIndex, dirtyBit);
             }
 
             if (Options.PagesDebugPattern)

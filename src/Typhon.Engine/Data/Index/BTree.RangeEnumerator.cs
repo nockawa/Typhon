@@ -32,6 +32,9 @@ public abstract partial class BTree<TKey, TStore>
         private readonly IComparer<TKey> _comparer;
         private readonly TKey _boundKey;
         private readonly bool _bounded;
+
+        // Phase 6: Data:Index:BTree:RangeScan span (Tier-2 gated). ResultCount/RestartCount filled during enumeration.
+        private Profiler.DataIndexBTreeRangeScanEvent _span;
         private readonly bool _reverse;
 
         /// <summary>Unbounded forward constructor — walks the entire leaf chain (used by <see cref="EnumerateLeaves"/>).</summary>
@@ -55,6 +58,8 @@ public abstract partial class BTree<TKey, TStore>
                 _nodeItemCount = 0;
                 _leafVersion = 0;
             }
+
+            _span = Profiler.TyphonEvent.BeginDataIndexBTreeRangeScan();
         }
 
         /// <summary>
@@ -107,6 +112,8 @@ public abstract partial class BTree<TKey, TStore>
                     _currentIndex = _nodeItemCount;
                 }
             }
+
+            _span = Profiler.TyphonEvent.BeginDataIndexBTreeRangeScan();
         }
 
         /// <summary>Positions the cursor for forward iteration starting at the leaf containing minKey.</summary>
@@ -212,6 +219,11 @@ public abstract partial class BTree<TKey, TStore>
                     {
                         return false;
                     }
+                    if (TelemetryConfig.DataIndexBTreeRangeScanActive)
+                    {
+                        _span.ResultCount++;
+                    }
+
                     return true;
                 }
             }
@@ -228,6 +240,11 @@ public abstract partial class BTree<TKey, TStore>
                             return false;
                         }
                     }
+                    if (TelemetryConfig.DataIndexBTreeRangeScanActive)
+                    {
+                        _span.ResultCount++;
+                    }
+
                     return true;
                 }
             }
@@ -237,6 +254,11 @@ public abstract partial class BTree<TKey, TStore>
             var latch = _currentNode.GetLatch(ref _accessor);
             if (!latch.ValidateVersion(_leafVersion))
             {
+                if (TelemetryConfig.DataIndexBTreeRangeScanActive && _span.RestartCount < byte.MaxValue)
+                {
+                    _span.RestartCount++;
+                }
+
                 if (_reverse)
                 {
                     ReadLeafState();
@@ -289,6 +311,11 @@ public abstract partial class BTree<TKey, TStore>
                 }
             }
 
+            if (TelemetryConfig.DataIndexBTreeRangeScanActive)
+            {
+                _span.ResultCount++;
+            }
+
             return true;
         }
 
@@ -298,6 +325,7 @@ public abstract partial class BTree<TKey, TStore>
             if (!_disposed)
             {
                 _disposed = true;
+                _span.Dispose();
                 _accessor.Dispose();
             }
         }

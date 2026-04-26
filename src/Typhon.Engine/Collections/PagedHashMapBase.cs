@@ -264,7 +264,7 @@ public abstract unsafe partial class PagedHashMapBase<TStore> where TStore : str
         do
         {
             Interlocked.Increment(ref _writeLockFailures);
-            spin.SpinOnce(sleep1Threshold: -1);
+            spin.SpinOnce(-1);
         }
         while (!latch.TryWriteLock());
     }

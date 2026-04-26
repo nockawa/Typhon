@@ -24,9 +24,19 @@ internal static class ExpressionParser
 
     public static FieldPredicate[] Parse<T>(Expression<Func<T, bool>> expression)
     {
-        var predicates = new List<FieldPredicate>();
-        CollectPredicates(expression.Body, [expression.Parameters[0]], predicates, null);
-        return predicates.ToArray();
+        // Phase 7: Query:Parse span — covers single-clause predicate parsing. Stats filled at exit.
+        var parseScope = Profiler.TyphonEvent.BeginQueryParse(0, 1);
+        try
+        {
+            var predicates = new List<FieldPredicate>();
+            CollectPredicates(expression.Body, [expression.Parameters[0]], predicates, null);
+            parseScope.PredicateCount = (ushort)Math.Min(predicates.Count, ushort.MaxValue);
+            return predicates.ToArray();
+        }
+        finally
+        {
+            parseScope.Dispose();
+        }
     }
 
     /// <summary>
@@ -43,18 +53,28 @@ internal static class ExpressionParser
     /// <exception cref="InvalidOperationException">Thrown when the normalized DNF exceeds 16 branches.</exception>
     public static FieldPredicate[][] ParseDnf<T>(Expression<Func<T, bool>> expression)
     {
-        var parameters = new[] { expression.Parameters[0] };
-        var ast = BuildAst(expression.Body, parameters, false);
-        var dnf = ToDnf(ast);
-        var branches = CollectDnfBranches(dnf, parameters);
-        if (branches.Length > MaxDnfBranches)
+        // Phase 7: Query:Parse:DNF span — covers normalization. inBranches=1 (input), outBranches set after CollectDnfBranches.
+        var dnfScope = Profiler.TyphonEvent.BeginQueryParseDnf(1, 0);
+        try
         {
-            throw new InvalidOperationException(
-                $"Predicate normalizes to {branches.Length} DNF clauses (max {MaxDnfBranches}). " +
-                "This typically happens when multiple OR pairs are ANDed together: each additional (A||B) doubles " +
-                "the clause count. Simplify by reducing the number of ANDed OR pairs, or split into separate queries.");
+            var parameters = new[] { expression.Parameters[0] };
+            var ast = BuildAst(expression.Body, parameters, false);
+            var dnf = ToDnf(ast);
+            var branches = CollectDnfBranches(dnf, parameters);
+            dnfScope.OutBranches = (ushort)Math.Min(branches.Length, ushort.MaxValue);
+            if (branches.Length > MaxDnfBranches)
+            {
+                throw new InvalidOperationException(
+                    $"Predicate normalizes to {branches.Length} DNF clauses (max {MaxDnfBranches}). " +
+                    "This typically happens when multiple OR pairs are ANDed together: each additional (A||B) doubles " +
+                    "the clause count. Simplify by reducing the number of ANDed OR pairs, or split into separate queries.");
+            }
+            return branches;
         }
-        return branches;
+        finally
+        {
+            dnfScope.Dispose();
+        }
     }
 
     public static string ExtractFieldName<T, TKey>(Expression<Func<T, TKey>> keySelector)

@@ -37,7 +37,7 @@ internal static unsafe class IndexMaintainer
                         // With TAIL tracking, preserveEmptyBuffer keeps the old HEAD buffer alive for tombstone writes.
                         *(int*)&cur[ifi.OffsetToIndexElementId] = index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
                             *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
-                            out var oldHeadBufferId, out var newHeadBufferId, preserveEmptyBuffer: tailVSBS != null);
+                            out var oldHeadBufferId, out var newHeadBufferId, tailVSBS != null);
 
                         if (tailVSBS != null)
                         {
@@ -58,7 +58,7 @@ internal static unsafe class IndexMaintainer
                             if (newHeadBufferId >= 0)
                             {
                                 var newTailBufferId = EnsureTailPopulated(newHeadBufferId, tailVSBS,
-                                    ref accessor, ref tailAccessor, info, excludeChainId: startChunkId);
+                                    ref accessor, ref tailAccessor, info, startChunkId);
                                 tailVSBS.AddElement(newTailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
                             }
 
@@ -72,8 +72,7 @@ internal static unsafe class IndexMaintainer
                     }
                     accessor.Dispose();
 
-                    NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
-                        isDeletion: false);
+                    NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, false, false);
                 }
                 else if (ifi.AllowMultiple)
                 {
@@ -115,7 +114,7 @@ internal static unsafe class IndexMaintainer
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
                 ref var ifi = ref indexedFieldInfos[i];
-                NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, isCreation: true, isDeletion: false);
+                NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, true, false);
             }
 
             info.ComponentTable.MutationsSinceRebuild++;
@@ -131,7 +130,7 @@ internal static unsafe class IndexMaintainer
         for (int i = 0; i < indexedFieldInfos.Length; i++)
         {
             ref var ifi = ref indexedFieldInfos[i];
-            NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, null, ifi.Size, isCreation: false, isDeletion: true);
+            NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, null, ifi.Size, false, true);
         }
 
         for (int i = 0; i < indexedFieldInfos.Length; i++)
@@ -145,8 +144,7 @@ internal static unsafe class IndexMaintainer
 
                 // When TAIL tracking is active, preserve the BTree key even if the HEAD buffer empties.
                 // This keeps the TAIL version-history buffer reachable for temporal queries.
-                index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor,
-                    preserveEmptyBuffer: tailVSBS != null);
+                index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref accessor, tailVSBS != null);
 
                 // TAIL: backfill + Active + Tombstone for the deleted entity.
                 // preserveEmptyBuffer keeps the key alive so TryGet succeeds after RemoveValue.
@@ -204,7 +202,7 @@ internal static unsafe class IndexMaintainer
 
                         *(int*)&cur[ifi.OffsetToIndexElementId] = index.MoveValue(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField],
                             *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i],
-                            out var oldHeadBufferId, out var newHeadBufferId, preserveEmptyBuffer: tailVSBS != null);
+                            out var oldHeadBufferId, out var newHeadBufferId, tailVSBS != null);
 
                         if (tailVSBS != null)
                         {
@@ -220,7 +218,7 @@ internal static unsafe class IndexMaintainer
                             if (newHeadBufferId >= 0)
                             {
                                 var newTailBufferId = EnsureTailPopulated(newHeadBufferId, tailVSBS,
-                                    ref indexAccessors[i], ref tailAccessor, info, excludeChainId: startChunkId);
+                                    ref indexAccessors[i], ref tailAccessor, info, startChunkId);
                                 tailVSBS.AddElement(newTailBufferId, VersionedIndexEntry.Active(startChunkId, tsn), ref tailAccessor);
                             }
                         }
@@ -230,8 +228,7 @@ internal static unsafe class IndexMaintainer
                         index.Move(&prev[ifi.OffsetToField], &cur[ifi.OffsetToField], startChunkId, ref indexAccessors[i]);
                     }
 
-                    NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, isCreation: false,
-                        isDeletion: false);
+                    NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, cur + ifi.OffsetToField, ifi.Size, false, false);
                 }
                 else if (ifi.AllowMultiple)
                 {
@@ -264,7 +261,7 @@ internal static unsafe class IndexMaintainer
             for (int i = 0; i < indexedFieldInfos.Length; i++)
             {
                 ref var ifi = ref indexedFieldInfos[i];
-                NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, isCreation: true, isDeletion: false);
+                NotifyViews(info.ComponentTable, i, pk, tsn, null, cur + ifi.OffsetToField, ifi.Size, true, false);
             }
 
             info.ComponentTable.MutationsSinceRebuild++;
@@ -285,7 +282,7 @@ internal static unsafe class IndexMaintainer
         for (int i = 0; i < indexedFieldInfos.Length; i++)
         {
             ref var ifi = ref indexedFieldInfos[i];
-            NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, null, ifi.Size, isCreation: false, isDeletion: true);
+            NotifyViews(info.ComponentTable, i, pk, tsn, prev + ifi.OffsetToField, null, ifi.Size, false, true);
         }
 
         for (int i = 0; i < indexedFieldInfos.Length; i++)
@@ -296,8 +293,7 @@ internal static unsafe class IndexMaintainer
             {
                 var tailVSBS = info.ComponentTable.TailVSBS;
 
-                index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i],
-                    preserveEmptyBuffer: tailVSBS != null);
+                index.RemoveValue(&prev[ifi.OffsetToField], *(int*)&prev[ifi.OffsetToIndexElementId], startChunkId, ref indexAccessors[i], tailVSBS != null);
 
                 if (tailVSBS != null)
                 {

@@ -279,6 +279,300 @@ public static class TelemetryConfig
     public static readonly bool ConcurrencyOlcLatchValidationFailActive;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // SPATIAL TRACING (Phase 3 — see 03-spatial.md)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Greenfield namespace. The legacy `Typhon:Telemetry:Spatial:Enabled` flag was deleted in
+    // Phase 0; this Spatial subtree is brand-new with no back-compat fallback. Default-OFF
+    // for everything except `ClusterMigration:Execute` which preserves the pre-Phase-3 behavior
+    // of kind 60 (the only Spatial event that already shipped).
+
+    /// <summary>Combined gate for the entire Spatial subsystem (parent of all Spatial:* leaves).</summary>
+    public static readonly bool SpatialActive;
+
+    // Subtree parents
+    public static readonly bool SpatialQueryActive;
+    public static readonly bool SpatialRTreeActive;
+    public static readonly bool SpatialGridActive;
+    public static readonly bool SpatialCellActive;
+    public static readonly bool SpatialCellIndexActive;
+    public static readonly bool SpatialClusterMigrationActive;
+    public static readonly bool SpatialTierIndexActive;
+    public static readonly bool SpatialMaintainActive;
+    public static readonly bool SpatialTriggerActive;
+    public static readonly bool SpatialTriggerOccupantActive;
+    public static readonly bool SpatialTriggerCacheActive;
+
+    // Query leaves (kinds 117-122)
+    public static readonly bool SpatialQueryAabbActive;
+    public static readonly bool SpatialQueryRadiusActive;
+    public static readonly bool SpatialQueryRayActive;
+    public static readonly bool SpatialQueryFrustumActive;
+    public static readonly bool SpatialQueryKnnActive;
+    public static readonly bool SpatialQueryCountActive;
+
+    // RTree structural leaves (kinds 123-126)
+    public static readonly bool SpatialRTreeInsertActive;
+    public static readonly bool SpatialRTreeRemoveActive;
+    public static readonly bool SpatialRTreeNodeSplitActive;
+    public static readonly bool SpatialRTreeBulkLoadActive;
+
+    // Grid leaves (kinds 127-129)
+    public static readonly bool SpatialGridCellTierChangeActive;
+    public static readonly bool SpatialGridOccupancyChangeActive;
+    public static readonly bool SpatialGridClusterCellAssignActive;
+
+    // Cell:Index leaves (kinds 130-132)
+    public static readonly bool SpatialCellIndexAddActive;
+    public static readonly bool SpatialCellIndexUpdateActive;
+    public static readonly bool SpatialCellIndexRemoveActive;
+
+    // ClusterMigration leaves (kinds 133-135; Execute = existing kind 60)
+    public static readonly bool SpatialClusterMigrationDetectActive;
+    public static readonly bool SpatialClusterMigrationQueueActive;
+    public static readonly bool SpatialClusterMigrationExecuteActive;
+    public static readonly bool SpatialClusterMigrationHysteresisActive;
+
+    // TierIndex leaves (kinds 136-137)
+    public static readonly bool SpatialTierIndexRebuildActive;
+    public static readonly bool SpatialTierIndexVersionSkipActive;
+
+    // Maintain leaves (kinds 138-141)
+    public static readonly bool SpatialMaintainInsertActive;
+    public static readonly bool SpatialMaintainUpdateSlowPathActive;
+    public static readonly bool SpatialMaintainAabbValidateActive;
+    public static readonly bool SpatialMaintainBackPointerWriteActive;
+
+    // Trigger leaves (kinds 142-145)
+    public static readonly bool SpatialTriggerRegionActive;
+    public static readonly bool SpatialTriggerEvalActive;
+    public static readonly bool SpatialTriggerOccupantDiffActive;
+    public static readonly bool SpatialTriggerCacheInvalidateActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SCHEDULER & RUNTIME TRACING (Phase 4 — see 04-scheduler-runtime.md)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Greenfield deeper subtree. The existing `SchedulerActive` master gate (above) stays;
+    // these are NEW sub-tree gates allowing operators to opt into Scheduler depth + Runtime
+    // (UoW, Tx Lifecycle, Subscription) tracing per-leaf.
+
+    // Scheduler subtree parents
+    public static readonly bool SchedulerSystemActive;
+    public static readonly bool SchedulerWorkerActive;
+    public static readonly bool SchedulerDispenseActive;
+    public static readonly bool SchedulerDependencyActive;
+    public static readonly bool SchedulerOverloadActive;
+    public static readonly bool SchedulerGraphActive;
+
+    // Scheduler:System leaves (kinds 146-149)
+    public static readonly bool SchedulerSystemStartExecutionActive;
+    public static readonly bool SchedulerSystemCompletionActive;
+    public static readonly bool SchedulerSystemQueueWaitActive;
+    public static readonly bool SchedulerSystemSingleThreadedActive;
+
+    // Scheduler:Worker leaves (kinds 150-152)
+    public static readonly bool SchedulerWorkerIdleActive;
+    public static readonly bool SchedulerWorkerWakeActive;
+    public static readonly bool SchedulerWorkerBetweenTickActive;
+
+    // Scheduler:Dependency leaves (kinds 154-155)
+    public static readonly bool SchedulerDependencyReadyActive;
+    public static readonly bool SchedulerDependencyFanOutActive;
+
+    // Scheduler:Overload leaves (kinds 156-158)
+    public static readonly bool SchedulerOverloadLevelChangeActive;
+    public static readonly bool SchedulerOverloadSystemShedActive;
+    public static readonly bool SchedulerOverloadTickMultiplierActive;
+
+    // Scheduler:Graph leaves (kinds 159-160)
+    public static readonly bool SchedulerGraphBuildActive;
+    public static readonly bool SchedulerGraphRebuildActive;
+
+    // Runtime subtree parents
+    public static readonly bool RuntimeActive;
+    public static readonly bool RuntimePhaseActive;
+    public static readonly bool RuntimeTransactionActive;
+    public static readonly bool RuntimeSubscriptionActive;
+    public static readonly bool RuntimeSubscriptionOutputActive;
+
+    // Runtime:Phase leaves (kinds 161-162)
+    public static readonly bool RuntimePhaseUoWCreateActive;
+    public static readonly bool RuntimePhaseUoWFlushActive;
+
+    // Runtime:Transaction leaves (kind 163)
+    public static readonly bool RuntimeTransactionLifecycleActive;
+
+    // Runtime:Subscription leaves (Phase 4: kind 164; Phase 9: kinds 235-240)
+    public static readonly bool RuntimeSubscriptionOutputExecuteActive;
+
+    // Phase 9 (#287) Subscription depth leaves
+    public static readonly bool RuntimeSubscriptionSubscriberActive;
+    public static readonly bool RuntimeSubscriptionDeltaBuildActive;
+    public static readonly bool RuntimeSubscriptionDeltaSerializeActive;
+    public static readonly bool RuntimeSubscriptionTransitionBeginSyncActive;
+    public static readonly bool RuntimeSubscriptionOutputCleanupActive;
+    public static readonly bool RuntimeSubscriptionDeltaDirtyBitmapSupplementActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STORAGE & MEMORY TRACING (Phase 5 — see 05-storage-memory.md)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Storage gets a deeper subtree for the new IDs 165-171; existing kinds 50-59
+    // remain controlled by the per-kind suppression list (and the new
+    // CompletionThresholdMs knob for 56/57/58).
+    // Memory:AlignmentWaste (kind 172) is the only Memory event flag.
+
+    // Storage subtree parents
+    public static readonly bool StorageActive;
+    public static readonly bool StoragePageCacheActive;
+    public static readonly bool StorageSegmentActive;
+    public static readonly bool StorageChunkSegmentActive;
+    public static readonly bool StorageFileHandleActive;
+    public static readonly bool StorageOccupancyMapActive;
+
+    // Storage leaves (kinds 165-171)
+    public static readonly bool StoragePageCacheDirtyWalkActive;
+    public static readonly bool StorageSegmentCreateActive;
+    public static readonly bool StorageSegmentGrowActive;
+    public static readonly bool StorageSegmentLoadActive;
+    public static readonly bool StorageChunkSegmentGrowActive;
+    public static readonly bool StorageFileHandleEnabledActive;
+    public static readonly bool StorageOccupancyMapGrowActive;
+
+    /// <summary>
+    /// Producer-side duration threshold (ms) for kinds 56/57/58 (PageCache:DiskRead/Write/Flush Completed).
+    /// When &gt; 0 the emit path skips records whose duration is shorter than the threshold; when 0 it
+    /// matches today's behaviour (always emit when un-suppressed). Default: 1 ms.
+    /// </summary>
+    public static readonly int StoragePageCacheCompletionThresholdMs;
+
+    // Memory subtree parents
+    public static readonly bool MemoryActive;
+
+    // Memory leaves (kind 172)
+    public static readonly bool MemoryAlignmentWasteActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DATA PLANE TRACING (Phase 6 — see 06-data-plane.md)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Data:Transaction / Data:MVCC / Data:Index:BTree subtrees. All default off; high-freq
+    // leaves (Prepare, ChainWalk, Search, Revalidate, NodeCow) are also added to the per-kind
+    // suppression list so that flipping the parent on doesn't drown the ring in events.
+
+    // Data subtree parents
+    public static readonly bool DataActive;
+    public static readonly bool DataTransactionActive;
+    public static readonly bool DataMvccActive;
+    public static readonly bool DataIndexActive;
+    public static readonly bool DataIndexBTreeActive;
+
+    // Data:Transaction leaves (kinds 173-177)
+    public static readonly bool DataTransactionInitActive;
+    public static readonly bool DataTransactionPrepareActive;
+    public static readonly bool DataTransactionValidateActive;
+    public static readonly bool DataTransactionConflictActive;
+    public static readonly bool DataTransactionCleanupActive;
+
+    // Data:MVCC leaves (kinds 178-179)
+    public static readonly bool DataMvccChainWalkActive;
+    public static readonly bool DataMvccVersionCleanupActive;
+
+    // Data:Index:BTree leaves (kinds 180-186)
+    public static readonly bool DataIndexBTreeSearchActive;
+    public static readonly bool DataIndexBTreeRangeScanActive;
+    public static readonly bool DataIndexBTreeRangeScanRevalidateActive;
+    public static readonly bool DataIndexBTreeRebalanceFallbackActive;
+    public static readonly bool DataIndexBTreeBulkInsertActive;
+    public static readonly bool DataIndexBTreeRootActive;
+    public static readonly bool DataIndexBTreeNodeCowActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // QUERY / ECS:Query / ECS:View TRACING (Phase 7 — see 07-query-ecs-view.md)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Query subtree parents
+    public static readonly bool QueryActive;
+    public static readonly bool QueryParseActive;
+    public static readonly bool QueryPlanActive;
+    public static readonly bool QueryExecuteActive;
+
+    // Query leaves (kinds 187-198)
+    public static readonly bool QueryParseEnabledActive;
+    public static readonly bool QueryParseDnfActive;
+    public static readonly bool QueryPlanEnabledActive;
+    public static readonly bool QueryEstimateActive;
+    public static readonly bool QueryPlanPrimarySelectActive;
+    public static readonly bool QueryPlanSortActive;
+    public static readonly bool QueryExecuteIndexScanActive;
+    public static readonly bool QueryExecuteIterateActive;
+    public static readonly bool QueryExecuteFilterActive;
+    public static readonly bool QueryExecutePaginationActive;
+    public static readonly bool QueryExecuteStorageModeActive;
+    public static readonly bool QueryCountActive;
+
+    // ECS subtree parents (and depth from Phase 7)
+    public static readonly bool EcsActive;
+    public static readonly bool EcsQueryActive;
+    public static readonly bool EcsViewActive;
+
+    // ECS:Query depth leaves (kinds 199-203)
+    public static readonly bool EcsQueryConstructActive;
+    public static readonly bool EcsQueryMaskAndActive;
+    public static readonly bool EcsQuerySubtreeExpandActive;
+    public static readonly bool EcsQueryConstraintEnabledActive;
+    public static readonly bool EcsQuerySpatialAttachActive;
+
+    // ECS:View depth leaves (kinds 204-213)
+    public static readonly bool EcsViewRefreshPullActive;
+    public static readonly bool EcsViewIncrementalDrainActive;
+    public static readonly bool EcsViewDeltaBufferOverflowActive;
+    public static readonly bool EcsViewProcessEntryActive;
+    public static readonly bool EcsViewProcessEntryOrActive;
+    public static readonly bool EcsViewRefreshFullActive;
+    public static readonly bool EcsViewRefreshFullOrActive;
+    public static readonly bool EcsViewRegistryRegisterActive;
+    public static readonly bool EcsViewRegistryDeregisterActive;
+    public static readonly bool EcsViewDeltaCacheMissActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DURABILITY TRACING (Phase 8 — see 08-durability.md)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Durability subtree parents
+    public static readonly bool DurabilityActive;
+    public static readonly bool DurabilityWalActive;
+    public static readonly bool DurabilityCheckpointActive;
+    public static readonly bool DurabilityRecoveryActive;
+    public static readonly bool DurabilityUowActive;
+
+    // Durability:WAL leaves (kinds 214-221)
+    public static readonly bool DurabilityWalQueueDrainActive;
+    public static readonly bool DurabilityWalOsWriteActive;
+    public static readonly bool DurabilityWalSignalActive;
+    public static readonly bool DurabilityWalGroupCommitActive;
+    public static readonly bool DurabilityWalQueueActive;
+    public static readonly bool DurabilityWalBufferActive;
+    public static readonly bool DurabilityWalFrameActive;
+    public static readonly bool DurabilityWalBackpressureActive;
+
+    // Durability:Checkpoint depth (kinds 222-224)
+    public static readonly bool DurabilityCheckpointWriteBatchActive;
+    public static readonly bool DurabilityCheckpointBackpressureActive;
+    public static readonly bool DurabilityCheckpointSleepActive;
+
+    // Durability:Recovery leaves (kinds 225-232)
+    public static readonly bool DurabilityRecoveryStartActive;
+    public static readonly bool DurabilityRecoveryDiscoverActive;
+    public static readonly bool DurabilityRecoverySegmentActive;
+    public static readonly bool DurabilityRecoveryRecordActive;
+    public static readonly bool DurabilityRecoveryFpiActive;
+    public static readonly bool DurabilityRecoveryRedoActive;
+    public static readonly bool DurabilityRecoveryUndoActive;
+    public static readonly bool DurabilityRecoveryTickFenceActive;
+
+    // Durability:UoW leaves (kinds 233-234)
+    public static readonly bool DurabilityUowStateActive;
+    public static readonly bool DurabilityUowDeadlineActive;
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // CONFIGURATION SOURCE TRACKING (for diagnostics)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -459,6 +753,578 @@ public static class TelemetryConfig
         ConcurrencyOlcLatchMarkObsoleteActive     = concurrencyMap["Concurrency:OlcLatch:MarkObsolete"];
         ConcurrencyOlcLatchValidationFailActive   = concurrencyMap["Concurrency:OlcLatch:ValidationFail"];
 
+        // ─── Spatial subtree (Phase 3 final shape) ─────────────────────────────
+        // Greenfield. No legacy fallback (Phase 0 deleted the dead Typhon:Telemetry:Spatial:* tree).
+        // Default-off everywhere; operators flip Profiler:Spatial:Enabled = true to opt into the subtree.
+        var spatialTree = new Node("Spatial",
+        [
+            new Node("Query",
+            [
+                new Node("Aabb"),
+                new Node("Radius"),
+                new Node("Ray"),
+                new Node("Frustum"),
+                new Node("Knn"),
+                new Node("Count"),
+            ]),
+            new Node("RTree",
+            [
+                new Node("Insert"),
+                new Node("Remove"),
+                new Node("NodeSplit"),
+                new Node("BulkLoad"),
+            ]),
+            new Node("Grid",
+            [
+                new Node("CellTierChange"),
+                new Node("OccupancyChange"),
+                new Node("ClusterCellAssign"),
+            ]),
+            new Node("Cell",
+            [
+                new Node("Index",
+                [
+                    new Node("Add"),
+                    new Node("Update"),
+                    new Node("Remove"),
+                ]),
+            ]),
+            new Node("ClusterMigration",
+            [
+                new Node("Detect"),
+                new Node("Queue"),
+                new Node("Execute"),
+                new Node("Hysteresis"),
+            ]),
+            new Node("TierIndex",
+            [
+                new Node("Rebuild"),
+                new Node("VersionSkip"),
+            ]),
+            new Node("Maintain",
+            [
+                new Node("Insert"),
+                new Node("UpdateSlowPath"),
+                new Node("AabbValidate"),
+                new Node("BackPointerWrite"),
+            ]),
+            new Node("Trigger",
+            [
+                new Node("Region"),
+                new Node("Eval"),
+                new Node("Occupant",
+                [
+                    new Node("Diff"),
+                ]),
+                new Node("Cache",
+                [
+                    new Node("Invalidate"),
+                ]),
+            ]),
+        ]);
+        var spatialRootExplicit = ReadBool(config, "Typhon:Profiler:Spatial:Enabled", false);
+        var spatialRootEffective = Enabled && spatialRootExplicit;
+        var spatialMap = TelemetryConfigResolver.Resolve(
+            spatialTree, spatialRootEffective, config, "Typhon:Profiler");
+
+        // Root + sub-tree parents
+        SpatialActive                   = spatialMap["Spatial"];
+        SpatialQueryActive              = spatialMap["Spatial:Query"];
+        SpatialRTreeActive              = spatialMap["Spatial:RTree"];
+        SpatialGridActive               = spatialMap["Spatial:Grid"];
+        SpatialCellActive               = spatialMap["Spatial:Cell"];
+        SpatialCellIndexActive          = spatialMap["Spatial:Cell:Index"];
+        SpatialClusterMigrationActive   = spatialMap["Spatial:ClusterMigration"];
+        SpatialTierIndexActive          = spatialMap["Spatial:TierIndex"];
+        SpatialMaintainActive           = spatialMap["Spatial:Maintain"];
+        SpatialTriggerActive            = spatialMap["Spatial:Trigger"];
+        SpatialTriggerOccupantActive    = spatialMap["Spatial:Trigger:Occupant"];
+        SpatialTriggerCacheActive       = spatialMap["Spatial:Trigger:Cache"];
+
+        // Query leaves
+        SpatialQueryAabbActive    = spatialMap["Spatial:Query:Aabb"];
+        SpatialQueryRadiusActive  = spatialMap["Spatial:Query:Radius"];
+        SpatialQueryRayActive     = spatialMap["Spatial:Query:Ray"];
+        SpatialQueryFrustumActive = spatialMap["Spatial:Query:Frustum"];
+        SpatialQueryKnnActive     = spatialMap["Spatial:Query:Knn"];
+        SpatialQueryCountActive   = spatialMap["Spatial:Query:Count"];
+
+        // RTree structural leaves
+        SpatialRTreeInsertActive    = spatialMap["Spatial:RTree:Insert"];
+        SpatialRTreeRemoveActive    = spatialMap["Spatial:RTree:Remove"];
+        SpatialRTreeNodeSplitActive = spatialMap["Spatial:RTree:NodeSplit"];
+        SpatialRTreeBulkLoadActive  = spatialMap["Spatial:RTree:BulkLoad"];
+
+        // Grid leaves
+        SpatialGridCellTierChangeActive    = spatialMap["Spatial:Grid:CellTierChange"];
+        SpatialGridOccupancyChangeActive   = spatialMap["Spatial:Grid:OccupancyChange"];
+        SpatialGridClusterCellAssignActive = spatialMap["Spatial:Grid:ClusterCellAssign"];
+
+        // Cell:Index leaves
+        SpatialCellIndexAddActive    = spatialMap["Spatial:Cell:Index:Add"];
+        SpatialCellIndexUpdateActive = spatialMap["Spatial:Cell:Index:Update"];
+        SpatialCellIndexRemoveActive = spatialMap["Spatial:Cell:Index:Remove"];
+
+        // ClusterMigration leaves
+        SpatialClusterMigrationDetectActive     = spatialMap["Spatial:ClusterMigration:Detect"];
+        SpatialClusterMigrationQueueActive      = spatialMap["Spatial:ClusterMigration:Queue"];
+        SpatialClusterMigrationExecuteActive    = spatialMap["Spatial:ClusterMigration:Execute"];
+        SpatialClusterMigrationHysteresisActive = spatialMap["Spatial:ClusterMigration:Hysteresis"];
+
+        // TierIndex leaves
+        SpatialTierIndexRebuildActive     = spatialMap["Spatial:TierIndex:Rebuild"];
+        SpatialTierIndexVersionSkipActive = spatialMap["Spatial:TierIndex:VersionSkip"];
+
+        // Maintain leaves
+        SpatialMaintainInsertActive           = spatialMap["Spatial:Maintain:Insert"];
+        SpatialMaintainUpdateSlowPathActive   = spatialMap["Spatial:Maintain:UpdateSlowPath"];
+        SpatialMaintainAabbValidateActive     = spatialMap["Spatial:Maintain:AabbValidate"];
+        SpatialMaintainBackPointerWriteActive = spatialMap["Spatial:Maintain:BackPointerWrite"];
+
+        // Trigger leaves
+        SpatialTriggerRegionActive          = spatialMap["Spatial:Trigger:Region"];
+        SpatialTriggerEvalActive            = spatialMap["Spatial:Trigger:Eval"];
+        SpatialTriggerOccupantDiffActive    = spatialMap["Spatial:Trigger:Occupant:Diff"];
+        SpatialTriggerCacheInvalidateActive = spatialMap["Spatial:Trigger:Cache:Invalidate"];
+
+        // ─── Scheduler depth + Runtime subtrees (Phase 4 final shape) ──────────
+        // The existing SchedulerActive master flag (read above) stays as-is. Phase 4 adds the deeper tree:
+        // System / Worker / Dispense / Dependency / Overload / Graph. These default off; operators flip
+        // Profiler:Scheduler:System:Enabled = true (etc.) to opt in.
+        var schedulerDepthTree = new Node("Scheduler",
+        [
+            new Node("System",
+            [
+                new Node("StartExecution"),
+                new Node("Completion"),
+                new Node("QueueWait"),
+                new Node("SingleThreaded"),
+            ]),
+            new Node("Worker",
+            [
+                new Node("Idle"),
+                new Node("Wake"),
+                new Node("BetweenTick"),
+            ]),
+            new Node("Dispense"),
+            new Node("Dependency",
+            [
+                new Node("Ready"),
+                new Node("FanOut"),
+            ]),
+            new Node("Overload",
+            [
+                new Node("LevelChange"),
+                new Node("SystemShed"),
+                new Node("TickMultiplier"),
+            ]),
+            new Node("Graph",
+            [
+                new Node("Build"),
+                new Node("Rebuild"),
+            ]),
+        ]);
+        // Effective root = master profiler && existing Scheduler enabled flag (already computed as SchedulerEnabled).
+        var schedulerDepthRootEffective = Enabled && SchedulerEnabled;
+        var schedulerDepthMap = TelemetryConfigResolver.Resolve(
+            schedulerDepthTree, schedulerDepthRootEffective, config, "Typhon:Profiler");
+
+        // Subtree parents
+        SchedulerSystemActive     = schedulerDepthMap["Scheduler:System"];
+        SchedulerWorkerActive     = schedulerDepthMap["Scheduler:Worker"];
+        SchedulerDispenseActive   = schedulerDepthMap["Scheduler:Dispense"];
+        SchedulerDependencyActive = schedulerDepthMap["Scheduler:Dependency"];
+        SchedulerOverloadActive   = schedulerDepthMap["Scheduler:Overload"];
+        SchedulerGraphActive      = schedulerDepthMap["Scheduler:Graph"];
+
+        // System leaves
+        SchedulerSystemStartExecutionActive = schedulerDepthMap["Scheduler:System:StartExecution"];
+        SchedulerSystemCompletionActive     = schedulerDepthMap["Scheduler:System:Completion"];
+        SchedulerSystemQueueWaitActive      = schedulerDepthMap["Scheduler:System:QueueWait"];
+        SchedulerSystemSingleThreadedActive = schedulerDepthMap["Scheduler:System:SingleThreaded"];
+
+        // Worker leaves
+        SchedulerWorkerIdleActive        = schedulerDepthMap["Scheduler:Worker:Idle"];
+        SchedulerWorkerWakeActive        = schedulerDepthMap["Scheduler:Worker:Wake"];
+        SchedulerWorkerBetweenTickActive = schedulerDepthMap["Scheduler:Worker:BetweenTick"];
+
+        // Dependency leaves
+        SchedulerDependencyReadyActive  = schedulerDepthMap["Scheduler:Dependency:Ready"];
+        SchedulerDependencyFanOutActive = schedulerDepthMap["Scheduler:Dependency:FanOut"];
+
+        // Overload leaves
+        SchedulerOverloadLevelChangeActive    = schedulerDepthMap["Scheduler:Overload:LevelChange"];
+        SchedulerOverloadSystemShedActive     = schedulerDepthMap["Scheduler:Overload:SystemShed"];
+        SchedulerOverloadTickMultiplierActive = schedulerDepthMap["Scheduler:Overload:TickMultiplier"];
+
+        // Graph leaves
+        SchedulerGraphBuildActive   = schedulerDepthMap["Scheduler:Graph:Build"];
+        SchedulerGraphRebuildActive = schedulerDepthMap["Scheduler:Graph:Rebuild"];
+
+        // ─── Runtime subtree (Phase 4 + Phase 9 depth) ─────────────────────────
+        var runtimeTree = new Node("Runtime",
+        [
+            new Node("Phase",
+            [
+                new Node("UoWCreate"),
+                new Node("UoWFlush"),
+            ]),
+            new Node("Transaction",
+            [
+                new Node("Lifecycle"),
+            ]),
+            new Node("Subscription",
+            [
+                new Node("Subscriber"),
+                new Node("Delta",
+                [
+                    new Node("Build"),
+                    new Node("Serialize"),
+                    new Node("DirtyBitmapSupplement"),
+                ]),
+                new Node("Transition",
+                [
+                    new Node("BeginSync"),
+                ]),
+                new Node("Output",
+                [
+                    new Node("Execute"),
+                    new Node("Cleanup"),
+                ]),
+            ]),
+        ]);
+        var runtimeRootExplicit = ReadBool(config, "Typhon:Profiler:Runtime:Enabled", false);
+        var runtimeRootEffective = Enabled && runtimeRootExplicit;
+        var runtimeMap = TelemetryConfigResolver.Resolve(
+            runtimeTree, runtimeRootEffective, config, "Typhon:Profiler");
+
+        RuntimeActive                   = runtimeMap["Runtime"];
+        RuntimePhaseActive              = runtimeMap["Runtime:Phase"];
+        RuntimeTransactionActive        = runtimeMap["Runtime:Transaction"];
+        RuntimeSubscriptionActive       = runtimeMap["Runtime:Subscription"];
+        RuntimeSubscriptionOutputActive = runtimeMap["Runtime:Subscription:Output"];
+
+        RuntimePhaseUoWCreateActive          = runtimeMap["Runtime:Phase:UoWCreate"];
+        RuntimePhaseUoWFlushActive           = runtimeMap["Runtime:Phase:UoWFlush"];
+        RuntimeTransactionLifecycleActive    = runtimeMap["Runtime:Transaction:Lifecycle"];
+        RuntimeSubscriptionOutputExecuteActive = runtimeMap["Runtime:Subscription:Output:Execute"];
+
+        // Phase 9 — Subscription depth leaves
+        RuntimeSubscriptionSubscriberActive                 = runtimeMap["Runtime:Subscription:Subscriber"];
+        RuntimeSubscriptionDeltaBuildActive                 = runtimeMap["Runtime:Subscription:Delta:Build"];
+        RuntimeSubscriptionDeltaSerializeActive             = runtimeMap["Runtime:Subscription:Delta:Serialize"];
+        RuntimeSubscriptionDeltaDirtyBitmapSupplementActive = runtimeMap["Runtime:Subscription:Delta:DirtyBitmapSupplement"];
+        RuntimeSubscriptionTransitionBeginSyncActive        = runtimeMap["Runtime:Subscription:Transition:BeginSync"];
+        RuntimeSubscriptionOutputCleanupActive              = runtimeMap["Runtime:Subscription:Output:Cleanup"];
+
+        // ─── Storage subtree (Phase 5 final shape) ─────────────────────────────
+        // Greenfield deeper subtree; the existing per-kind suppression list still controls
+        // kinds 50-59. Storage:PageCache:DirtyWalk is a brand-new span (kind 165). Segment +
+        // ChunkSegment + FileHandle + OccupancyMap leaves cover kinds 166-171.
+        var storageTree = new Node("Storage",
+        [
+            new Node("PageCache",
+            [
+                new Node("DirtyWalk"),
+            ]),
+            new Node("Segment",
+            [
+                new Node("Create"),
+                new Node("Grow"),
+                new Node("Load"),
+            ]),
+            new Node("ChunkSegment",
+            [
+                new Node("Grow"),
+            ]),
+            new Node("FileHandle"),
+            new Node("OccupancyMap",
+            [
+                new Node("Grow"),
+            ]),
+        ]);
+        var storageRootExplicit = ReadBool(config, "Typhon:Profiler:Storage:Enabled", false);
+        var storageRootEffective = Enabled && storageRootExplicit;
+        var storageMap = TelemetryConfigResolver.Resolve(
+            storageTree, storageRootEffective, config, "Typhon:Profiler");
+
+        StorageActive             = storageMap["Storage"];
+        StoragePageCacheActive    = storageMap["Storage:PageCache"];
+        StorageSegmentActive      = storageMap["Storage:Segment"];
+        StorageChunkSegmentActive = storageMap["Storage:ChunkSegment"];
+        StorageFileHandleActive   = storageMap["Storage:FileHandle"];
+        StorageOccupancyMapActive = storageMap["Storage:OccupancyMap"];
+
+        StoragePageCacheDirtyWalkActive = storageMap["Storage:PageCache:DirtyWalk"];
+        StorageSegmentCreateActive      = storageMap["Storage:Segment:Create"];
+        StorageSegmentGrowActive        = storageMap["Storage:Segment:Grow"];
+        StorageSegmentLoadActive        = storageMap["Storage:Segment:Load"];
+        StorageChunkSegmentGrowActive   = storageMap["Storage:ChunkSegment:Grow"];
+        StorageFileHandleEnabledActive  = storageMap["Storage:FileHandle"];
+        StorageOccupancyMapGrowActive   = storageMap["Storage:OccupancyMap:Grow"];
+
+        // Threshold knob — independent of the gate tree (default 1 ms).
+        StoragePageCacheCompletionThresholdMs = ReadInt(config,
+            "Typhon:Profiler:Storage:PageCache:CompletionThresholdMs", 1);
+
+        // ─── Memory subtree (Phase 5 final shape) ──────────────────────────────
+        var memoryTree = new Node("Memory",
+        [
+            new Node("AlignmentWaste"),
+        ]);
+        var memoryRootExplicit = ReadBool(config, "Typhon:Profiler:Memory:Enabled", false);
+        var memoryRootEffective = Enabled && memoryRootExplicit;
+        var memoryMap = TelemetryConfigResolver.Resolve(
+            memoryTree, memoryRootEffective, config, "Typhon:Profiler");
+
+        MemoryActive               = memoryMap["Memory"];
+        MemoryAlignmentWasteActive = memoryMap["Memory:AlignmentWaste"];
+
+        // ─── Data plane subtree (Phase 6 final shape) ──────────────────────────
+        // Greenfield. High-frequency leaves (Prepare, ChainWalk, Search, Revalidate, NodeCow) get added
+        // to the per-kind suppression list at TyphonEvent class load — flipping the parent ON still keeps
+        // those leaves OFF unless the operator also calls UnsuppressKind explicitly.
+        var dataTree = new Node("Data",
+        [
+            new Node("Transaction",
+            [
+                new Node("Init"),
+                new Node("Prepare"),
+                new Node("Validate"),
+                new Node("Conflict"),
+                new Node("Cleanup"),
+            ]),
+            new Node("MVCC",
+            [
+                new Node("ChainWalk"),
+                new Node("VersionCleanup"),
+            ]),
+            new Node("Index",
+            [
+                new Node("BTree",
+                [
+                    new Node("Search"),
+                    new Node("RangeScan",
+                    [
+                        new Node("Revalidate"),
+                    ]),
+                    new Node("RebalanceFallback"),
+                    new Node("BulkInsert"),
+                    new Node("Root"),
+                    new Node("NodeCow"),
+                ]),
+            ]),
+        ]);
+        var dataRootExplicit = ReadBool(config, "Typhon:Profiler:Data:Enabled", false);
+        var dataRootEffective = Enabled && dataRootExplicit;
+        var dataMap = TelemetryConfigResolver.Resolve(
+            dataTree, dataRootEffective, config, "Typhon:Profiler");
+
+        DataActive             = dataMap["Data"];
+        DataTransactionActive  = dataMap["Data:Transaction"];
+        DataMvccActive         = dataMap["Data:MVCC"];
+        DataIndexActive        = dataMap["Data:Index"];
+        DataIndexBTreeActive   = dataMap["Data:Index:BTree"];
+
+        DataTransactionInitActive     = dataMap["Data:Transaction:Init"];
+        DataTransactionPrepareActive  = dataMap["Data:Transaction:Prepare"];
+        DataTransactionValidateActive = dataMap["Data:Transaction:Validate"];
+        DataTransactionConflictActive = dataMap["Data:Transaction:Conflict"];
+        DataTransactionCleanupActive  = dataMap["Data:Transaction:Cleanup"];
+
+        DataMvccChainWalkActive       = dataMap["Data:MVCC:ChainWalk"];
+        DataMvccVersionCleanupActive  = dataMap["Data:MVCC:VersionCleanup"];
+
+        DataIndexBTreeSearchActive             = dataMap["Data:Index:BTree:Search"];
+        DataIndexBTreeRangeScanActive          = dataMap["Data:Index:BTree:RangeScan"];
+        DataIndexBTreeRangeScanRevalidateActive = dataMap["Data:Index:BTree:RangeScan:Revalidate"];
+        DataIndexBTreeRebalanceFallbackActive  = dataMap["Data:Index:BTree:RebalanceFallback"];
+        DataIndexBTreeBulkInsertActive         = dataMap["Data:Index:BTree:BulkInsert"];
+        DataIndexBTreeRootActive               = dataMap["Data:Index:BTree:Root"];
+        DataIndexBTreeNodeCowActive            = dataMap["Data:Index:BTree:NodeCow"];
+
+        // ─── Query subtree (Phase 7) ───────────────────────────────────────────
+        var queryTree = new Node("Query",
+        [
+            new Node("Parse",
+            [
+                new Node("DNF"),
+            ]),
+            new Node("Plan",
+            [
+                new Node("PrimarySelect"),
+                new Node("Sort"),
+            ]),
+            new Node("Estimate"),
+            new Node("Execute",
+            [
+                new Node("IndexScan"),
+                new Node("Iterate"),
+                new Node("Filter"),
+                new Node("Pagination"),
+                new Node("StorageMode"),
+            ]),
+            new Node("Count"),
+        ]);
+        var queryRootExplicit = ReadBool(config, "Typhon:Profiler:Query:Enabled", false);
+        var queryRootEffective = Enabled && queryRootExplicit;
+        var queryMap = TelemetryConfigResolver.Resolve(queryTree, queryRootEffective, config, "Typhon:Profiler");
+
+        QueryActive                  = queryMap["Query"];
+        QueryParseActive             = queryMap["Query:Parse"];
+        QueryPlanActive              = queryMap["Query:Plan"];
+        QueryExecuteActive           = queryMap["Query:Execute"];
+
+        QueryParseEnabledActive      = queryMap["Query:Parse"];   // alias for the leaf gate
+        QueryParseDnfActive          = queryMap["Query:Parse:DNF"];
+        QueryPlanEnabledActive       = queryMap["Query:Plan"];    // alias
+        QueryEstimateActive          = queryMap["Query:Estimate"];
+        QueryPlanPrimarySelectActive = queryMap["Query:Plan:PrimarySelect"];
+        QueryPlanSortActive          = queryMap["Query:Plan:Sort"];
+        QueryExecuteIndexScanActive  = queryMap["Query:Execute:IndexScan"];
+        QueryExecuteIterateActive    = queryMap["Query:Execute:Iterate"];
+        QueryExecuteFilterActive     = queryMap["Query:Execute:Filter"];
+        QueryExecutePaginationActive = queryMap["Query:Execute:Pagination"];
+        QueryExecuteStorageModeActive = queryMap["Query:Execute:StorageMode"];
+        QueryCountActive             = queryMap["Query:Count"];
+
+        // ─── ECS subtree (Phase 7 depth) ───────────────────────────────────────
+        var ecsTree = new Node("ECS",
+        [
+            new Node("Query",
+            [
+                new Node("Construct"),
+                new Node("MaskAnd"),
+                new Node("SubtreeExpand"),
+                new Node("Constraint",
+                [
+                    new Node("Enabled"),
+                ]),
+                new Node("Spatial",
+                [
+                    new Node("Attach"),
+                ]),
+            ]),
+            new Node("View",
+            [
+                new Node("RefreshPull"),
+                new Node("IncrementalDrain"),
+                new Node("DeltaBuffer",
+                [
+                    new Node("Overflow"),
+                ]),
+                new Node("ProcessEntry"),
+                new Node("ProcessEntryOr"),
+                new Node("RefreshFull"),
+                new Node("RefreshFullOr"),
+                new Node("Registry",
+                [
+                    new Node("Register"),
+                    new Node("Deregister"),
+                ]),
+                new Node("DeltaCache",
+                [
+                    new Node("Miss"),
+                ]),
+            ]),
+        ]);
+        var ecsRootExplicit = ReadBool(config, "Typhon:Profiler:ECS:Enabled", false);
+        var ecsRootEffective = Enabled && ecsRootExplicit;
+        var ecsMap = TelemetryConfigResolver.Resolve(ecsTree, ecsRootEffective, config, "Typhon:Profiler");
+
+        EcsActive       = ecsMap["ECS"];
+        EcsQueryActive  = ecsMap["ECS:Query"];
+        EcsViewActive   = ecsMap["ECS:View"];
+
+        EcsQueryConstructActive          = ecsMap["ECS:Query:Construct"];
+        EcsQueryMaskAndActive            = ecsMap["ECS:Query:MaskAnd"];
+        EcsQuerySubtreeExpandActive      = ecsMap["ECS:Query:SubtreeExpand"];
+        EcsQueryConstraintEnabledActive  = ecsMap["ECS:Query:Constraint:Enabled"];
+        EcsQuerySpatialAttachActive      = ecsMap["ECS:Query:Spatial:Attach"];
+
+        EcsViewRefreshPullActive         = ecsMap["ECS:View:RefreshPull"];
+        EcsViewIncrementalDrainActive    = ecsMap["ECS:View:IncrementalDrain"];
+        EcsViewDeltaBufferOverflowActive = ecsMap["ECS:View:DeltaBuffer:Overflow"];
+        EcsViewProcessEntryActive        = ecsMap["ECS:View:ProcessEntry"];
+        EcsViewProcessEntryOrActive      = ecsMap["ECS:View:ProcessEntryOr"];
+        EcsViewRefreshFullActive         = ecsMap["ECS:View:RefreshFull"];
+        EcsViewRefreshFullOrActive       = ecsMap["ECS:View:RefreshFullOr"];
+        EcsViewRegistryRegisterActive    = ecsMap["ECS:View:Registry:Register"];
+        EcsViewRegistryDeregisterActive  = ecsMap["ECS:View:Registry:Deregister"];
+        EcsViewDeltaCacheMissActive      = ecsMap["ECS:View:DeltaCache:Miss"];
+
+        // ─── Durability subtree (Phase 8) ──────────────────────────────────────
+        var durabilityTree = new Node("Durability",
+        [
+            new Node("WAL",
+            [
+                new Node("QueueDrain"),
+                new Node("OsWrite"),
+                new Node("Signal"),
+                new Node("GroupCommit"),
+                new Node("Queue"),
+                new Node("Buffer"),
+                new Node("Frame"),
+                new Node("Backpressure"),
+            ]),
+            new Node("Checkpoint",
+            [
+                new Node("WriteBatch"),
+                new Node("Backpressure"),
+                new Node("Sleep"),
+            ]),
+            new Node("Recovery",
+            [
+                new Node("Start"),
+                new Node("Discover"),
+                new Node("Segment"),
+                new Node("Record"),
+                new Node("FPI"),
+                new Node("Redo"),
+                new Node("Undo"),
+                new Node("TickFence"),
+            ]),
+            new Node("UoW",
+            [
+                new Node("State"),
+                new Node("Deadline"),
+            ]),
+        ]);
+        var durabilityRootExplicit = ReadBool(config, "Typhon:Profiler:Durability:Enabled", false);
+        var durabilityRootEffective = Enabled && durabilityRootExplicit;
+        var durabilityMap = TelemetryConfigResolver.Resolve(durabilityTree, durabilityRootEffective, config, "Typhon:Profiler");
+
+        DurabilityActive            = durabilityMap["Durability"];
+        DurabilityWalActive         = durabilityMap["Durability:WAL"];
+        DurabilityCheckpointActive  = durabilityMap["Durability:Checkpoint"];
+        DurabilityRecoveryActive    = durabilityMap["Durability:Recovery"];
+        DurabilityUowActive         = durabilityMap["Durability:UoW"];
+
+        DurabilityWalQueueDrainActive    = durabilityMap["Durability:WAL:QueueDrain"];
+        DurabilityWalOsWriteActive       = durabilityMap["Durability:WAL:OsWrite"];
+        DurabilityWalSignalActive        = durabilityMap["Durability:WAL:Signal"];
+        DurabilityWalGroupCommitActive   = durabilityMap["Durability:WAL:GroupCommit"];
+        DurabilityWalQueueActive         = durabilityMap["Durability:WAL:Queue"];
+        DurabilityWalBufferActive        = durabilityMap["Durability:WAL:Buffer"];
+        DurabilityWalFrameActive         = durabilityMap["Durability:WAL:Frame"];
+        DurabilityWalBackpressureActive  = durabilityMap["Durability:WAL:Backpressure"];
+
+        DurabilityCheckpointWriteBatchActive   = durabilityMap["Durability:Checkpoint:WriteBatch"];
+        DurabilityCheckpointBackpressureActive = durabilityMap["Durability:Checkpoint:Backpressure"];
+        DurabilityCheckpointSleepActive        = durabilityMap["Durability:Checkpoint:Sleep"];
+
+        DurabilityRecoveryStartActive     = durabilityMap["Durability:Recovery:Start"];
+        DurabilityRecoveryDiscoverActive  = durabilityMap["Durability:Recovery:Discover"];
+        DurabilityRecoverySegmentActive   = durabilityMap["Durability:Recovery:Segment"];
+        DurabilityRecoveryRecordActive    = durabilityMap["Durability:Recovery:Record"];
+        DurabilityRecoveryFpiActive       = durabilityMap["Durability:Recovery:FPI"];
+        DurabilityRecoveryRedoActive      = durabilityMap["Durability:Recovery:Redo"];
+        DurabilityRecoveryUndoActive      = durabilityMap["Durability:Recovery:Undo"];
+        DurabilityRecoveryTickFenceActive = durabilityMap["Durability:Recovery:TickFence"];
+
+        DurabilityUowStateActive    = durabilityMap["Durability:UoW:State"];
+        DurabilityUowDeadlineActive = durabilityMap["Durability:UoW:Deadline"];
+
         // ─── Legacy-presence detection ─────────────────────────────────────────
         // Even if no fallback fired (e.g., user has only dead-family keys with no live consumers),
         // any populated Typhon:Telemetry:* subtree warrants the deprecation warning.
@@ -487,6 +1353,16 @@ public static class TelemetryConfig
             return defaultValue;
         }
         return bool.TryParse(v, out var b) ? b : defaultValue;
+    }
+
+    private static int ReadInt(IConfiguration config, string key, int defaultValue)
+    {
+        var v = config[key];
+        if (string.IsNullOrEmpty(v))
+        {
+            return defaultValue;
+        }
+        return int.TryParse(v, out var i) ? i : defaultValue;
     }
 
     private static bool ReadBoolFallback(
@@ -558,7 +1434,7 @@ public static class TelemetryConfig
         var currentDirPath = Path.Combine(Directory.GetCurrentDirectory(), "typhon.telemetry.json");
         if (File.Exists(currentDirPath))
         {
-            builder.AddJsonFile(currentDirPath, optional: true, reloadOnChange: false);
+            builder.AddJsonFile(currentDirPath, true, false);
             loadedPath = currentDirPath;
         }
 
@@ -572,7 +1448,7 @@ public static class TelemetryConfig
                 var assemblyConfigPath = Path.Combine(assemblyDir, "typhon.telemetry.json");
                 if (File.Exists(assemblyConfigPath) && assemblyConfigPath != currentDirPath)
                 {
-                    builder.AddJsonFile(assemblyConfigPath, optional: true, reloadOnChange: false);
+                    builder.AddJsonFile(assemblyConfigPath, true, false);
                     loadedPath ??= assemblyConfigPath;
                 }
             }

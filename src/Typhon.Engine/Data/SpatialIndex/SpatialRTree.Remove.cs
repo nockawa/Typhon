@@ -1,4 +1,5 @@
 using System.Threading;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -15,7 +16,16 @@ internal unsafe partial class SpatialRTree<TStore>
     /// </returns>
     internal long Remove(int leafChunkId, int slotIndex, ref ChunkAccessor<TStore> accessor)
     {
-        byte* leafBase = accessor.GetChunkAddress(leafChunkId, dirty: true);
+        // Read entityId before we modify the leaf, so we can carry it in the span payload.
+        long entityIdForTrace = 0;
+        if (TelemetryConfig.SpatialRTreeRemoveActive)
+        {
+            byte* leafForTrace = accessor.GetChunkAddress(leafChunkId);
+            entityIdForTrace = SpatialNodeHelper.ReadLeafEntityId(leafForTrace, slotIndex, _desc);
+        }
+        using var removeSpan = TyphonEvent.BeginSpatialRTreeRemove(entityIdForTrace);
+
+        byte* leafBase = accessor.GetChunkAddress(leafChunkId, true);
         SpinWriteLock(leafBase, out var latch);
 
         int count = SpatialNodeHelper.GetCount(leafBase);
@@ -61,7 +71,7 @@ internal unsafe partial class SpatialRTree<TStore>
         byte* leafBase = accessor.GetChunkAddress(leafChunkId);
         int parentChunkId = SpatialNodeHelper.GetParentChunkId(leafBase);
 
-        byte* parentBase = accessor.GetChunkAddress(parentChunkId, dirty: true);
+        byte* parentBase = accessor.GetChunkAddress(parentChunkId, true);
         SpinWriteLock(parentBase, out var parentLatch);
 
         // Find and remove the entry pointing to this leaf
@@ -101,7 +111,7 @@ internal unsafe partial class SpatialRTree<TStore>
             int remainingChild = SpatialNodeHelper.ReadInternalChildId(
                 accessor.GetChunkAddress(parentChunkId), 0, _desc);
 
-            byte* newRootBase = accessor.GetChunkAddress(remainingChild, dirty: true);
+            byte* newRootBase = accessor.GetChunkAddress(remainingChild, true);
             SpatialNodeHelper.SetParentChunkId(newRootBase, 0);
 
             _segment.FreeChunk(_rootChunkId);

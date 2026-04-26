@@ -17,160 +17,172 @@ internal unsafe partial class SpatialRTree<TStore>
     /// <param name="categoryMasks">Category bitmask for each entry</param>
     /// <param name="changeSet">ChangeSet for WAL participation (null for non-WAL)</param>
     /// <returns>A fully constructed tree. Returns an empty tree if input is empty.</returns>
-    internal static SpatialRTree<TStore> BulkLoad(ChunkBasedSegment<TStore> segment, SpatialVariant variant, ReadOnlySpan<long> entityIds, 
+    internal static SpatialRTree<TStore> BulkLoad(ChunkBasedSegment<TStore> segment, SpatialVariant variant, ReadOnlySpan<long> entityIds,
         ReadOnlySpan<int> componentChunkIds, ReadOnlySpan<double> coords, ReadOnlySpan<uint> categoryMasks, ChangeSet changeSet = null)
     {
-        // Create an empty tree first (reserves chunk 0 for metadata)
-        var tree = new SpatialRTree<TStore>(segment, variant, load: false, changeSet);
-
-        int entityCount = entityIds.Length;
-        if (entityCount == 0)
-        {
-            return tree;
-        }
-
-        var desc = tree._desc;
-        int coordCount = desc.CoordCount;
-        int halfCoord = coordCount / 2;
-        int fillFactor = Math.Max(1, (int)(desc.LeafCapacity * 0.9));
-
-        // Build sort index array (indirect sort to avoid copying large coord arrays)
-        int[] sortIndex = ArrayPool<int>.Shared.Rent(entityCount);
-        double[] centers = ArrayPool<double>.Shared.Rent(entityCount * halfCoord);
+        // Phase 3: Spatial:RTree:BulkLoad span. EntityCount/LeafCount filled at exit.
+        var bulkScope = Profiler.TyphonEvent.BeginSpatialRTreeBulkLoad(entityIds.Length);
         try
         {
-            // Compute centers for sorting
-            for (int i = 0; i < entityCount; i++)
+
+            // Create an empty tree first (reserves chunk 0 for metadata)
+            var tree = new SpatialRTree<TStore>(segment, variant, false, changeSet);
+
+            int entityCount = entityIds.Length;
+            if (entityCount == 0)
             {
-                sortIndex[i] = i;
-                int coordBase = i * coordCount;
-                for (int d = 0; d < halfCoord; d++)
-                {
-                    centers[i * halfCoord + d] = (coords[coordBase + d] + coords[coordBase + halfCoord + d]) * 0.5;
-                }
+                bulkScope.LeafCount = 0;
+                return tree;
             }
 
-            // STR sort: sort by X, then within X-slabs sort by Y (and Z for 3D)
-            STRSort(sortIndex.AsSpan(0, entityCount), centers, halfCoord, fillFactor);
+            var desc = tree._desc;
+            int coordCount = desc.CoordCount;
+            int halfCoord = coordCount / 2;
+            int fillFactor = Math.Max(1, (int)(desc.LeafCapacity * 0.9));
 
-            // Pack sorted entries into leaf nodes
-            var accessor = segment.CreateChunkAccessor(changeSet);
+            // Build sort index array (indirect sort to avoid copying large coord arrays)
+            int[] sortIndex = ArrayPool<int>.Shared.Rent(entityCount);
+            double[] centers = ArrayPool<double>.Shared.Rent(entityCount * halfCoord);
             try
             {
-                int leafCount = (entityCount + fillFactor - 1) / fillFactor;
-                int[] leafChunkIds = ArrayPool<int>.Shared.Rent(leafCount);
+                // Compute centers for sorting
+                for (int i = 0; i < entityCount; i++)
+                {
+                    sortIndex[i] = i;
+                    int coordBase = i * coordCount;
+                    for (int d = 0; d < halfCoord; d++)
+                    {
+                        centers[i * halfCoord + d] = (coords[coordBase + d] + coords[coordBase + halfCoord + d]) * 0.5;
+                    }
+                }
+
+                // STR sort: sort by X, then within X-slabs sort by Y (and Z for 3D)
+                STRSort(sortIndex.AsSpan(0, entityCount), centers, halfCoord, fillFactor);
+
+                // Pack sorted entries into leaf nodes
+                var accessor = segment.CreateChunkAccessor(changeSet);
                 try
                 {
-                    // Create leaf nodes
-                    for (int leafIdx = 0; leafIdx < leafCount; leafIdx++)
-                    {
-                        int start = leafIdx * fillFactor;
-                        int end = Math.Min(start + fillFactor, entityCount);
-                        int count = end - start;
-
-                        int leafChunkId = tree.AllocNode(true, 0, ref accessor, changeSet);
-                        leafChunkIds[leafIdx] = leafChunkId;
-
-                        byte* leafBase = accessor.GetChunkAddress(leafChunkId, dirty: true);
-
-                        for (int j = 0; j < count; j++)
-                        {
-                            int srcIdx = sortIndex[start + j];
-                            tree.WriteLeafEntry(leafBase, j, entityIds[srcIdx], componentChunkIds[srcIdx],
-                                coords.Slice(srcIdx * coordCount, coordCount), categoryMasks[srcIdx]);
-                        }
-
-                        SpatialNodeHelper.SetCount(leafBase, count);
-                        SpatialNodeHelper.RefitLeafMBR(leafBase, desc);
-                    }
-
-                    // The constructor created an initial empty root node that we won't use.
-                    // Start fresh with our leaf count; the orphaned chunk is wasted but harmless.
-                    tree._nodeCount = leafCount;
-                    tree._entityCount = entityCount;
-
-                    // Build internal levels bottom-up using two alternating buffers
-                    int currentLevelCount = leafCount;
-                    int[] currentBuf = ArrayPool<int>.Shared.Rent(leafCount);
-                    leafChunkIds.AsSpan(0, leafCount).CopyTo(currentBuf);
-                    int[] nextBuf = null;
+                    int leafCount = (entityCount + fillFactor - 1) / fillFactor;
+                    int[] leafChunkIds = ArrayPool<int>.Shared.Rent(leafCount);
                     try
                     {
-                        int depth = 1;
-                        while (currentLevelCount > 1)
+                        // Create leaf nodes
+                        for (int leafIdx = 0; leafIdx < leafCount; leafIdx++)
                         {
-                            int internalFill = Math.Max(1, (int)(desc.InternalCapacity * 0.9));
-                            int nextLevelCount = (currentLevelCount + internalFill - 1) / internalFill;
+                            int start = leafIdx * fillFactor;
+                            int end = Math.Min(start + fillFactor, entityCount);
+                            int count = end - start;
 
-                            if (nextBuf == null || nextBuf.Length < nextLevelCount)
+                            int leafChunkId = tree.AllocNode(true, 0, ref accessor, changeSet);
+                            leafChunkIds[leafIdx] = leafChunkId;
+
+                            byte* leafBase = accessor.GetChunkAddress(leafChunkId, true);
+
+                            for (int j = 0; j < count; j++)
                             {
-                                if (nextBuf != null) ArrayPool<int>.Shared.Return(nextBuf);
-                                nextBuf = ArrayPool<int>.Shared.Rent(nextLevelCount);
+                                int srcIdx = sortIndex[start + j];
+                                tree.WriteLeafEntry(leafBase, j, entityIds[srcIdx], componentChunkIds[srcIdx],
+                                    coords.Slice(srcIdx * coordCount, coordCount), categoryMasks[srcIdx]);
                             }
 
-                            for (int nodeIdx = 0; nodeIdx < nextLevelCount; nodeIdx++)
-                            {
-                                int start = nodeIdx * internalFill;
-                                int end = Math.Min(start + internalFill, currentLevelCount);
-                                int count = end - start;
-
-                                int internalChunkId = tree.AllocNode(false, 0, ref accessor, changeSet);
-                                nextBuf[nodeIdx] = internalChunkId;
-                                tree._nodeCount++;
-
-                                byte* internalBase = accessor.GetChunkAddress(internalChunkId, dirty: true);
-
-                                for (int j = 0; j < count; j++)
-                                {
-                                    int childChunkId = currentBuf[start + j];
-                                    tree.WriteInternalEntry(internalBase, j, childChunkId, ref accessor);
-
-                                    // Set parent pointer on child
-                                    byte* childBase = accessor.GetChunkAddress(childChunkId, dirty: true);
-                                    SpatialNodeHelper.SetParentChunkId(childBase, internalChunkId);
-                                }
-
-                                SpatialNodeHelper.SetCount(internalBase, count);
-                                SpatialNodeHelper.RefitInternalMBR(internalBase, desc);
-                                tree.RefitInternalUnionMask(internalBase, ref accessor);
-                            }
-
-                            // Swap buffers
-                            (currentBuf, nextBuf) = (nextBuf, currentBuf);
-                            currentLevelCount = nextLevelCount;
-                            depth++;
+                            SpatialNodeHelper.SetCount(leafBase, count);
+                            SpatialNodeHelper.RefitLeafMBR(leafBase, desc);
                         }
 
-                        // The last remaining node is the root (parentChunkId already 0 from AllocNode)
-                        tree._rootChunkId = currentBuf[0];
-                        tree._depth = depth;
+                        // The constructor created an initial empty root node that we won't use.
+                        // Start fresh with our leaf count; the orphaned chunk is wasted but harmless.
+                        tree._nodeCount = leafCount;
+                        tree._entityCount = entityCount;
 
-                        tree.SyncMetadata(ref accessor);
-                        tree._mutationVersion = 1;
+                        // Build internal levels bottom-up using two alternating buffers
+                        int currentLevelCount = leafCount;
+                        int[] currentBuf = ArrayPool<int>.Shared.Rent(leafCount);
+                        leafChunkIds.AsSpan(0, leafCount).CopyTo(currentBuf);
+                        int[] nextBuf = null;
+                        try
+                        {
+                            int depth = 1;
+                            while (currentLevelCount > 1)
+                            {
+                                int internalFill = Math.Max(1, (int)(desc.InternalCapacity * 0.9));
+                                int nextLevelCount = (currentLevelCount + internalFill - 1) / internalFill;
+
+                                if (nextBuf == null || nextBuf.Length < nextLevelCount)
+                                {
+                                    if (nextBuf != null) ArrayPool<int>.Shared.Return(nextBuf);
+                                    nextBuf = ArrayPool<int>.Shared.Rent(nextLevelCount);
+                                }
+
+                                for (int nodeIdx = 0; nodeIdx < nextLevelCount; nodeIdx++)
+                                {
+                                    int start = nodeIdx * internalFill;
+                                    int end = Math.Min(start + internalFill, currentLevelCount);
+                                    int count = end - start;
+
+                                    int internalChunkId = tree.AllocNode(false, 0, ref accessor, changeSet);
+                                    nextBuf[nodeIdx] = internalChunkId;
+                                    tree._nodeCount++;
+
+                                    byte* internalBase = accessor.GetChunkAddress(internalChunkId, true);
+
+                                    for (int j = 0; j < count; j++)
+                                    {
+                                        int childChunkId = currentBuf[start + j];
+                                        tree.WriteInternalEntry(internalBase, j, childChunkId, ref accessor);
+
+                                        // Set parent pointer on child
+                                        byte* childBase = accessor.GetChunkAddress(childChunkId, true);
+                                        SpatialNodeHelper.SetParentChunkId(childBase, internalChunkId);
+                                    }
+
+                                    SpatialNodeHelper.SetCount(internalBase, count);
+                                    SpatialNodeHelper.RefitInternalMBR(internalBase, desc);
+                                    tree.RefitInternalUnionMask(internalBase, ref accessor);
+                                }
+
+                                // Swap buffers
+                                (currentBuf, nextBuf) = (nextBuf, currentBuf);
+                                currentLevelCount = nextLevelCount;
+                                depth++;
+                            }
+
+                            // The last remaining node is the root (parentChunkId already 0 from AllocNode)
+                            tree._rootChunkId = currentBuf[0];
+                            tree._depth = depth;
+
+                            tree.SyncMetadata(ref accessor);
+                            tree._mutationVersion = 1;
+                        }
+                        finally
+                        {
+                            ArrayPool<int>.Shared.Return(currentBuf);
+                            if (nextBuf != null) ArrayPool<int>.Shared.Return(nextBuf);
+                        }
                     }
                     finally
                     {
-                        ArrayPool<int>.Shared.Return(currentBuf);
-                        if (nextBuf != null) ArrayPool<int>.Shared.Return(nextBuf);
+                        ArrayPool<int>.Shared.Return(leafChunkIds);
                     }
                 }
                 finally
                 {
-                    ArrayPool<int>.Shared.Return(leafChunkIds);
+                    accessor.Dispose();
                 }
             }
             finally
             {
-                accessor.Dispose();
+                ArrayPool<double>.Shared.Return(centers);
+                ArrayPool<int>.Shared.Return(sortIndex);
             }
+
+            bulkScope.LeafCount = (entityCount + fillFactor - 1) / fillFactor;
+            return tree;
         }
         finally
         {
-            ArrayPool<double>.Shared.Return(centers);
-            ArrayPool<int>.Shared.Return(sortIndex);
+            bulkScope.Dispose();
         }
-
-        return tree;
     }
 
     /// <summary>

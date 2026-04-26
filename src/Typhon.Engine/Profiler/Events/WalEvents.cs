@@ -30,7 +30,7 @@ public ref struct WalFlushEvent : ITraceEventEncoder
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalFlush, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BatchByteCount, FrameCount, HighLsn, newSegmentIndex: 0, targetLsn: 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BatchByteCount, FrameCount, HighLsn, 0, 0, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -58,7 +58,7 @@ public ref struct WalSegmentRotateEvent : ITraceEventEncoder
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalSegmentRotate, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, batchByteCount: 0, frameCount: 0, highLsn: 0, NewSegmentIndex, targetLsn: 0,
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, 0, 0, 0, NewSegmentIndex, 0,
             out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
@@ -88,7 +88,7 @@ public ref struct WalWaitEvent : ITraceEventEncoder
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalWait, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, batchByteCount: 0, frameCount: 0, highLsn: 0, newSegmentIndex: 0, TargetLsn,
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, 0, 0, 0, 0, TargetLsn,
             out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);

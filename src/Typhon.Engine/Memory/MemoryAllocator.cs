@@ -102,6 +102,21 @@ public class MemoryAllocator : ResourceNode, IMemoryAllocator, IMetricSource, ID
         }
         _blocks.Add(mb);
 
+        // Phase 5: Memory:AlignmentWaste instant — emitted only when the requested size isn't a multiple of the alignment,
+        // i.e. when the underlying allocator must round up to the next aligned chunk. The leaf-gate check is FIRST so when
+        // tracing is off the JIT folds the entire computation block away.
+        if (TelemetryConfig.MemoryAlignmentWasteActive && alignment > 0)
+        {
+            var rem = size % alignment;
+            if (rem != 0)
+            {
+                var wasted = alignment - rem;
+                var padded = size + wasted;
+                var wastePctHundredths = (ushort)Math.Min((wasted * 10000L) / padded, 10000L);
+                TyphonEvent.EmitMemoryAlignmentWaste(size, alignment, wastePctHundredths);
+            }
+        }
+
         // Update allocation tracking — grand totals
         var newTotal = Interlocked.Add(ref _totalAllocatedBytes, size);
         if (newTotal > _peakAllocatedBytes)

@@ -13,6 +13,18 @@
           "WorkerUtilization": { "Enabled": true },
           "StragglerGap":      { "Enabled": true }
         }
+      },
+
+      "Spatial": {
+        "Enabled": false,
+        "Query":            { "Enabled": false },
+        "RTree":            { "Enabled": false },
+        "Grid":             { "Enabled": false },
+        "Cell":             { "Enabled": false },
+        "ClusterMigration": { "Enabled": false, "Execute": { "Enabled": true } },
+        "TierIndex":        { "Enabled": false },
+        "Maintain":         { "Enabled": false },
+        "Trigger":          { "Enabled": false }
       }
     }
   }

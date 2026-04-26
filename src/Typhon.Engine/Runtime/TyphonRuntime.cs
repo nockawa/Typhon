@@ -1633,6 +1633,7 @@ public sealed partial class TyphonRuntime : IDisposable
 
         // Create UoW for this tick (Deferred — batch all system commits, single WAL flush at end)
         _currentUow = Engine.CreateUnitOfWork();
+        Profiler.TyphonEvent.EmitRuntimePhaseUoWCreate(scheduler.CurrentTickNumber);
 
         // Rebuild per-archetype tier indexes ONCE per tick on the scheduler thread, before any parallel system dispatch. This eliminates the race where
         // multiple worker threads concurrently invoking OnParallelQueryPrepare for different systems on the same archetype would corrupt shared
@@ -1761,6 +1762,7 @@ public sealed partial class TyphonRuntime : IDisposable
             {
                 _currentUow?.Dispose();
                 _currentUow = null;
+                Profiler.TyphonEvent.EmitRuntimePhaseUoWFlush(scheduler.CurrentTickNumber, 0);
             }
         });
 
@@ -1772,7 +1774,13 @@ public sealed partial class TyphonRuntime : IDisposable
         //   1. Ring buffer has ALL entries (commit-time + shadow-time) for correct View membership
         //   2. PreviousTickDirtyBitmap has this tick's dirty chunks for Modified detection
         //   3. All state is quiescent (no concurrent writers)
-        InspectorPhase(TickPhase.OutputPhase, () => _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber, Scheduler.CurrentOverloadLevel));
+        InspectorPhase(TickPhase.OutputPhase, () =>
+        {
+            using var subSpan = Profiler.TyphonEvent.BeginRuntimeSubscriptionOutputExecute(
+                scheduler.CurrentTickNumber, (byte)Scheduler.CurrentOverloadLevel);
+            _subscriptionOutputPhase?.Execute(scheduler.CurrentTickNumber, Scheduler.CurrentOverloadLevel);
+            // Stats fields (clientCount, viewsRefreshed, deltasPushed, overflowCount) populated when Phase 9 wires per-tick subscription metrics back from SubscriptionOutputPhase.
+        });
     }
 
     /// <summary>
@@ -1835,6 +1843,8 @@ public sealed partial class TyphonRuntime : IDisposable
 
     private TickContext OnSystemStartInternal(int sysIdx)
     {
+        Profiler.TyphonEvent.BeginRuntimeTransactionLifecycleTls((ushort)sysIdx);
+
         // Create a Transaction on the CALLING THREAD (worker thread).
         // This respects Transaction's single-thread affinity constraint.
         var tx = _currentUow.CreateTransaction();
@@ -1908,6 +1918,7 @@ public sealed partial class TyphonRuntime : IDisposable
         {
             tx.Dispose();
             _systemTransactions[sysIdx] = null;
+            Profiler.TyphonEvent.EmitRuntimeTransactionLifecycleEnd(success);
 
             // #197: Return pooled entity list to ArrayPool
             _systemEntityLists[sysIdx].Return();

@@ -68,7 +68,7 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
         var writtenSize = AlignUp(capacity);
         var totalSize = entriesSize + deltaTSNsSize + flagsSize + componentTagsSize + writtenSize;
 
-        _block = allocator.AllocatePinned("ViewDeltaRingBuffer", resourceParent, totalSize, zeroed: true, alignment: CacheLineSize);
+        _block = allocator.AllocatePinned("ViewDeltaRingBuffer", resourceParent, totalSize, true, CacheLineSize);
 
         var basePtr = _block.DataAsPointer;
         _entries = (ViewDeltaEntry*)basePtr;

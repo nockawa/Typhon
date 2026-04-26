@@ -682,6 +682,9 @@ internal sealed unsafe class ArchetypeClusterState
 
         byte* newBase = accessor.GetChunkAddress(newChunkId, true);
         *(ulong*)newBase = 1UL; // occupancy bit 0
+
+        // Phase 3: Spatial:Grid:ClusterCellAssign instant — fired when a new cluster is bound to a cell.
+        Profiler.TyphonEvent.EmitSpatialGridClusterCellAssign(newChunkId, cellKey, (ushort)Math.Min(ArchetypeId, ushort.MaxValue));
         return (newChunkId, 0);
     }
 
@@ -736,6 +739,9 @@ internal sealed unsafe class ArchetypeClusterState
 
         byte* newBase = accessor.GetChunkAddress(newChunkId, true);
         *(ulong*)newBase = 1UL;
+
+        // Phase 3: Spatial:Grid:ClusterCellAssign instant — fired when a new cluster is bound to a cell.
+        Profiler.TyphonEvent.EmitSpatialGridClusterCellAssign(newChunkId, cellKey, (ushort)Math.Min(ArchetypeId, ushort.MaxValue));
         return (newChunkId, 0);
     }
 
@@ -1286,6 +1292,7 @@ internal sealed unsafe class ArchetypeClusterState
             fresh.CategoryMask = slot.DynamicIndex.CategoryMasks[indexSlot];
             stored = fresh;
             slot.DynamicIndex.UpdateAt(indexSlot, in fresh);
+            Profiler.TyphonEvent.EmitSpatialCellIndexUpdate(cellKey, indexSlot);
 
             // Outlier extent check — only fires in the rare "accumulated drift" case. The AABB just-recomputed fits all live entities exactly, so the
             // extent comparison is trivially correct.
@@ -1375,6 +1382,7 @@ internal sealed unsafe class ArchetypeClusterState
             }
             int indexSlot = slot.StaticIndex.Add(clusterChunkId, aabb);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
+            Profiler.TyphonEvent.EmitSpatialCellIndexAdd(cellKey, indexSlot, clusterChunkId, slot.StaticIndex.Capacity);
         }
         else
         {
@@ -1384,6 +1392,7 @@ internal sealed unsafe class ArchetypeClusterState
             }
             int indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
+            Profiler.TyphonEvent.EmitSpatialCellIndexAdd(cellKey, indexSlot, clusterChunkId, slot.DynamicIndex.Capacity);
         }
     }
 
@@ -1421,6 +1430,7 @@ internal sealed unsafe class ArchetypeClusterState
         }
 
         int swappedClusterId = targetIndex.RemoveAt(indexSlot);
+        Profiler.TyphonEvent.EmitSpatialCellIndexRemove(cellKey, indexSlot, swappedClusterId);
         if (swappedClusterId >= 0 && swappedClusterId < ClusterSpatialIndexSlot.Length)
         {
             // The swapped cluster now lives at indexSlot; fix its back-pointer.
@@ -1734,8 +1744,8 @@ internal sealed unsafe class ArchetypeClusterState
                     Index = btree,
                     AllowMultiple = ifi.AllowMultiple,
                     ZoneMap = new ZoneMapArray(PrimarySegmentCapacity, ifi.Size,
-                        isFloat: fieldDef.Type == FieldType.Float, isDouble: fieldDef.Type == FieldType.Double,
-                        isUnsigned: (fieldDef.Type & FieldType.Unsigned) != 0),
+                        fieldDef.Type == FieldType.Float, fieldDef.Type == FieldType.Double,
+                        (fieldDef.Type & FieldType.Unsigned) != 0),
                     MultiFieldIndex = multiFieldIndex,
                 };
                 shadowBuffers[fi] = new FieldShadowBuffer();

@@ -77,6 +77,9 @@ internal unsafe partial class SpatialRTree<TStore>
         private SpatialQueryResult _current;
         private bool _disposed;
 
+        // Phase 3: Spatial:Query:Aabb span (Tier-2 gated). ResultCount/RestartCount filled during enumeration.
+        private Profiler.SpatialQueryAabbEvent _span;
+
         internal AABBQueryEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> queryCoords, ChangeSet changeSet, uint categoryMask = 0)
         {
             _tree = tree;
@@ -103,6 +106,8 @@ internal unsafe partial class SpatialRTree<TStore>
                 _stack[0] = tree._rootChunkId;
                 _stackTop = 1;
             }
+
+            _span = Profiler.TyphonEvent.BeginSpatialQueryAabb(categoryMask);
         }
 
         public SpatialQueryResult Current => _current;
@@ -131,6 +136,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     _current = new SpatialQueryResult(
                         SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
                         SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
+                    if (TelemetryConfig.SpatialQueryAabbActive && _span.ResultCount < ushort.MaxValue)
+                    {
+                        _span.ResultCount++;
+                    }
+
                     return true;
                 }
             }
@@ -147,6 +157,11 @@ internal unsafe partial class SpatialRTree<TStore>
                 {
                     // Locked or obsolete: restart from root
                     RestartFromRoot();
+                    if (TelemetryConfig.SpatialQueryAabbActive && _span.RestartCount < byte.MaxValue)
+                    {
+                        _span.RestartCount++;
+                    }
+
                     continue;
                 }
 
@@ -156,6 +171,11 @@ internal unsafe partial class SpatialRTree<TStore>
                 if (!latch.ValidateVersion(version))
                 {
                     RestartFromRoot();
+                    if (TelemetryConfig.SpatialQueryAabbActive && _span.RestartCount < byte.MaxValue)
+                    {
+                        _span.RestartCount++;
+                    }
+
                     continue;
                 }
 
@@ -171,6 +191,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     _currentLeafChunkId = chunkId;
                     _currentLeafIndex = -1;
                     _currentLeafCount = count;
+                    if (TelemetryConfig.SpatialQueryAabbActive && _span.LeavesEntered < ushort.MaxValue)
+                    {
+                        _span.LeavesEntered++;
+                    }
+
                     return MoveNext(); // Re-enter to scan leaf entries
                 }
 
@@ -190,10 +215,18 @@ internal unsafe partial class SpatialRTree<TStore>
                         }
                     }
                 }
+                if (TelemetryConfig.SpatialQueryAabbActive && _span.NodesVisited < ushort.MaxValue)
+                {
+                    _span.NodesVisited++;
+                }
 
                 if (!latch.ValidateVersion(version))
                 {
                     RestartFromRoot();
+                    if (TelemetryConfig.SpatialQueryAabbActive && _span.RestartCount < byte.MaxValue)
+                    {
+                        _span.RestartCount++;
+                    }
                 }
             }
 
@@ -260,6 +293,7 @@ internal unsafe partial class SpatialRTree<TStore>
             if (!_disposed)
             {
                 _disposed = true;
+                _span.Dispose();
                 _accessor.Dispose();
             }
         }
@@ -482,6 +516,8 @@ internal unsafe partial class SpatialRTree<TStore>
     internal ref struct RadiusEnumerator
     {
         private AABBQueryEnumerator _inner;
+        private Profiler.SpatialQueryRadiusEvent _span;
+        private bool _disposed;
 
         internal RadiusEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> center, double radius, ChangeSet changeSet, uint categoryMask = 0)
         {
@@ -496,12 +532,33 @@ internal unsafe partial class SpatialRTree<TStore>
 #pragma warning disable CS9080 // Use of variable in this context may expose referenced variables outside of their declaration scope
             _inner = new AABBQueryEnumerator(tree, aabb, changeSet, categoryMask);
 #pragma warning restore CS9080 // Use of variable in this context may expose referenced variables outside of their declaration scope
+            _disposed = false;
+            _span = Profiler.TyphonEvent.BeginSpatialQueryRadius((float)radius);
         }
 
         public SpatialQueryResult Current => _inner.Current;
         public RadiusEnumerator GetEnumerator() => this;
-        public bool MoveNext() => _inner.MoveNext();
-        public void Dispose() => _inner.Dispose();
+
+        public bool MoveNext()
+        {
+            var hit = _inner.MoveNext();
+            if (hit && TelemetryConfig.SpatialQueryRadiusActive && _span.ResultCount < ushort.MaxValue)
+            {
+                _span.ResultCount++;
+            }
+
+            return hit;
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                _span.Dispose();
+                _inner.Dispose();
+            }
+        }
     }
 
     // ── Ray Query ────────────────────────────────────────────────────────
@@ -546,6 +603,9 @@ internal unsafe partial class SpatialRTree<TStore>
         private SpatialQueryResult _current;
         private bool _disposed;
 
+        // Phase 3: Spatial:Query:Ray span (Tier-2 gated).
+        private Profiler.SpatialQueryRayEvent _span;
+
         internal RayEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> origin, ReadOnlySpan<double> direction, double maxDist,
             ChangeSet changeSet, uint categoryMask = 0)
         {
@@ -561,6 +621,7 @@ internal unsafe partial class SpatialRTree<TStore>
             _current = default;
             _disposed = false;
             _categoryMask = categoryMask;
+            _span = Profiler.TyphonEvent.BeginSpatialQueryRay((float)maxDist);
 
             int halfCoordInit = _desc.CoordCount / 2;
             bool degenerate = double.IsNaN(maxDist) || maxDist < 0;
@@ -617,6 +678,11 @@ internal unsafe partial class SpatialRTree<TStore>
                         _current = new SpatialQueryResult(
                             SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
                             SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
+                        if (TelemetryConfig.SpatialQueryRayActive && _span.ResultCount < ushort.MaxValue)
+                        {
+                            _span.ResultCount++;
+                        }
+
                         return true;
                     }
                 }
@@ -638,6 +704,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (version == 0)
                     {
                         RestartFromRoot();
+                        if (TelemetryConfig.SpatialQueryRayActive && _span.RestartCount < byte.MaxValue)
+                        {
+                            _span.RestartCount++;
+                        }
+
                         continue;
                     }
 
@@ -647,6 +718,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (!latch.ValidateVersion(version))
                     {
                         RestartFromRoot();
+                        if (TelemetryConfig.SpatialQueryRayActive && _span.RestartCount < byte.MaxValue)
+                        {
+                            _span.RestartCount++;
+                        }
+
                         continue;
                     }
 
@@ -654,6 +730,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
                     {
                         continue;
+                    }
+
+                    if (TelemetryConfig.SpatialQueryRayActive && _span.NodesVisited < ushort.MaxValue)
+                    {
+                        _span.NodesVisited++;
                     }
 
                     if (isLeaf)
@@ -679,6 +760,10 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (!latch.ValidateVersion(version))
                     {
                         RestartFromRoot();
+                        if (TelemetryConfig.SpatialQueryRayActive && _span.RestartCount < byte.MaxValue)
+                        {
+                            _span.RestartCount++;
+                        }
                     }
                 }
 
@@ -755,6 +840,7 @@ internal unsafe partial class SpatialRTree<TStore>
             if (!_disposed)
             {
                 _disposed = true;
+                _span.Dispose();
                 _accessor.Dispose();
             }
         }
@@ -800,6 +886,9 @@ internal unsafe partial class SpatialRTree<TStore>
         private SpatialQueryResult _current;
         private bool _disposed;
 
+        // Phase 3: Spatial:Query:Frustum span (Tier-2 gated).
+        private Profiler.SpatialQueryFrustumEvent _span;
+
         internal FrustumEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> planes, int planeCount, ChangeSet changeSet, uint categoryMask = 0)
         {
             _tree = tree;
@@ -816,6 +905,7 @@ internal unsafe partial class SpatialRTree<TStore>
             _current = default;
             _disposed = false;
             _categoryMask = categoryMask;
+            _span = Profiler.TyphonEvent.BeginSpatialQueryFrustum((byte)Math.Min(planeCount, byte.MaxValue));
 
             int len = Math.Min(planes.Length, 24);
             for (int i = 0; i < len; i++)
@@ -864,6 +954,11 @@ internal unsafe partial class SpatialRTree<TStore>
                         _current = new SpatialQueryResult(
                             SpatialNodeHelper.ReadLeafEntityId(leafBase, _currentLeafIndex, _desc),
                             SpatialNodeHelper.ReadLeafCompChunkId(leafBase, _currentLeafIndex, _desc));
+                        if (TelemetryConfig.SpatialQueryFrustumActive && _span.ResultCount < ushort.MaxValue)
+                        {
+                            _span.ResultCount++;
+                        }
+
                         return true;
                     }
 
@@ -881,6 +976,11 @@ internal unsafe partial class SpatialRTree<TStore>
                         _current = new SpatialQueryResult(
                             SpatialNodeHelper.ReadLeafEntityId(lb, _currentLeafIndex, _desc),
                             SpatialNodeHelper.ReadLeafCompChunkId(lb, _currentLeafIndex, _desc));
+                        if (TelemetryConfig.SpatialQueryFrustumActive && _span.ResultCount < ushort.MaxValue)
+                        {
+                            _span.ResultCount++;
+                        }
+
                         return true;
                     }
                 }
@@ -899,6 +999,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (version == 0)
                     {
                         RestartFromRoot();
+                        if (TelemetryConfig.SpatialQueryFrustumActive && _span.RestartCount < byte.MaxValue)
+                        {
+                            _span.RestartCount++;
+                        }
+
                         continue;
                     }
 
@@ -908,6 +1013,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (!latch.ValidateVersion(version))
                     {
                         RestartFromRoot();
+                        if (TelemetryConfig.SpatialQueryFrustumActive && _span.RestartCount < byte.MaxValue)
+                        {
+                            _span.RestartCount++;
+                        }
+
                         continue;
                     }
 
@@ -915,6 +1025,11 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (_categoryMask != 0 && (SpatialNodeHelper.ReadUnionCategoryMask(nodeBase, _desc) & _categoryMask) == 0)
                     {
                         continue;
+                    }
+
+                    if (TelemetryConfig.SpatialQueryFrustumActive && _span.NodesVisited < ushort.MaxValue)
+                    {
+                        _span.NodesVisited++;
                     }
 
                     if (isLeaf)
@@ -968,6 +1083,10 @@ internal unsafe partial class SpatialRTree<TStore>
                     if (!latch.ValidateVersion(version))
                     {
                         RestartFromRoot();
+                        if (TelemetryConfig.SpatialQueryFrustumActive && _span.RestartCount < byte.MaxValue)
+                        {
+                            _span.RestartCount++;
+                        }
                     }
                 }
 
@@ -991,6 +1110,7 @@ internal unsafe partial class SpatialRTree<TStore>
             if (!_disposed)
             {
                 _disposed = true;
+                _span.Dispose();
                 _accessor.Dispose();
             }
         }
@@ -1011,79 +1131,95 @@ internal unsafe partial class SpatialRTree<TStore>
             return 0;
         }
 
-        int halfCoord = _desc.CoordCount / 2;
-
-        // Estimate initial radius from entity density
-        double worldVolume = 1.0;
-        if (_entityCount > 1)
+        // Phase 3: Spatial:Query:Knn span (Tier-2 gated). IterCount/FinalRadius/ResultCount filled at exit.
+        var knnScope = Profiler.TyphonEvent.BeginSpatialQueryKnn((ushort)Math.Min(k, ushort.MaxValue));
+        try
         {
-            // Read root node MBR to estimate world extent
-            var accessor = _segment.CreateChunkAccessor(changeSet);
-            try
+
+            int halfCoord = _desc.CoordCount / 2;
+
+            // Estimate initial radius from entity density
+            double worldVolume = 1.0;
+            if (_entityCount > 1)
             {
-                byte* rootBase = accessor.GetChunkAddress(_rootChunkId);
-                for (int d = 0; d < halfCoord; d++)
+                // Read root node MBR to estimate world extent
+                var accessor = _segment.CreateChunkAccessor(changeSet);
+                try
                 {
-                    double extent = SpatialNodeHelper.ReadNodeMBRCoord(rootBase, d + halfCoord, _desc) -
-                                    SpatialNodeHelper.ReadNodeMBRCoord(rootBase, d, _desc);
-                    if (extent > 0)
+                    byte* rootBase = accessor.GetChunkAddress(_rootChunkId);
+                    for (int d = 0; d < halfCoord; d++)
                     {
-                        worldVolume *= extent;
+                        double extent = SpatialNodeHelper.ReadNodeMBRCoord(rootBase, d + halfCoord, _desc) -
+                                        SpatialNodeHelper.ReadNodeMBRCoord(rootBase, d, _desc);
+                        if (extent > 0)
+                        {
+                            worldVolume *= extent;
+                        }
                     }
                 }
-            }
-            finally
-            {
-                accessor.Dispose();
-            }
-        }
-
-        double entityDensity = _entityCount / Math.Max(worldVolume, 1e-10);
-        double volumeForK = k / Math.Max(entityDensity, 1e-10);
-        double radius = Math.Pow(volumeForK, 1.0 / halfCoord) * 1.5; // 1.5x safety factor
-        radius = Math.Max(radius, 1.0); // Minimum radius
-
-        // Iterative expansion — collect candidate entity IDs within expanding radius. distSq is set to 0 at the tree level because the tree stores fat
-        // AABBs, not tight bounds. Callers must recompute actual distances from component data for precise ordering.
-        int maxCandidates = Math.Min(k * 4, 256);
-        Span<(long entityId, double distSq)> candidates = stackalloc (long, double)[maxCandidates];
-        int lastCount = 0;
-
-        for (int iteration = 0; iteration < 8; iteration++)
-        {
-            int count = 0;
-            foreach (var result in QueryRadius(center, radius, changeSet, categoryMask))
-            {
-                if (count >= candidates.Length)
+                finally
                 {
-                    break;
+                    accessor.Dispose();
                 }
-                candidates[count++] = (result.EntityId, 0);
             }
 
-            if (count >= k || count == lastCount || radius > 1e15)
+            double entityDensity = _entityCount / Math.Max(worldVolume, 1e-10);
+            double volumeForK = k / Math.Max(entityDensity, 1e-10);
+            double radius = Math.Pow(volumeForK, 1.0 / halfCoord) * 1.5; // 1.5x safety factor
+            radius = Math.Max(radius, 1.0); // Minimum radius
+
+            // Iterative expansion — collect candidate entity IDs within expanding radius. distSq is set to 0 at the tree level because the tree stores fat
+            // AABBs, not tight bounds. Callers must recompute actual distances from component data for precise ordering.
+            int maxCandidates = Math.Min(k * 4, 256);
+            Span<(long entityId, double distSq)> candidates = stackalloc (long, double)[maxCandidates];
+            int lastCount = 0;
+
+            for (int iteration = 0; iteration < 8; iteration++)
             {
-                int resultCount = Math.Min(count, k);
-                resultCount = Math.Min(resultCount, results.Length);
-                for (int i = 0; i < resultCount; i++)
+                int count = 0;
+                foreach (var result in QueryRadius(center, radius, changeSet, categoryMask))
                 {
-                    results[i] = candidates[i];
+                    if (count >= candidates.Length)
+                    {
+                        break;
+                    }
+                    candidates[count++] = (result.EntityId, 0);
                 }
-                return resultCount;
+
+                if (count >= k || count == lastCount || radius > 1e15)
+                {
+                    int resultCount = Math.Min(count, k);
+                    resultCount = Math.Min(resultCount, results.Length);
+                    for (int i = 0; i < resultCount; i++)
+                    {
+                        results[i] = candidates[i];
+                    }
+                    knnScope.IterCount = (byte)Math.Min(iteration + 1, byte.MaxValue);
+                    knnScope.FinalRadius = (float)radius;
+                    knnScope.ResultCount = (ushort)Math.Min(resultCount, ushort.MaxValue);
+                    return resultCount;
+                }
+
+                lastCount = count;
+                radius *= 2.0;
             }
 
-            lastCount = count;
-            radius *= 2.0;
+            // Iteration limit reached — return whatever candidates we have from the last pass
+            int finalCount = Math.Min(lastCount, k);
+            finalCount = Math.Min(finalCount, results.Length);
+            for (int i = 0; i < finalCount; i++)
+            {
+                results[i] = candidates[i];
+            }
+            knnScope.IterCount = 8;
+            knnScope.FinalRadius = (float)radius;
+            knnScope.ResultCount = (ushort)Math.Min(finalCount, ushort.MaxValue);
+            return finalCount;
         }
-
-        // Iteration limit reached — return whatever candidates we have from the last pass
-        int finalCount = Math.Min(lastCount, k);
-        finalCount = Math.Min(finalCount, results.Length);
-        for (int i = 0; i < finalCount; i++)
+        finally
         {
-            results[i] = candidates[i];
+            knnScope.Dispose();
         }
-        return finalCount;
     }
 
     // ── Count Queries ────────────────────────────────────────────────────
@@ -1105,6 +1241,8 @@ internal unsafe partial class SpatialRTree<TStore>
             return 0;
         }
 
+        // Phase 3: Spatial:Query:Count span (variant 0=AABB). ResultCount filled at exit.
+        var countScope = Profiler.TyphonEvent.BeginSpatialQueryCount(0);
         var accessor = _segment.CreateChunkAccessor(changeSet);
         try
         {
@@ -1335,10 +1473,12 @@ internal unsafe partial class SpatialRTree<TStore>
                 }
             }
 
+            countScope.ResultCount = count;
             return count;
         }
         finally
         {
+            countScope.Dispose();
             accessor.Dispose();
         }
     }
@@ -1349,14 +1489,25 @@ internal unsafe partial class SpatialRTree<TStore>
     /// </summary>
     internal int CountInRadius(ReadOnlySpan<double> center, double radius, ChangeSet changeSet = null, uint categoryMask = 0)
     {
-        radius = Math.Max(radius, 0);
-        int halfCoord = _desc.CoordCount / 2;
-        Span<double> aabb = stackalloc double[_desc.CoordCount];
-        for (int d = 0; d < halfCoord; d++)
+        // Phase 3: Spatial:Query:Count span (variant 1=Radius). Inner CountInAABB also emits its own variant=0 span.
+        var countScope = Profiler.TyphonEvent.BeginSpatialQueryCount(1);
+        try
         {
-            aabb[d] = center[d] - radius;
-            aabb[d + halfCoord] = center[d] + radius;
+            radius = Math.Max(radius, 0);
+            int halfCoord = _desc.CoordCount / 2;
+            Span<double> aabb = stackalloc double[_desc.CoordCount];
+            for (int d = 0; d < halfCoord; d++)
+            {
+                aabb[d] = center[d] - radius;
+                aabb[d + halfCoord] = center[d] + radius;
+            }
+            var result = CountInAABB(aabb, changeSet, categoryMask);
+            countScope.ResultCount = result;
+            return result;
         }
-        return CountInAABB(aabb, changeSet, categoryMask);
+        finally
+        {
+            countScope.Dispose();
+        }
     }
 }

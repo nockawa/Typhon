@@ -34,6 +34,32 @@ public enum GaugeId : ushort
     /// <summary>Count of live (not-yet-disposed) <c>PinnedMemoryBlock</c> instances. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
     MemoryUnmanagedLiveBlocks = 0x0102,
 
+    // ── Memory pool / fragmentation (Phase 5) ──────────────────────────── 0x0103
+
+    /// <summary>Allocator fragmentation ratio expressed as hundredths-of-percent (e.g. 5025 = 50.25%). Value kind: <see cref="GaugeValueKind.U32PercentHundredths"/>.</summary>
+    MemoryFragmentationPctHundredths = 0x0103,
+
+    /// <summary>Free-block count for stride-64 pool. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
+    MemoryPoolFreeBlocksStride64 = 0x0104,
+
+    /// <summary>Free-block count for stride-128 pool. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
+    MemoryPoolFreeBlocksStride128 = 0x0105,
+
+    /// <summary>Free-block count for stride-256 pool. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
+    MemoryPoolFreeBlocksStride256 = 0x0106,
+
+    /// <summary>Free-block count for stride-512 pool. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
+    MemoryPoolFreeBlocksStride512 = 0x0107,
+
+    /// <summary>Free-block count for stride-1024 pool. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
+    MemoryPoolFreeBlocksStride1024 = 0x0108,
+
+    /// <summary>Free-block count for stride-2048 pool. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
+    MemoryPoolFreeBlocksStride2048 = 0x0109,
+
+    /// <summary>Free-block count for stride-4096 pool. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
+    MemoryPoolFreeBlocksStride4096 = 0x010A,
+
     // ── GC heap — sampled from GC.GetGCMemoryInfo() ────────────────────── 0x0110
 
     /// <summary>Gen0 size after last GC, in bytes. Value kind: <see cref="GaugeValueKind.U64Bytes"/>.</summary>
@@ -76,6 +102,12 @@ public enum GaugeId : ushort
 
     /// <summary>Count of I/O reads currently in flight. Value kind: <see cref="GaugeValueKind.U32Count"/>.</summary>
     PageCachePendingIoReads = 0x0206,
+
+    /// <summary>Stopwatch-tick age of the oldest entry on the LRU list (snapshotted once per tick). Value kind: <see cref="GaugeValueKind.U64Bytes"/>.</summary>
+    PageCacheLRUAgeTicks = 0x0207,
+
+    /// <summary>Total file size in bytes for the primary database's <see cref="System.IO.MemoryMappedFiles.MemoryMappedFile"/>. Value kind: <see cref="GaugeValueKind.U64Bytes"/>.</summary>
+    PageCacheFileSizeBytes = 0x0208,
 
     // ── TransientStore ─────────────────────────────────────────────────── 0x0210
 

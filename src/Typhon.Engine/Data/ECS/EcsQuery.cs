@@ -66,16 +66,50 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             return;
         }
 
-        if (_useLargeMask)
+        // Phase 7: ECS:Query:Construct span — covers archetype mask resolution.
+        var ctorScope = TyphonEvent.BeginEcsQueryConstruct(
+            Math.Min(meta.ArchetypeId, ushort.MaxValue),
+            (byte)(polymorphic ? 1 : 0),
+            (byte)(_useLargeMask ? 1 : 0));  // 0 = Mask256, 1 = MaskLarge
+        try
         {
-            _maskLarge = polymorphic && meta.SubtreeArchetypeIds != null ? 
-                ArchetypeMaskLarge.FromSubtree(meta.SubtreeArchetypeIds, ArchetypeRegistry.MaxArchetypeId) : 
-                ArchetypeMaskLarge.FromArchetype(meta.ArchetypeId, ArchetypeRegistry.MaxArchetypeId);
+            // Phase 7: ECS:Query:SubtreeExpand span — covers polymorphic subtree expansion (when applicable).
+            if (polymorphic && meta.SubtreeArchetypeIds != null)
+            {
+                var subtreeScope = TyphonEvent.BeginEcsQuerySubtreeExpand(
+                    (ushort)Math.Min(meta.SubtreeArchetypeIds.Length, ushort.MaxValue),
+                    Math.Min(meta.ArchetypeId, ushort.MaxValue));
+                try
+                {
+                    if (_useLargeMask)
+                    {
+                        _maskLarge = ArchetypeMaskLarge.FromSubtree(meta.SubtreeArchetypeIds, ArchetypeRegistry.MaxArchetypeId);
+                    }
+                    else
+                    {
+                        _mask256 = ArchetypeMask256.FromSubtree(meta.SubtreeArchetypeIds);
+                    }
+                }
+                finally
+                {
+                    subtreeScope.Dispose();
+                }
+            }
+            else
+            {
+                if (_useLargeMask)
+                {
+                    _maskLarge = ArchetypeMaskLarge.FromArchetype(meta.ArchetypeId, ArchetypeRegistry.MaxArchetypeId);
+                }
+                else
+                {
+                    _mask256 = ArchetypeMask256.FromArchetype(meta.ArchetypeId);
+                }
+            }
         }
-        else
+        finally
         {
-            _mask256 = polymorphic && meta.SubtreeArchetypeIds != null ? 
-                ArchetypeMask256.FromSubtree(meta.SubtreeArchetypeIds) : ArchetypeMask256.FromArchetype(meta.ArchetypeId);
+            ctorScope.Dispose();
         }
     }
 
@@ -157,6 +191,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     {
         int typeId = ArchetypeRegistry.GetComponentTypeId<T>();
         Debug.Assert(typeId >= 0, $"Component {typeof(T).Name} not registered");
+        // Phase 7: ECS:Query:Constraint:Enabled instant.
+        TyphonEvent.EmitEcsQueryConstraintEnabled((ushort)Math.Min(typeId, ushort.MaxValue), 1);
         AddEnabledTypeId(typeId);
         return this;
     }
@@ -166,6 +202,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     {
         int typeId = ArchetypeRegistry.GetComponentTypeId<T>();
         Debug.Assert(typeId >= 0, $"Component {typeof(T).Name} not registered");
+        // Phase 7: ECS:Query:Constraint:Enabled instant (enableBit=0 means Disabled).
+        TyphonEvent.EmitEcsQueryConstraintEnabled((ushort)Math.Min(typeId, ushort.MaxValue), 0);
         AddDisabledTypeId(typeId);
         return this;
     }
@@ -317,6 +355,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         Debug.Assert(_spatialTable?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
         _spatialQueryType = SpatialQueryType.Radius;
         _spatialParams[0] = centerX; _spatialParams[1] = centerY; _spatialParams[2] = centerZ; _spatialParams[3] = radius;
+        // Phase 7: ECS:Query:Spatial:Attach instant. queryBox encodes the bounding box of the radius sphere.
+        TyphonEvent.EmitEcsQuerySpatialAttach((byte)SpatialQueryType.Radius, (float)(centerX - radius), (float)(centerY - radius), (float)(centerX + radius), (float)(centerY + radius));
         return this;
     }
 
@@ -328,6 +368,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         _spatialQueryType = SpatialQueryType.AABB;
         _spatialParams[0] = minX; _spatialParams[1] = minY; _spatialParams[2] = minZ;
         _spatialParams[3] = maxX; _spatialParams[4] = maxY; _spatialParams[5] = maxZ;
+        // Phase 7: ECS:Query:Spatial:Attach instant — XY plane projection of the AABB for the wire payload.
+        TyphonEvent.EmitEcsQuerySpatialAttach((byte)SpatialQueryType.AABB, (float)minX, (float)minY, (float)maxX, (float)maxY);
         return this;
     }
 
@@ -340,6 +382,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         _spatialQueryType = SpatialQueryType.Ray;
         _spatialParams[0] = originX; _spatialParams[1] = originY; _spatialParams[2] = originZ;
         _spatialParams[3] = dirX; _spatialParams[4] = dirY; _spatialParams[5] = dirZ; _spatialParams[6] = maxDist;
+        // Phase 7: ECS:Query:Spatial:Attach instant — origin + endpoint XY projection.
+        TyphonEvent.EmitEcsQuerySpatialAttach((byte)SpatialQueryType.Ray, (float)originX, (float)originY, (float)(originX + dirX * maxDist), (float)(originY + dirY * maxDist));
         return this;
     }
 
@@ -786,7 +830,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 {
                     var newStreams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(streams.Length * 2);
                     Array.Copy(streams, newStreams, streamCount);
-                    System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+                    System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
                     streams = newStreams;
                 }
 
@@ -796,12 +840,12 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
             if (streamCount == 0)
             {
-                System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+                System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
                 return [];
             }
 
             // KWayMergeState takes ownership of the streams array (ownsArray: true → returns to pool on Dispose)
-            var merge = KWayMergeState.Create(streams, streamCount, descending, ownsArray: true);
+            var merge = KWayMergeState.Create(streams, streamCount, descending, true);
             try
             {
                 return CollectMergedResults(ref merge, evaluators);
@@ -818,7 +862,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             {
                 streams[i].Dispose();
             }
-            System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, clearArray: true);
+            System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
             throw;
         }
     }
@@ -2021,7 +2065,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             }
 
             bool found = false;
-            CollectMatching((_, _) => found = true, stopOnFirst: true);
+            CollectMatching((_, _) => found = true, true);
             scope.ScanMode = EcsQueryScanMode.Broad;
             scope.Found = found;
             return found;

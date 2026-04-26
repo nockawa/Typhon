@@ -28,7 +28,17 @@ public abstract partial class BTree<TKey, TStore>
             // slot from the primary CA's 16-slot cache.
             ref var bufferAccessor = ref args.SiblingAccessor;
             var bufferId = _storage.CreateBuffer(ref bufferAccessor);
-            args.ElementId = _storage.Append(bufferId, args.GetValue(), ref bufferAccessor);
+
+            // Phase 6: Data:Index:BTree:BulkInsert span — wraps the multi-value VSBS buffer append.
+            var bulkScope = Profiler.TyphonEvent.BeginDataIndexBTreeBulkInsert(bufferId, 1);
+            try
+            {
+                args.ElementId = _storage.Append(bufferId, args.GetValue(), ref bufferAccessor);
+            }
+            finally
+            {
+                bulkScope.Dispose();
+            }
             args.BufferRootId = bufferId;
             return bufferId;
         }
@@ -55,6 +65,9 @@ public abstract partial class BTree<TKey, TStore>
                 IncCount();
                 _cachedLastKey = args.Key;
                 _hasCachedLastKey = true;
+
+                // Phase 6: Data:Index:BTree:Root instant (op=0 / Init).
+                Profiler.TyphonEvent.EmitDataIndexBTreeRoot(0, newRoot.ChunkId, (byte)Math.Min(Height, byte.MaxValue));
                 return;
             }
             // Another thread initialized the root — free our unused node and fall through
@@ -63,6 +76,7 @@ public abstract partial class BTree<TKey, TStore>
 
         // 2. OLC retry loop — handles append/prepend fast paths + non-full leaf inserts.
         //    Zero writes to shared state except the single leaf being modified (WriteLocked).
+        byte fallbackReason = 1;  // OlcFail (default) — overwritten to 0 if we break for LeafFull
         for (int attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
         {
             var result = TryInsertOlc(ref args);
@@ -73,6 +87,7 @@ public abstract partial class BTree<TKey, TStore>
             if (result == OlcInsertResult.LeafFull)
             {
                 Interlocked.Increment(ref _leafFullFromOlc);
+                fallbackReason = 0;  // LeafFull
                 break; // Need pessimistic path for split/spill
             }
             // Restart: version validation failed
@@ -81,6 +96,8 @@ public abstract partial class BTree<TKey, TStore>
 
         // 3. Pessimistic fallback — exclusive lock + WriteLock all modified nodes for OLC readers
         Interlocked.Increment(ref _pessimisticFallbacks);
+        // Phase 6: Data:Index:BTree:RebalanceFallback instant — reason byte distinguishes LeafFull (0) vs OLC retry budget exhausted (1).
+        Profiler.TyphonEvent.EmitDataIndexBTreeRebalanceFallback(fallbackReason);
         AddOrUpdateCorePessimistic(ref args);
     }
 
@@ -254,7 +271,7 @@ public abstract partial class BTree<TKey, TStore>
         // --- General path: optimistic descent to leaf, non-full insert ---
         // followRightLink: false — inserts must not follow B-link because inserting into the right sibling bypasses the spill/split path that updates parent
         // separators. If the leaf was split concurrently, version validation will trigger a restart.
-        var (leafChunkId, leafVersion, _) = OptimisticDescendToLeaf(args.Key, ref accessor, followRightLink: false);
+        var (leafChunkId, leafVersion, _) = OptimisticDescendToLeaf(args.Key, ref accessor, false);
         if (leafChunkId == 0)
         {
             return OlcInsertResult.Restart;

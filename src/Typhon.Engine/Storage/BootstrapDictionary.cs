@@ -75,7 +75,7 @@ public class BootstrapDictionary
         public static Value FromInt5(int v0, int v1, int v2, int v3, int v4) => new(ValueType.Int5, 0, [v0, v1, v2, v3, v4]);
         public static Value FromInt6(int v0, int v1, int v2, int v3, int v4, int v5) => new(ValueType.Int6, 0, [v0, v1, v2, v3, v4, v5]);
         public static Value FromLong(long value) => new(ValueType.Long, value);
-        public static Value FromDateTime(System.DateTime value) => new(ValueType.DateTime, value.Ticks);
+        public static Value FromDateTime(DateTime value) => new(ValueType.DateTime, value.Ticks);
         public static Value FromString(string value) => new(ValueType.String, 0, str: value);
 
         // ═══════════════════════════════════════════════════════════════════════
@@ -102,13 +102,13 @@ public class BootstrapDictionary
             }
         }
 
-        public System.DateTime AsDateTime
+        public DateTime AsDateTime
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
                 Debug.Assert(Type == ValueType.DateTime);
-                return new System.DateTime(_scalar);
+                return new DateTime(_scalar);
             }
         }
 
@@ -178,7 +178,7 @@ public class BootstrapDictionary
     public void SetBool(string key, bool value) => _entries[key] = Value.FromBool(value);
     public void SetInt(string key, int value) => _entries[key] = Value.FromInt(value);
     public void SetLong(string key, long value) => _entries[key] = Value.FromLong(value);
-    public void SetDateTime(string key, System.DateTime value) => _entries[key] = Value.FromDateTime(value);
+    public void SetDateTime(string key, DateTime value) => _entries[key] = Value.FromDateTime(value);
     public void SetString(string key, string value) => _entries[key] = Value.FromString(value);
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -418,7 +418,7 @@ public class BootstrapDictionary
                 if (src + 8 > limit) { return default; }
                 long ticks = *(long*)src;
                 src += 8;
-                return Value.FromDateTime(new System.DateTime(ticks));
+                return Value.FromDateTime(new DateTime(ticks));
 
             case ValueType.String:
                 byte* strStart = src;

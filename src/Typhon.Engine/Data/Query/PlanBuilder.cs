@@ -18,8 +18,21 @@ internal class PlanBuilder
     /// </summary>
     public ExecutionPlan BuildPlan(FieldEvaluator[] evaluators, ComponentTable table, ISelectivityEstimator estimator)
     {
-        var (ordered, estimates) = OrderBySelectivity(evaluators, table, estimator);
-        return BuildPlanWithPrimarySelection(ordered, estimates, table, false);
+        // Phase 7: Query:Plan span.
+        var planScope = Profiler.TyphonEvent.BeginQueryPlan((byte)System.Math.Min(evaluators.Length, byte.MaxValue), 0, long.MinValue, long.MaxValue);
+        try
+        {
+            var (ordered, estimates) = OrderBySelectivity(evaluators, table, estimator);
+            var plan = BuildPlanWithPrimarySelection(ordered, estimates, table, false);
+            planScope.IndexFieldIdx = (ushort)System.Math.Max(0, plan.PrimaryFieldIndex);
+            planScope.RangeMin = plan.PrimaryScanMin;
+            planScope.RangeMax = plan.PrimaryScanMax;
+            return plan;
+        }
+        finally
+        {
+            planScope.Dispose();
+        }
     }
 
     /// <summary>
@@ -28,18 +41,35 @@ internal class PlanBuilder
     /// </summary>
     public ExecutionPlan BuildPlan(FieldEvaluator[] evaluators, ComponentTable table, ISelectivityEstimator estimator, OrderByField orderBy)
     {
-        var (ordered, estimates) = OrderBySelectivity(evaluators, table, estimator);
-
-        // Only use secondary index as primary if OrderBy matches the candidate primary field
-        var plan = BuildPlanWithPrimarySelection(ordered, estimates, table, orderBy.Descending, orderBy.FieldIndex);
-        return plan;
+        // Phase 7: Query:Plan span (OrderBy variant).
+        var planScope = Profiler.TyphonEvent.BeginQueryPlan((byte)System.Math.Min(evaluators.Length, byte.MaxValue), 0, long.MinValue, long.MaxValue);
+        try
+        {
+            var (ordered, estimates) = OrderBySelectivity(evaluators, table, estimator);
+            var plan = BuildPlanWithPrimarySelection(ordered, estimates, table, orderBy.Descending, orderBy.FieldIndex);
+            planScope.IndexFieldIdx = (ushort)System.Math.Max(0, plan.PrimaryFieldIndex);
+            planScope.RangeMin = plan.PrimaryScanMin;
+            planScope.RangeMax = plan.PrimaryScanMax;
+            return plan;
+        }
+        finally
+        {
+            planScope.Dispose();
+        }
     }
 
-    private static ExecutionPlan BuildPlanWithPrimarySelection(FieldEvaluator[] orderedEvaluators, long[] estimates, ComponentTable table, bool descending, 
+    private static ExecutionPlan BuildPlanWithPrimarySelection(FieldEvaluator[] orderedEvaluators, long[] estimates, ComponentTable table, bool descending,
         int orderByFieldIndex = int.MinValue)
     {
         // Try to find a secondary index for the primary stream
         var (primaryFieldIndex, primaryKeyType, scanMin, scanMax) = SelectPrimaryStream(orderedEvaluators, table, orderByFieldIndex);
+
+        // Phase 7: Query:Plan:PrimarySelect instant — fires once per BuildPlan, after the candidate decision is made.
+        // candidates = total evaluator count, winnerIdx = chosen field idx (or 0xFF if PK fallback), reason: 0 = secondary-index, 1 = PK fallback.
+        Profiler.TyphonEvent.EmitQueryPlanPrimarySelect(
+            (byte)System.Math.Min(orderedEvaluators.Length, byte.MaxValue),
+            (byte)(primaryFieldIndex < 0 ? 0xFF : System.Math.Min(primaryFieldIndex, byte.MaxValue)),
+            (byte)(primaryFieldIndex < 0 ? 1 : 0));
 
         if (primaryFieldIndex < 0)
         {
@@ -148,34 +178,47 @@ internal class PlanBuilder
             return ([], []);
         }
 
-        // Copy evaluators and estimate cardinality in a single pass
-        var ordered = new FieldEvaluator[evaluators.Length];
-        var estimates = new long[evaluators.Length];
-        for (var i = 0; i < evaluators.Length; i++)
+        // Phase 7: Query:Plan:Sort span — wraps the cardinality-estimate + insertion-sort pass.
+        var sortStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        var sortScope = Profiler.TyphonEvent.BeginQueryPlanSort((byte)System.Math.Min(evaluators.Length, byte.MaxValue), 0);
+        try
         {
-            ordered[i] = evaluators[i];
-            ref var eval = ref ordered[i];
-            estimates[i] = estimator.EstimateCardinality(table, eval.FieldIndex, eval.CompareOp, eval.Threshold);
-        }
 
-        // Insertion sort by ascending cardinality, tie-break by lower FieldIndex.
-        // Optimal for typical predicate counts (1-3), avoids delegate allocation from Array.Sort.
-        for (var i = 1; i < ordered.Length; i++)
-        {
-            var keyEval = ordered[i];
-            var keyEst = estimates[i];
-            var j = i - 1;
-            while (j >= 0 && (estimates[j] > keyEst || (estimates[j] == keyEst && ordered[j].FieldIndex > keyEval.FieldIndex)))
+            // Copy evaluators and estimate cardinality in a single pass
+            var ordered = new FieldEvaluator[evaluators.Length];
+            var estimates = new long[evaluators.Length];
+            for (var i = 0; i < evaluators.Length; i++)
             {
-                ordered[j + 1] = ordered[j];
-                estimates[j + 1] = estimates[j];
-                j--;
+                ordered[i] = evaluators[i];
+                ref var eval = ref ordered[i];
+                estimates[i] = estimator.EstimateCardinality(table, eval.FieldIndex, eval.CompareOp, eval.Threshold);
             }
-            ordered[j + 1] = keyEval;
-            estimates[j + 1] = keyEst;
-        }
 
-        return (ordered, estimates);
+            // Insertion sort by ascending cardinality, tie-break by lower FieldIndex.
+            // Optimal for typical predicate counts (1-3), avoids delegate allocation from Array.Sort.
+            for (var i = 1; i < ordered.Length; i++)
+            {
+                var keyEval = ordered[i];
+                var keyEst = estimates[i];
+                var j = i - 1;
+                while (j >= 0 && (estimates[j] > keyEst || (estimates[j] == keyEst && ordered[j].FieldIndex > keyEval.FieldIndex)))
+                {
+                    ordered[j + 1] = ordered[j];
+                    estimates[j + 1] = estimates[j];
+                    j--;
+                }
+                ordered[j + 1] = keyEval;
+                estimates[j + 1] = keyEst;
+            }
+
+            var sortNs = (uint)System.Math.Min((System.Diagnostics.Stopwatch.GetTimestamp() - sortStart) * 1_000_000_000L / System.Diagnostics.Stopwatch.Frequency, uint.MaxValue);
+            sortScope.SortNs = sortNs;
+            return (ordered, estimates);
+        }
+        finally
+        {
+            sortScope.Dispose();
+        }
     }
 
     private static bool IsIntegerKeyType(KeyType kt) => kt is KeyType.Bool or KeyType.Byte or KeyType.SByte or KeyType.Short or 

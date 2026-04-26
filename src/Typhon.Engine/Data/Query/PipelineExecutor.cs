@@ -42,14 +42,28 @@ internal class PipelineExecutor
     /// </summary>
     public int Count(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx)
     {
-        if (plan.UsesSecondaryIndex)
+        // Phase 7: Query:Count span. ResultCount filled at exit.
+        var countScope = Profiler.TyphonEvent.BeginQueryCount();
+        try
         {
-            return CountCoreSecondaryIndex(plan, evaluators, table, tx);
+            int result;
+            if (plan.UsesSecondaryIndex)
+            {
+                result = CountCoreSecondaryIndex(plan, evaluators, table, tx);
+            }
+            else
+            {
+                // PK B+Tree removed — non-secondary-index count path returns 0.
+                // All current callers (EcsQuery.Count via WhereField, EcsView.CountScan) use secondary indexes.
+                result = 0;
+            }
+            countScope.ResultCount = result;
+            return result;
         }
-
-        // PK B+Tree removed — non-secondary-index count path returns 0.
-        // All current callers (EcsQuery.Count via WhereField, EcsView.CountScan) use secondary indexes.
-        return 0;
+        finally
+        {
+            countScope.Dispose();
+        }
     }
 
     /// <summary>
@@ -57,48 +71,57 @@ internal class PipelineExecutor
     /// </summary>
     private int CountCoreSecondaryIndex(ExecutionPlan plan, FieldEvaluator[] evaluators, ComponentTable table, Transaction tx)
     {
-        var ifi = table.IndexedFieldInfos[plan.PrimaryFieldIndex];
-
-        if (table.StorageMode == StorageMode.Transient)
+        // Phase 7: Query:Execute:IndexScan span — wraps the secondary-index dispatch path.
+        var scanScope = Profiler.TyphonEvent.BeginQueryExecuteIndexScan((ushort)Math.Max(0, plan.PrimaryFieldIndex), (byte)table.StorageMode);
+        try
         {
-            var compAccessor = table.TransientComponentSegment.CreateChunkAccessor();
-            try
+            var ifi = table.IndexedFieldInfos[plan.PrimaryFieldIndex];
+
+            if (table.StorageMode == StorageMode.Transient)
             {
-                return plan.PrimaryKeyType switch
+                var compAccessor = table.TransientComponentSegment.CreateChunkAccessor();
+                try
                 {
-                    KeyType.Byte   => CountPKsTypedNonVersioned((BTree<byte, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.SByte  => CountPKsTypedNonVersioned((BTree<sbyte, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.Short  => CountPKsTypedNonVersioned((BTree<short, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.UShort => CountPKsTypedNonVersioned((BTree<ushort, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.Int    => CountPKsTypedNonVersioned((BTree<int, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.UInt   => CountPKsTypedNonVersioned((BTree<uint, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.Long   => CountPKsTypedNonVersioned((BTree<long, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.ULong  => CountPKsTypedNonVersioned((BTree<long, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.Float  => CountPKsTypedNonVersioned((BTree<float, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    KeyType.Double => CountPKsTypedNonVersioned((BTree<double, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
-                    _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for Transient index scan")
-                };
+                    return plan.PrimaryKeyType switch
+                    {
+                        KeyType.Byte   => CountPKsTypedNonVersioned((BTree<byte, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.SByte  => CountPKsTypedNonVersioned((BTree<sbyte, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.Short  => CountPKsTypedNonVersioned((BTree<short, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.UShort => CountPKsTypedNonVersioned((BTree<ushort, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.Int    => CountPKsTypedNonVersioned((BTree<int, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.UInt   => CountPKsTypedNonVersioned((BTree<uint, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.Long   => CountPKsTypedNonVersioned((BTree<long, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.ULong  => CountPKsTypedNonVersioned((BTree<long, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.Float  => CountPKsTypedNonVersioned((BTree<float, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        KeyType.Double => CountPKsTypedNonVersioned((BTree<double, TransientStore>)ifi.Index, plan, table, evaluators, ref compAccessor),
+                        _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for Transient index scan")
+                    };
+                }
+                finally
+                {
+                    compAccessor.Dispose();
+                }
             }
-            finally
-            {
-                compAccessor.Dispose();
-            }
-        }
 
-        return plan.PrimaryKeyType switch
+            return plan.PrimaryKeyType switch
+            {
+                KeyType.Byte => CountPKsTyped((BTree<byte, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.SByte => CountPKsTyped((BTree<sbyte, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.Short => CountPKsTyped((BTree<short, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.UShort => CountPKsTyped((BTree<ushort, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.Int => CountPKsTyped((BTree<int, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.UInt => CountPKsTyped((BTree<uint, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.Long => CountPKsTyped((BTree<long, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.ULong => CountPKsTyped((BTree<long, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.Float => CountPKsTyped((BTree<float, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                KeyType.Double => CountPKsTyped((BTree<double, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
+                _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for index scan")
+            };
+        }
+        finally
         {
-            KeyType.Byte => CountPKsTyped((BTree<byte, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.SByte => CountPKsTyped((BTree<sbyte, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Short => CountPKsTyped((BTree<short, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.UShort => CountPKsTyped((BTree<ushort, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Int => CountPKsTyped((BTree<int, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.UInt => CountPKsTyped((BTree<uint, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Long => CountPKsTyped((BTree<long, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.ULong => CountPKsTyped((BTree<long, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Float => CountPKsTyped((BTree<float, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            KeyType.Double => CountPKsTyped((BTree<double, PersistentStore>)ifi.Index, plan, table, evaluators, tx),
-            _ => throw new NotSupportedException($"KeyType {plan.PrimaryKeyType} not supported for index scan")
-        };
+            scanScope.Dispose();
+        }
     }
 
     private static int CountPKsTyped<TKey>(BTree<TKey, PersistentStore> index, ExecutionPlan plan, ComponentTable table, FieldEvaluator[] evaluators, Transaction tx) where TKey : unmanaged
@@ -123,6 +146,10 @@ internal class PipelineExecutor
 
         var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
         var compContentAccessor = hasFilters ? table.ComponentSegment.CreateChunkAccessor() : default;
+
+        // Phase 7: Query:Execute:Iterate / Filter spans.
+        var iterScope = Profiler.TyphonEvent.BeginQueryExecuteIterate();
+        var filterScope = Profiler.TyphonEvent.BeginQueryExecuteFilter((byte)Math.Min(nonPrimaryEvals.Length, byte.MaxValue));
         try
         {
             if (index.AllowMultiple)
@@ -132,14 +159,20 @@ internal class PipelineExecutor
                 {
                     while (enumerator.MoveNextKey())
                     {
+                        if (TelemetryConfig.QueryExecuteIterateActive) iterScope.ChunkCount++;
                         do
                         {
                             var values = enumerator.CurrentValues;
                             for (var j = 0; j < values.Length; j++)
                             {
+                                if (TelemetryConfig.QueryExecuteIterateActive) iterScope.EntryCount++;
                                 if (CountOneVersioned(values[j], ref compRevAccessor, ref compContentAccessor, table, nonPrimaryEvals, hasFilters, tx))
                                 {
                                     count++;
+                                }
+                                else if (TelemetryConfig.QueryExecuteFilterActive)
+                                {
+                                    filterScope.RejectedCount++;
                                 }
                             }
                         } while (enumerator.NextChunk());
@@ -155,15 +188,22 @@ internal class PipelineExecutor
                 var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
                 foreach (var kv in enumerator)
                 {
+                    if (TelemetryConfig.QueryExecuteIterateActive) { iterScope.ChunkCount++; iterScope.EntryCount++; }
                     if (CountOneVersioned(kv.Value, ref compRevAccessor, ref compContentAccessor, table, nonPrimaryEvals, hasFilters, tx))
                     {
                         count++;
+                    }
+                    else if (TelemetryConfig.QueryExecuteFilterActive)
+                    {
+                        filterScope.RejectedCount++;
                     }
                 }
             }
         }
         finally
         {
+            filterScope.Dispose();
+            iterScope.Dispose();
             compRevAccessor.Dispose();
             if (hasFilters)
             {
@@ -223,6 +263,10 @@ internal class PipelineExecutor
 
         // For SV, component data is read directly from the component segment (no revision chain).
         var compAccessor = table.ComponentSegment.CreateChunkAccessor();
+
+        // Phase 7: Query:Execute:Iterate / Filter spans — SV count path.
+        var iterScope = Profiler.TyphonEvent.BeginQueryExecuteIterate();
+        var filterScope = Profiler.TyphonEvent.BeginQueryExecuteFilter((byte)Math.Min(nonPrimaryEvals.Length, byte.MaxValue));
         try
         {
             if (index.AllowMultiple)
@@ -232,14 +276,20 @@ internal class PipelineExecutor
                 {
                     while (enumerator.MoveNextKey())
                     {
+                        if (TelemetryConfig.QueryExecuteIterateActive) iterScope.ChunkCount++;
                         do
                         {
                             var values = enumerator.CurrentValues;
                             for (var j = 0; j < values.Length; j++)
                             {
+                                if (TelemetryConfig.QueryExecuteIterateActive) iterScope.EntryCount++;
                                 if (!hasFilters || EvaluateFiltersSV(nonPrimaryEvals, table, values[j], ref compAccessor))
                                 {
                                     count++;
+                                }
+                                else if (TelemetryConfig.QueryExecuteFilterActive)
+                                {
+                                    filterScope.RejectedCount++;
                                 }
                             }
                         } while (enumerator.NextChunk());
@@ -255,15 +305,22 @@ internal class PipelineExecutor
                 var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
                 foreach (var kv in enumerator)
                 {
+                    if (TelemetryConfig.QueryExecuteIterateActive) { iterScope.ChunkCount++; iterScope.EntryCount++; }
                     if (!hasFilters || EvaluateFiltersSV(nonPrimaryEvals, table, kv.Value, ref compAccessor))
                     {
                         count++;
+                    }
+                    else if (TelemetryConfig.QueryExecuteFilterActive)
+                    {
+                        filterScope.RejectedCount++;
                     }
                 }
             }
         }
         finally
         {
+            filterScope.Dispose();
+            iterScope.Dispose();
             compAccessor.Dispose();
         }
 
@@ -401,6 +458,13 @@ internal class PipelineExecutor
 
         var compRevAccessor = table.CompRevTableSegment.CreateChunkAccessor();
         var compContentAccessor = hasFilters ? table.ComponentSegment.CreateChunkAccessor() : default;
+
+        // Phase 7: Query:Execute:Iterate / Filter / Pagination spans — Versioned Execute path.
+        // Filter:RejectedCount tracks entries rejected by MVCC visibility or non-primary filters.
+        // Pagination:EarlyTerm = 1 when collected >= take triggers an early return.
+        var iterScope = Profiler.TyphonEvent.BeginQueryExecuteIterate();
+        var filterScope = Profiler.TyphonEvent.BeginQueryExecuteFilter((byte)Math.Min(nonPrimaryEvals.Length, byte.MaxValue));
+        var pageScope = Profiler.TyphonEvent.BeginQueryExecutePagination(skip, take);
         try
         {
             if (index.AllowMultiple)
@@ -410,15 +474,23 @@ internal class PipelineExecutor
                 {
                     while (enumerator.MoveNextKey())
                     {
+                        if (TelemetryConfig.QueryExecuteIterateActive) iterScope.ChunkCount++;
                         do
                         {
                             var values = enumerator.CurrentValues;
                             for (var j = 0; j < values.Length; j++)
                             {
+                                if (TelemetryConfig.QueryExecuteIterateActive) iterScope.EntryCount++;
+                                var collectedBefore = collected;
                                 if (ExecuteOneVersioned(values[j], ref compRevAccessor, ref compContentAccessor, table, nonPrimaryEvals, hasFilters, tx,
                                         unorderedResult, orderedResult, ref skip, ref collected) && collected >= take)
                                 {
+                                    if (TelemetryConfig.QueryExecutePaginationActive) pageScope.EarlyTerm = 1;
                                     return;
+                                }
+                                if (collected == collectedBefore && TelemetryConfig.QueryExecuteFilterActive)
+                                {
+                                    filterScope.RejectedCount++;
                                 }
                             }
                         } while (enumerator.NextChunk());
@@ -434,16 +506,26 @@ internal class PipelineExecutor
                 var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
                 foreach (var kv in enumerator)
                 {
+                    if (TelemetryConfig.QueryExecuteIterateActive) { iterScope.ChunkCount++; iterScope.EntryCount++; }
+                    var collectedBefore = collected;
                     if (ExecuteOneVersioned(kv.Value, ref compRevAccessor, ref compContentAccessor, table, nonPrimaryEvals, hasFilters, tx,
                             unorderedResult, orderedResult, ref skip, ref collected) && collected >= take)
                     {
+                        if (TelemetryConfig.QueryExecutePaginationActive) pageScope.EarlyTerm = 1;
                         return;
+                    }
+                    if (collected == collectedBefore && TelemetryConfig.QueryExecuteFilterActive)
+                    {
+                        filterScope.RejectedCount++;
                     }
                 }
             }
         }
         finally
         {
+            pageScope.Dispose();
+            filterScope.Dispose();
+            iterScope.Dispose();
             compRevAccessor.Dispose();
             if (hasFilters)
             {
@@ -571,6 +653,11 @@ internal class PipelineExecutor
         var collected = 0;
 
         var compAccessor = table.ComponentSegment.CreateChunkAccessor();
+
+        // Phase 7: Query:Execute:Iterate / Filter / Pagination spans — SV Execute path.
+        var iterScope = Profiler.TyphonEvent.BeginQueryExecuteIterate();
+        var filterScope = Profiler.TyphonEvent.BeginQueryExecuteFilter((byte)Math.Min(nonPrimaryEvals.Length, byte.MaxValue));
+        var pageScope = Profiler.TyphonEvent.BeginQueryExecutePagination(skip, take);
         try
         {
             if (index.AllowMultiple)
@@ -580,13 +667,16 @@ internal class PipelineExecutor
                 {
                     while (enumerator.MoveNextKey())
                     {
+                        if (TelemetryConfig.QueryExecuteIterateActive) iterScope.ChunkCount++;
                         do
                         {
                             var values = enumerator.CurrentValues;
                             for (var j = 0; j < values.Length; j++)
                             {
+                                if (TelemetryConfig.QueryExecuteIterateActive) iterScope.EntryCount++;
                                 if (hasFilters && !EvaluateFiltersSV(nonPrimaryEvals, table, values[j], ref compAccessor))
                                 {
+                                    if (TelemetryConfig.QueryExecuteFilterActive) filterScope.RejectedCount++;
                                     continue;
                                 }
 
@@ -605,7 +695,11 @@ internal class PipelineExecutor
                                     orderedResult?.Add(entityPK);
                                 }
 
-                                if (++collected >= take) { return; }
+                                if (++collected >= take)
+                                {
+                                    if (TelemetryConfig.QueryExecutePaginationActive) pageScope.EarlyTerm = 1;
+                                    return;
+                                }
                             }
                         } while (enumerator.NextChunk());
                     }
@@ -620,8 +714,10 @@ internal class PipelineExecutor
                 var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
                 foreach (var kv in enumerator)
                 {
+                    if (TelemetryConfig.QueryExecuteIterateActive) { iterScope.ChunkCount++; iterScope.EntryCount++; }
                     if (hasFilters && !EvaluateFiltersSV(nonPrimaryEvals, table, kv.Value, ref compAccessor))
                     {
+                        if (TelemetryConfig.QueryExecuteFilterActive) filterScope.RejectedCount++;
                         continue;
                     }
 
@@ -642,6 +738,7 @@ internal class PipelineExecutor
 
                     if (++collected >= take)
                     {
+                        if (TelemetryConfig.QueryExecutePaginationActive) pageScope.EarlyTerm = 1;
                         return;
                     }
                 }
@@ -649,6 +746,9 @@ internal class PipelineExecutor
         }
         finally
         {
+            pageScope.Dispose();
+            filterScope.Dispose();
+            iterScope.Dispose();
             compAccessor.Dispose();
         }
     }
@@ -670,41 +770,63 @@ internal class PipelineExecutor
         var hasFilters = nonPrimaryEvals.Length > 0;
         var count = 0;
 
-        if (index.AllowMultiple)
+        // Phase 7: Query:Execute:Iterate / Filter spans — Transient/non-versioned count path.
+        var iterScope = Profiler.TyphonEvent.BeginQueryExecuteIterate();
+        var filterScope = Profiler.TyphonEvent.BeginQueryExecuteFilter((byte)Math.Min(nonPrimaryEvals.Length, byte.MaxValue));
+        try
         {
-            var enumerator = plan.Descending ? index.EnumerateRangeMultipleDescending(minKey, maxKey) : index.EnumerateRangeMultiple(minKey, maxKey);
-            try
+            if (index.AllowMultiple)
             {
-                while (enumerator.MoveNextKey())
+                var enumerator = plan.Descending ? index.EnumerateRangeMultipleDescending(minKey, maxKey) : index.EnumerateRangeMultiple(minKey, maxKey);
+                try
                 {
-                    do
+                    while (enumerator.MoveNextKey())
                     {
-                        var values = enumerator.CurrentValues;
-                        for (var j = 0; j < values.Length; j++)
+                        if (TelemetryConfig.QueryExecuteIterateActive) iterScope.ChunkCount++;
+                        do
                         {
-                            if (!hasFilters || EvaluateFiltersNonVersioned(nonPrimaryEvals, table, values[j], ref compAccessor))
+                            var values = enumerator.CurrentValues;
+                            for (var j = 0; j < values.Length; j++)
                             {
-                                count++;
+                                if (TelemetryConfig.QueryExecuteIterateActive) iterScope.EntryCount++;
+                                if (!hasFilters || EvaluateFiltersNonVersioned(nonPrimaryEvals, table, values[j], ref compAccessor))
+                                {
+                                    count++;
+                                }
+                                else if (TelemetryConfig.QueryExecuteFilterActive)
+                                {
+                                    filterScope.RejectedCount++;
+                                }
                             }
-                        }
-                    } while (enumerator.NextChunk());
+                        } while (enumerator.NextChunk());
+                    }
+                }
+                finally
+                {
+                    enumerator.Dispose();
                 }
             }
-            finally
+            else
             {
-                enumerator.Dispose();
+                var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
+                foreach (var kv in enumerator)
+                {
+                    if (TelemetryConfig.QueryExecuteIterateActive) { iterScope.ChunkCount++; iterScope.EntryCount++; }
+                    if (!hasFilters || EvaluateFiltersNonVersioned(nonPrimaryEvals, table, kv.Value, ref compAccessor))
+                    {
+                        count++;
+                    }
+                    else if (TelemetryConfig.QueryExecuteFilterActive)
+                    {
+                        filterScope.RejectedCount++;
+                    }
+                }
             }
         }
-        else
+        finally
         {
-            var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
-            foreach (var kv in enumerator)
-            {
-                if (!hasFilters || EvaluateFiltersNonVersioned(nonPrimaryEvals, table, kv.Value, ref compAccessor))
-                {
-                    count++;
-                }
-            }
+            filterScope.Dispose();
+            iterScope.Dispose();
         }
 
         return count;
@@ -723,78 +845,101 @@ internal class PipelineExecutor
         var hasFilters = nonPrimaryEvals.Length > 0;
         var collected = 0;
 
-        if (index.AllowMultiple)
+        // Phase 7: Query:Execute:Iterate / Filter / Pagination spans — Transient/non-versioned Execute path.
+        var iterScope = Profiler.TyphonEvent.BeginQueryExecuteIterate();
+        var filterScope = Profiler.TyphonEvent.BeginQueryExecuteFilter((byte)Math.Min(nonPrimaryEvals.Length, byte.MaxValue));
+        var pageScope = Profiler.TyphonEvent.BeginQueryExecutePagination(skip, take);
+        try
         {
-            var enumerator = plan.Descending ? index.EnumerateRangeMultipleDescending(minKey, maxKey) : index.EnumerateRangeMultiple(minKey, maxKey);
-            try
+            if (index.AllowMultiple)
             {
-                while (enumerator.MoveNextKey())
+                var enumerator = plan.Descending ? index.EnumerateRangeMultipleDescending(minKey, maxKey) : index.EnumerateRangeMultiple(minKey, maxKey);
+                try
                 {
-                    do
+                    while (enumerator.MoveNextKey())
                     {
-                        var values = enumerator.CurrentValues;
-                        for (var j = 0; j < values.Length; j++)
+                        if (TelemetryConfig.QueryExecuteIterateActive) iterScope.ChunkCount++;
+                        do
                         {
-                            if (hasFilters && !EvaluateFiltersNonVersioned(nonPrimaryEvals, table, values[j], ref compAccessor))
+                            var values = enumerator.CurrentValues;
+                            for (var j = 0; j < values.Length; j++)
                             {
-                                continue;
-                            }
+                                if (TelemetryConfig.QueryExecuteIterateActive) iterScope.EntryCount++;
+                                if (hasFilters && !EvaluateFiltersNonVersioned(nonPrimaryEvals, table, values[j], ref compAccessor))
+                                {
+                                    if (TelemetryConfig.QueryExecuteFilterActive) filterScope.RejectedCount++;
+                                    continue;
+                                }
 
-                            long entityPK = *(long*)compAccessor.GetChunkAddress(values[j]);
-                            if (skip > 0)
-                            {
-                                skip--; continue;
-                            }
+                                long entityPK = *(long*)compAccessor.GetChunkAddress(values[j]);
+                                if (skip > 0)
+                                {
+                                    skip--; continue;
+                                }
 
-                            if (unorderedResult != null)
-                            {
-                                unorderedResult.TryAdd(entityPK);
-                            }
-                            else
-                            {
-                                orderedResult?.Add(entityPK);
-                            }
+                                if (unorderedResult != null)
+                                {
+                                    unorderedResult.TryAdd(entityPK);
+                                }
+                                else
+                                {
+                                    orderedResult?.Add(entityPK);
+                                }
 
-                            if (++collected >= take) { return; }
-                        }
-                    } while (enumerator.NextChunk());
+                                if (++collected >= take)
+                                {
+                                    if (TelemetryConfig.QueryExecutePaginationActive) pageScope.EarlyTerm = 1;
+                                    return;
+                                }
+                            }
+                        } while (enumerator.NextChunk());
+                    }
+                }
+                finally
+                {
+                    enumerator.Dispose();
                 }
             }
-            finally
+            else
             {
-                enumerator.Dispose();
+                var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
+                foreach (var kv in enumerator)
+                {
+                    if (TelemetryConfig.QueryExecuteIterateActive) { iterScope.ChunkCount++; iterScope.EntryCount++; }
+                    if (hasFilters && !EvaluateFiltersNonVersioned(nonPrimaryEvals, table, kv.Value, ref compAccessor))
+                    {
+                        if (TelemetryConfig.QueryExecuteFilterActive) filterScope.RejectedCount++;
+                        continue;
+                    }
+
+                    long entityPK = *(long*)compAccessor.GetChunkAddress(kv.Value);
+                    if (skip > 0)
+                    {
+                        skip--; continue;
+                    }
+
+                    if (unorderedResult != null)
+                    {
+                        unorderedResult.TryAdd(entityPK);
+                    }
+                    else
+                    {
+                        orderedResult?.Add(entityPK);
+                    }
+
+                    if (++collected >= take)
+                    {
+                        if (TelemetryConfig.QueryExecutePaginationActive) pageScope.EarlyTerm = 1;
+                        return;
+                    }
+                }
             }
         }
-        else
+        finally
         {
-            var enumerator = plan.Descending ? index.EnumerateRangeDescending(minKey, maxKey) : index.EnumerateRange(minKey, maxKey);
-            foreach (var kv in enumerator)
-            {
-                if (hasFilters && !EvaluateFiltersNonVersioned(nonPrimaryEvals, table, kv.Value, ref compAccessor))
-                {
-                    continue;
-                }
-
-                long entityPK = *(long*)compAccessor.GetChunkAddress(kv.Value);
-                if (skip > 0)
-                {
-                    skip--; continue;
-                }
-
-                if (unorderedResult != null)
-                {
-                    unorderedResult.TryAdd(entityPK);
-                }
-                else
-                {
-                    orderedResult?.Add(entityPK);
-                }
-
-                if (++collected >= take)
-                {
-                    return;
-                }
-            }
+            pageScope.Dispose();
+            filterScope.Dispose();
+            iterScope.Dispose();
         }
     }
 

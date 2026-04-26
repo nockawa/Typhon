@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine;
 
@@ -72,8 +73,10 @@ internal sealed unsafe class SpatialGrid
         byte newTier = (byte)tier;
         if (cell.Tier != newTier)
         {
+            byte oldTier = cell.Tier;
             cell.Tier = newTier;
             _tierVersion++;
+            TyphonEvent.EmitSpatialGridCellTierChange(cellKey, oldTier, newTier);
         }
     }
 

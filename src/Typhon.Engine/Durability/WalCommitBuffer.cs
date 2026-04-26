@@ -123,7 +123,7 @@ public sealed unsafe class WalCommitBuffer : IDisposable
 
         // Single allocation for both buffers via IMemoryAllocator for resource tracking.
         // zeroed: true ensures all frame headers start as unpublished (FrameLength = 0).
-        _memoryBlock = allocator.AllocatePinned("WalCommitBuffer", parent, bufferCapacity * 2, zeroed: true, alignment: CacheLineSize);
+        _memoryBlock = allocator.AllocatePinned("WalCommitBuffer", parent, bufferCapacity * 2, true, CacheLineSize);
         _buffer0 = _memoryBlock.DataAsPointer;
         _buffer1 = _memoryBlock.DataAsPointer + bufferCapacity;
     }
@@ -270,16 +270,28 @@ public sealed unsafe class WalCommitBuffer : IDisposable
 
             // CASE B & C: Wait for the buffer swap to complete.// Poll _activeBufferIndex — when it changes, a swap happened and the fresh buffer is ready.
             // AdaptiveWaiter provides spin → yield → sleep(1) progression.
-            var waiter = new AdaptiveWaiter();
-            while (_activeBufferIndex == bufferIndex)
+            // Phase 8: Backpressure span — captures how long this producer blocked waiting for the writer thread to swap buffers.
+            // Emitted on the calling (producer) thread, not the writer. Parents under whatever span the producer is in (e.g. TransactionPersist).
+            var bpStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            var bpScope = Profiler.TyphonEvent.BeginDurabilityWalBackpressure(0, Environment.CurrentManagedThreadId);
+            try
             {
-                if (!Unsafe.IsNullRef(ref ctx) && ctx.ShouldStop)
+                var waiter = new AdaptiveWaiter();
+                while (_activeBufferIndex == bufferIndex)
                 {
-                    ThrowHelper.ThrowWalBackPressureTimeout(frameSize, ctx.Deadline.Remaining);
-                }
+                    if (!Unsafe.IsNullRef(ref ctx) && ctx.ShouldStop)
+                    {
+                        ThrowHelper.ThrowWalBackPressureTimeout(frameSize, ctx.Deadline.Remaining);
+                    }
 
-                ThrowIfDisposed();
-                waiter.Wait();
+                    ThrowIfDisposed();
+                    waiter.Wait();
+                }
+                bpScope.WaitUs = (uint)Math.Min((System.Diagnostics.Stopwatch.GetTimestamp() - bpStart) * 1_000_000L / System.Diagnostics.Stopwatch.Frequency, uint.MaxValue);
+            }
+            finally
+            {
+                bpScope.Dispose();
             }
         }
     }

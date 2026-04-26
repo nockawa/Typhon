@@ -26,11 +26,11 @@ public ref struct PageCacheFetchEvent : ITraceEventEncoder
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFetch, TraceIdHi != 0 || TraceIdLo != 0, optMask: 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFetch, TraceIdHi != 0 || TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFetch, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, pageCount: 0, optMask: 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -52,11 +52,11 @@ public ref struct PageCacheDiskReadEvent : ITraceEventEncoder
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskRead, TraceIdHi != 0 || TraceIdLo != 0, optMask: 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskRead, TraceIdHi != 0 || TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheDiskRead, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, pageCount: 0, optMask: 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -105,11 +105,11 @@ public ref struct PageCacheAllocatePageEvent : ITraceEventEncoder
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheAllocatePage, TraceIdHi != 0 || TraceIdLo != 0, optMask: 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheAllocatePage, TraceIdHi != 0 || TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheAllocatePage, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, pageCount: 0, optMask: 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -127,11 +127,11 @@ public ref struct PageCacheFlushEvent : ITraceEventEncoder
     public int PageCount;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFlush, TraceIdHi != 0 || TraceIdLo != 0, optMask: 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFlush, TraceIdHi != 0 || TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFlush, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, filePageIndex: PageCount, pageCount: 0, optMask: 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, PageCount, 0, 0, out bytesWritten);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

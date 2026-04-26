@@ -93,7 +93,7 @@ public unsafe partial class EntityAccessor
     /// <summary>Open an entity for reading. Throws if not found or not visible.</summary>
     public EntityRef Open(EntityId id)
     {
-        var entity = ResolveEntity(id, writable: false);
+        var entity = ResolveEntity(id, false);
         if (!entity.IsValid)
         {
             throw new InvalidOperationException($"Entity {id} not found or not visible at TSN {TSN}");
@@ -105,7 +105,7 @@ public unsafe partial class EntityAccessor
     /// Override in Transaction to add EnsureMutable + state transition.</summary>
     public virtual EntityRef OpenMut(EntityId id)
     {
-        var entity = ResolveEntity(id, writable: true);
+        var entity = ResolveEntity(id, true);
         if (!entity.IsValid)
         {
             throw new InvalidOperationException($"Entity {id} not found or not visible at TSN {TSN}");
@@ -116,7 +116,7 @@ public unsafe partial class EntityAccessor
     /// <summary>Try to open an entity. Returns false if the entity doesn't exist or isn't visible.</summary>
     public bool TryOpen(EntityId id, out EntityRef entity)
     {
-        entity = ResolveEntity(id, writable: false);
+        entity = ResolveEntity(id, false);
         return entity.IsValid;
     }
 
@@ -276,7 +276,7 @@ public unsafe partial class EntityAccessor
                     var compTypeId = meta._componentTypeIds[slot];
                     var info = GetComponentInfoInternal(compTypeId, meta._slotToComponentType[slot]);
 
-                    var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, skipTimeout: true);
+                    var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, true);
                     if (chainResult.IsSuccess)
                     {
                         result.SetLocation(slot, chainResult.Value.CurCompContentChunkId);
@@ -311,7 +311,7 @@ public unsafe partial class EntityAccessor
                 var compTypeId = meta._componentTypeIds[slot];
                 var info = GetComponentInfoByTypeId(compTypeId, meta._slotToComponentType[slot]);
 
-                var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, skipTimeout: true);
+                var chainResult = RevisionChainReader.WalkChain(ref info.CompRevTableAccessor, compRevFirstChunkId, TSN, true);
                 if (chainResult.IsFailure)
                 {
                     continue;

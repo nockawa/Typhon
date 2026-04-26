@@ -196,8 +196,11 @@ public partial class ManagedPagedMMF : PagedMMF, IMetricSource, IDebugProperties
         pages[length - 1] = _occupancyNextReservedPageIndex;
 
         _occupancySegment.CreateOrGrow(PageBlockType.OccupancyMap, pages, length - 1, ref _occupancyNextReservedMapPageIndex, true, changeSet);
+        var oldCap = _occupancyMap.Capacity;
         _occupancyMap.Grow();
-        
+        // Phase 5: Storage:OccupancyMap:Grow event.
+        Profiler.TyphonEvent.EmitStorageOccupancyMapGrow(oldCap, _occupancyMap.Capacity);
+
         // If CreateOrGrow uses the reserved page for map extension, the value after the call is 0, so we need to allocate a new one
         if (_occupancyNextReservedMapPageIndex == 0)
         {

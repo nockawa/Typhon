@@ -80,7 +80,7 @@ public static class GaugeSnapshotEmitter
             return;
         }
 
-        Span<GaugeValue> values = stackalloc GaugeValue[32];
+        Span<GaugeValue> values = stackalloc GaugeValue[64];
         int n = 0;
 
         // ── Unmanaged memory ──
@@ -135,6 +135,10 @@ public static class GaugeSnapshotEmitter
             values[n++] = GaugeValue.FromU32(GaugeId.PageCacheExclusivePages, (uint)pc.ExclusivePages);
             values[n++] = GaugeValue.FromU32(GaugeId.PageCacheEpochProtectedPages, (uint)pc.EpochProtectedPages);
             values[n++] = GaugeValue.FromU32(GaugeId.PageCachePendingIoReads, (uint)pc.PendingIoReads);
+
+            // Phase 5 — primary database FileSize gauge. Replaces the per-CAS TrackFileGrowth event spam
+            // with a single end-of-tick reading; viewer plots a smooth growth curve.
+            values[n++] = GaugeValue.FromU64(GaugeId.PageCacheFileSizeBytes, (ulong)pagedMmf.FileSize);
         }
 
         // ── Transaction chain ──
@@ -195,7 +199,7 @@ public static class GaugeSnapshotEmitter
             values[n++] = GaugeValue.FromU64(GaugeId.TransientStoreBytesUsed, (ulong)transientBytesUsed);
         }
 
-        TyphonEvent.EmitPerTickSnapshot(tickNumber, Stopwatch.GetTimestamp(), flags: 0u, values[..n]);
+        TyphonEvent.EmitPerTickSnapshot(tickNumber, Stopwatch.GetTimestamp(), 0u, values[..n]);
 
         firstSnapshotEmitted = true;
     }

@@ -139,7 +139,7 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
         _allocator = allocator;
 
         _stagingBufferSize = options.StagingBufferSize;
-        _stagingBlock = allocator.AllocatePinned("WalWriter.Staging", this, _stagingBufferSize, zeroed: true, alignment: PageSize);
+        _stagingBlock = allocator.AllocatePinned("WalWriter.Staging", this, _stagingBufferSize, true, PageSize);
         _stagingBuffer = _stagingBlock.DataAsPointer;
     }
 
@@ -305,6 +305,8 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                         // Still no data — handle GroupCommit timer flush if needed
                         if (_flushRequested)
                         {
+                            // Phase 8: GroupCommit instant — captures the trigger interval + producer thread for latency analysis.
+                            TyphonEvent.EmitDurabilityWalGroupCommit((ushort)Math.Min(_options.GroupCommitIntervalMs, ushort.MaxValue), Environment.CurrentManagedThreadId);
                             _flushRequested = false;
                             PerformFlush();
                         }
@@ -327,6 +329,8 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
 
                 // WalFlush span: covers the write + signal cycle. The WAL writer thread claims its own ThreadSlotRegistry slot
                 // on first emit, so it appears as a dedicated lane in the viewer.
+                // Phase 8: kind 80 stays as the wrapper; QueueDrain/OsWrite/Signal sub-spans nest inside via the TLS open-span
+                // chain so the viewer renders them as children of the existing WalFlush span.
                 var flushScope = TyphonEvent.BeginWalFlush(data.Length, frameCount, batchHighLsn);
                 try
                 {
@@ -334,49 +338,86 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                     // 4. Copy to staging buffer with 4096-byte alignment
                     var bytesToWrite = AlignUp(data.Length, PageSize);
 
-                    if (bytesToWrite > _stagingBufferSize)
+                    // Phase 8: Buffer span — covers the staging-buffer copy + zero-pad + CRC patch.
+                    var bufferScope = TyphonEvent.BeginDurabilityWalBuffer(bytesToWrite, bytesToWrite - data.Length);
+                    try
                     {
-                        // Data exceeds staging buffer — write in chunks
-                        WriteInChunks(data);
-                    }
-                    else
-                    {
-                        // Copy data to staging buffer and zero-pad
-                        data.CopyTo(new Span<byte>(_stagingBuffer, _stagingBufferSize));
-
-                        // Zero-pad the remainder to the 4096 boundary
-                        var padStart = data.Length;
-                        var padLength = bytesToWrite - padStart;
-                        if (padLength > 0)
+                        if (bytesToWrite > _stagingBufferSize)
                         {
-                            new Span<byte>(_stagingBuffer + padStart, padLength).Clear();
+                            // Data exceeds staging buffer — write in chunks
+                            WriteInChunks(data);
                         }
+                        else
+                        {
+                            // Copy data to staging buffer and zero-pad
+                            data.CopyTo(new Span<byte>(_stagingBuffer, _stagingBufferSize));
 
-                        // Patch chunk CRCs before writing to disk
-                        PatchChunkCrcs(new Span<byte>(_stagingBuffer, _stagingBufferSize), data.Length);
+                            // Zero-pad the remainder to the 4096 boundary
+                            var padStart = data.Length;
+                            var padLength = bytesToWrite - padStart;
+                            if (padLength > 0)
+                            {
+                                new Span<byte>(_stagingBuffer + padStart, padLength).Clear();
+                            }
 
-                        // 5. Write aligned to active segment
-                        var segment = _segmentManager.ActiveSegment;
-                        var writeSpan = new ReadOnlySpan<byte>(_stagingBuffer, bytesToWrite);
-
-                        var flushStart = Stopwatch.GetTimestamp();
-                        _fileIO.WriteAligned(segment.Handle, segment.WriteOffset, writeSpan);
-                        RecordFlushLatency(flushStart);
-
-                        segment.WriteOffset += bytesToWrite;
-                        Interlocked.Add(ref _totalBytesWritten, bytesToWrite);
+                            // Patch chunk CRCs before writing to disk
+                            PatchChunkCrcs(new Span<byte>(_stagingBuffer, _stagingBufferSize), data.Length);
+                        }
+                    }
+                    finally
+                    {
+                        bufferScope.Dispose();
                     }
 
-                    // 6. Complete drain to advance buffer position
-                    _commitBuffer.CompleteDrain(data.Length);
+                    // Phase 8: OsWrite span — covers the actual disk write (WriteAligned + fsync via direct I/O).
+                    if (bytesToWrite <= _stagingBufferSize)
+                    {
+                        var osWriteScope = TyphonEvent.BeginDurabilityWalOsWrite(bytesToWrite, frameCount, batchHighLsn);
+                        try
+                        {
+                            // 5. Write aligned to active segment
+                            var segment = _segmentManager.ActiveSegment;
+                            var writeSpan = new ReadOnlySpan<byte>(_stagingBuffer, bytesToWrite);
 
-                    // 7. Advance durable LSN and signal waiters
+                            var flushStart = Stopwatch.GetTimestamp();
+                            _fileIO.WriteAligned(segment.Handle, segment.WriteOffset, writeSpan);
+                            RecordFlushLatency(flushStart);
+
+                            segment.WriteOffset += bytesToWrite;
+                            Interlocked.Add(ref _totalBytesWritten, bytesToWrite);
+                        }
+                        finally
+                        {
+                            osWriteScope.Dispose();
+                        }
+                    }
+
+                    // 6. Complete drain to advance buffer position. Phase 8: QueueDrain span — covers the drain advance.
+                    var queueDrainScope = TyphonEvent.BeginDurabilityWalQueueDrain(data.Length, frameCount);
+                    try
+                    {
+                        _commitBuffer.CompleteDrain(data.Length);
+                    }
+                    finally
+                    {
+                        queueDrainScope.Dispose();
+                    }
+
+                    // 7. Advance durable LSN and signal waiters. Phase 8: Signal span — LSN advance + waiter wake-up.
                     if (batchHighLsn > 0)
                     {
-                        Logger?.LogDebug("WAL writer: advancing durable LSN to {DurableLsn}, wrote {BytesWritten} bytes ({FrameCount} frames)",
-                            batchHighLsn, bytesToWrite, frameCount);
-                        Interlocked.Exchange(ref _durableLsn, batchHighLsn);
-                        _durabilityEvent.Set();
+                        var signalScope = TyphonEvent.BeginDurabilityWalSignal(batchHighLsn);
+                        try
+                        {
+                            Logger?.LogDebug("WAL writer: advancing durable LSN to {DurableLsn}, wrote {BytesWritten} bytes ({FrameCount} frames)",
+                                batchHighLsn, bytesToWrite, frameCount);
+                            Interlocked.Exchange(ref _durableLsn, batchHighLsn);
+                            _durabilityEvent.Set();
+                        }
+                        finally
+                        {
+                            signalScope.Dispose();
+                        }
                     }
 
                     Interlocked.Increment(ref _totalFlushes);
@@ -389,7 +430,7 @@ public sealed unsafe class WalWriter : ResourceNode, IMetricSource
                         using var rotateScope = TyphonEvent.BeginWalSegmentRotate((int)(_segmentManager.ActiveSegment?.SegmentId ?? -1));
                         try
                         {
-                            _segmentManager.RotateSegment(firstLSN: batchHighLsn + 1, prevLastLSN: batchHighLsn);
+                            _segmentManager.RotateSegment(batchHighLsn + 1, batchHighLsn);
                             _lastFooterCrc = 0; // Reset CRC chain for new segment
                             Logger?.LogInformation("WAL segment rotation complete, new segment {SegmentId}",
                                 _segmentManager.ActiveSegment?.SegmentId ?? -1);

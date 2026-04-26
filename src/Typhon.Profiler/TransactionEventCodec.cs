@@ -5,6 +5,24 @@ using System.Runtime.CompilerServices;
 namespace Typhon.Profiler;
 
 /// <summary>
+/// Reasons for a <see cref="TraceEventKind.TransactionRollback"/>. Wire-stable; append-only (new entries get higher byte values).
+/// </summary>
+public enum TransactionRollbackReason : byte
+{
+    /// <summary>Caller invoked <c>Transaction.Rollback()</c> directly.</summary>
+    Explicit = 0,
+
+    /// <summary>Implicit rollback from <c>Dispose()</c> when the transaction was never committed.</summary>
+    AutoOnDispose = 1,
+
+    /// <summary>Rollback triggered by a concurrency-conflict resolver outcome.</summary>
+    Conflict = 2,
+
+    /// <summary>Rollback triggered by a transaction-level deadline / timeout.</summary>
+    TimedOut = 3,
+}
+
+/// <summary>
 /// Decoded form of a transaction span event (Commit, Rollback, CommitComponent, or Persist). Which optional fields are valid depends on the
 /// kind — see the per-event ref structs for the contract.
 /// </summary>
@@ -36,16 +54,25 @@ public readonly struct TransactionEventData
     /// <summary>Optional — WAL LSN assigned by serialization (Persist only). Valid iff <see cref="HasWalLsn"/>.</summary>
     public long WalLsn { get; }
 
+    /// <summary>Phase 6: rollback reason (Rollback only). Valid iff <see cref="HasReason"/>.</summary>
+    public TransactionRollbackReason Reason { get; }
+
+    /// <summary>Phase 6: row count for CommitComponent (kind 22). Valid iff <see cref="HasRowCount"/>.</summary>
+    public int RowCount { get; }
+
     public bool HasComponentCount => (OptionalFieldMask & TransactionEventCodec.OptComponentCount) != 0;
     public bool HasConflictDetected => (OptionalFieldMask & TransactionEventCodec.OptConflictDetected) != 0;
     public bool HasWalLsn => Kind == TraceEventKind.TransactionPersist && (OptionalFieldMask & TransactionEventCodec.OptWalLsn) != 0;
+    public bool HasReason => (OptionalFieldMask & TransactionEventCodec.OptReason) != 0;
+    public bool HasRowCount => (OptionalFieldMask & TransactionEventCodec.OptRowCount) != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
     public TransactionEventData(
         TraceEventKind kind, byte threadSlot, long startTimestamp, long durationTicks,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         long tsn, int componentTypeId, byte optionalFieldMask,
-        int componentCount, bool conflictDetected, long walLsn = 0)
+        int componentCount, bool conflictDetected, long walLsn = 0,
+        TransactionRollbackReason reason = TransactionRollbackReason.Explicit, int rowCount = 0)
     {
         Kind = kind;
         ThreadSlot = threadSlot;
@@ -61,6 +88,8 @@ public readonly struct TransactionEventData
         ComponentCount = componentCount;
         ConflictDetected = conflictDetected;
         WalLsn = walLsn;
+        Reason = reason;
+        RowCount = rowCount;
     }
 }
 
@@ -95,6 +124,12 @@ public static class TransactionEventCodec
     /// <summary>Optional-mask bit 1 — <c>ConflictDetected</c> (Commit only).</summary>
     public const byte OptConflictDetected = 0x02;
 
+    /// <summary>Phase 6 — Optional-mask bit 2 — <c>Reason</c> u8 (Rollback only). Wire-additive on kind 21.</summary>
+    public const byte OptReason = 0x04;
+
+    /// <summary>Phase 6 — Optional-mask bit 3 — <c>RowCount</c> i32 (CommitComponent only). Wire-additive on kind 22.</summary>
+    public const byte OptRowCount = 0x08;
+
     /// <summary>Optional-mask bit 0 — <c>WalLsn</c> (Persist only).</summary>
     public const byte OptWalLsn = 0x01;
 
@@ -104,6 +139,8 @@ public static class TransactionEventCodec
     private const int OptMaskSize = 1;
     private const int ComponentCountSize = 4;
     private const int ConflictDetectedSize = 1;
+    private const int ReasonSize = 1;
+    private const int RowCountSize = 4;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int ComputeSize(TraceEventKind kind, bool hasTraceContext, byte optMask)
@@ -120,6 +157,14 @@ public static class TransactionEventCodec
         if ((optMask & OptConflictDetected) != 0)
         {
             size += ConflictDetectedSize;
+        }
+        if ((optMask & OptReason) != 0)
+        {
+            size += ReasonSize;
+        }
+        if ((optMask & OptRowCount) != 0)
+        {
+            size += RowCountSize;
         }
         return size;
     }
@@ -139,7 +184,9 @@ public static class TransactionEventCodec
         byte optMask,
         int componentCount,
         bool conflictDetected,
-        out int bytesWritten)
+        out int bytesWritten,
+        TransactionRollbackReason reason = TransactionRollbackReason.Explicit,
+        int rowCount = 0)
     {
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSize(kind, hasTraceContext, optMask);
@@ -178,6 +225,16 @@ public static class TransactionEventCodec
             payload[cursor] = conflictDetected ? (byte)1 : (byte)0;
             cursor += ConflictDetectedSize;
         }
+        if ((optMask & OptReason) != 0)
+        {
+            payload[cursor] = (byte)reason;
+            cursor += ReasonSize;
+        }
+        if ((optMask & OptRowCount) != 0)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(payload[cursor..], rowCount);
+            cursor += RowCountSize;
+        }
 
         bytesWritten = size;
     }
@@ -211,6 +268,8 @@ public static class TransactionEventCodec
 
         int componentCount = 0;
         bool conflictDetected = false;
+        TransactionRollbackReason reason = TransactionRollbackReason.Explicit;
+        int rowCount = 0;
         if ((optMask & OptComponentCount) != 0)
         {
             componentCount = BinaryPrimitives.ReadInt32LittleEndian(payload[cursor..]);
@@ -221,9 +280,19 @@ public static class TransactionEventCodec
             conflictDetected = payload[cursor] != 0;
             cursor += ConflictDetectedSize;
         }
+        if ((optMask & OptReason) != 0)
+        {
+            reason = (TransactionRollbackReason)payload[cursor];
+            cursor += ReasonSize;
+        }
+        if ((optMask & OptRowCount) != 0)
+        {
+            rowCount = BinaryPrimitives.ReadInt32LittleEndian(payload[cursor..]);
+            cursor += RowCountSize;
+        }
 
         return new TransactionEventData(kind, threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            tsn, componentTypeId, optMask, componentCount, conflictDetected);
+            tsn, componentTypeId, optMask, componentCount, conflictDetected, reason: reason, rowCount: rowCount);
     }
 
     // ── Persist-specific codec (kind 23) ──

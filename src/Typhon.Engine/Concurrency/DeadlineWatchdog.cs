@@ -81,7 +81,7 @@ public class DeadlineWatchdog : ResourceNode
         // Short-circuit: already expired — return pre-cancelled token
         if (deadline.IsExpired)
         {
-            return new CancellationToken(canceled: true);
+            return new CancellationToken(true);
         }
 
         var cts = new CancellationTokenSource();

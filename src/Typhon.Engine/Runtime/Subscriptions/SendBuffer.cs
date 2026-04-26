@@ -34,7 +34,7 @@ internal sealed class SendBuffer : IDisposable
 
         _capacity = capacity;
         // Pinned Object Heap — immovable by GC, safe for Socket.Send without additional pinning
-        _buffer = GC.AllocateArray<byte>(capacity, pinned: true);
+        _buffer = GC.AllocateArray<byte>(capacity, true);
     }
 
     /// <summary>Total buffer capacity in bytes.</summary>
