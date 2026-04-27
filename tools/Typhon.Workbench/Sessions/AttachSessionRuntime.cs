@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Sockets;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -94,6 +95,16 @@ public sealed partial class AttachSessionRuntime : IDisposable
     /// <summary>Fires when the connection state changes. SSE handlers emit heartbeat frames when this fires.</summary>
     public event Action<string> ConnectionStateChanged;
 
+    /// <summary>
+    /// Latest tick-0 (pre-tick) batch — typically carries `ThreadInfo` catch-up records replayed by `TcpExporter`
+    /// to late-connecting clients, plus any `MemoryAllocEvent`/`GcStart`/`GcEnd` instants emitted before the first
+    /// `TickStart`. Cached here because the TCP read loop processes the catch-up block as soon as bytes arrive,
+    /// which is BEFORE any SSE subscriber registers `TickReceived` — so without caching the pre-tick batch the
+    /// client never sees it. SSE handlers replay it on connect via <see cref="MetadataTickBatch"/>, the same way
+    /// they replay <see cref="Metadata"/>.
+    /// </summary>
+    public LiveTickBatch MetadataTickBatch { get; private set; }
+
     private AttachSessionRuntime(string endpointAddress, string host, int port, ILogger logger)
     {
         _endpointAddress = endpointAddress;
@@ -111,6 +122,7 @@ public sealed partial class AttachSessionRuntime : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpointAddress);
         var (host, port) = ParseEndpoint(endpointAddress);
+        var ipv4 = await ResolveIPv4Async(host, ct);
 
         TcpClient tcp = null;
         Exception lastError = null;
@@ -120,7 +132,7 @@ public sealed partial class AttachSessionRuntime : IDisposable
             tcp = new TcpClient();
             try
             {
-                await tcp.ConnectAsync(host, port, ct);
+                await tcp.ConnectAsync(ipv4, port, ct);
                 tcp.NoDelay = true;
                 break;
             }
@@ -177,6 +189,25 @@ public sealed partial class AttachSessionRuntime : IDisposable
         return (id, channel.Reader);
     }
 
+    /// <summary>
+    /// User-initiated disconnect from the engine. Cancels the read loop and any in-flight reconnect attempts so the
+    /// runtime settles on <c>"disconnected"</c> status. Does NOT dispose the runtime — Metadata, MetadataTickBatch,
+    /// and the SSE subscriber channels are kept alive so the user can keep inspecting the captured tick buffer
+    /// (live data just stops flowing). Idempotent; subsequent calls no-op.
+    /// </summary>
+    public void RequestDisconnect()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        try { _cts.Cancel(); }
+        catch (ObjectDisposedException)
+        {
+            // already torn down; nothing to do
+        }
+    }
+
     /// <summary>Removes a subscriber channel and completes it. No-op if the subscriber is already gone.</summary>
     public void Unsubscribe(Guid id)
     {
@@ -191,6 +222,7 @@ public sealed partial class AttachSessionRuntime : IDisposable
     {
         var ct = _cts.Token;
         var socket = initialSocket;
+        var streamEnd = StreamEndReason.ConnectionLost;
 
         while (!ct.IsCancellationRequested)
         {
@@ -198,16 +230,17 @@ public sealed partial class AttachSessionRuntime : IDisposable
             {
                 using (socket)
                 {
-                    await ProcessStreamAsync(socket.GetStream(), ct);
+                    streamEnd = await ProcessStreamAsync(socket.GetStream(), ct);
                 }
-                // Graceful stream end (Shutdown frame, clean close).
             }
             catch (SocketException) when (!ct.IsCancellationRequested)
             {
+                streamEnd = StreamEndReason.ConnectionLost;
                 // Engine dropped — reconnect.
             }
             catch (IOException) when (!ct.IsCancellationRequested)
             {
+                streamEnd = StreamEndReason.ConnectionLost;
                 LogConnectionLost();
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -216,11 +249,21 @@ public sealed partial class AttachSessionRuntime : IDisposable
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
+                streamEnd = StreamEndReason.ConnectionLost;
                 LogUnexpectedError(ex);
             }
 
             socket = null;
             if (ct.IsCancellationRequested) break;
+
+            // The engine sent a Shutdown frame — terminal. Stay disconnected; do NOT enter the reconnect loop,
+            // because the engine has explicitly told us the session is over (graceful exit). Reconnecting after
+            // a Shutdown frame would just spin until either the engine restarts (a new session) or the user
+            // closes the Workbench tab.
+            if (streamEnd == StreamEndReason.Shutdown)
+            {
+                break;
+            }
 
             SetConnectionStatus("reconnecting");
             _decoder = null;
@@ -231,8 +274,9 @@ public sealed partial class AttachSessionRuntime : IDisposable
                 try
                 {
                     await Task.Delay(ReconnectDelayMs, ct);
+                    var ipv4 = await ResolveIPv4Async(_host, ct);
                     var next = new TcpClient();
-                    await next.ConnectAsync(_host, _port, ct);
+                    await next.ConnectAsync(ipv4, _port, ct);
                     next.NoDelay = true;
                     socket = next;
                     SetConnectionStatus("connected");
@@ -248,7 +292,15 @@ public sealed partial class AttachSessionRuntime : IDisposable
         SetConnectionStatus("disconnected");
     }
 
-    private async Task ProcessStreamAsync(NetworkStream stream, CancellationToken ct)
+    /// <summary>How <see cref="ProcessStreamAsync"/> exited — distinguishes "engine sent Shutdown" (terminal,
+    /// no reconnect) from "stream ended for any other reason" (reconnect).</summary>
+    private enum StreamEndReason
+    {
+        ConnectionLost,
+        Shutdown,
+    }
+
+    private async Task<StreamEndReason> ProcessStreamAsync(NetworkStream stream, CancellationToken ct)
     {
         var headerBuf = new byte[LiveStreamProtocol.FrameHeaderSize];
 
@@ -260,7 +312,7 @@ public sealed partial class AttachSessionRuntime : IDisposable
             if (length < 0 || length > MaxFrameBytes)
             {
                 LogMalformedFrame(type.ToString(), $"invalid length {length}");
-                return;
+                return StreamEndReason.ConnectionLost;
             }
 
             // Pool buffers to keep LOH pressure down: blocks routinely exceed 85 KB at high-fanout workloads.
@@ -284,7 +336,7 @@ public sealed partial class AttachSessionRuntime : IDisposable
 
                     case LiveFrameType.Shutdown:
                         LogShutdownReceived();
-                        return;
+                        return StreamEndReason.Shutdown;
 
                     default:
                         LogUnknownFrame((byte)type);
@@ -303,6 +355,8 @@ public sealed partial class AttachSessionRuntime : IDisposable
                 }
             }
         }
+
+        return StreamEndReason.ConnectionLost;
     }
 
     private void HandleInit(byte[] payload, int length)
@@ -466,6 +520,16 @@ public sealed partial class AttachSessionRuntime : IDisposable
             Events = events,
         };
 
+        // Cache the FIRST tick-0 batch we ever see — that's the catch-up ThreadInfo block synthesized by the
+        // engine's TcpExporter on accept. Subsequent tick-0 batches (the regular stream's pre-first-TickStart
+        // events: kind 152 WorkerBetweenTick etc.) must NOT overwrite it; they're not metadata, they'll reach
+        // any live subscriber via the regular event-firing path. Late-connecting SSE clients only need the
+        // catch-up replayed (see ProfilerLiveStream.HandleAsync).
+        if (tickNumber == 0 && MetadataTickBatch == null)
+        {
+            MetadataTickBatch = batch;
+        }
+
         Interlocked.Increment(ref _tickCount);
         TickReceived?.Invoke(batch);
         BroadcastBatch(batch);
@@ -484,6 +548,45 @@ public sealed partial class AttachSessionRuntime : IDisposable
         if (_connectionStatus == status) return;
         _connectionStatus = status;
         ConnectionStateChanged?.Invoke(status);
+    }
+
+    /// <summary>
+    /// Resolve <paramref name="host"/> to its first IPv4 address. The engine's <c>TcpExporter</c> binds
+    /// <see cref="IPAddress.Any"/> (IPv4-only); going through <c>TcpClient.ConnectAsync(string, int)</c>
+    /// resolves to <c>[::1, 127.0.0.1]</c> on Windows for "localhost", attempts <c>::1</c> first, and burns
+    /// ~2 s on Happy-Eyeballs fallback before reaching the IPv4 listener. Pinning to
+    /// <see cref="AddressFamily.InterNetwork"/> here skips that round-trip entirely.
+    /// </summary>
+    private static async Task<IPAddress> ResolveIPv4Async(string host, CancellationToken ct)
+    {
+        if (IPAddress.TryParse(host, out var literal) && literal.AddressFamily == AddressFamily.InterNetwork)
+        {
+            return literal;
+        }
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(host, AddressFamily.InterNetwork, ct);
+        }
+        catch (SocketException ex)
+        {
+            throw new WorkbenchException(
+                StatusCodes.Status503ServiceUnavailable,
+                "attach_dns_failed",
+                $"Failed to resolve '{host}' to an IPv4 address: {ex.Message}",
+                ex);
+        }
+
+        if (addresses.Length == 0)
+        {
+            throw new WorkbenchException(
+                StatusCodes.Status503ServiceUnavailable,
+                "attach_dns_failed",
+                $"Host '{host}' resolved to zero IPv4 addresses. The Workbench connects to the engine over IPv4 only.");
+        }
+
+        return addresses[0];
     }
 
     private static (string Host, int Port) ParseEndpoint(string endpoint)

@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.RuntimeTransactionLifecycle"/>.</summary>
 public ref struct RuntimeTransactionLifecycleEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeTransactionLifecycle;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -30,6 +32,8 @@ public ref struct RuntimeTransactionLifecycleEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.RuntimeSubscriptionOutputExecute"/>.</summary>
 public ref struct RuntimeSubscriptionOutputExecuteEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeSubscriptionOutputExecute;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

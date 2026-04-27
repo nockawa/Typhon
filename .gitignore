@@ -35,6 +35,7 @@ bld/
 # Playwright (hyphenated convention — not matched by TestResult*/)
 test-results/
 playwright-report/
+.playwright-mcp/
 
 # NUNIT
 *.VisualState.xml

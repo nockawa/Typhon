@@ -10,6 +10,8 @@ namespace Typhon.Engine.Profiler;
 /// </summary>
 public ref struct StatisticsRebuildEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.StatisticsRebuild;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

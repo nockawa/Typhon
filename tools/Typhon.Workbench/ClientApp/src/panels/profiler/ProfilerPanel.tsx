@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from 'react';
-import { Activity, AlertCircle, Loader2, Radio } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, AlertCircle, Loader2, Radio, Unplug } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useSessionStore } from '@/stores/useSessionStore';
 import { useNavHistoryStore } from '@/stores/useNavHistoryStore';
@@ -23,6 +23,7 @@ import TimeArea from './sections/TimeArea';
  */
 export default function ProfilerPanel() {
   const sessionId = useSessionStore((s) => s.sessionId);
+  const token = useSessionStore((s) => s.token);
   const filePath = useSessionStore((s) => s.filePath);
   const kind = useSessionStore((s) => s.kind);
 
@@ -30,10 +31,28 @@ export default function ProfilerPanel() {
   const buildProgress = useProfilerSessionStore((s) => s.buildProgress);
   const buildError = useProfilerSessionStore((s) => s.buildError);
   const connectionStatus = useProfilerSessionStore((s) => s.connectionStatus);
-  const liveTickCount = useProfilerSessionStore((s) => s.liveTickCount);
+  const latestTickNumber = useProfilerSessionStore((s) => s.latestTickNumber);
   const liveFollowActive = useProfilerSessionStore((s) => s.liveFollowActive);
   const setLiveFollowActive = useProfilerSessionStore((s) => s.setLiveFollowActive);
   const setIsLive = useProfilerSessionStore((s) => s.setIsLive);
+
+  // Disconnect drops the engine TCP link but keeps the session+buffer alive for inspection. The button is
+  // hidden once the runtime is already disconnected (engine quit, user already disconnected, etc.).
+  const [disconnecting, setDisconnecting] = useState(false);
+  const handleDisconnect = useCallback(async () => {
+    if (!sessionId || disconnecting) return;
+    setDisconnecting(true);
+    try {
+      const headers = new Headers();
+      if (token) headers.set('X-Session-Token', token);
+      await fetch(`/api/sessions/${sessionId}/profiler/disconnect`, { method: 'POST', headers });
+    } catch {
+      // Server returns 204 even if the runtime is already disconnected; transient network errors are not
+      // fatal here — the connection-status SSE heartbeat is the source of truth either way.
+    } finally {
+      setDisconnecting(false);
+    }
+  }, [sessionId, token, disconnecting]);
 
   const isAttach = kind === 'attach';
   const isTrace = kind === 'trace';
@@ -45,15 +64,36 @@ export default function ProfilerPanel() {
   // on a degenerate range). TimeArea internally treats `{0, 0}` as "show the full trace" — it
   // falls back to `metadata.globalMetrics` for its initial viewport so the user still sees
   // everything, but the store stays at the sentinel until a real pan/zoom/drag-zoom interaction.
+  //
+  // Live (Attach) mode skips this reset: the auto-follow effect below sets viewRange continuously
+  // from the latest tick's end-µs, so leaving the sentinel here would briefly blank the timeline
+  // every time metadata arrives (e.g. on Init reconnect).
   useEffect(() => {
+    if (isAttach) return;
     if (!metadata?.globalMetrics) return;
     setViewRange({ startUs: 0, endUs: 0 });
-  }, [metadata, setViewRange]);
+  }, [metadata, setViewRange, isAttach]);
 
-  // Chunk cache — creates on metadata arrival, fetches ticks overlapping the current viewRange,
-  // returns `TickData[]` assembled from whatever chunks are resident. Live mode stays empty for
-  // now (live→TickData conversion is a separate concern).
+  // Chunk cache (trace) + live tick assembly (attach). Single hook handles both modes — the live
+  // branch reads `recentTicks` from the session store, builds per-tick `TickData` incrementally,
+  // and returns the same shape TimeArea/TickOverview already consume.
   const { ticks: timeAreaTicks, gaugeData, pendingRangesUs } = useProfilerCache(sessionId, isAttach);
+
+  // Auto-follow viewport: in live mode with Following enabled, keep the viewRange anchored to the
+  // last `liveFollowWindowUs` µs of the newest tick. Pausing Follow freezes the viewport at
+  // wherever it is, so the user can inspect older ticks without the viewport snapping forward.
+  // The pan/zoom interactions in TimeArea remain free in either state — Follow only re-asserts
+  // the auto-window on each new tick, not on every render. The window width is a persisted UX
+  // preference on `useProfilerViewStore`.
+  const liveFollowWindowUs = useProfilerViewStore((s) => s.liveFollowWindowUs);
+  useEffect(() => {
+    if (!isAttach || !liveFollowActive) return;
+    if (timeAreaTicks.length === 0) return;
+    const latest = timeAreaTicks[timeAreaTicks.length - 1];
+    const endUs = latest.endUs;
+    const startUs = Math.max(0, endUs - liveFollowWindowUs);
+    setViewRange({ startUs, endUs });
+  }, [isAttach, liveFollowActive, timeAreaTicks, setViewRange, liveFollowWindowUs]);
 
   // Metadata polling runs in both Trace and Attach modes — server branches on session kind.
   // Gate on kind so the query doesn't fire for Open (DB) sessions, which would 409.
@@ -106,21 +146,40 @@ export default function ProfilerPanel() {
         {isAttach && (
           <>
             <StatusPill status={connectionStatus} />
+            {connectionStatus !== 'disconnected' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDisconnect}
+                disabled={disconnecting}
+                className="h-6 px-2 text-[11px]"
+                aria-label="Disconnect from the engine"
+                title="Drop the TCP link to the engine. Captured ticks remain visible for inspection; close the tab to discard them."
+              >
+                <Unplug className="mr-1 h-3 w-3" aria-hidden="true" />
+                Disconnect
+              </Button>
+            )}
             <span className="text-muted-foreground">·</span>
             <span className="font-mono tabular-nums text-foreground">
-              {liveTickCount.toLocaleString()} ticks received
+              Tick {latestTickNumber.toLocaleString()}
             </span>
             <div className="ml-auto">
               <Button
                 variant={liveFollowActive ? 'default' : 'outline'}
                 size="sm"
                 onClick={() => setLiveFollowActive(!liveFollowActive)}
+                disabled={connectionStatus === 'disconnected'}
                 className="h-6 text-[11px]"
-                aria-label={liveFollowActive ? 'Pause live follow' : 'Resume live follow'}
+                aria-label={liveFollowActive ? 'Disable auto-scroll' : 'Enable auto-scroll'}
                 aria-pressed={liveFollowActive}
-                title="Phase 2 will hook this up to the live timeline's auto-scroll. No visible effect in Phase 1b."
+                title={
+                  connectionStatus === 'disconnected'
+                    ? 'Engine has shut down — no further ticks will arrive.'
+                    : 'When on, the time-area viewport tracks the latest tick. Any pan/zoom interaction turns it off.'
+                }
               >
-                {liveFollowActive ? 'Following' : 'Paused'}
+                auto-scroll
               </Button>
             </div>
           </>
@@ -157,9 +216,9 @@ export default function ProfilerPanel() {
           <LiveWaitingOverlay status={connectionStatus} />
         ) : (
           <div className="flex h-full w-full flex-col overflow-hidden">
-            <TickOverview isLive={isAttach} />
+            <TickOverview isLive={isAttach} liveTicks={isAttach ? timeAreaTicks : undefined} />
             <div className="flex-1 min-h-0">
-              <TimeArea ticks={timeAreaTicks} gaugeData={gaugeData} pendingRangesUs={pendingRangesUs} isLive={isAttach} />
+              <TimeArea ticks={timeAreaTicks} gaugeData={gaugeData} threadNames={gaugeData.threadNames} pendingRangesUs={pendingRangesUs} isLive={isAttach} />
             </div>
           </div>
         )}
@@ -183,7 +242,7 @@ function StatusPill({ status }: { status: ConnectionStatus | null }) {
         ? 'Reconnecting…'
         : effective === 'connecting'
           ? 'Connecting…'
-          : 'Disconnected';
+          : 'Engine offline';
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-foreground">
       <span className={`h-2 w-2 rounded-full ${dotClass}`} />

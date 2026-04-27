@@ -26,6 +26,11 @@ export interface TickOverviewInputs {
   viewRange: TimeRange;
   /** Slice of ticks currently visible in the overview (pan state, separate from viewRange). */
   scrollWindow: { startIdx: number; endIdx: number };
+  /**
+   * Set true while the user is hovering the scrollbar track or actively dragging the thumb. Lets the renderer
+   * brighten the thumb during interaction. Optional — falsy by default.
+   */
+  scrollbarHovered?: boolean;
   /** Ticks that overlap viewRange. `-1`/`-1` if no overlap. */
   selection: { first: number; last: number };
   /** In-flight drag preview, or null if no drag. */
@@ -41,6 +46,10 @@ export interface TickOverviewInputs {
 }
 
 export const TIMELINE_HEIGHT = 80;
+/** y-offset of the top of the bar area inside the canvas. */
+export const BAR_AREA_TOP = 2;
+/** Pixel offset between the bottom of the bar area and the bottom of the canvas — reserved for tick-number labels and the (optional) scrollbar. */
+export const BAR_AREA_BOTTOM_RESERVED = 26;
 export const MAX_BAR_WIDTH = 10;
 /** Per-bar floor so individual ticks stay legible. Caps visible window at `floor(width/MIN_BAR_WIDTH)` ticks. */
 export const MIN_BAR_WIDTH = 4;
@@ -55,6 +64,13 @@ export const HELP_GLYPH_MARGIN_RIGHT = 8;
 export const HELP_GLYPH_Y_BASELINE = 14;
 export const HELP_ICON_HIT_PAD = 4;
 export const HELP_ICON_GLYPH_WIDTH = 10;
+
+/** Scrollbar track height (px). Drawn between the bar area and the tick-number labels. */
+export const SCROLLBAR_HEIGHT = 5;
+/** Vertical gap (px) between the bar area's bottom and the scrollbar track. */
+export const SCROLLBAR_TOP_PAD = 1;
+/** Minimum thumb width (px) for usability — short thumbs become un-grabbable on long traces. */
+export const SCROLLBAR_MIN_THUMB_PX = 16;
 
 const OVERLAY_COLOR = OVERVIEW_PALETTE.selection + '40';
 const OVERLAY_BORDER = OVERVIEW_PALETTE.selection + 'B3';
@@ -89,8 +105,8 @@ export function drawTickOverview(
   ctx.lineTo(width, height - 0.5);
   ctx.stroke();
 
-  const barAreaHeight = height - 18;
-  const barAreaTop = 2;
+  const barAreaHeight = height - BAR_AREA_BOTTOM_RESERVED;
+  const barAreaTop = BAR_AREA_TOP;
 
   // P95 reference dashed line — drawn before bars so bars visually sit "under the ceiling". The P95 LABEL
   // is drawn much later (after bars + overlay) so its backdrop stays on top and actually reads.
@@ -245,6 +261,77 @@ export function drawTickOverview(
     ctx.lineWidth = 1.5;
     ctx.strokeRect(x, barAreaTop, barWidth, barAreaHeight);
   }
+
+  // Horizontal scrollbar — drawn only when the visible window doesn't cover all ticks. Sits between the bar
+  // area and the tick-number labels. Track = muted background; thumb = primary accent (brightened on hover).
+  // Geometry mirrors `computeScrollbarGeometry` so hit-tests in the React wrapper line up exactly.
+  const sbg = computeScrollbarGeometry(width, ticks.length, sr, barAreaTop, barAreaHeight);
+  if (sbg) {
+    ctx.fillStyle = theme.muted;
+    ctx.fillRect(sbg.trackX, sbg.trackY, sbg.trackW, sbg.trackH);
+    ctx.fillStyle = inputs.scrollbarHovered ? theme.primary : theme.mutedForeground;
+    ctx.fillRect(sbg.thumbX, sbg.trackY, sbg.thumbW, sbg.trackH);
+  }
+}
+
+/**
+ * Compute scrollbar track + thumb pixel rects for the current state. Returns <c>null</c> when the visible window
+ * already covers every tick (no need for a scrollbar). Shared by <see cref="drawTickOverview"/> and the React
+ * wrapper's hit-test logic so click coordinates resolve to the same target the renderer drew.
+ */
+export function computeScrollbarGeometry(
+  canvasWidth: number,
+  totalTicks: number,
+  scrollWindow: { startIdx: number; endIdx: number },
+  barAreaTop: number,
+  barAreaHeight: number,
+): { trackX: number; trackY: number; trackW: number; trackH: number; thumbX: number; thumbW: number } | null {
+  const visibleCount = scrollWindow.endIdx - scrollWindow.startIdx;
+  if (totalTicks <= 0 || visibleCount <= 0 || visibleCount >= totalTicks) {
+    return null;
+  }
+  const trackX = 0;
+  const trackY = barAreaTop + barAreaHeight + SCROLLBAR_TOP_PAD;
+  const trackW = canvasWidth;
+  const trackH = SCROLLBAR_HEIGHT;
+  // Thumb width is proportional to the fraction of total ticks we can see, with a usability floor.
+  const proportional = (visibleCount / totalTicks) * trackW;
+  const thumbW = Math.max(SCROLLBAR_MIN_THUMB_PX, proportional);
+  // Thumb left = startIdx normalized to [0, 1] mapped to [0, trackW - thumbW] so the thumb's right edge stops
+  // exactly at the track's right edge when scrollWindow is fully right-justified.
+  const maxStartIdx = totalTicks - visibleCount;
+  const startFrac = maxStartIdx > 0 ? scrollWindow.startIdx / maxStartIdx : 0;
+  const thumbX = startFrac * (trackW - thumbW);
+  return { trackX, trackY, trackW, trackH, thumbX, thumbW };
+}
+
+/**
+ * Hit-test for the scrollbar. Returns a <c>"thumb"</c> hit if the pointer is within the thumb (drag start), a
+ * <c>"track"</c> hit if it's elsewhere on the track (jump-to-here), or <c>null</c> if no scrollbar interaction.
+ */
+export function hitTestScrollbar(
+  mouseX: number,
+  mouseY: number,
+  canvasWidth: number,
+  totalTicks: number,
+  scrollWindow: { startIdx: number; endIdx: number },
+  barAreaTop: number,
+  barAreaHeight: number,
+): { kind: 'thumb' | 'track'; thumbX: number; thumbW: number } | null {
+  const sbg = computeScrollbarGeometry(canvasWidth, totalTicks, scrollWindow, barAreaTop, barAreaHeight);
+  if (sbg == null) {
+    return null;
+  }
+  // Generous vertical hit pad so the 5-px-tall scrollbar isn't fiddly to grab.
+  const hitPad = 4;
+  if (mouseY < sbg.trackY - hitPad || mouseY > sbg.trackY + sbg.trackH + hitPad) {
+    return null;
+  }
+  if (mouseX < sbg.trackX || mouseX > sbg.trackX + sbg.trackW) {
+    return null;
+  }
+  const onThumb = mouseX >= sbg.thumbX && mouseX <= sbg.thumbX + sbg.thumbW;
+  return { kind: onThumb ? 'thumb' : 'track', thumbX: sbg.thumbX, thumbW: sbg.thumbW };
 }
 
 /**

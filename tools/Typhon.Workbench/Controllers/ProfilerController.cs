@@ -70,6 +70,30 @@ public sealed class ProfilerController : ControllerBase
     }
 
     /// <summary>
+    /// User-initiated disconnect for an Attach session. Drops the TCP connection to the engine and pins the
+    /// runtime status to <c>disconnected</c>; the session itself stays alive in the <see cref="SessionManager"/>
+    /// so the client can keep inspecting the captured tick buffer. Idempotent — repeated calls are 204 no-ops.
+    /// To free the session entirely, the client should call <c>DELETE /api/sessions/{id}</c>.
+    /// </summary>
+    [HttpPost("disconnect")]
+    public IActionResult Disconnect(Guid sessionId)
+    {
+        var session = HttpContext.Items["Session"];
+        if (session is not AttachSession attach)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "session_kind_mismatch",
+                Detail = "Disconnect is only valid on Attach sessions.",
+                Status = StatusCodes.Status409Conflict,
+            });
+        }
+
+        attach.Runtime.RequestDisconnect();
+        return NoContent();
+    }
+
+    /// <summary>
     /// Returns the raw LZ4-compressed bytes of a single chunk. Response headers carry everything the browser worker
     /// needs to decode the payload:
     /// <list type="bullet">

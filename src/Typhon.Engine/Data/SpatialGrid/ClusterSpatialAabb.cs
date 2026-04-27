@@ -24,7 +24,8 @@ namespace Typhon.Engine;
 /// </para>
 /// </remarks>
 [StructLayout(LayoutKind.Sequential)]
-internal struct ClusterSpatialAabb
+[JetBrains.Annotations.PublicAPI]
+public struct ClusterSpatialAabb
 {
     public float MinX;
     public float MinY;
@@ -33,6 +34,14 @@ internal struct ClusterSpatialAabb
     public float MaxY;
     public float MaxZ;
     public uint CategoryMask;
+
+    /// <summary>Static empty sentinel for ref-returning properties when no spatial data exists.</summary>
+    internal static ClusterSpatialAabb s_empty = new()
+    {
+        MinX = float.PositiveInfinity, MinY = float.PositiveInfinity, MinZ = float.PositiveInfinity,
+        MaxX = float.NegativeInfinity, MaxY = float.NegativeInfinity, MaxZ = float.NegativeInfinity,
+        CategoryMask = 0u,
+    };
 
     /// <summary>Create an empty AABB suitable as the seed for incremental unions (min = +inf, max = -inf on all axes).</summary>
     public static ClusterSpatialAabb Empty => new()

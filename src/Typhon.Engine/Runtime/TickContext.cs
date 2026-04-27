@@ -112,6 +112,13 @@ public struct TickContext
     public TierBudgetMetrics TierBudgetMetrics { get; init; }
 
     /// <summary>
+    /// Zero-based worker index for the thread executing this system chunk. Range: [0, WorkerCount).
+    /// For non-parallel systems, always 0. Use this to index into per-worker data structures
+    /// (e.g., per-worker render buffers) without any synchronization.
+    /// </summary>
+    public int WorkerId { get; init; }
+
+    /// <summary>
     /// Game-facing accessor for the engine's spatial grid (issue #232). Provides cell tier assignment, coordinate conversion, and multi-observer
     /// helpers (<see cref="SpatialGridAccessor.SetCellTierMin"/>, <see cref="SpatialGridAccessor.ResetAllTiers"/>,
     /// <see cref="SpatialGridAccessor.SetTierInAABB"/>). Check <see cref="SpatialGridAccessor.IsValid"/> before use — false when no grid is configured.

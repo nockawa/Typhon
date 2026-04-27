@@ -50,6 +50,36 @@ const SPAN_FLAGS_HAS_TRACE_CONTEXT = 0x01;
  * Malformed records (size less than header, size overruns slice, or size exceeds ushort range) stop the walk early — partial results remain
  * returned. Mirrors the server's behavior and keeps the viewer useful on truncated traces.
  */
+/**
+ * True for kinds whose wire format is the 12-byte common header + per-kind payload only — no 25-byte span-header extension. Must mirror
+ * `TraceEventKindExtensions.IsSpan` (negated) in `src/Typhon.Profiler/TraceEventKind.cs`. Kept in this file (rather than `model/types.ts`)
+ * because it's purely a wire-decode concern; renderer code never branches on it.
+ *
+ * If you add a new instant-style kind on the C# side, add it here too. The list of carve-out ranges below is structured the same way as the
+ * C# IsSpan body so the two stay in lockstep visually.
+ */
+function isInstantKind(v: number): boolean {
+  if (v < 10) return true;                                                 // pre-#243 instants (TickStart..MemoryAllocEvent)
+  if (v === TraceEventKind.PerTickSnapshot || v === TraceEventKind.ThreadInfo) return true; // 76, 77
+  if (v >= 90 && v <= 116) return true;                                    // Concurrency tracing (Phase 2, #280)
+  // Spatial tracing (Phase 3, #281) — mixed; instants are 127-135, 137, 140-142, 144, 145.
+  if ((v >= 127 && v <= 135) || v === 137 || (v >= 140 && v <= 142) || v === 144 || v === 145) return true;
+  // Scheduler & Runtime tracing (Phase 4, #282) — mixed; instants:
+  //   146-148 (System Start/Completion/QueueWait), 151 (WorkerWake), 153 (Dispense),
+  //   154 (DependencyReady), 156-158 (Overload trio), 161-162 (UoWCreate/Flush).
+  if ((v >= 146 && v <= 148) || v === 151 || v === 153 || v === 154
+      || (v >= 156 && v <= 158) || v === 161 || v === 162) return true;
+  if (v >= 166 && v <= 172) return true;                                   // Storage & Memory (Phase 5, #283) — 165 is the only span
+  // Data plane (Phase 6, #284) — instants: 176, 178, 180, 182-183, 185-186.
+  if (v === 176 || v === 178 || v === 180 || v === 182 || v === 183 || v === 185 || v === 186) return true;
+  // Query / ECS (Phase 7, #285) — instants: 191, 197, 200, 202-203, 206-208, 211-213.
+  if (v === 191 || v === 197 || v === 200 || v === 202 || v === 203 || v === 206
+      || v === 207 || v === 208 || v === 211 || v === 212 || v === 213) return true;
+  // Durability (Phase 8, #286) — instants: 217-218, 220, 225, 228, 233-234.
+  if (v === 217 || v === 218 || v === 220 || v === 225 || v === 228 || v === 233 || v === 234) return true;
+  return false;
+}
+
 export function decodeChunkBinary(bytes: Uint8Array, firstTick: number, ticksPerUs: number, isContinuation: boolean): TraceEvent[] {
   const reader = new BinaryReader(bytes);
   const events: TraceEvent[] = [];
@@ -76,11 +106,13 @@ export function decodeChunkBinary(bytes: Uint8Array, firstTick: number, ticksPer
     const kind = kindByte as TraceEventKind;
     let evt: TraceEvent | null;
 
-    // PerTickSnapshot (kind 76) and ThreadInfo (kind 77) are numerically in the span range but have INSTANT wire shape — no span header
-    // extension after the common header. Route them to the instant branch explicitly; otherwise readSpanHeader would read 25 bytes of
-    // payload as span metadata and mis-align every subsequent record in the chunk. Mirrors the server's IsSpan() carve-out — any future
-    // instant-style kind with numeric value ≥ 10 must be added to this list AND to TraceEventKindExtensions.IsSpan on the C# side.
-    if (kindByte < 10 || kind === TraceEventKind.PerTickSnapshot || kind === TraceEventKind.ThreadInfo) {
+    // Instant vs span discrimination — must mirror C# `TraceEventKindExtensions.IsSpan` at
+    // `TraceEventKind.cs:903` exactly. Numeric kinds ≥ 10 are MOSTLY spans, but #277 (Tracing
+    // Instrumentation Expansion) added many instant-shaped kinds in the ≥ 10 range whose wire
+    // format omits the 25-byte span header extension. Routing them through readSpanHeader reads
+    // 25 bytes of payload as span metadata, producing nonsense durationUs (big end time) and
+    // parent/child links (deep stack), even though `pos += size` keeps subsequent records aligned.
+    if (isInstantKind(kindByte)) {
       evt = decodeInstant(reader, pos, kind, threadSlot, currentTick, timestampUs, ticksPerUs);
     } else {
       evt = decodeSpan(reader, pos, kind, threadSlot, currentTick, timestampUs, ticksPerUs);

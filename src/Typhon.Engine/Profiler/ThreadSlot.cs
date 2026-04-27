@@ -21,15 +21,40 @@ namespace Typhon.Engine.Profiler;
 internal sealed class ThreadSlot
 {
     /// <summary>
-    /// Variable-size SPSC ring buffer owned by this slot. <c>null</c> until the first claim assigns one; reused across re-claims of the same slot.
+    /// <b>Primary</b> variable-size SPSC ring buffer owned by this slot. <c>null</c> until the first claim assigns one; reused across re-claims
+    /// of the same slot. Always the head of the per-slot chain — see <see cref="ChainHead"/> / <see cref="ChainTail"/> for the spillover model.
+    /// Never recycled to <see cref="SpilloverRingPool"/>; only spillover rings cycle through there.
     /// </summary>
     public TraceRecordRing Buffer;
+
+    /// <summary>
+    /// Consumer's drain start: the oldest live ring in this slot's chain. Initialised to <see cref="Buffer"/> on first claim and on every
+    /// re-claim. Advances forward (along <see cref="TraceRecordRing.Next"/>) when the consumer fully drains the current head and observes a
+    /// successor — the previous head, if it was a spillover, is recycled to the pool. Always points at a live ring once the slot has been
+    /// claimed; never null.
+    /// </summary>
+    public TraceRecordRing ChainHead;
+
+    /// <summary>
+    /// Producer's write target: the newest ring in this slot's chain. Initialised to <see cref="Buffer"/> on first claim and on every re-claim.
+    /// Advances forward when the producer overflows the current tail and acquires a fresh spillover from
+    /// <see cref="SpilloverRingPool"/>. Once a ring becomes a non-tail link it is drained-only: the producer never writes back to it. Always
+    /// points at a live ring once the slot has been claimed; never null.
+    /// </summary>
+    public TraceRecordRing ChainTail;
 
     /// <summary>
     /// Managed thread ID of the current owner, or 0 if the slot is free. Diagnostic only — never used as an index because the CLR recycles
     /// managed thread IDs.
     /// </summary>
     public int OwnerManagedThreadId;
+
+    /// <summary>
+    /// Name of the current owning thread, captured once at claim time. Cached so exporters can synthesize catch-up
+    /// <see cref="TraceEventKind.ThreadInfo"/> records for clients that connect after the slot was claimed — without this, mid-session
+    /// live connections have no slot→name mapping and the viewer can't label lanes. Nulled on retirement. Not read on the hot path.
+    /// </summary>
+    public string OwnerThreadName;
 
     /// <summary>
     /// Hot-path flag: when <c>false</c>, <c>TyphonEvent</c> skips the <see cref="System.Diagnostics.Activity.Current"/> lookup entirely,

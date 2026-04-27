@@ -182,8 +182,15 @@ internal static class ThreadSlotRegistry
         }
         else
         {
+            // Re-claim: collapse any leftover spillover chain back to the primary before resetting. The consumer
+            // should already have drained and recycled all spillovers before the slot reached Free, but we belt-
+            // and-suspenders this in case a Stop-while-warm path or a forced ResetForTests left a chain attached.
+            // Walk Buffer.Next forward, returning each spillover to the pool. Buffer itself is never recycled.
+            CollapseChainToPrimary(slot);
             slot.Buffer.Reset();
         }
+        slot.ChainHead = slot.Buffer;
+        slot.ChainTail = slot.Buffer;
         slot.OwnerManagedThreadId = threadId;
         slot.CaptureActivityContext = SGlobalCaptureActivityContext;
         SlotIndex = index;
@@ -193,7 +200,10 @@ internal static class ThreadSlotRegistry
         // Emit a ThreadInfo record right after the claim so the viewer can label this lane with a real thread name instead of just "Slot N".
         // This runs on the claiming thread, so the per-slot SPSC invariant is preserved (this thread is the sole writer of its ring). If the
         // thread has no name set we pass null — the encoder writes a zero-length name and the viewer falls back to "Thread {id}" downstream.
+        // Cache on the slot so TCP exporters can replay ThreadInfo to late-connecting clients (mid-session live connect otherwise has no
+        // way to see this one-shot record — it was drained and fanned out long before the client connected).
         var threadName = Thread.CurrentThread.Name;
+        slot.OwnerThreadName = threadName;
         TyphonEvent.EmitThreadInfo((byte)index, threadId, threadName);
     }
 
@@ -225,6 +235,7 @@ internal static class ThreadSlotRegistry
         if (Interlocked.CompareExchange(ref SSlots[slotIndex].State, (int)SlotState.Free, (int)SlotState.Retiring) == (int)SlotState.Retiring)
         {
             SSlots[slotIndex].Slot.OwnerManagedThreadId = 0;
+            SSlots[slotIndex].Slot.OwnerThreadName = null;
             Interlocked.Decrement(ref SActiveSlotCount);
         }
     }
@@ -244,7 +255,13 @@ internal static class ThreadSlotRegistry
             var slot = SSlots[i].Slot;
             slot.OwnerManagedThreadId = 0;
             slot.CaptureActivityContext = true;
+            // Release any held spillovers back to the pool BEFORE resetting the primary, so a recycled buffer
+            // doesn't carry a stale Next forward into the next test.
+            CollapseChainToPrimary(slot);
             slot.Buffer?.Reset();
+            // Re-anchor chain pointers (or null them out if the slot was never claimed and Buffer is still null).
+            slot.ChainHead = slot.Buffer;
+            slot.ChainTail = slot.Buffer;
         }
         SHighWaterMark = 0;
         SActiveSlotCount = 0;
@@ -259,6 +276,45 @@ internal static class ThreadSlotRegistry
         }
         SlotIndex = 0;
         Releaser = null;
+    }
+
+    /// <summary>
+    /// Walk the slot's spillover chain forward from <see cref="ThreadSlot.Buffer"/>, returning every spillover ring to
+    /// <see cref="SpilloverRingPool"/> and re-anchoring <see cref="ThreadSlot.ChainHead"/> / <see cref="ThreadSlot.ChainTail"/>
+    /// to the primary. Safe to call when the slot is not claimed (no producer running). The primary itself is never
+    /// recycled — only spillovers cycle through the pool.
+    /// </summary>
+    private static void CollapseChainToPrimary(ThreadSlot slot)
+    {
+        var primary = slot.Buffer;
+        if (primary == null)
+        {
+            return;
+        }
+        var ring = primary.Next;
+        primary.SetNext(null);
+        while (ring != null)
+        {
+            var next = ring.Next;
+            SpilloverRingPool.Release(ring);
+            ring = next;
+        }
+        slot.ChainHead = primary;
+        slot.ChainTail = primary;
+    }
+
+    /// <summary>
+    /// Walk every claimed slot and collapse its chain back to the primary, releasing all spillovers to the pool.
+    /// Called by <see cref="TyphonProfiler.Stop"/> before <see cref="SpilloverRingPool.Shutdown"/> so no spillover
+    /// reference outlives the pool. Must run after producers have quiesced (consumer thread stopped).
+    /// </summary>
+    internal static void CollapseAllChainsToPrimary()
+    {
+        var hwm = SHighWaterMark;
+        for (var i = 0; i < hwm; i++)
+        {
+            CollapseChainToPrimary(SSlots[i].Slot);
+        }
     }
 
     /// <summary>

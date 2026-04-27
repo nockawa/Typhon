@@ -13,6 +13,8 @@ namespace Typhon.Engine.Profiler;
 /// </remarks>
 public ref struct WalFlushEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.WalFlush;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -43,6 +45,8 @@ public ref struct WalFlushEvent : ITraceEventEncoder
 /// </remarks>
 public ref struct WalSegmentRotateEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.WalSegmentRotate;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -73,6 +77,8 @@ public ref struct WalSegmentRotateEvent : ITraceEventEncoder
 /// </remarks>
 public ref struct WalWaitEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.WalWait;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

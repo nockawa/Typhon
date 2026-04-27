@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BAR_AREA_BOTTOM_RESERVED,
+  BAR_AREA_TOP,
   DRAG_THRESHOLD_PX,
   MIN_BAR_WIDTH,
   TIMELINE_HEIGHT,
   computeSelectionIdxRange,
   drawTickOverview,
+  hitTestScrollbar,
   hitTestTick,
   isInHelpHitZone,
   type TickRow,
@@ -12,6 +15,7 @@ import {
 import { formatDuration } from '@/libs/profiler/canvas/canvasUtils';
 import { getStudioThemeTokens } from '@/libs/profiler/canvas/theme';
 import { HelpOverlay } from '@/panels/profiler/components/HelpOverlay';
+import type { TickData } from '@/libs/profiler/model/traceModel';
 import { useProfilerSessionStore } from '@/stores/useProfilerSessionStore';
 import { useProfilerViewStore } from '@/stores/useProfilerViewStore';
 import { useThemeStore } from '@/stores/useThemeStore';
@@ -56,35 +60,84 @@ const OVERVIEW_HELP_LINES: string[] = [
   '    → Viewport selection is NOT changed.',
   '',
   '  Wheel (no modifier)',
-  '    Step viewport selection forward/backward by 1 tick.',
+  '    Pan the overview window ≈10% horizontally per notch.',
   '',
   '  Shift + Wheel',
-  '    Expand/contract the selection\'s right edge by 1.',
-  '',
-  '  Ctrl + Shift + Wheel',
-  '    Same, by 5 ticks — accelerator for wide traces.',
+  '    Pan faster (≈25% per notch).',
   '',
   '  Ctrl + Wheel',
-  '    Pan the overview window ≈10% horizontally.',
+  '    Step the viewport-selection right edge by ±1 tick.',
+  '',
+  '  Ctrl + Shift + Wheel',
+  '    Same, by ±5 ticks — accelerator for wide traces.',
 ];
 
 interface Props {
   /** True when the active session is Attach-mode; toggles live-follow behavior. */
   isLive?: boolean;
+  /**
+   * In live mode, the per-tick `TickData[]` derived from the SSE stream by `useProfilerCache`.
+   * The server's metadata DTO has empty `tickSummaries` for attach sessions
+   * (`AttachSessionRuntime.BuildMetadataDto` defers live aggregation), so we synthesise
+   * the overview rows from the live tick cache instead. Ignored in trace mode.
+   */
+  liveTicks?: TickData[];
 }
 
-export default function TickOverview({ isLive = false }: Props) {
+export default function TickOverview({ isLive = false, liveTicks }: Props) {
   const metadata = useProfilerSessionStore((s) => s.metadata);
+  const liveFollowActive = useProfilerSessionStore((s) => s.liveFollowActive);
+  const setLiveFollowActive = useProfilerSessionStore((s) => s.setLiveFollowActive);
   const viewRange = useProfilerViewStore((s) => s.viewRange);
   const setViewRange = useProfilerViewStore((s) => s.setViewRange);
   const legendsVisible = useProfilerViewStore((s) => s.legendsVisible);
 
+  // In live mode, any explicit user interaction (wheel pan, drag-select, overview pan, ...)
+  // implicitly turns off live-follow — otherwise the next tick batch (≤100 ms later) would snap
+  // both the viewport AND the overview's scroll window back to the live tail and erase the user's
+  // pan. Mirrors the standard "scroll = pause follow" UX in DevTools-style live profilers. The user
+  // re-enables follow via the header toggle.
+  const pauseLiveFollow = useCallback(() => {
+    if (isLive) setLiveFollowActive(false);
+  }, [isLive, setLiveFollowActive]);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wheelCleanupRef = useRef<(() => void) | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Derive TickRow[] from server metadata. TickSummaryDto fields are typed as `number | string` by orval's
-  // regex hint; coerce defensively. Memo on the tickSummaries reference — doesn't re-run per view change.
+  // Callback ref bound to <canvas ref={setCanvasNode}>. React invokes it with the canvas DOM node on
+  // mount and with `null` on unmount — synchronous, not batched into a useEffect — so the wheel listener
+  // is guaranteed to be attached the moment the canvas appears in the DOM. handleWheelRef.current is
+  // re-assigned every render below; the listener reads through the ref so it always sees the latest
+  // closure (with current tickRows etc.).
+  const setCanvasNode = useCallback((node: HTMLCanvasElement | null) => {
+    if (wheelCleanupRef.current) {
+      wheelCleanupRef.current();
+      wheelCleanupRef.current = null;
+    }
+    canvasRef.current = node;
+    if (node) {
+      const listener = (e: WheelEvent) => handleWheelRef.current(e);
+      node.addEventListener('wheel', listener, { passive: false });
+      wheelCleanupRef.current = () => node.removeEventListener('wheel', listener);
+    }
+  }, []);
+
+  // Derive TickRow[]:
+  //  - Trace mode: from server-built `metadata.tickSummaries` (the cache builder pre-aggregates these).
+  //  - Live mode: from `liveTicks` produced by `useProfilerCache`'s live branch — the server returns an empty
+  //    `tickSummaries` array for attach sessions, so we synthesise the rows on the client.
+  // Coerce numeric fields defensively (orval types tickSummaries fields as `number | string`).
   const tickRows: TickRow[] = useMemo(() => {
+    if (isLive && liveTicks && liveTicks.length > 0) {
+      return liveTicks.map((t) => ({
+        tickNumber: t.tickNumber,
+        startUs: t.startUs,
+        endUs: t.endUs,
+        durationUs: t.durationUs,
+        eventCount: t.rawEvents?.length ?? 0,
+      }));
+    }
     const summaries = metadata?.tickSummaries;
     if (!summaries || summaries.length === 0) return [];
     return summaries.map((s) => {
@@ -98,7 +151,7 @@ export default function TickOverview({ isLive = false }: Props) {
         eventCount: Number(s.eventCount),
       };
     });
-  }, [metadata?.tickSummaries]);
+  }, [isLive, liveTicks, metadata?.tickSummaries]);
 
   const p95 = Number(metadata?.globalMetrics?.p95TickDurationUs ?? 0);
 
@@ -108,8 +161,12 @@ export default function TickOverview({ isLive = false }: Props) {
   const dragRef = useRef<
     | { mode: 'select'; startClientX: number; startTickIdx: number; currentTickIdx: number; moved: boolean }
     | { mode: 'pan'; startClientX: number; startStartIdx: number; moved: boolean }
+    | { mode: 'scrollbar'; startClientX: number; startStartIdx: number; thumbW: number; moved: boolean }
     | null
   >(null);
+  const [scrollbarHovered, setScrollbarHovered] = useState(false);
+  const scrollbarHoveredRef = useRef(false);
+  scrollbarHoveredRef.current = scrollbarHovered;
   const canvasWidthRef = useRef(0);
   const selectionIdxRef = useRef<{ first: number; last: number }>({ first: -1, last: -1 });
   const rafRef = useRef(0);
@@ -131,22 +188,42 @@ export default function TickOverview({ isLive = false }: Props) {
   }, [tickRows]);
 
   // Initial + on-tickRows-change scroll-window setup.
+  // Live mode: snap to tail on first paint and whenever live-follow is active. When the user has
+  // paused follow (by panning, drag-selecting, etc.) we preserve their scroll offset and only
+  // re-clamp it against the new tickRows length — otherwise the 100 ms tick cadence would erase
+  // every pan within one frame.
   useEffect(() => {
     if (tickRows.length === 0) {
       scrollRangeRef.current = { startIdx: 0, endIdx: 0 };
       return;
     }
     if (isLive) {
-      const maxVisible = 200;
-      const endIdx = tickRows.length;
-      const startIdx = Math.max(0, endIdx - maxVisible);
-      scrollRangeRef.current = { startIdx, endIdx };
+      // Cap visibleCount by what fits at MIN_BAR_WIDTH — same rule as trace mode below. The previous
+      // hardcoded 200 was unrelated to canvas width and caused inconsistent behavior across modes.
+      const w = canvasWidthRef.current;
+      const maxVisible = w > 0 ? Math.max(1, Math.floor(w / MIN_BAR_WIDTH)) : tickRows.length;
+      const sr = scrollRangeRef.current;
+      const visibleCount = sr.endIdx - sr.startIdx;
+      if (visibleCount <= 0 || liveFollowActive) {
+        // Auto-scroll ON: snap window to the live tail.
+        const endIdx = tickRows.length;
+        const desiredVisible = Math.min(maxVisible, tickRows.length);
+        const startIdx = Math.max(0, endIdx - desiredVisible);
+        scrollRangeRef.current = { startIdx, endIdx };
+      } else {
+        // Auto-scroll OFF: keep user's pan anchor (sr.startIdx), but let visibleCount grow up to the
+        // cap as new ticks accumulate — otherwise pausing follow at 50 ticks freezes the visible window
+        // at 50 forever even when thousands of ticks land later.
+        const desiredVisible = Math.min(maxVisible, tickRows.length);
+        const startIdx = Math.max(0, Math.min(tickRows.length - desiredVisible, sr.startIdx));
+        scrollRangeRef.current = { startIdx, endIdx: startIdx + desiredVisible };
+      }
     } else {
       const w = canvasWidthRef.current;
       const visible = w > 0 ? Math.max(1, Math.min(tickRows.length, Math.floor(w / MIN_BAR_WIDTH))) : tickRows.length;
       scrollRangeRef.current = { startIdx: 0, endIdx: Math.min(visible, tickRows.length) };
     }
-  }, [tickRows, isLive]);
+  }, [tickRows, isLive, liveFollowActive]);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -179,6 +256,7 @@ export default function TickOverview({ isLive = false }: Props) {
       p95TickDurationUs: p95,
       legendsVisible,
       helpHovered: helpTooltipPosRef.current !== null,
+      scrollbarHovered: scrollbarHoveredRef.current || dragRef.current?.mode === 'scrollbar',
     }, getStudioThemeTokens());
   }, [tickRows, viewRange, p95, legendsVisible, isLive]);
 
@@ -243,62 +321,69 @@ export default function TickOverview({ isLive = false }: Props) {
     if (visibleCount <= 0) return;
     const newStart = clampStart(sr.startIdx + deltaTicks, visibleCount);
     if (newStart === sr.startIdx) return;
+    pauseLiveFollow();
     scrollRangeRef.current = { startIdx: newStart, endIdx: newStart + visibleCount };
     scheduleRender();
-  }, [clampStart, scheduleRender]);
+  }, [clampStart, pauseLiveFollow, scheduleRender]);
 
   const applyViewRange = useCallback((r: TimeRange) => {
+    pauseLiveFollow();
     setViewRange(r);
-  }, [setViewRange]);
+  }, [pauseLiveFollow, setViewRange]);
 
   // React attaches wheel handlers as **passive** — `e.preventDefault()` is silently ignored, which lets the
   // browser still fire Ctrl+wheel zoom or page scroll. Attach natively via a `{passive:false}` listener to
   // suppress those defaults. Kept inside a ref so the installer runs once and the latest deps are read live.
+  //
+  // **Mapping (post-redesign).**
+  //   - **plain wheel** — pan the overview's visible window (10% per notch). Most-intuitive default for a
+  //     compressed timeline strip; matches Chrome DevTools / Tracy / Audacity.
+  //   - **Shift + wheel** — pan FAST (25% per notch).
+  //   - **Ctrl + wheel** — step the viewport-selection right edge by ±1 (the "scrub by tick" workflow that
+  //     used to be plain wheel). Power-user knob — most users just want to pan.
+  //   - **Ctrl + Shift + wheel** — same as Ctrl + wheel but ±5 ticks per notch.
   const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {});
   handleWheelRef.current = (e: WheelEvent) => {
     if (tickRows.length === 0) return;
     e.preventDefault();
 
-    if (e.ctrlKey && !e.shiftKey) {
-      const sr = scrollRangeRef.current;
-      const visibleCount = sr.endIdx - sr.startIdx;
-      const step = Math.max(1, Math.floor(visibleCount * 0.1));
-      panBy(e.deltaY < 0 ? step : -step);
+    // Any wheel interaction in live mode = user took control. Disable auto-scroll FIRST so subsequent
+    // tick batches don't keep snapping the view to tail and erasing the pan we're about to apply.
+    // panBy used to do this, but only on a successful pan — when visibleCount === tickRows.length
+    // (the common live-mode case where the cap matches the data) panBy returns early and auto-scroll
+    // never gets disabled, so each batch re-snaps and the wheel feels broken.
+    pauseLiveFollow();
+
+    const sr = scrollRangeRef.current;
+    const visibleCount = sr.endIdx - sr.startIdx;
+
+    if (!e.ctrlKey)
+    {
+      // Pan path. Wheel up (deltaY < 0) = pan toward the past (leftward); wheel down = toward the present.
+      if (visibleCount <= 0) return;
+      const fraction = e.shiftKey ? 0.25 : 0.1;
+      const step = Math.max(1, Math.floor(visibleCount * fraction));
+      panBy(e.deltaY > 0 ? step : -step);
       return;
     }
 
+    // Ctrl held: scrub the viewport-selection right edge.
     let firstIdx = selectionIdxRef.current.first;
     let lastIdx = selectionIdxRef.current.last;
     if (firstIdx < 0) {
       firstIdx = 0;
       lastIdx = 0;
     }
-
-    if (e.ctrlKey && e.shiftKey) {
-      const step = 5;
-      if (e.deltaY < 0) lastIdx = Math.min(tickRows.length - 1, lastIdx + step);
-      else lastIdx = Math.max(firstIdx, lastIdx - step);
-    } else if (e.shiftKey) {
-      if (e.deltaY < 0) lastIdx = Math.min(tickRows.length - 1, lastIdx + 1);
-      else if (lastIdx > firstIdx) lastIdx--;
-    } else {
-      if (e.deltaY < 0) {
-        if (lastIdx < tickRows.length - 1) { firstIdx++; lastIdx++; }
-      } else {
-        if (firstIdx > 0) { firstIdx--; lastIdx--; }
-      }
-    }
-
+    const stepN = e.shiftKey ? 5 : 1;
+    if (e.deltaY < 0) lastIdx = Math.min(tickRows.length - 1, lastIdx + stepN);
+    else lastIdx = Math.max(firstIdx, lastIdx - stepN);
     applyViewRange({ startUs: tickRows[firstIdx].startUs, endUs: tickRows[lastIdx].endUs });
   };
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const listener = (e: WheelEvent) => handleWheelRef.current(e);
-    canvas.addEventListener('wheel', listener, { passive: false });
-    return () => canvas.removeEventListener('wheel', listener);
-  }, []);
+  // Wheel listener is attached via a callback ref on the canvas element (see `setCanvasNode` below).
+  // Doing this in a useEffect was flaky: in attach (live) mode the canvas isn't in the DOM until the
+  // first tick batch arrives, so a `useEffect(() => ..., [])` would early-return on first run and never
+  // re-fire. A callback ref runs synchronously the moment React mounts/unmounts the canvas.
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const local = getCanvasLocal(e);
@@ -306,12 +391,54 @@ export default function TickOverview({ isLive = false }: Props) {
 
     const canvas = canvasRef.current;
     const canvasWidth = canvas?.getBoundingClientRect().width ?? 0;
+    const canvasHeight = canvas?.getBoundingClientRect().height ?? 0;
     if (isInHelpHitZone(local.mx, local.my, canvasWidth, legendsVisible)) {
       e.preventDefault();
       return;
     }
 
     if (e.button !== 0 && e.button !== 1) return;
+
+    // Left-click on the scrollbar takes priority over a select-drag — the click is on the bar, not the bars.
+    if (e.button === 0)
+    {
+      const sb = hitTestScrollbar(
+        local.mx, local.my, canvasWidth, tickRows.length, scrollRangeRef.current,
+        BAR_AREA_TOP, canvasHeight - BAR_AREA_BOTTOM_RESERVED,
+      );
+      if (sb)
+      {
+        e.preventDefault();
+        // Pause auto-follow as soon as the user grabs the scrollbar — same UX as middle-button pan.
+        pauseLiveFollow();
+        if (sb.kind === 'track')
+        {
+          // Click on the track outside the thumb: jump-scroll so the thumb's center lands at the click X.
+          const sr = scrollRangeRef.current;
+          const visibleCount = sr.endIdx - sr.startIdx;
+          const totalTicks = tickRows.length;
+          const usable = canvasWidth - sb.thumbW;
+          if (usable > 0 && totalTicks > visibleCount)
+          {
+            const targetThumbX = Math.max(0, Math.min(usable, local.mx - sb.thumbW / 2));
+            const startFrac = targetThumbX / usable;
+            const newStart = Math.round(startFrac * (totalTicks - visibleCount));
+            scrollRangeRef.current = { startIdx: newStart, endIdx: newStart + visibleCount };
+            scheduleRender();
+          }
+        }
+        // Either kind enters drag mode so the user can continue scrolling smoothly.
+        dragRef.current = {
+          mode: 'scrollbar',
+          startClientX: e.clientX,
+          startStartIdx: scrollRangeRef.current.startIdx,
+          thumbW: sb.thumbW,
+          moved: false,
+        };
+        try { canvas?.setPointerCapture(e.pointerId); } catch { /* safari private mode */ }
+        return;
+      }
+    }
 
     const mode: 'select' | 'pan' = e.button === 0 ? 'select' : 'pan';
     if (mode === 'select') {
@@ -337,7 +464,7 @@ export default function TickOverview({ isLive = false }: Props) {
     // Pointer capture keeps the drag live when the cursor leaves the canvas — pointermove/pointerup continue
     // firing on this element until release.
     try { canvas?.setPointerCapture(e.pointerId); } catch { /* safari private mode */ }
-  }, [getCanvasLocal, hitTest, legendsVisible]);
+  }, [getCanvasLocal, hitTest, legendsVisible, pauseLiveFollow, scheduleRender, tickRows]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -349,7 +476,8 @@ export default function TickOverview({ isLive = false }: Props) {
     const drag = dragRef.current;
     if (drag) {
       const dx = e.clientX - drag.startClientX;
-      if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+      // Scrollbar drag is responsive from the first pixel — skip the threshold to avoid feeling sluggish.
+      if (drag.mode !== 'scrollbar' && !drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
       drag.moved = true;
 
       if (drag.mode === 'pan') {
@@ -361,7 +489,23 @@ export default function TickOverview({ isLive = false }: Props) {
         const deltaIdx = -Math.round(dx / barWidth);
         const newStart = clampStart(drag.startStartIdx + deltaIdx, visibleCount);
         if (newStart !== sr.startIdx) {
+          pauseLiveFollow();
           scrollRangeRef.current = { startIdx: newStart, endIdx: newStart + visibleCount };
+        }
+      } else if (drag.mode === 'scrollbar') {
+        // Scrollbar drag: translate pointer dx into a scroll-window-startIdx delta. The mapping is the
+        // inverse of `computeScrollbarGeometry`'s thumb placement: thumbX = startFrac * (trackW - thumbW).
+        const sr = scrollRangeRef.current;
+        const visibleCount = sr.endIdx - sr.startIdx;
+        const totalTicks = tickRows.length;
+        const usable = rect.width - drag.thumbW;
+        if (usable > 0 && totalTicks > visibleCount) {
+          const fracDelta = dx / usable;
+          const tickDelta = Math.round(fracDelta * (totalTicks - visibleCount));
+          const newStart = clampStart(drag.startStartIdx + tickDelta, visibleCount);
+          if (newStart !== sr.startIdx) {
+            scrollRangeRef.current = { startIdx: newStart, endIdx: newStart + visibleCount };
+          }
         }
       } else {
         const idx = hitTest(e.clientX);
@@ -393,6 +537,22 @@ export default function TickOverview({ isLive = false }: Props) {
       setHelpTooltipPos(null);
     }
 
+    // Scrollbar hover — brighten the thumb when the pointer is over it (or anywhere on the track). Skips the
+    // tick-bar tooltip in that band so we don't fight for the same vertical pixels.
+    const onScrollbar = hitTestScrollbar(
+      mx, my, rect.width, tickRows.length, scrollRangeRef.current,
+      BAR_AREA_TOP, rect.height - BAR_AREA_BOTTOM_RESERVED,
+    ) != null;
+    if (onScrollbar !== scrollbarHoveredRef.current) {
+      setScrollbarHovered(onScrollbar);
+    }
+    if (onScrollbar) {
+      hoverRef.current = null;
+      if (tickTooltipState !== null) setTickTooltipState(null);
+      scheduleRender();
+      return;
+    }
+
     const idx = hitTest(e.clientX);
     const sr = scrollRangeRef.current;
     if (idx >= sr.startIdx && idx < sr.endIdx && idx < tickRows.length) {
@@ -412,7 +572,7 @@ export default function TickOverview({ isLive = false }: Props) {
       if (tickTooltipState !== null) setTickTooltipState(null);
     }
     scheduleRender();
-  }, [tickRows, hitTest, clampStart, scheduleRender, legendsVisible, tickTooltipState]);
+  }, [tickRows, hitTest, clampStart, pauseLiveFollow, scheduleRender, legendsVisible, tickTooltipState]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const drag = dragRef.current;
@@ -447,6 +607,9 @@ export default function TickOverview({ isLive = false }: Props) {
       setHelpTooltipPos(null);
     }
     if (tickTooltipState !== null) setTickTooltipState(null);
+    if (scrollbarHoveredRef.current) {
+      setScrollbarHovered(false);
+    }
     scheduleRender();
   }, [scheduleRender, tickTooltipState]);
 
@@ -490,7 +653,7 @@ export default function TickOverview({ isLive = false }: Props) {
       style={{ height: `${TIMELINE_HEIGHT}px` }}
     >
       <canvas
-        ref={canvasRef}
+        ref={setCanvasNode}
         className="h-full w-full cursor-pointer touch-none"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

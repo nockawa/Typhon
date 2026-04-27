@@ -10,6 +10,14 @@ namespace Typhon.Engine.Profiler;
 /// </summary>
 public interface ITraceEventEncoder
 {
+    /// <summary>
+    /// The <see cref="TraceEventKind"/> byte this event encodes — used by drop-counting diagnostics so that when
+    /// the ring buffer rejects a record we can attribute the drop to the right event type (without reading the
+    /// kind from the destination buffer, which we don't have on the failure path). Static-abstract so each event
+    /// struct supplies a literal: zero per-call cost, the JIT folds it to a constant.
+    /// </summary>
+    static abstract byte Kind { get; }
+
     /// <summary>Total bytes this event will write when serialized.</summary>
     int ComputeSize();
 

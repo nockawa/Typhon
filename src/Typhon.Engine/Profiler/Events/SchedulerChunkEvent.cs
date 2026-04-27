@@ -11,6 +11,8 @@ namespace Typhon.Engine.Profiler;
 /// </summary>
 public ref struct SchedulerChunkEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SchedulerChunk;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

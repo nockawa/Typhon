@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.DataTransactionInit"/>.</summary>
 public ref struct DataTransactionInitEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DataTransactionInit;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -29,6 +31,8 @@ public ref struct DataTransactionInitEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.DataTransactionPrepare"/>.</summary>
 public ref struct DataTransactionPrepareEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DataTransactionPrepare;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -51,6 +55,8 @@ public ref struct DataTransactionPrepareEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.DataTransactionValidate"/>.</summary>
 public ref struct DataTransactionValidateEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DataTransactionValidate;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -74,6 +80,8 @@ public ref struct DataTransactionValidateEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.DataTransactionCleanup"/>.</summary>
 public ref struct DataTransactionCleanupEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DataTransactionCleanup;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -97,6 +105,8 @@ public ref struct DataTransactionCleanupEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.DataMvccVersionCleanup"/>.</summary>
 public ref struct DataMvccVersionCleanupEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DataMvccVersionCleanup;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -120,6 +130,8 @@ public ref struct DataMvccVersionCleanupEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.DataIndexBTreeRangeScan"/>.</summary>
 public ref struct DataIndexBTreeRangeScanEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DataIndexBTreeRangeScan;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -143,6 +155,8 @@ public ref struct DataIndexBTreeRangeScanEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.DataIndexBTreeBulkInsert"/>.</summary>
 public ref struct DataIndexBTreeBulkInsertEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DataIndexBTreeBulkInsert;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

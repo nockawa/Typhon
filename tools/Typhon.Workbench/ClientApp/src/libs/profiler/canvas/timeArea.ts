@@ -857,7 +857,10 @@ function drawPhases(
         ctx.beginPath();
         ctx.rect(x1, ty + 1, w, PHASE_TRACK_HEIGHT - 2);
         ctx.clip();
-        ctx.fillStyle = theme.foreground;
+        // Phase bar fill is always a dark colour (slot 0 of either timeline palette is the deep
+        // purple identity), so the label needs the textOnDarkBar token in both themes — the previous
+        // `theme.foreground` produced dark-on-dark text in light mode.
+        ctx.fillStyle = theme.textOnDarkBar;
         ctx.font = '9px monospace';
         ctx.textAlign = 'left';
         ctx.fillText(`${phase.phaseName} (${formatDuration(phase.durationUs)})`, x1 + 3, ty + 12);

@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeInsert"/>.</summary>
 public ref struct SpatialRTreeInsertEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialRTreeInsert;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -31,6 +33,8 @@ public ref struct SpatialRTreeInsertEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeRemove"/>.</summary>
 public ref struct SpatialRTreeRemoveEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialRTreeRemove;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -54,6 +58,8 @@ public ref struct SpatialRTreeRemoveEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeNodeSplit"/>.</summary>
 public ref struct SpatialRTreeNodeSplitEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialRTreeNodeSplit;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -79,6 +85,8 @@ public ref struct SpatialRTreeNodeSplitEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeBulkLoad"/>.</summary>
 public ref struct SpatialRTreeBulkLoadEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialRTreeBulkLoad;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

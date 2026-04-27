@@ -51,8 +51,18 @@ interface ProfilerSessionStoreState {
   isLive: boolean;
   /** Live connection status; null when no live session is active. */
   connectionStatus: ConnectionStatus | null;
-  /** Total ticks received since the session started. Survives reconnects — server-side counter resets, client accumulates. */
+  /**
+   * Number of SSE `tick` batches received since the session started. NOT the engine tick count: a single engine
+   * tick can produce multiple batches when its records span multiple Block frames (large ticks, GC bursts), so
+   * this number drifts upward of the actual engine tick. Use {@link latestTickNumber} for the engine-side count.
+   * Kept for diagnostics / logging.
+   */
   liveTickCount: number;
+  /**
+   * Highest engine tick number seen so far in the live stream. Matches the rightmost bar of the tick overview
+   * (modulo currently-pending batches in the 100 ms flush window). Resets on session change.
+   */
+  latestTickNumber: number;
   /** User's follow/pause state for the live timeline. Default true on new live sessions. */
   liveFollowActive: boolean;
   /** Ring buffer of the most recent tick batches (cap {@link LIVE_TICK_BUFFER_CAP}). Phase 2 renders from this. */
@@ -78,6 +88,7 @@ export const useProfilerSessionStore = create<ProfilerSessionStoreState>()((set)
   isLive: false,
   connectionStatus: null,
   liveTickCount: 0,
+  latestTickNumber: 0,
   liveFollowActive: true,
   recentTicks: [],
 
@@ -93,9 +104,16 @@ export const useProfilerSessionStore = create<ProfilerSessionStoreState>()((set)
       // Preserve the newest N ticks when exceeding cap — drop-oldest semantics matches the server's bounded channel.
       const merged = s.recentTicks.concat(batches);
       const trimmed = merged.length > LIVE_TICK_BUFFER_CAP ? merged.slice(merged.length - LIVE_TICK_BUFFER_CAP) : merged;
+      // High-water mark of engine tick numbers. Take max rather than last because batches can theoretically arrive
+      // out of order (multi-block tick fragments fan in from the SSE channel) — though the server emits in order.
+      let maxTick = s.latestTickNumber;
+      for (const b of batches) {
+        if (b.tickNumber > maxTick) maxTick = b.tickNumber;
+      }
       return {
         recentTicks: trimmed,
         liveTickCount: s.liveTickCount + batches.length,
+        latestTickNumber: maxTick,
       };
     }),
   setLiveFollowActive: (active) => set({ liveFollowActive: active }),
@@ -108,6 +126,7 @@ export const useProfilerSessionStore = create<ProfilerSessionStoreState>()((set)
       isLive: false,
       connectionStatus: null,
       liveTickCount: 0,
+      latestTickNumber: 0,
       liveFollowActive: true,
       recentTicks: [],
     }),

@@ -9,23 +9,39 @@ import {
 } from './types';
 
 /**
- * Counts malformed ticks (seen events but no TickStart) per page-load and routes warnings to the console with a cap so a
- * catastrophically broken trace can't spam the console. Reset on a new trace load via <see cref="resetMalformedTickCounter"/>.
+ * Tracks UNIQUE malformed ticks (events seen but no TickStart record) per page-load and routes warnings to the console
+ * with a cap so a catastrophically broken trace can't spam it. Reset on a new trace load via
+ * {@link resetMalformedTickCounter}.
+ *
+ * **Live mode skips this entirely** by passing `suppressMalformedWarn = true` to {@link processTickEvents}. The
+ * warning was originally meant as a "broken trace file" signal, but in live mode the workbench's bounded ring buffer
+ * (`useProfilerSessionStore.recentTicks`, FIFO 1000) evicts oldest batches first — multi-block ticks pass through a
+ * transient state where the first block (carrying `TickStart`) is gone but a tail block is still present, which
+ * would fire the warning on every multi-block tick despite no actual data loss upstream.
+ *
+ * **Dedup** keeps this honest for trace mode too: `processTickEvents` may be called more than once per tick number
+ * during chunk reload, so dedupe by tickNumber before counting / logging.
  */
-let _malformedTickCount = 0;
+const _malformedTicks = new Set<number>();
 const _MALFORMED_TICK_LOG_CAP = 5;
+
 function warnMalformedTick(tickNumber: number): void {
-  _malformedTickCount++;
-  if (_malformedTickCount <= _MALFORMED_TICK_LOG_CAP) {
+  if (_malformedTicks.has(tickNumber)) {
+    return; // already counted — re-processing same tick as more batches/chunks arrive
+  }
+  _malformedTicks.add(tickNumber);
+  const total = _malformedTicks.size;
+  if (total <= _MALFORMED_TICK_LOG_CAP) {
     console.warn(`[trace] malformed tick ${tickNumber}: no TickStart/TickEnd observed — reset to (0, 0). Possible producer-ring overflow or truncated trace.`);
-    if (_malformedTickCount === _MALFORMED_TICK_LOG_CAP) {
+    if (total === _MALFORMED_TICK_LOG_CAP) {
       console.warn(`[trace] ${_MALFORMED_TICK_LOG_CAP} malformed ticks logged — further warnings suppressed for this session.`);
     }
   }
 }
-/** Called from the trace-load path (<see cref="processTrace"/>) to reset the per-session counter so each trace open gets its own log budget. */
+
+/** Called from the trace-load path ({@link processTrace}) to reset the per-session counter so each trace open gets its own log budget. */
 export function resetMalformedTickCounter(): void {
-  _malformedTickCount = 0;
+  _malformedTicks.clear();
 }
 
 /** A chunk span: one rectangle in the Gantt chart */
@@ -487,7 +503,18 @@ export function findTickIndex(trace: ProcessedTrace, tickNumber: number): number
   return trace.ticks.findIndex(t => t.tickNumber === tickNumber);
 }
 
-export function processTickEvents(tickNumber: number, events: TraceEvent[], systems: SystemDef[], isContinuation: boolean): TickData {
+/**
+ * Build a {@link TickData} from a tick's raw events.
+ *
+ * @param suppressMalformedWarn When true, the "no TickStart observed" path silently falls back to (0, 0) without
+ *   firing {@link warnMalformedTick}. Live mode passes true: the workbench client buffers a bounded slice of recent
+ *   batches (`useProfilerSessionStore.recentTicks`, FIFO 1000-cap) and re-runs the assembly as new batches arrive.
+ *   Multi-block ticks transit a brief state where their first block (which carried `TickStart`) has been evicted
+ *   from the FIFO while a tail block is still present — the warning would fire on every multi-block tick at that
+ *   transient point even though no actual data was lost upstream. Trace mode passes false: the file is complete,
+ *   so missing TickStart there really does mean a corrupted/truncated trace.
+ */
+export function processTickEvents(tickNumber: number, events: TraceEvent[], systems: SystemDef[], isContinuation: boolean, suppressMalformedWarn = false): TickData {
   let startUs = Infinity;
   let endUs = -Infinity;
 
@@ -779,7 +806,7 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
     // consumed it), so "startUs = Infinity" here is expected, not a malformed-trace indicator. Same reasoning covers
     // the tickNumber==0 pre-tick case. The malformed warning fires only when we had a real, complete chunk expected to
     // contain a TickStart and genuinely didn't — at that point it's a useful signal about a broken trace.
-    if (tickNumber > 0 && !isContinuation) warnMalformedTick(tickNumber);
+    if (tickNumber > 0 && !isContinuation && !suppressMalformedWarn) warnMalformedTick(tickNumber);
     startUs = 0;
   }
   if (endUs === -Infinity) endUs = startUs;

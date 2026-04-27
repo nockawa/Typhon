@@ -42,6 +42,11 @@ public static class TyphonProfiler
     private static GcTracingHost GcTracing;
     private static bool Running;
 
+    // Process-exit safety net — fields are non-null while hooks are wired (Running == true). Both invoke Stop()
+    // best-effort; Stop is idempotent so a double-fire (host called Stop and ProcessExit also fired) is harmless.
+    private static EventHandler s_processExitHandler;
+    private static UnhandledExceptionEventHandler s_unhandledExceptionHandler;
+
     /// <summary>True while the profiler consumer thread is running.</summary>
     public static bool IsRunning
     {
@@ -107,6 +112,15 @@ public static class TyphonProfiler
             options ??= new ProfilerOptions();
             options.Validate();
 
+            // Allocate the spillover ring pool if a host helper (ProfilerLauncher.EnableTelemetryGateIfActive)
+            // didn't already do so. Idempotent on the IsInitialized check — if the pool is already up (because the
+            // host opened it earlier so events emitted during bridge construction could chain into it), keep it.
+            // The pool is freed at Stop. Default config: 8 × 16 MiB = 128 MiB while the profiler is running.
+            if (!SpilloverRingPool.IsInitialized)
+            {
+                SpilloverRingPool.Initialize(options.SpilloverBufferCount, options.SpilloverBufferSizeBytes);
+            }
+
             // Snapshot the exporter list so the consumer iterates a stable instance even if a future API ever allows live mutation.
             var exporterSnapshot = new List<IProfilerExporter>(Exporters);
 
@@ -142,6 +156,77 @@ public static class TyphonProfiler
             }
 
             Running = true;
+
+            // Register process-exit safety net under the lock so paired Unregister in Stop sees the same instances.
+            // If the host (Godot _ExitTree, console Main exit, ASP.NET host shutdown, …) forgets to call Stop, the
+            // CLR's ProcessExit / UnhandledException paths will run it for us so attached exporters get a chance to
+            // emit their Shutdown signal before the socket dies.
+            RegisterProcessExitHooks();
+        }
+    }
+
+    /// <summary>
+    /// Wire <see cref="AppDomain.ProcessExit"/> + <see cref="AppDomain.UnhandledException"/> handlers that call <see cref="Stop"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>What ProcessExit catches:</b> normal Main return, <see cref="Environment.Exit"/>, console window close, Ctrl+C in console apps,
+    /// Godot's window close (which fires <c>_ExitTree</c> first; this is just a fallback if the host forgets to call Stop). On Linux/macOS
+    /// SIGTERM/SIGINT are surfaced through ProcessExit too.
+    /// </para>
+    /// <para>
+    /// <b>What it does NOT catch:</b> <c>TerminateProcess</c> / <c>taskkill /F</c> / <c>SIGKILL</c>, <c>StackOverflowException</c>, access
+    /// violations, FailFast — the OS reaps the process and no managed code runs. The workbench's reconnect-loop policy is the only thing
+    /// that helps in those scenarios.
+    /// </para>
+    /// <para>
+    /// <b>Budget:</b> the CLR caps ProcessExit handlers at ~2 s. <see cref="Stop"/> normally completes well within that on a quiet engine,
+    /// but if the consumer's final drain or an exporter thread hangs we may get cut short — at which point the kernel's TCP teardown
+    /// closes the socket without a Shutdown frame. Best-effort by design.
+    /// </para>
+    /// </remarks>
+    private static void RegisterProcessExitHooks()
+    {
+        if (s_processExitHandler != null)
+        {
+            return; // already registered (lock-protected, but be defensive)
+        }
+
+        s_processExitHandler = (_, _) =>
+        {
+            try { Stop(); }
+            catch
+            {
+                // Process is exiting — nothing useful to do with the exception.
+            }
+        };
+        s_unhandledExceptionHandler = (_, args) =>
+        {
+            // Only run on terminating exceptions. Non-terminating UnhandledException (rare on .NET 6+) means the
+            // process keeps going and we shouldn't tear down the profiler.
+            if (!args.IsTerminating)
+            {
+                return;
+            }
+            try { Stop(); } catch { }
+        };
+
+        AppDomain.CurrentDomain.ProcessExit += s_processExitHandler;
+        AppDomain.CurrentDomain.UnhandledException += s_unhandledExceptionHandler;
+    }
+
+    /// <summary>Mirror of <see cref="RegisterProcessExitHooks"/> — call from <see cref="Stop"/> so the CLR doesn't keep references to disposed state.</summary>
+    private static void UnregisterProcessExitHooks()
+    {
+        if (s_processExitHandler != null)
+        {
+            AppDomain.CurrentDomain.ProcessExit -= s_processExitHandler;
+            s_processExitHandler = null;
+        }
+        if (s_unhandledExceptionHandler != null)
+        {
+            AppDomain.CurrentDomain.UnhandledException -= s_unhandledExceptionHandler;
+            s_unhandledExceptionHandler = null;
         }
     }
 
@@ -175,6 +260,12 @@ public static class TyphonProfiler
             ExporterCts = null;
             GcTracing = null;
             Running = false;
+
+            // Detach the safety-net hooks now that we've taken responsibility for the rest of teardown — both
+            // for normal Stop callers and for the ProcessExit handler reentering itself (Stop is idempotent so a
+            // second call from the handler bails at the !Running check above, but unregistering also keeps the
+            // AppDomain from holding stale delegate references after a Start/Stop/Start cycle).
+            UnregisterProcessExitHooks();
         }
 
         // Detach GC tracing first so the CLR stops delivering events before we start tearing down the consumer side.
@@ -239,6 +330,17 @@ public static class TyphonProfiler
             try { exporter.Flush(); } catch { /* swallow flush errors during shutdown */ }
             try { exporter.Dispose(); } catch { /* swallow dispose errors during shutdown */ }
         }
+
+        // 5. Snapshot spillover-pool stats BEFORE Shutdown clears the pool — these counters survive Shutdown but
+        // resetting them on the next Initialize would lose post-mortem visibility.
+        SpilloverPoolAcquiredCount = SpilloverRingPool.AcquiredCount;
+        SpilloverPoolExhaustedCount = SpilloverRingPool.ExhaustedCount;
+
+        // 6. Collapse every slot's spillover chain back to its primary ring, returning all in-flight spillovers to
+        // the pool BEFORE we drop the pool. Without this, chains would still reference rings that no longer
+        // belong to any pool, and a subsequent Start() would allocate a fresh pool while the orphans linger.
+        ThreadSlotRegistry.CollapseAllChainsToPrimary();
+        SpilloverRingPool.Shutdown();
     }
 
     /// <summary>
@@ -300,6 +402,12 @@ public static class TyphonProfiler
     public static long FinalDrainPasses { get; private set; }
     public static long FinalDrainZeroProgressPasses { get; private set; }
     public static long FinalDrainPendingBytes { get; private set; }
+
+    /// <summary>Snapshot of total spillover-buffer acquires across the session, captured at <see cref="Stop"/> time. Each acquire corresponds to one chain-extension on a slot's overflow.</summary>
+    public static long SpilloverPoolAcquiredCount { get; private set; }
+
+    /// <summary>Snapshot of total spillover-pool exhaustions captured at <see cref="Stop"/> time — overflow events that found the pool empty and fell back to the drop path. Non-zero means the configured <c>SpilloverBufferCount</c> was undersized for the workload.</summary>
+    public static long SpilloverPoolExhaustedCount { get; private set; }
 
     public static string SlotStateDump => SSlotStateDump ?? "(not captured)";
     private static string SSlotStateDump;

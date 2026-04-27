@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -205,6 +206,73 @@ public static class TyphonEvent
     /// restore.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Chain-aware reservation. Tries the slot's current <see cref="ThreadSlot.ChainTail"/>; on overflow, attempts
+    /// to acquire a spillover from <see cref="SpilloverRingPool"/>, link it onto the chain, and reserve there.
+    /// Returns the ring the reservation landed on via <paramref name="reservedOn"/> so the caller can publish to
+    /// the SAME ring (publishing to a different ring would corrupt SPSC ordering). When the slot has a null
+    /// primary or the pool is exhausted, returns <c>false</c> without reserving — the per-kind drop counter on
+    /// the overflowing tail has already been bumped via <see cref="TraceRecordRing.TryReserve(int, byte, out Span{byte})"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Capture-once discipline.</b> The producer reads <c>slot.ChainTail</c> exactly once per call. If the
+    /// reservation succeeds on the first try, the producer publishes on that same captured ring. If the first try
+    /// fails and the chain extends, the producer publishes on the new spillover, again the captured one. There is
+    /// no path where TryReserve and Publish target different rings.
+    /// </para>
+    /// <para>
+    /// <b>SPSC ordering on chain link.</b> The producer assigns <c>tail.SetNext(spill)</c> before <c>slot.ChainTail = spill</c>.
+    /// On x64 TSO both stores are release-ordered. The consumer reads <c>head.Next</c> with <see cref="Volatile.Read"/>
+    /// to defeat JIT hoisting. A consumer that observes <c>head.IsEmpty == true</c> with a stale-null <c>head.Next</c>
+    /// simply doesn't advance this pass — next pass picks it up. Not a correctness bug, just a fraction of a millisecond
+    /// of latency.
+    /// </para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryReserveOnChain(ThreadSlot slot, int size, byte kind, out Span<byte> destination, out TraceRecordRing reservedOn)
+    {
+        var tail = slot.ChainTail;
+        if (tail == null)
+        {
+            // Slot not claimed (Buffer null) — cannot reserve.
+            destination = default;
+            reservedOn = null;
+            return false;
+        }
+        if (tail.TryReserve(size, kind, out destination))
+        {
+            reservedOn = tail;
+            return true;
+        }
+        // Overflow on the current tail. Try to extend the chain with a fresh spillover from the pool.
+        var spill = SpilloverRingPool.TryAcquire();
+        if (spill == null)
+        {
+            // Pool exhausted (or not initialised) — drop. The TryReserve above already bumped the per-kind drop
+            // counter on `tail`, so the breakdown stays accurate.
+            reservedOn = null;
+            return false;
+        }
+        // Publish the new ring into the chain, then advance ChainTail. SPSC: this method only ever runs on the
+        // owning thread, so concurrent producers on the same slot are impossible.
+        tail.SetNext(spill);
+        slot.ChainTail = spill;
+        if (spill.TryReserve(size, kind, out destination))
+        {
+            // Recovery succeeded — the failing TryReserve on `tail` above bumped its drop counters, but no data
+            // was actually lost. Rescind that bump so the diagnostic counters reflect real loss only.
+            tail.RescindLastDrop(kind);
+            reservedOn = spill;
+            return true;
+        }
+        // Should be unreachable — a fresh spillover is at least 64 KiB and the record fits within MaxRecordSize
+        // (0xFFFE bytes). If it ever happens (e.g. someone configured a too-small spillover for a giant record),
+        // the per-kind drop counter on the spillover has been bumped by the failing TryReserve.
+        reservedOn = null;
+        return false;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static void PublishEvent<T>(ref T evt, byte threadSlot, ulong previousSpanId, ulong spanId) where T : struct, ITraceEventEncoder, allows ref struct
     {
@@ -219,11 +287,13 @@ public static class TyphonEvent
         var endTs = Stopwatch.GetTimestamp();
         var size = evt.ComputeSize();
         var slot = ThreadSlotRegistry.GetSlot(threadSlot);
-        var ring = slot.Buffer;
-        if (ring != null && ring.TryReserve(size, out var dst))
+        // Chain-aware reserve: try the current ChainTail (primary or latest spillover), and on overflow extend the
+        // chain with a fresh spillover from the pool. The reservation MUST land on the same ring as Publish — we
+        // capture the ring used (`reservedOn`) and publish to that exact instance.
+        if (TryReserveOnChain(slot, size, T.Kind, out var dst, out var reservedOn))
         {
             evt.EncodeTo(dst, endTs, out _);
-            ring.Publish();
+            reservedOn.Publish();
         }
         CurrentOpenSpanId = previousSpanId;
     }
@@ -2127,7 +2197,7 @@ public static class TyphonEvent
     // Diagnostics
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Total records dropped across all slots due to ring-buffer overflow.</summary>
+    /// <summary>Total records dropped across all slots due to ring-buffer overflow — primary AND any in-flight spillovers in each slot's chain.</summary>
     public static long TotalDroppedEvents
     {
         get
@@ -2136,13 +2206,61 @@ public static class TyphonEvent
             var hwm = ThreadSlotRegistry.HighWaterMark;
             for (var i = 0; i < hwm; i++)
             {
-                var buffer = ThreadSlotRegistry.GetSlot(i).Buffer;
-                if (buffer != null)
+                var slot = ThreadSlotRegistry.GetSlot(i);
+                var ring = slot.ChainHead ?? slot.Buffer;
+                while (ring != null)
                 {
-                    total += buffer.DroppedEvents;
+                    total += ring.DroppedEvents;
+                    ring = ring.Next;
                 }
             }
             return total;
+        }
+    }
+
+    /// <summary>
+    /// Drop counts broken down by <see cref="TraceEventKind"/>, summed across all per-thread rings. Caller-visible
+    /// only after a quiesced state (e.g. shutdown post-<see cref="TyphonProfiler.Stop"/>) since the per-ring
+    /// counters are updated lock-free SPSC by the producer threads.
+    /// </summary>
+    /// <remarks>
+    /// Currently only span events (those routed through <see cref="PublishEvent{T}"/>) are tracked per-kind — they
+    /// pass <c>T.Kind</c> to <see cref="TraceRecordRing.TryReserve(int, byte, out Span{byte})"/>. Instant events
+    /// (TickStart/TickEnd/Phase/GC/Memory/...) emitted directly via <c>EmitX</c> still drop into the aggregate
+    /// <see cref="TotalDroppedEvents"/> count but aren't broken down here yet. The sum of all values returned can
+    /// therefore be lower than <see cref="TotalDroppedEvents"/>; the gap is "instants dropped".
+    /// </remarks>
+    public static IReadOnlyDictionary<TraceEventKind, long> DroppedEventsByKind
+    {
+        get
+        {
+            var totals = new long[256];
+            var hwm = ThreadSlotRegistry.HighWaterMark;
+            for (var i = 0; i < hwm; i++)
+            {
+                // Walk the slot's chain — drops can land on the primary (when pool was exhausted on extension) OR
+                // on a spillover (when a spillover's own capacity overflowed before we could chain again, rare).
+                // Aggregating only the primary would miss the latter.
+                var slot = ThreadSlotRegistry.GetSlot(i);
+                var ring = slot.ChainHead ?? slot.Buffer;
+                while (ring != null)
+                {
+                    for (var k = 0; k < 256; k++)
+                    {
+                        totals[k] += ring.DroppedEventsForKind((byte)k);
+                    }
+                    ring = ring.Next;
+                }
+            }
+            var result = new Dictionary<TraceEventKind, long>();
+            for (var k = 0; k < 256; k++)
+            {
+                if (totals[k] > 0)
+                {
+                    result[(TraceEventKind)k] = totals[k];
+                }
+            }
+            return result;
         }
     }
 

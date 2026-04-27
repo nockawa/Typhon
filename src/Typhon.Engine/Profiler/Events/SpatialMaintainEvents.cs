@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialMaintainInsert"/>.</summary>
 public ref struct SpatialMaintainInsertEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialMaintainInsert;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -30,6 +32,8 @@ public ref struct SpatialMaintainInsertEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialMaintainUpdateSlowPath"/>.</summary>
 public ref struct SpatialMaintainUpdateSlowPathEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialMaintainUpdateSlowPath;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

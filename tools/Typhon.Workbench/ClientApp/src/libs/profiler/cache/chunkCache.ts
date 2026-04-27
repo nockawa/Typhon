@@ -77,6 +77,16 @@ export interface ChunkCacheState {
       threadNames: Map<number, string>;
     };
   } | null;
+  /**
+   * Persistent slot → thread-name map. ThreadInfo records are emitted ONCE per slot at slot-claim time and live in the
+   * pre-tick bucket of the FIRST chunk only (the cache builder prepends pre-tick records to chunk 1's binary). If chunk 1
+   * isn't currently loaded — e.g., the user dragged a viewRange to a later region of the trace — the per-assembly
+   * `threadNames` aggregation walks only the resident chunks and finds nothing. Persisting the map across chunk loads /
+   * evictions matches the metadata-not-per-tick-data nature of ThreadInfo: once a slot's name is observed, it stays. The
+   * accumulator is mutated during chunk insertion (`storeChunk`); `assembleTickViewAndNumbers` returns this map directly
+   * instead of recomputing per call. Cleared only when the cache itself is recreated (new session / fingerprint change).
+   */
+  threadNames: Map<number, string>;
 }
 
 /**
@@ -119,6 +129,7 @@ export function createChunkCache(budgetBytes: number = DEFAULT_BUDGET, opfsStore
     opfsStore,
     overBudgetWarned: false,
     failedChunks: new Map(),
+    threadNames: new Map(),
   };
 }
 
@@ -316,7 +327,13 @@ export function assembleTickViewAndNumbers(cache: ChunkCacheState, systems: Syst
   for (const idx of mergedIndices) {
     tickData[idx].rawEvents = [];
   }
-  const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } = aggregateGaugeData(tickData);
+  const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions } = aggregateGaugeData(tickData);
+  // Use the cache-level persistent thread-name map rather than the per-assembly aggregator's
+  // result. The aggregator only sees currently-resident ticks; if chunk 1 (where pre-tick
+  // ThreadInfo records live) has been evicted or never loaded for the current viewRange, the
+  // aggregator returns an empty map even though we saw the names earlier. The persistent map on
+  // the cache survives evictions — see `cache.threadNames` docs and the harvest in `loadChunk`.
+  const threadNames = cache.threadNames;
   const result = { tickData, tickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames };
   // Snapshot the version at which this result was computed. Any future call with the same version returns the same result via the
   // short-circuit at the top. Invalidated automatically when entries mutate (loadChunk ↑, evict ↑).
@@ -528,6 +545,19 @@ async function loadChunk(
     cache.entries.set(chunkIdx, loaded);
     cache.entriesVersion++;
     cache.totalBytes += byteSize;
+    // Harvest ThreadInfo entries from this chunk's tickData into the persistent cache-level map.
+    // ThreadInfo records are emitted ONCE per slot at slot-claim time and only live in chunk 1's
+    // pre-tick bucket (cache builder prepends pre-tick records to chunk 1's binary). Walk every
+    // tick's threadInfos here so the slot→name map survives chunk eviction — without this, a user
+    // whose viewRange doesn't currently overlap chunk 1 sees lane labels regress to "Slot N".
+    // First observation wins (re-claims under the same slot would emit a fresh ThreadInfo, which we
+    // intentionally honour via the `set` overwrite — matches `aggregateGaugeData`'s behavior).
+    for (const td of tickData) {
+      if (td.threadInfos.length === 0) continue;
+      for (const info of td.threadInfos) {
+        cache.threadNames.set(info.threadSlot, info.name);
+      }
+    }
     // Successful decode clears any prior failure record for this chunk. A transient error (network blip, server restart
     // mid-request) would otherwise leave a stale entry in failedChunks that suppresses future retries for the retry-after
     // window even though the chunk is demonstrably fine now.

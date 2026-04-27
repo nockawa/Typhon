@@ -27,6 +27,8 @@ namespace Typhon.Engine.Profiler;
 /// </remarks>
 public ref struct EcsQueryExecuteEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsQueryExecute;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -66,6 +68,8 @@ public ref struct EcsQueryExecuteEvent : ITraceEventEncoder
 
 public ref struct EcsQueryCountEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsQueryCount;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -104,6 +108,8 @@ public ref struct EcsQueryCountEvent : ITraceEventEncoder
 
 public ref struct EcsQueryAnyEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsQueryAny;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

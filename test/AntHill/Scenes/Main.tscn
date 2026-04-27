@@ -7,7 +7,7 @@
 [node name="Main" type="Node2D" unique_id=1288788662]
 script = ExtResource("1")
 
-[node name="AntRenderer" type="MultiMeshInstance2D" parent="." unique_id=1820962456]
+[node name="AntRenderer" type="Node2D" parent="." unique_id=1820962456]
 script = ExtResource("2")
 
 [node name="Camera" type="Camera2D" parent="." unique_id=1172137721]

@@ -10,6 +10,8 @@ namespace Typhon.Engine.Profiler;
 
 public ref struct QueryParseEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryParse;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public ushort PredicateCount;
     public byte BranchCount;
@@ -21,6 +23,8 @@ public ref struct QueryParseEvent : ITraceEventEncoder
 
 public ref struct QueryParseDnfEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryParseDnf;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public ushort InBranches;
     public ushort OutBranches;
@@ -32,6 +36,8 @@ public ref struct QueryParseDnfEvent : ITraceEventEncoder
 
 public ref struct QueryPlanEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryPlan;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public byte EvaluatorCount;
     public ushort IndexFieldIdx;
@@ -45,6 +51,8 @@ public ref struct QueryPlanEvent : ITraceEventEncoder
 
 public ref struct QueryEstimateEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryEstimate;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public ushort FieldIdx;
     public long Cardinality;
@@ -56,6 +64,8 @@ public ref struct QueryEstimateEvent : ITraceEventEncoder
 
 public ref struct QueryPlanSortEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryPlanSort;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public byte EvaluatorCount;
     public uint SortNs;
@@ -67,6 +77,8 @@ public ref struct QueryPlanSortEvent : ITraceEventEncoder
 
 public ref struct QueryExecuteIndexScanEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryExecuteIndexScan;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public ushort PrimaryFieldIdx;
     public byte Mode;
@@ -78,6 +90,8 @@ public ref struct QueryExecuteIndexScanEvent : ITraceEventEncoder
 
 public ref struct QueryExecuteIterateEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryExecuteIterate;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int ChunkCount;
     public int EntryCount;
@@ -89,6 +103,8 @@ public ref struct QueryExecuteIterateEvent : ITraceEventEncoder
 
 public ref struct QueryExecuteFilterEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryExecuteFilter;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public byte FilterCount;
     public int RejectedCount;
@@ -100,6 +116,8 @@ public ref struct QueryExecuteFilterEvent : ITraceEventEncoder
 
 public ref struct QueryExecutePaginationEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryExecutePagination;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int Skip;
     public int Take;
@@ -112,6 +130,8 @@ public ref struct QueryExecutePaginationEvent : ITraceEventEncoder
 
 public ref struct QueryCountEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.QueryCount;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int ResultCount;
     public readonly int ComputeSize() => QueryEventCodec.ComputeSizeCount(TraceIdHi != 0 || TraceIdLo != 0);
@@ -124,6 +144,8 @@ public ref struct QueryCountEvent : ITraceEventEncoder
 
 public ref struct EcsQueryConstructEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsQueryConstruct;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public ushort TargetArchId;
     public byte Polymorphic;
@@ -136,6 +158,8 @@ public ref struct EcsQueryConstructEvent : ITraceEventEncoder
 
 public ref struct EcsQuerySubtreeExpandEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsQuerySubtreeExpand;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public ushort SubtreeCount;
     public ushort RootId;
@@ -149,6 +173,8 @@ public ref struct EcsQuerySubtreeExpandEvent : ITraceEventEncoder
 
 public ref struct EcsViewRefreshPullEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsViewRefreshPull;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public uint QueryNs;
     public ushort ArchetypeMaskBits;
@@ -160,6 +186,8 @@ public ref struct EcsViewRefreshPullEvent : ITraceEventEncoder
 
 public ref struct EcsViewIncrementalDrainEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsViewIncrementalDrain;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int DeltaCount;
     public byte Overflow;
@@ -171,6 +199,8 @@ public ref struct EcsViewIncrementalDrainEvent : ITraceEventEncoder
 
 public ref struct EcsViewRefreshFullEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsViewRefreshFull;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int OldCount;
     public int NewCount;
@@ -183,6 +213,8 @@ public ref struct EcsViewRefreshFullEvent : ITraceEventEncoder
 
 public ref struct EcsViewRefreshFullOrEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsViewRefreshFullOr;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int OldCount;
     public int NewCount;

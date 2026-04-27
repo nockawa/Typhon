@@ -76,6 +76,14 @@ public static class ProfilerLiveStream
             {
                 await WriteEventAsync(ctx, new LiveStreamEventDto(Kind: "metadata", Metadata: runtime.Metadata), ct);
             }
+            // Replay the pre-tick (tickNumber == 0) batch — typically the catch-up ThreadInfo records
+            // synthesized by the engine's TcpExporter on accept. The TCP read loop processes those bytes
+            // before this SSE handler ever registers TickReceived, so the live event-firing path drops them.
+            // Replaying the cached snapshot here is the same pattern as the Metadata snapshot above.
+            if (runtime.MetadataTickBatch != null)
+            {
+                await WriteEventAsync(ctx, new LiveStreamEventDto(Kind: "tick", Tick: runtime.MetadataTickBatch), ct);
+            }
             await WriteEventAsync(ctx, new LiveStreamEventDto(Kind: "heartbeat", Status: runtime.ConnectionStatus), ct);
 
             await DrainLoopAsync(ctx, channel.Reader, runtime, ct);

@@ -10,6 +10,8 @@ namespace Typhon.Engine.Profiler;
 /// </summary>
 public ref struct ClusterMigrationEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.ClusterMigration;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

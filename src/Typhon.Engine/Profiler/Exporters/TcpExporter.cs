@@ -31,6 +31,8 @@ namespace Typhon.Engine.Profiler.Exporters;
 public sealed class TcpExporter : ResourceNode, IProfilerExporter
 {
     private readonly int _port;
+    private readonly int _liveConnectTimeoutMs;
+    private readonly ManualResetEventSlim _firstClientConnected = new(initialState: false);
     private TcpListener _listener;
     private Thread _acceptThread;
     private bool _shutdown;
@@ -42,15 +44,34 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     private ProfilerSessionMetadata _metadata;
 
     private bool _disposed;
+    private bool _shutdownFrameSent;
 
-    public TcpExporter(int port, IResource parent) : base("TcpExporter", ResourceType.Service, parent ?? throw new ArgumentNullException(nameof(parent)))
+    /// <summary>
+    /// Construct a TcpExporter listening on <paramref name="port"/>. Pass <paramref name="liveConnectTimeoutMs"/> &gt; 0
+    /// to make <see cref="Initialize"/> block until the first client connects (or the timeout elapses) — gives the
+    /// host an attach-the-viewer-before-startup window. <c>0</c> (default) preserves the original async behavior:
+    /// Initialize returns immediately, clients connect when they connect.
+    /// </summary>
+    public TcpExporter(int port, IResource parent, int liveConnectTimeoutMs = 0)
+        : base("TcpExporter", ResourceType.Service, parent ?? throw new ArgumentNullException(nameof(parent)))
     {
+        if (liveConnectTimeoutMs < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(liveConnectTimeoutMs), "must be ≥ 0 (0 = don't wait)");
+        }
         _port = port;
+        _liveConnectTimeoutMs = liveConnectTimeoutMs;
         // Match <see cref="FileExporter"/>'s capacity — 64 gives the socket-send path ~16 MB of slack, enough to absorb a single// gcChurn-class burst
         // without drop-newest firing. Previously 4, which was too tight for any workload with multi-tick-spanning// I/O pressure. See FileExporter ctor for
         // why not 256.
         Queue = new ExporterQueue(64);
     }
+
+    /// <summary>True if the first client has connected since startup. Stays true after the client disconnects (we only signal once).</summary>
+    public bool HasClientEverConnected => _firstClientConnected.IsSet;
+
+    /// <summary>The configured live-connect wait timeout in milliseconds (0 = no wait).</summary>
+    public int LiveConnectTimeoutMs => _liveConnectTimeoutMs;
 
     /// <inheritdoc />
     public ExporterQueue Queue { get; }
@@ -75,6 +96,17 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
             IsBackground = true
         };
         _acceptThread.Start();
+
+        // Synchronous "wait for first client" gate. The listener is up, the accept thread is running — both
+        // necessary for a client to actually connect during this wait. Block on `_firstClientConnected` (Set
+        // by AcceptLoop after `_client = socket`). The wait is a no-op when the timeout is 0.
+        if (_liveConnectTimeoutMs > 0)
+        {
+            // We don't reach Stopwatch.Elapsed here for logging because the host owns logging — the
+            // counterpart `HasClientEverConnected` after Initialize lets the host observe the outcome
+            // (timeout vs. connected) and decide what to print.
+            _firstClientConnected.Wait(_liveConnectTimeoutMs);
+        }
     }
 
     /// <inheritdoc />
@@ -106,13 +138,7 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     /// <inheritdoc />
     public void Flush()
     {
-        var client = _client;
-        if (client != null)
-        {
-            var shutdownFrame = new byte[LiveStreamProtocol.FrameHeaderSize];
-            LiveStreamProtocol.WriteFrameHeader(shutdownFrame, LiveFrameType.Shutdown, 0);
-            TrySendAll(client, shutdownFrame, 0, shutdownFrame.Length);
-        }
+        SendShutdownFrame();
 
         _shutdown = true;
         try { _listener?.Stop(); }
@@ -122,6 +148,40 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
         }
 
         _acceptThread?.Join(500);
+    }
+
+    /// <summary>
+    /// Send the <see cref="LiveFrameType.Shutdown"/> envelope synchronously, switching the socket back to blocking mode for this one send. The
+    /// hot-path uses non-blocking <see cref="TrySendAll"/>, which silently drops on <see cref="SocketError.WouldBlock"/> — fine for Block frames
+    /// (the consumer's bounded queue absorbs back-pressure) but disastrous for the Shutdown signal. If the workbench misses Shutdown, it sees
+    /// the socket close as "connection lost" and enters the reconnect loop forever. Idempotent — second call no-ops.
+    /// </summary>
+    private void SendShutdownFrame()
+    {
+        if (_shutdownFrameSent)
+        {
+            return;
+        }
+        _shutdownFrameSent = true;
+
+        var client = _client;
+        if (client == null)
+        {
+            return;
+        }
+
+        var shutdownFrame = new byte[LiveStreamProtocol.FrameHeaderSize];
+        LiveStreamProtocol.WriteFrameHeader(shutdownFrame, LiveFrameType.Shutdown, 0);
+        try
+        {
+            client.Blocking = true;
+            client.SendTimeout = 500;
+            client.Send(shutdownFrame, 0, shutdownFrame.Length, SocketFlags.None);
+        }
+        catch
+        {
+            // Best-effort — peer may already be gone or the socket may be in a bad state.
+        }
     }
 
     /// <inheritdoc />
@@ -140,6 +200,9 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
         if (disposing)
         {
             _shutdown = true;
+            // Belt-and-suspenders: if Flush wasn't called (e.g. owner skipped Stop and went straight to Dispose),
+            // still try to deliver the Shutdown envelope before tearing down the socket.
+            SendShutdownFrame();
             var client = Interlocked.Exchange(ref _client, null);
             if (client != null)
             {
@@ -163,6 +226,11 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
             _acceptThread?.Join(2000);
             try { Queue?.Dispose(); }
+            catch
+            {
+                // ignored
+            }
+            try { _firstClientConnected.Dispose(); }
             catch
             {
                 // ignored
@@ -246,8 +314,21 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
                 socket.SendTimeout = 5000;
                 socket.Send(frameBuffer);
+
+                // Before switching to non-blocking (and before exposing _client to ProcessBatch), send a catch-up Block frame
+                // carrying a synthetic ThreadInfo record for every currently-claimed slot. Without this, mid-session live
+                // connections never see the one-shot ThreadInfo records emitted when each worker claimed its slot — those
+                // were silently dropped by ProcessBatch while _client was null — and the viewer has no slot→name mapping,
+                // which leaves lanes unlabeled and the UI unable to lay out span tracks. See docs on TcpExporter above.
+                TrySendCatchupThreadInfoBlock(socket);
+
                 socket.Blocking = false;
                 _client = socket;
+
+                // Signal any synchronous-wait gate set up at Initialize time. Done AFTER `_client = socket` so a
+                // host that observes HasClientEverConnected and starts emitting can be sure ProcessBatch will
+                // see a non-null client. ManualResetEventSlim.Set is idempotent — second connect doesn't re-block.
+                _firstClientConnected.Set();
             }
             catch (SocketException)
             {
@@ -328,6 +409,88 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
         bw.Flush();
         return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Encode a ThreadInfo record for every currently-claimed slot and send them as one Block frame on <paramref name="socket"/>. Runs once per
+    /// client accept, while the socket is still in blocking mode. Silent no-op if zero slots are claimed (no data yet, or the client connected
+    /// before the first worker emitted an event — in that case the normal path will deliver ThreadInfo as usual).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reads <see cref="ThreadSlot.OwnerManagedThreadId"/> and <see cref="ThreadSlot.OwnerThreadName"/> from another thread. The producer-side
+    /// assignment order is <c>State → CAS Active</c> then <c>ManagedThreadId</c> then <c>OwnerThreadName</c>, so we skip any slot whose
+    /// <c>OwnerManagedThreadId</c> is still zero — <c>AssignClaim</c> is mid-flight and the producer will emit its own ThreadInfo shortly.
+    /// </para>
+    /// <para>
+    /// Failure mode: any send exception propagates up to <see cref="AcceptLoop"/>'s catch block, which closes the socket — identical handling to
+    /// an init-frame send failure. The next reconnect attempt will get a fresh replay.
+    /// </para>
+    /// </remarks>
+    private static void TrySendCatchupThreadInfoBlock(Socket socket)
+    {
+        var scanLimit = ThreadSlotRegistry.HighWaterMark;
+        if (scanLimit == 0)
+        {
+            return;
+        }
+
+        // Allocate generously — 256 max slots × 273 bytes (12+4+2+255 name cap) = ~70 KB worst case. Heap-allocated because this runs once per
+        // client accept; the cost is negligible and keeps the stack frame small.
+        var rawScratch = new byte[ThreadSlotRegistry.MaxSlots * 273];
+        var writePos = 0;
+        var recordCount = 0;
+        var timestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        for (var i = 0; i < scanLimit; i++)
+        {
+            var state = ThreadSlotRegistry.GetSlotState(i);
+            if (state != (int)SlotState.Active && state != (int)SlotState.Retiring)
+            {
+                continue;
+            }
+
+            var slot = ThreadSlotRegistry.GetSlot(i);
+            var managedThreadId = slot.OwnerManagedThreadId;
+            if (managedThreadId == 0)
+            {
+                continue; // AssignClaim still mid-flight — producer will emit its own ThreadInfo
+            }
+
+            var name = slot.OwnerThreadName;
+            var nameBytes = name != null ? Encoding.UTF8.GetBytes(name) : Array.Empty<byte>();
+            if (nameBytes.Length > 255)
+            {
+                nameBytes = nameBytes.AsSpan(0, 255).ToArray(); // defensive cap; pathological for a thread name
+            }
+
+            var recordSize = ThreadInfoEventCodec.ComputeSize(nameBytes.Length);
+            if (writePos + recordSize > rawScratch.Length)
+            {
+                break;
+            }
+
+            ThreadInfoEventCodec.WriteThreadInfo(rawScratch.AsSpan(writePos), (byte)i, timestamp, managedThreadId, nameBytes, out var bytesWritten);
+            writePos += bytesWritten;
+            recordCount++;
+        }
+
+        if (recordCount == 0)
+        {
+            return;
+        }
+
+        // Same framing as ProcessBatch: [frame header][block header][LZ4 compressed records].
+        var maxCompressed = LZ4Codec.MaximumOutputSize(writePos);
+        var frame = new byte[LiveStreamProtocol.FrameHeaderSize + TraceBlockEncoder.BlockHeaderSize + maxCompressed];
+        var blockHeader = frame.AsSpan(LiveStreamProtocol.FrameHeaderSize, TraceBlockEncoder.BlockHeaderSize);
+        var compressedSlot = frame.AsSpan(LiveStreamProtocol.FrameHeaderSize + TraceBlockEncoder.BlockHeaderSize);
+
+        var compressedSize = TraceBlockEncoder.EncodeBlock(rawScratch.AsSpan(0, writePos), recordCount, compressedSlot, blockHeader);
+        var payloadSize = TraceBlockEncoder.BlockHeaderSize + compressedSize;
+        LiveStreamProtocol.WriteFrameHeader(frame.AsSpan(), LiveFrameType.Block, payloadSize);
+
+        socket.Send(frame, 0, LiveStreamProtocol.FrameHeaderSize + payloadSize, SocketFlags.None);
     }
 
     private static void WriteShortString(BinaryWriter bw, string value)

@@ -191,9 +191,20 @@ export const SkipReasonNames: Record<number, string> = {
 
 /**
  * Display name for each span kind. Used by the viewer whenever it needs to render a human-readable
- * label next to a span record. Update when new TraceEventKind values are added on the engine side.
+ * label next to a span record. Mirrors the C# `TraceEventKind` enum in
+ * `src/Typhon.Profiler/TraceEventKind.cs` — keep this table in sync when new kinds are added on the
+ * engine side. Entries that would otherwise need a TS enum extension use raw numeric keys; the TS
+ * enum (above) intentionally only declares kinds that other code references symbolically.
+ *
+ * Note on kind 200 — both `NamedSpan` (legacy) and `EcsQueryMaskAnd` (#277) are assigned `200`
+ * on the C# side. NamedSpan is decoded specially in `chunkDecoder.ts` (it has an inline UTF-8
+ * payload that the decoder treats verbatim — unrelated to this table). For everything else that
+ * lands at kind 200, the modern engine emits `EcsQueryMaskAnd`, so this table labels 200 as
+ * `ECS.Query.MaskAnd`. The pre-#277 `NamedSpan` entry below is overwritten by the later
+ * `200: 'ECS.Query.MaskAnd'` line — intentional: post-#277 traces dominate.
  */
 export const SpanKindNames: Record<number, string> = {
+  // Pre-#277 kinds (mostly already in the TS enum).
   [TraceEventKind.SchedulerChunk]: 'Scheduler.Chunk',
   [TraceEventKind.TransactionCommit]: 'Transaction.Commit',
   [TraceEventKind.TransactionRollback]: 'Transaction.Rollback',
@@ -231,7 +242,182 @@ export const SpanKindNames: Record<number, string> = {
   [TraceEventKind.StatisticsRebuild]: 'Statistics.Rebuild',
   [TraceEventKind.ClusterMigration]: 'Cluster.Migration',
   [TraceEventKind.GcSuspension]: 'GC.Suspension',
-  [TraceEventKind.NamedSpan]: 'NamedSpan',
+  // `NamedSpan` (= 200) is intentionally NOT listed here: it's the inline-name fallback kind
+  // that `chunkDecoder.decodeSpan` handles specially. Kind 200 is also `EcsQueryMaskAnd` on
+  // the modern engine — see the entry below in the ECS subtree block.
+
+  // Concurrency subtree (90-116) — added by #277.
+  90: 'Concurrency.AccessControl.SharedAcquire',
+  91: 'Concurrency.AccessControl.SharedRelease',
+  92: 'Concurrency.AccessControl.ExclusiveAcquire',
+  93: 'Concurrency.AccessControl.ExclusiveRelease',
+  94: 'Concurrency.AccessControl.Promotion',
+  95: 'Concurrency.AccessControl.Contention',
+  96: 'Concurrency.AccessControlSmall.SharedAcquire',
+  97: 'Concurrency.AccessControlSmall.SharedRelease',
+  98: 'Concurrency.AccessControlSmall.ExclusiveAcquire',
+  99: 'Concurrency.AccessControlSmall.ExclusiveRelease',
+  100: 'Concurrency.AccessControlSmall.Contention',
+  101: 'Concurrency.Resource.Accessing',
+  102: 'Concurrency.Resource.Modify',
+  103: 'Concurrency.Resource.Destroy',
+  104: 'Concurrency.Resource.ModifyPromotion',
+  105: 'Concurrency.Resource.Contention',
+  106: 'Concurrency.Epoch.ScopeEnter',
+  107: 'Concurrency.Epoch.ScopeExit',
+  108: 'Concurrency.Epoch.Advance',
+  109: 'Concurrency.Epoch.Refresh',
+  110: 'Concurrency.Epoch.SlotClaim',
+  111: 'Concurrency.Epoch.SlotReclaim',
+  112: 'Concurrency.AdaptiveWaiter.YieldOrSleep',
+  113: 'Concurrency.OlcLatch.WriteLockAttempt',
+  114: 'Concurrency.OlcLatch.WriteUnlock',
+  115: 'Concurrency.OlcLatch.MarkObsolete',
+  116: 'Concurrency.OlcLatch.ValidationFail',
+
+  // Spatial subtree (117-145).
+  117: 'Spatial.Query.AABB',
+  118: 'Spatial.Query.Radius',
+  119: 'Spatial.Query.Ray',
+  120: 'Spatial.Query.Frustum',
+  121: 'Spatial.Query.KNN',
+  122: 'Spatial.Query.Count',
+  123: 'Spatial.RTree.Insert',
+  124: 'Spatial.RTree.Remove',
+  125: 'Spatial.RTree.NodeSplit',
+  126: 'Spatial.RTree.BulkLoad',
+  127: 'Spatial.Grid.CellTierChange',
+  128: 'Spatial.Grid.OccupancyChange',
+  129: 'Spatial.Grid.ClusterCellAssign',
+  130: 'Spatial.Cell.Index.Add',
+  131: 'Spatial.Cell.Index.Update',
+  132: 'Spatial.Cell.Index.Remove',
+  133: 'Spatial.ClusterMigration.Detect',
+  134: 'Spatial.ClusterMigration.Queue',
+  135: 'Spatial.ClusterMigration.Hysteresis',
+  136: 'Spatial.TierIndex.Rebuild',
+  137: 'Spatial.TierIndex.VersionSkip',
+  138: 'Spatial.Maintain.Insert',
+  139: 'Spatial.Maintain.UpdateSlowPath',
+  140: 'Spatial.Maintain.AabbValidate',
+  141: 'Spatial.Maintain.BackPointerWrite',
+  142: 'Spatial.Trigger.Region',
+  143: 'Spatial.Trigger.Eval',
+  144: 'Spatial.Trigger.Occupant.Diff',
+  145: 'Spatial.Trigger.Cache.Invalidate',
+
+  // Scheduler depth subtree (146-160).
+  146: 'Scheduler.System.StartExecution',
+  147: 'Scheduler.System.Completion',
+  148: 'Scheduler.System.QueueWait',
+  149: 'Scheduler.System.SingleThreaded',
+  150: 'Scheduler.Worker.Idle',
+  151: 'Scheduler.Worker.Wake',
+  152: 'Scheduler.Worker.BetweenTick',
+  153: 'Scheduler.Dispense',
+  154: 'Scheduler.Dependency.Ready',
+  155: 'Scheduler.Dependency.FanOut',
+  156: 'Scheduler.Overload.LevelChange',
+  157: 'Scheduler.Overload.SystemShed',
+  158: 'Scheduler.Overload.TickMultiplier',
+  159: 'Scheduler.Graph.Build',
+  160: 'Scheduler.Graph.Rebuild',
+
+  // Runtime subtree (161-164, 235-240).
+  161: 'Runtime.Phase.UoWCreate',
+  162: 'Runtime.Phase.UoWFlush',
+  163: 'Runtime.Transaction.Lifecycle',
+  164: 'Runtime.Subscription.OutputExecute',
+  235: 'Runtime.Subscription.Subscriber',
+  236: 'Runtime.Subscription.Delta.Build',
+  237: 'Runtime.Subscription.Delta.Serialize',
+  238: 'Runtime.Subscription.Transition.BeginSync',
+  239: 'Runtime.Subscription.Output.Cleanup',
+  240: 'Runtime.Subscription.Delta.DirtyBitmapSupplement',
+
+  // Storage subtree (165-171).
+  165: 'Storage.PageCache.DirtyWalk',
+  166: 'Storage.Segment.Create',
+  167: 'Storage.Segment.Grow',
+  168: 'Storage.Segment.Load',
+  169: 'Storage.ChunkSegment.Grow',
+  170: 'Storage.FileHandle',
+  171: 'Storage.OccupancyMap.Grow',
+
+  // Memory subtree (172).
+  172: 'Memory.AlignmentWaste',
+
+  // Data plane (173-186).
+  173: 'Data.Transaction.Init',
+  174: 'Data.Transaction.Prepare',
+  175: 'Data.Transaction.Validate',
+  176: 'Data.Transaction.Conflict',
+  177: 'Data.Transaction.Cleanup',
+  178: 'Data.MVCC.ChainWalk',
+  179: 'Data.MVCC.VersionCleanup',
+  180: 'Data.Index.BTree.Search',
+  181: 'Data.Index.BTree.RangeScan',
+  182: 'Data.Index.BTree.RangeScan.Revalidate',
+  183: 'Data.Index.BTree.RebalanceFallback',
+  184: 'Data.Index.BTree.BulkInsert',
+  185: 'Data.Index.BTree.Root',
+  186: 'Data.Index.BTree.NodeCow',
+
+  // Query subtree (187-198).
+  187: 'Query.Parse',
+  188: 'Query.Parse.DNF',
+  189: 'Query.Plan',
+  190: 'Query.Estimate',
+  191: 'Query.Plan.PrimarySelect',
+  192: 'Query.Plan.Sort',
+  193: 'Query.Execute.IndexScan',
+  194: 'Query.Execute.Iterate',
+  195: 'Query.Execute.Filter',
+  196: 'Query.Execute.Pagination',
+  197: 'Query.Execute.StorageMode',
+  198: 'Query.Count',
+
+  // ECS subtree depth (199-213). Note: kind 200 collides with NamedSpan (above) — last writer wins
+  // for the lookup. NamedSpan is decoded specially upstream so spans of "real" NamedSpan kind get a
+  // distinct name from their inline payload regardless of this table.
+  199: 'ECS.Query.Construct',
+  200: 'ECS.Query.MaskAnd',
+  201: 'ECS.Query.SubtreeExpand',
+  202: 'ECS.Query.ConstraintEnabled',
+  203: 'ECS.Query.SpatialAttach',
+  204: 'ECS.View.Refresh.Pull',
+  205: 'ECS.View.IncrementalDrain',
+  206: 'ECS.View.Delta.BufferOverflow',
+  207: 'ECS.View.ProcessEntry',
+  208: 'ECS.View.ProcessEntryOr',
+  209: 'ECS.View.Refresh.Full',
+  210: 'ECS.View.Refresh.FullOr',
+  211: 'ECS.View.Registry.Register',
+  212: 'ECS.View.Registry.Deregister',
+  213: 'ECS.View.Delta.CacheMiss',
+
+  // Durability subtree (214-234).
+  214: 'Durability.WAL.QueueDrain',
+  215: 'Durability.WAL.OsWrite',
+  216: 'Durability.WAL.Signal',
+  217: 'Durability.WAL.GroupCommit',
+  218: 'Durability.WAL.Queue',
+  219: 'Durability.WAL.Buffer',
+  220: 'Durability.WAL.Frame',
+  221: 'Durability.WAL.Backpressure',
+  222: 'Durability.Checkpoint.WriteBatch',
+  223: 'Durability.Checkpoint.Backpressure',
+  224: 'Durability.Checkpoint.Sleep',
+  225: 'Durability.Recovery.Start',
+  226: 'Durability.Recovery.Discover',
+  227: 'Durability.Recovery.Segment',
+  228: 'Durability.Recovery.Record',
+  229: 'Durability.Recovery.Fpi',
+  230: 'Durability.Recovery.Redo',
+  231: 'Durability.Recovery.Undo',
+  232: 'Durability.Recovery.TickFence',
+  233: 'Durability.UoW.State',
+  234: 'Durability.UoW.Deadline',
 };
 
 export interface TraceMetadata {
