@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BAR_AREA_BOTTOM_RESERVED,
   BAR_AREA_TOP,
+  BAR_LEFT_PAD,
+  BAR_WIDTH,
   DRAG_THRESHOLD_PX,
-  MIN_BAR_WIDTH,
   TIMELINE_HEIGHT,
+  buildTickRows,
   computeSelectionIdxRange,
   drawTickOverview,
   hitTestScrollbar,
@@ -15,7 +17,6 @@ import {
 import { formatDuration } from '@/libs/profiler/canvas/canvasUtils';
 import { getStudioThemeTokens } from '@/libs/profiler/canvas/theme';
 import { HelpOverlay } from '@/panels/profiler/components/HelpOverlay';
-import type { TickData } from '@/libs/profiler/model/traceModel';
 import { useProfilerSessionStore } from '@/stores/useProfilerSessionStore';
 import { useProfilerViewStore } from '@/stores/useProfilerViewStore';
 import { useThemeStore } from '@/stores/useThemeStore';
@@ -60,31 +61,23 @@ const OVERVIEW_HELP_LINES: string[] = [
   '    → Viewport selection is NOT changed.',
   '',
   '  Wheel (no modifier)',
-  '    Pan the overview window ≈10% horizontally per notch.',
+  '    Move the viewport selection by ±1 tick (translates the',
+  '    whole range — multi-tick selections keep their size).',
   '',
   '  Shift + Wheel',
-  '    Pan faster (≈25% per notch).',
+  '    Step the viewport-selection right edge by ±1 tick',
+  '    (resizes the range; left edge stays put).',
   '',
   '  Ctrl + Wheel',
-  '    Step the viewport-selection right edge by ±1 tick.',
-  '',
-  '  Ctrl + Shift + Wheel',
-  '    Same, by ±5 ticks — accelerator for wide traces.',
+  '    Pan the overview window fast (≈25% per notch).',
 ];
 
 interface Props {
   /** True when the active session is Attach-mode; toggles live-follow behavior. */
   isLive?: boolean;
-  /**
-   * In live mode, the per-tick `TickData[]` derived from the SSE stream by `useProfilerCache`.
-   * The server's metadata DTO has empty `tickSummaries` for attach sessions
-   * (`AttachSessionRuntime.BuildMetadataDto` defers live aggregation), so we synthesise
-   * the overview rows from the live tick cache instead. Ignored in trace mode.
-   */
-  liveTicks?: TickData[];
 }
 
-export default function TickOverview({ isLive = false, liveTicks }: Props) {
+export default function TickOverview({ isLive = false }: Props) {
   const metadata = useProfilerSessionStore((s) => s.metadata);
   const liveFollowActive = useProfilerSessionStore((s) => s.liveFollowActive);
   const setLiveFollowActive = useProfilerSessionStore((s) => s.setLiveFollowActive);
@@ -123,35 +116,10 @@ export default function TickOverview({ isLive = false, liveTicks }: Props) {
     }
   }, []);
 
-  // Derive TickRow[]:
-  //  - Trace mode: from server-built `metadata.tickSummaries` (the cache builder pre-aggregates these).
-  //  - Live mode: from `liveTicks` produced by `useProfilerCache`'s live branch — the server returns an empty
-  //    `tickSummaries` array for attach sessions, so we synthesise the rows on the client.
-  // Coerce numeric fields defensively (orval types tickSummaries fields as `number | string`).
-  const tickRows: TickRow[] = useMemo(() => {
-    if (isLive && liveTicks && liveTicks.length > 0) {
-      return liveTicks.map((t) => ({
-        tickNumber: t.tickNumber,
-        startUs: t.startUs,
-        endUs: t.endUs,
-        durationUs: t.durationUs,
-        eventCount: t.rawEvents?.length ?? 0,
-      }));
-    }
-    const summaries = metadata?.tickSummaries;
-    if (!summaries || summaries.length === 0) return [];
-    return summaries.map((s) => {
-      const start = Number(s.startUs);
-      const duration = Number(s.durationUs);
-      return {
-        tickNumber: Number(s.tickNumber),
-        startUs: start,
-        endUs: start + duration,
-        durationUs: duration,
-        eventCount: Number(s.eventCount),
-      };
-    });
-  }, [isLive, liveTicks, metadata?.tickSummaries]);
+  // #289 — both trace and live modes derive from `metadata.tickSummaries`. In live mode the array grows over time
+  // via SSE deltas (server-side IncrementalCacheBuilder finalizes ticks → store appends). The `buildTickRows`
+  // helper handles the float-drift boundary clamp; see its doc for why.
+  const tickRows: TickRow[] = useMemo(() => buildTickRows(metadata?.tickSummaries), [metadata?.tickSummaries]);
 
   const p95 = Number(metadata?.globalMetrics?.p95TickDurationUs ?? 0);
 
@@ -198,10 +166,10 @@ export default function TickOverview({ isLive = false, liveTicks }: Props) {
       return;
     }
     if (isLive) {
-      // Cap visibleCount by what fits at MIN_BAR_WIDTH — same rule as trace mode below. The previous
+      // Cap visibleCount by what fits at BAR_WIDTH — same rule as trace mode below. The previous
       // hardcoded 200 was unrelated to canvas width and caused inconsistent behavior across modes.
       const w = canvasWidthRef.current;
-      const maxVisible = w > 0 ? Math.max(1, Math.floor(w / MIN_BAR_WIDTH)) : tickRows.length;
+      const maxVisible = w > 0 ? Math.max(1, Math.floor((w - BAR_LEFT_PAD) / BAR_WIDTH)) : tickRows.length;
       const sr = scrollRangeRef.current;
       const visibleCount = sr.endIdx - sr.startIdx;
       if (visibleCount <= 0 || liveFollowActive) {
@@ -220,7 +188,7 @@ export default function TickOverview({ isLive = false, liveTicks }: Props) {
       }
     } else {
       const w = canvasWidthRef.current;
-      const visible = w > 0 ? Math.max(1, Math.min(tickRows.length, Math.floor(w / MIN_BAR_WIDTH))) : tickRows.length;
+      const visible = w > 0 ? Math.max(1, Math.min(tickRows.length, Math.floor((w - BAR_LEFT_PAD) / BAR_WIDTH))) : tickRows.length;
       scrollRangeRef.current = { startIdx: 0, endIdx: Math.min(visible, tickRows.length) };
     }
   }, [tickRows, isLive, liveFollowActive]);
@@ -229,16 +197,23 @@ export default function TickOverview({ isLive = false, liveTicks }: Props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
+    // Mirror setupCanvas's measurement protocol: clear the pinned inline width before reading
+    // getBoundingClientRect, otherwise we read back last frame's pinned size after a panel resize
+    // — the self-correction below would clamp maxVisible to the OLD width while setupCanvas (called
+    // inside drawTickOverview just below) measures the NEW width and pins the canvas bigger, so
+    // bars cover only the old width's worth of pixels and the right half of the canvas stays empty.
+    canvas.style.width = '';
+    canvas.style.height = '';
     const rect = canvas.getBoundingClientRect();
     canvasWidthRef.current = rect.width;
 
     // Width-aware self-correction — init effect runs before first layout, so scrollWindow may be larger than the
-    // canvas can show. Clamp down to what fits at MIN_BAR_WIDTH.
+    // canvas can show. Clamp down to what fits at BAR_WIDTH.
     if (!isLive && tickRows.length > 0 && rect.width > 0) {
-      const maxVisible = Math.max(1, Math.min(tickRows.length, Math.floor(rect.width / MIN_BAR_WIDTH)));
+      const maxVisible = Math.max(1, Math.min(tickRows.length, Math.floor((rect.width - BAR_LEFT_PAD) / BAR_WIDTH)));
       const sr0 = scrollRangeRef.current;
       const currentVisible = sr0.endIdx - sr0.startIdx;
-      if (currentVisible > maxVisible || sr0.endIdx > tickRows.length) {
+      if (currentVisible !== maxVisible || sr0.endIdx > tickRows.length) {
         const newStart = Math.max(0, Math.min(tickRows.length - maxVisible, sr0.startIdx));
         scrollRangeRef.current = { startIdx: newStart, endIdx: newStart + maxVisible };
       }
@@ -335,49 +310,73 @@ export default function TickOverview({ isLive = false, liveTicks }: Props) {
   // browser still fire Ctrl+wheel zoom or page scroll. Attach natively via a `{passive:false}` listener to
   // suppress those defaults. Kept inside a ref so the installer runs once and the latest deps are read live.
   //
-  // **Mapping (post-redesign).**
-  //   - **plain wheel** — pan the overview's visible window (10% per notch). Most-intuitive default for a
-  //     compressed timeline strip; matches Chrome DevTools / Tracy / Audacity.
-  //   - **Shift + wheel** — pan FAST (25% per notch).
-  //   - **Ctrl + wheel** — step the viewport-selection right edge by ±1 (the "scrub by tick" workflow that
-  //     used to be plain wheel). Power-user knob — most users just want to pan.
-  //   - **Ctrl + Shift + wheel** — same as Ctrl + wheel but ±5 ticks per notch.
+  // **Mapping.**
+  //   - **plain wheel** — translate the viewport selection by ±1 tick. Multi-tick ranges keep their size:
+  //     both edges shift together (clamped at the trace ends — selection size is preserved, never grows
+  //     or shrinks at the boundary).
+  //   - **Shift + wheel** — step the right edge of the viewport selection by ±1 tick (resize). Left edge
+  //     stays put. Wheel up grows the range, wheel down shrinks it.
+  //   - **Ctrl + wheel** — pan the overview's visible window fast (25% per notch). The drag-to-pan and
+  //     middle-click pan paths cover the slower, finer-grained variants.
   const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {});
   handleWheelRef.current = (e: WheelEvent) => {
     if (tickRows.length === 0) return;
     e.preventDefault();
 
     // Any wheel interaction in live mode = user took control. Disable auto-scroll FIRST so subsequent
-    // tick batches don't keep snapping the view to tail and erasing the pan we're about to apply.
-    // panBy used to do this, but only on a successful pan — when visibleCount === tickRows.length
-    // (the common live-mode case where the cap matches the data) panBy returns early and auto-scroll
-    // never gets disabled, so each batch re-snaps and the wheel feels broken.
+    // tick batches don't keep snapping the view to tail and erasing the change we're about to apply.
     pauseLiveFollow();
 
     const sr = scrollRangeRef.current;
     const visibleCount = sr.endIdx - sr.startIdx;
 
-    if (!e.ctrlKey)
-    {
-      // Pan path. Wheel up (deltaY < 0) = pan toward the past (leftward); wheel down = toward the present.
+    if (e.ctrlKey) {
+      // Pan the overview window fast — 25% of visible per notch. Wheel up = pan toward later ticks; wheel down = pan toward earlier.
       if (visibleCount <= 0) return;
-      const fraction = e.shiftKey ? 0.25 : 0.1;
-      const step = Math.max(1, Math.floor(visibleCount * fraction));
-      panBy(e.deltaY > 0 ? step : -step);
+      const step = Math.max(1, Math.floor(visibleCount * 0.25));
+      panBy(e.deltaY < 0 ? step : -step);
       return;
     }
 
-    // Ctrl held: scrub the viewport-selection right edge.
+    // Resolve current selection (or seed at index 0 when nothing is selected yet — the wheel still has to
+    // do something useful on a fresh attach session).
     let firstIdx = selectionIdxRef.current.first;
     let lastIdx = selectionIdxRef.current.last;
     if (firstIdx < 0) {
       firstIdx = 0;
       lastIdx = 0;
     }
-    const stepN = e.shiftKey ? 5 : 1;
-    if (e.deltaY < 0) lastIdx = Math.min(tickRows.length - 1, lastIdx + stepN);
-    else lastIdx = Math.max(firstIdx, lastIdx - stepN);
-    applyViewRange({ startUs: tickRows[firstIdx].startUs, endUs: tickRows[lastIdx].endUs });
+
+    if (e.shiftKey) {
+      // Resize: step the right edge only, by ±1 tick. Wheel up grows; wheel down shrinks (but never below the left edge).
+      if (e.deltaY < 0) lastIdx = Math.min(tickRows.length - 1, lastIdx + 1);
+      else lastIdx = Math.max(firstIdx, lastIdx - 1);
+      applyViewRange({ startUs: tickRows[firstIdx].startUs, endUs: tickRows[lastIdx].endUs });
+      return;
+    }
+
+    // Plain wheel: translate the whole range by ±1 tick. Wheel up moves toward later ticks; wheel down moves
+    // earlier. Range size is preserved at boundaries — when one edge would overshoot, the entire range stops
+    // at the boundary instead of clipping the size.
+    //
+    // **Tick-indexed.** Operations here are pure idx arithmetic; the only conversion to/from microseconds is at
+    // the apply boundary via the `tickRows[i].startUs / endUs` table. Doing arithmetic on µs (e.g. `newStart +
+    // duration`) reintroduces the wire-format float-drift the boundary clamp in the tickRows useMemo just
+    // eliminated, with the same "selection bleeds into the next tick" symptom.
+    const direction = e.deltaY < 0 ? 1 : -1;
+    let newFirst = firstIdx + direction;
+    let newLast = lastIdx + direction;
+    if (newFirst < 0) {
+      const overshoot = -newFirst;
+      newFirst = 0;
+      newLast = Math.min(tickRows.length - 1, newLast + overshoot);
+    }
+    if (newLast >= tickRows.length) {
+      const overshoot = newLast - (tickRows.length - 1);
+      newLast = tickRows.length - 1;
+      newFirst = Math.max(0, newFirst - overshoot);
+    }
+    applyViewRange({ startUs: tickRows[newFirst].startUs, endUs: tickRows[newLast].endUs });
   };
 
   // Wheel listener is attached via a callback ref on the canvas element (see `setCanvasNode` below).

@@ -54,6 +54,15 @@ export interface BuildLayoutInputs {
   systemNames: Record<number, string> | null | undefined;
   /** Whether the per-system lanes section is visible. `false` → skip emitting `system-*` tracks. */
   perSystemLanesVisible: boolean;
+  /**
+   * Per-track visibility maps from the section-filter popup. A track is rendered iff its key is absent
+   * OR maps to `true`. Missing maps default to "everything visible" — preserves the old layout behavior
+   * for callers that don't care about filtering.
+   */
+  slotVisibility?: Record<number, boolean>;
+  systemVisibility?: Record<number, boolean>;
+  gaugeVisibility?: Record<string, boolean>;
+  engineOpVisibility?: Record<string, boolean>;
 }
 
 export interface LayoutResult {
@@ -67,6 +76,10 @@ export interface LayoutResult {
  */
 export function buildLayout(inputs: BuildLayoutInputs): LayoutResult {
   const { activeSlots, slotsWithChunks, spanMaxDepthBySlot, threadNames, collapseState, gaugeRegionVisible, gaugeCollapse, activeSystems, systemNames, perSystemLanesVisible } = inputs;
+  const slotVisibility = inputs.slotVisibility;
+  const systemVisibility = inputs.systemVisibility;
+  const gaugeVisibility = inputs.gaugeVisibility;
+  const engineOpVisibility = inputs.engineOpVisibility;
   const tracks: TrackLayout[] = [];
   let y = 0;
 
@@ -77,8 +90,9 @@ export function buildLayout(inputs: BuildLayoutInputs): LayoutResult {
 
   // Gauges (2c) — six groups inserted between ruler and slot lanes. `appendGaugeTracks` pushes
   // up to six `TrackLayout` entries into the array in place and returns the next Y. When
-  // `gaugeRegionVisible` is false the call returns `y` unchanged.
-  y = appendGaugeTracks(tracks, y, gaugeCollapse, SUMMARY_STRIP_HEIGHT, LABEL_ROW_HEIGHT, TRACK_GAP, gaugeRegionVisible);
+  // `gaugeRegionVisible` is false the call returns `y` unchanged. `gaugeVisibility` filters out
+  // individual gauge groups whose key is `false`.
+  y = appendGaugeTracks(tracks, y, gaugeCollapse, SUMMARY_STRIP_HEIGHT, LABEL_ROW_HEIGHT, TRACK_GAP, gaugeRegionVisible, gaugeVisibility);
 
   // Non-gauge tracks are 2-state only (summary / expanded). `double` is gauge-only; if it ever appears
   // in `collapseState` for a non-gauge id we coerce it to `expanded`.
@@ -100,6 +114,7 @@ export function buildLayout(inputs: BuildLayoutInputs): LayoutResult {
   // span rows stack below it, sized to the slot's deepest observed depth. Span-only slots skip the
   // chunk row entirely so depth-0 spans land at the lane's top edge.
   for (const slotIdx of activeSlots) {
+    if (slotVisibility?.[slotIdx] === false) continue;
     const id = `slot-${slotIdx}`;
     const state = nonGaugeState(id);
     const hasChunks = slotsWithChunks.has(slotIdx);
@@ -129,6 +144,7 @@ export function buildLayout(inputs: BuildLayoutInputs): LayoutResult {
   // first open; user clicks the chevron to expand.
   if (perSystemLanesVisible) {
     for (const systemIdx of activeSystems) {
+      if (systemVisibility?.[systemIdx] === false) continue;
       const id = `system-${systemIdx}`;
       const stored = collapseState[id];
       const state: TrackState = stored === 'summary' || stored === 'expanded' ? stored : 'summary';
@@ -149,7 +165,9 @@ export function buildLayout(inputs: BuildLayoutInputs): LayoutResult {
 
   // Fixed operation tracks below the slot lanes. Order here matches the old client and is the stable
   // semantic grouping: phases (scheduler), then disk/cache (storage), then tx/wal/checkpoint (durability).
+  // Filtered out per-track via `engineOpVisibility[id] === false`.
   const pushFixed = (id: string, label: string, expandedBody: number): void => {
+    if (engineOpVisibility?.[id] === false) return;
     const state = nonGaugeState(id);
     tracks.push({ id, label, y, height: expandedBody, state, collapsible: true });
     y += nonGaugeHeight(state, expandedBody);

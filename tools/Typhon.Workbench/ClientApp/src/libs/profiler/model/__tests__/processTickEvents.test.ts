@@ -50,7 +50,7 @@ describe('processTickEvents — tick bounds', () => {
       baseEvent({ kind: KIND.TickStart as TraceEvent['kind'], timestampUs: 100 }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 300 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
     expect(tick.startUs).toBe(100);
     expect(tick.endUs).toBe(300);
     expect(tick.durationUs).toBe(200);
@@ -62,13 +62,13 @@ describe('processTickEvents — tick bounds', () => {
     const events: TraceEvent[] = [
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 500 }),
     ];
-    const tick = processTickEvents(5, events, [], /* isContinuation */ true);
+    const tick = processTickEvents(5, events, []);
     expect(tick.startUs).toBe(0);
     expect(tick.endUs).toBe(500);
   });
 
   it('malformed non-continuation tick falls back to (0, 0) without NaN', () => {
-    const tick = processTickEvents(2, [], [], false);
+    const tick = processTickEvents(2, [], []);
     expect(Number.isFinite(tick.startUs)).toBe(true);
     expect(Number.isFinite(tick.endUs)).toBe(true);
     expect(tick.durationUs).toBe(0);
@@ -97,7 +97,7 @@ describe('processTickEvents — depth walk', () => {
       }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 100 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
 
     const root = tick.spans.find((s) => s.spanId === 'aaaaaaaaaaaaaaaa')!;
     const child = tick.spans.find((s) => s.spanId === 'bbbbbbbbbbbbbbbb')!;
@@ -119,7 +119,7 @@ describe('processTickEvents — depth walk', () => {
     }
     events.push(baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 100 }));
 
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
     const deepest = tick.spans.find((s) => s.spanId === `s${(39).toString().padStart(15, '0')}`)!;
     // Cap is `if (depth > 32) break`, so depth reaches 33 before the check fires on the next iter.
     expect(deepest.depth).toBeLessThanOrEqual(33);
@@ -146,7 +146,7 @@ describe('processTickEvents — async-completion fold', () => {
       }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 100 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
 
     // Exactly ONE span for the pair — completion must fold into the kickoff, not add a new span.
     const pageCacheSpans = tick.spans.filter((s) => s.kind === (KIND.PageCacheDiskRead as unknown as typeof s.kind));
@@ -174,7 +174,7 @@ describe('processTickEvents — async-completion fold', () => {
       }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 100 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
 
     const pageCacheSpans = tick.spans.filter((s) => s.kind === (KIND.PageCacheDiskRead as unknown as typeof s.kind));
     expect(pageCacheSpans).toHaveLength(1);
@@ -193,7 +193,7 @@ describe('processTickEvents — async-completion fold', () => {
       }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 100 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
 
     // Orphan completion must survive — the data point is valuable even if the kickoff isn't visible.
     const completed = tick.spans.find((s) => s.spanId === 'cccccccccccccccc');
@@ -220,7 +220,7 @@ describe('processTickEvents — global invariants', () => {
       }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 100 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
     const spanIds = tick.spans.filter((s) => s.spanId).map((s) => s.spanId);
     expect(spanIds).toEqual(['aa000000000000aa', 'bb000000000000bb']);
   });
@@ -242,7 +242,7 @@ describe('processTickEvents — global invariants', () => {
       }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 200 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
 
     const slot0 = tick.spansByThreadSlot.get(0)!;
     const slot1 = tick.spansByThreadSlot.get(1)!;
@@ -264,7 +264,7 @@ describe('processTickEvents — global invariants', () => {
       }),
       baseEvent({ kind: KIND.TickEnd as TraceEvent['kind'], timestampUs: 100 }),
     ];
-    const tick = processTickEvents(1, events, [], false);
+    const tick = processTickEvents(1, events, []);
 
     // Dual-tracked: gcSuspensions drives the red "stop-the-world" bar on the GC gauge; the same
     // span ALSO lives in spans[] so the ingesting thread's lane can show the pause in context.

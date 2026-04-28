@@ -17,6 +17,8 @@ export interface FileBrowserProps {
  onSelectionChange?: (paths: string[]) => void;
  /** Double-click / Enter on a file — used by single-select flows ("Open" on Enter). */
  onActivate?: (path: string) => void;
+ /** Called whenever the browser navigates into a different directory (initial load + each ascend/descend). */
+ onPathChange?: (path: string) => void;
 }
 
 export default function FileBrowser({
@@ -25,6 +27,7 @@ export default function FileBrowser({
  initialPath,
  onSelectionChange,
  onActivate,
+ onPathChange,
 }: FileBrowserProps) {
  const homeQuery = useGetApiFsHome({
  query: { enabled: !initialPath, staleTime: Infinity },
@@ -61,11 +64,12 @@ export default function FileBrowser({
  onSelectionChange?.(Array.from(selected));
  }, [selected, onSelectionChange]);
 
- // Reset selection + highlight when directory changes
+ // Reset selection + highlight when directory changes; notify the parent so save flows can track the current dir.
  useEffect(() => {
  setSelected(new Set());
  setActiveIndex(0);
- }, [path]);
+ if (path) onPathChange?.(path);
+ }, [path, onPathChange]);
 
  const descend = (entry: FileEntryDto) => {
  if (entry.kind === 'dir') {

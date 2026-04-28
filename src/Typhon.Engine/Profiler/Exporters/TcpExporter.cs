@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -45,6 +46,17 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
     private bool _disposed;
     private bool _shutdownFrameSent;
+
+    /// <summary>
+    /// Stopwatch timestamp of the last catch-up ThreadInfo block sent from <see cref="ProcessBatch"/>. Drives a 1 Hz
+    /// re-emit of all currently-claimed slots' ThreadInfo records, backstopping any single-batch losses (WouldBlock,
+    /// pre-_client_set window). Read/written only from the consumer thread that calls ProcessBatch — no lock needed.
+    /// Initial value 0 forces the first ProcessBatch after each connect to fire a catch-up immediately.
+    /// </summary>
+    private long _lastCatchupTicks;
+
+    /// <summary>Stopwatch ticks per catch-up interval (1 second).</summary>
+    private static readonly long CatchupIntervalTicks = Stopwatch.Frequency;
 
     /// <summary>
     /// Construct a TcpExporter listening on <paramref name="port"/>. Pass <paramref name="liveConnectTimeoutMs"/> &gt; 0
@@ -116,6 +128,25 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
         if (client == null || batch.PayloadBytes == 0)
         {
             return;
+        }
+
+        // Periodic catch-up backstop. The producer's one-shot ThreadInfo emit at AssignClaim time can be lost if its
+        // batch hits a WouldBlock send or lands during the pre-_client_set window — the workbench then never learns
+        // that slot's name and falls back to "Slot N". Re-emitting catch-up here at most once per second walks the
+        // registry's OwnerThreadName cache (authoritative once AssignClaim completes) and re-ships ThreadInfo for
+        // every active slot. Workbench's upsertThreadInfo is idempotent, so re-sends are no-ops once received.
+        // Cost: ~600 bytes/sec while connected; runs on the consumer thread (same as the batch send below) so no
+        // socket lock needed. Initial _lastCatchupTicks=0 forces an immediate fire on the first batch after connect,
+        // backstopping the connect-time catch-up that ran in AcceptLoop before _client_set.
+        var now = Stopwatch.GetTimestamp();
+        if (now - _lastCatchupTicks > CatchupIntervalTicks)
+        {
+            var (catchupFrame, catchupLen) = BuildCatchupThreadInfoFrame();
+            if (catchupFrame != null)
+            {
+                TrySendAll(client, catchupFrame, 0, catchupLen);
+            }
+            _lastCatchupTicks = now;
         }
 
         // Frame layout: [5B envelope][12B block header][LZ4-compressed records]
@@ -319,8 +350,14 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
                 // carrying a synthetic ThreadInfo record for every currently-claimed slot. Without this, mid-session live
                 // connections never see the one-shot ThreadInfo records emitted when each worker claimed its slot — those
                 // were silently dropped by ProcessBatch while _client was null — and the viewer has no slot→name mapping,
-                // which leaves lanes unlabeled and the UI unable to lay out span tracks. See docs on TcpExporter above.
-                TrySendCatchupThreadInfoBlock(socket);
+                // which leaves lanes unlabeled and the UI unable to lay out span tracks. ProcessBatch fires another catch-up
+                // every ~1 s as a backstop for any slots claimed during the window between this scan and `_client = socket`,
+                // and for any later batch drops that wipe out a slot's one-shot ThreadInfo record.
+                var (catchupFrame, catchupLen) = BuildCatchupThreadInfoFrame();
+                if (catchupFrame != null)
+                {
+                    socket.Send(catchupFrame, 0, catchupLen, SocketFlags.None);
+                }
 
                 socket.Blocking = false;
                 _client = socket;
@@ -412,35 +449,32 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
     }
 
     /// <summary>
-    /// Encode a ThreadInfo record for every currently-claimed slot and send them as one Block frame on <paramref name="socket"/>. Runs once per
-    /// client accept, while the socket is still in blocking mode. Silent no-op if zero slots are claimed (no data yet, or the client connected
-    /// before the first worker emitted an event — in that case the normal path will deliver ThreadInfo as usual).
+    /// Encode a Block frame containing a synthetic ThreadInfo record for every currently-claimed slot, reading
+    /// <see cref="ThreadSlot.OwnerManagedThreadId"/> + <see cref="ThreadSlot.OwnerThreadName"/> from the registry.
+    /// Returns <c>(null, 0)</c> if no slots qualify (registry empty, or every active slot is mid-flight in
+    /// <c>AssignClaim</c> with <c>OwnerManagedThreadId == 0</c>).
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Reads <see cref="ThreadSlot.OwnerManagedThreadId"/> and <see cref="ThreadSlot.OwnerThreadName"/> from another thread. The producer-side
-    /// assignment order is <c>State → CAS Active</c> then <c>ManagedThreadId</c> then <c>OwnerThreadName</c>, so we skip any slot whose
-    /// <c>OwnerManagedThreadId</c> is still zero — <c>AssignClaim</c> is mid-flight and the producer will emit its own ThreadInfo shortly.
-    /// </para>
-    /// <para>
-    /// Failure mode: any send exception propagates up to <see cref="AcceptLoop"/>'s catch block, which closes the socket — identical handling to
-    /// an init-frame send failure. The next reconnect attempt will get a fresh replay.
-    /// </para>
+    /// Called from two paths: (1) <see cref="AcceptLoop"/> on client accept (sent synchronously while the socket is
+    /// still blocking) — covers slots active at connect time; (2) <see cref="ProcessBatch"/> on a 1 Hz cadence (sent
+    /// non-blocking via <see cref="TrySendAll"/>) — backstops slots whose producer-side ThreadInfo emit was lost in
+    /// a dropped batch (WouldBlock or pre-_client_set window). Workbench's upsert is idempotent, so re-sends are
+    /// harmless once received.
     /// </remarks>
-    private static void TrySendCatchupThreadInfoBlock(Socket socket)
+    private static (byte[] Frame, int Length) BuildCatchupThreadInfoFrame()
     {
         var scanLimit = ThreadSlotRegistry.HighWaterMark;
         if (scanLimit == 0)
         {
-            return;
+            return (null, 0);
         }
 
-        // Allocate generously — 256 max slots × 273 bytes (12+4+2+255 name cap) = ~70 KB worst case. Heap-allocated because this runs once per
-        // client accept; the cost is negligible and keeps the stack frame small.
+        // Allocate generously — 256 max slots × 273 bytes (12+4+2+255 name cap) = ~70 KB worst case. Heap-allocated
+        // (vs. stackalloc) because this runs at most 1 Hz and keeps the stack frame small.
         var rawScratch = new byte[ThreadSlotRegistry.MaxSlots * 273];
         var writePos = 0;
         var recordCount = 0;
-        var timestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        var timestamp = Stopwatch.GetTimestamp();
 
         for (var i = 0; i < scanLimit; i++)
         {
@@ -458,6 +492,7 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
             }
 
             var name = slot.OwnerThreadName;
+            var kind = slot.OwnerThreadKind;
             var nameBytes = name != null ? Encoding.UTF8.GetBytes(name) : Array.Empty<byte>();
             if (nameBytes.Length > 255)
             {
@@ -470,14 +505,14 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
                 break;
             }
 
-            ThreadInfoEventCodec.WriteThreadInfo(rawScratch.AsSpan(writePos), (byte)i, timestamp, managedThreadId, nameBytes, out var bytesWritten);
+            ThreadInfoEventCodec.WriteThreadInfo(rawScratch.AsSpan(writePos), (byte)i, timestamp, managedThreadId, nameBytes, kind, out var bytesWritten);
             writePos += bytesWritten;
             recordCount++;
         }
 
         if (recordCount == 0)
         {
-            return;
+            return (null, 0);
         }
 
         // Same framing as ProcessBatch: [frame header][block header][LZ4 compressed records].
@@ -490,7 +525,7 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
         var payloadSize = TraceBlockEncoder.BlockHeaderSize + compressedSize;
         LiveStreamProtocol.WriteFrameHeader(frame.AsSpan(), LiveFrameType.Block, payloadSize);
 
-        socket.Send(frame, 0, LiveStreamProtocol.FrameHeaderSize + payloadSize, SocketFlags.None);
+        return (frame, LiveStreamProtocol.FrameHeaderSize + payloadSize);
     }
 
     private static void WriteShortString(BinaryWriter bw, string value)

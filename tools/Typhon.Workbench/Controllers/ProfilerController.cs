@@ -94,6 +94,94 @@ public sealed class ProfilerController : ControllerBase
     }
 
     /// <summary>
+    /// Snapshot the current live attach session into a self-contained <c>.typhon-replay</c> file. The output is byte-format-identical to
+    /// a <c>.typhon-trace-cache</c> sidecar but includes an embedded <see cref="CacheSectionId.SourceMetadata"/> section + the
+    /// <see cref="CacheHeaderFlags.IsSelfContained"/> flag, so the file opens with no companion <c>.typhon-trace</c> required.
+    /// </summary>
+    /// <remarks>
+    /// Available only on Attach sessions. Trace sessions already have on-disk artifacts (the source <c>.typhon-trace</c> + sidecar cache)
+    /// so save-as-replay would be redundant. The flow takes a builder lock for the duration of the chunk re-feed + trailer write —
+    /// expect record processing to be paused for sub-second-to-few-seconds depending on session size.
+    /// </remarks>
+    [HttpPost("save-replay")]
+    public async Task<ActionResult<SaveReplayResponse>> SaveReplay(
+        Guid sessionId,
+        [FromBody] SaveReplayRequest request,
+        CancellationToken ct)
+    {
+        var session = HttpContext.Items["Session"];
+        if (session is not AttachSession attach)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "session_kind_mismatch",
+                Detail = "Save Replay is only valid on Attach sessions.",
+                Status = StatusCodes.Status409Conflict,
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(request?.Path))
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "invalid_path",
+                Detail = "path is required.",
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+
+        var resolved = System.IO.Path.GetFullPath(request.Path);
+        var parent = System.IO.Path.GetDirectoryName(resolved);
+        if (string.IsNullOrEmpty(parent) || !System.IO.Directory.Exists(parent))
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "parent_directory_missing",
+                Detail = $"Parent directory does not exist: {parent}",
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+
+        try
+        {
+            var bytesWritten = await attach.Runtime.SaveSessionAsync(resolved, ct);
+            return Ok(new SaveReplayResponse(resolved, bytesWritten));
+        }
+        catch (InvalidOperationException ex)
+        {
+            // Init not yet received → 409 (session not ready).
+            return Conflict(new ProblemDetails
+            {
+                Title = "session_not_ready",
+                Detail = ex.Message,
+                Status = StatusCodes.Status409Conflict,
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            // Read-only directory, ACL denial, etc. The user picked a path they can't write to — surface it
+            // as 403 with the OS message rather than a raw 500.
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "save_path_unauthorized",
+                Detail = ex.Message,
+                Status = StatusCodes.Status403Forbidden,
+            });
+        }
+        catch (IOException ex)
+        {
+            // Disk full, file locked by another process, transient I/O error. Surface as 400 — re-issuing
+            // the request after the user fixes the underlying condition is the recovery path.
+            return BadRequest(new ProblemDetails
+            {
+                Title = "save_io_error",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+    }
+
+    /// <summary>
     /// Returns the raw LZ4-compressed bytes of a single chunk. Response headers carry everything the browser worker
     /// needs to decode the payload:
     /// <list type="bullet">
@@ -108,30 +196,31 @@ public sealed class ProfilerController : ControllerBase
     [HttpGet("chunks/{chunkIdx:int}")]
     public async Task GetChunk(Guid sessionId, int chunkIdx, CancellationToken ct)
     {
-        var session = HttpContext.Items["Session"] as TraceSession;
-        if (session == null)
+        // #289 — both Trace and Attach sessions implement IChunkProvider, so this method handles both modes uniformly.
+        var session = HttpContext.Items["Session"];
+        IChunkProvider provider = session switch
+        {
+            TraceSession trace => trace.Runtime,
+            AttachSession attach => attach.Runtime,
+            _ => null,
+        };
+        if (provider == null)
         {
             Response.StatusCode = StatusCodes.Status409Conflict;
             return;
         }
 
-        var runtime = session.Runtime;
-        if (!runtime.IsBuildComplete)
+        if (!provider.IsReady)
         {
             Response.StatusCode = StatusCodes.Status409Conflict;
-            await Response.WriteAsync("Build not complete — call /profiler/metadata first.", ct);
-            return;
-        }
-        if (runtime.Metadata == null)
-        {
-            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await Response.WriteAsync("Runtime not ready — call /profiler/metadata first.", ct);
             return;
         }
 
         ChunkManifestEntry entry;
         try
         {
-            entry = await runtime.GetChunkManifestEntryAsync(chunkIdx);
+            entry = await provider.GetChunkManifestEntryAsync(chunkIdx);
         }
         catch (ArgumentOutOfRangeException)
         {
@@ -146,7 +235,7 @@ public sealed class ProfilerController : ControllerBase
         Response.Headers["X-Chunk-Event-Count"] = entry.EventCount.ToString();
         Response.Headers["X-Chunk-Uncompressed-Bytes"] = entry.UncompressedBytes.ToString();
         Response.Headers["X-Chunk-Is-Continuation"] = isContinuation ? "1" : "0";
-        Response.Headers["X-Timestamp-Frequency"] = runtime.TimestampFrequency.ToString();
+        Response.Headers["X-Timestamp-Frequency"] = provider.TimestampFrequency.ToString();
         Response.Headers["Access-Control-Expose-Headers"] = string.Join(", ", new[]
         {
             "X-Chunk-From-Tick",
@@ -159,7 +248,7 @@ public sealed class ProfilerController : ControllerBase
         Response.ContentType = "application/octet-stream";
         Response.ContentLength = (int)entry.CacheByteLength;
 
-        var (bytes, length) = await runtime.ReadChunkCompressedAsync(chunkIdx);
+        var (bytes, length) = await provider.ReadChunkCompressedAsync(chunkIdx);
         try
         {
             await Response.Body.WriteAsync(bytes.AsMemory(0, length), ct);

@@ -249,7 +249,7 @@ public sealed class RecordDecoder
 
     private LiveTraceEvent DecodeThreadInfo(ReadOnlySpan<byte> record)
     {
-        TraceRecordHeader.ReadCommonHeader(record, out _, out _, out var threadSlot, out var timestamp);
+        TraceRecordHeader.ReadCommonHeader(record, out var size, out _, out var threadSlot, out var timestamp);
         var p = record[TraceRecordHeader.CommonHeaderSize..];
         var managedThreadId = BinaryPrimitives.ReadInt32LittleEndian(p);
         var nameByteCount = BinaryPrimitives.ReadUInt16LittleEndian(p[4..]);
@@ -266,6 +266,13 @@ public sealed class RecordDecoder
                 name = null;
             }
         }
+        // Trailing ThreadKind byte (added in cache v4 / wire v4). Pre-bump traces don't carry it; size guard.
+        ThreadKind? threadKind = null;
+        var kindOffset = TraceRecordHeader.CommonHeaderSize + 4 + 2 + nameByteCount;
+        if (size > kindOffset && record.Length > kindOffset)
+        {
+            threadKind = (ThreadKind)record[kindOffset];
+        }
 
         return new LiveTraceEvent
         {
@@ -275,6 +282,7 @@ public sealed class RecordDecoder
             TimestampUs = timestamp / _ticksPerUs,
             ManagedThreadId = managedThreadId,
             ThreadName = name,
+            ThreadKind = threadKind,
         };
     }
 

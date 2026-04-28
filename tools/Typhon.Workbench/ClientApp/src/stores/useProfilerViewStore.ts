@@ -3,6 +3,15 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import type { TimeRange, TrackState } from '@/libs/profiler/model/uiTypes';
 
 /**
+ * How the renderer colors span bars on slot lanes. Different lenses on the same data:
+ *   - `name`     → hash span.name into the palette (default — pre-color-by-toggle behavior).
+ *   - `thread`   → palette[span.threadSlot]; spots cross-thread patterns at a glance.
+ *   - `depth`    → palette[span.depth]; visualizes call-stack nesting across the timeline.
+ *   - `duration` → log-scale heat-map (blue → green → orange → red); makes outliers pop.
+ */
+export type SpanColorMode = 'name' | 'thread' | 'depth' | 'duration';
+
+/**
  * View-state slice for the Profiler panel — viewport + toggle states + per-gauge-group collapse states.
  *
  * **Partial persistence:** toggles (gauge region visible, legends visible, per-system lanes visible) and gauge
@@ -35,12 +44,38 @@ interface ProfilerViewState {
    */
   gaugeCollapse: Record<string, TrackState>;
 
+  /**
+   * Per-gauge-group visibility map. Keyed by gauge group id (`"gauge-gc"`, `"gauge-memory"`, …). Missing key
+   * = visible. Set by the TimeArea filter popup. Persisted because gauge ids are part of the engine's static
+   * schema — selections are stable across runs.
+   */
+  gaugeVisibility: Record<string, boolean>;
+  /**
+   * Per-engine-op-track visibility map. Keyed by track id (`"phases"`, `"page-cache"`, `"disk-io"`,
+   * `"transactions"`, `"wal"`, `"checkpoint"`). Missing key = visible. Persisted (same reasoning as
+   * `gaugeVisibility`).
+   */
+  engineOpVisibility: Record<string, boolean>;
+
+  /** How spans are coloured on slot lanes. See {@link SpanColorMode}. Persisted UX preference. */
+  spanColorMode: SpanColorMode;
+
   setViewRange: (r: TimeRange) => void;
   setLiveFollowWindowUs: (us: number) => void;
   toggleGaugeRegion: () => void;
   toggleLegends: () => void;
   togglePerSystemLanes: () => void;
   setGaugeCollapse: (groupId: string, state: TrackState) => void;
+  setManyGaugeCollapse: (updates: Record<string, TrackState>) => void;
+
+  setSpanColorMode: (mode: SpanColorMode) => void;
+
+  setGaugeVisibility: (id: string, visible: boolean) => void;
+  setEngineOpVisibility: (id: string, visible: boolean) => void;
+  setManyGaugeVisibility: (updates: Record<string, boolean>) => void;
+  setManyEngineOpVisibility: (updates: Record<string, boolean>) => void;
+  clearGaugeVisibility: () => void;
+  clearEngineOpVisibility: () => void;
 }
 
 // Safe localStorage wrapper — falls back silently in non-browser environments (tests, SSR).
@@ -68,6 +103,9 @@ export const useProfilerViewStore = create<ProfilerViewState>()(
       legendsVisible: true,
       perSystemLanesVisible: true,
       gaugeCollapse: {},
+      gaugeVisibility: {},
+      engineOpVisibility: {},
+      spanColorMode: 'name',
 
       setViewRange: (r) => set({ viewRange: r }),
       setLiveFollowWindowUs: (us) => set({ liveFollowWindowUs: Math.max(1, us) }),
@@ -76,11 +114,64 @@ export const useProfilerViewStore = create<ProfilerViewState>()(
       togglePerSystemLanes: () => set((s) => ({ perSystemLanesVisible: !s.perSystemLanesVisible })),
       setGaugeCollapse: (groupId, state) =>
         set((s) => ({ gaugeCollapse: { ...s.gaugeCollapse, [groupId]: state } })),
+      setManyGaugeCollapse: (updates) =>
+        set((s) => {
+          const next = { ...s.gaugeCollapse };
+          for (const [id, state] of Object.entries(updates)) {
+            next[id] = state;
+          }
+          return { gaugeCollapse: next };
+        }),
+
+      setSpanColorMode: (mode) => set({ spanColorMode: mode }),
+
+      setGaugeVisibility: (id, visible) =>
+        set((s) => {
+          if (visible) {
+            if (!(id in s.gaugeVisibility)) return s;
+            const next = { ...s.gaugeVisibility };
+            delete next[id];
+            return { gaugeVisibility: next };
+          }
+          if (s.gaugeVisibility[id] === false) return s;
+          return { gaugeVisibility: { ...s.gaugeVisibility, [id]: false } };
+        }),
+      setEngineOpVisibility: (id, visible) =>
+        set((s) => {
+          if (visible) {
+            if (!(id in s.engineOpVisibility)) return s;
+            const next = { ...s.engineOpVisibility };
+            delete next[id];
+            return { engineOpVisibility: next };
+          }
+          if (s.engineOpVisibility[id] === false) return s;
+          return { engineOpVisibility: { ...s.engineOpVisibility, [id]: false } };
+        }),
+      setManyGaugeVisibility: (updates) =>
+        set((s) => {
+          const next = { ...s.gaugeVisibility };
+          for (const [id, v] of Object.entries(updates)) {
+            if (v) delete next[id];
+            else next[id] = false;
+          }
+          return { gaugeVisibility: next };
+        }),
+      setManyEngineOpVisibility: (updates) =>
+        set((s) => {
+          const next = { ...s.engineOpVisibility };
+          for (const [id, v] of Object.entries(updates)) {
+            if (v) delete next[id];
+            else next[id] = false;
+          }
+          return { engineOpVisibility: next };
+        }),
+      clearGaugeVisibility: () => set({ gaugeVisibility: {} }),
+      clearEngineOpVisibility: () => set({ engineOpVisibility: {} }),
     }),
     {
       name: 'workbench-profiler-view',
       storage: safeStorage,
-      version: 1,
+      version: 2,
       // Only persist UX preferences; viewRange is session-scoped and reset on each open.
       partialize: (s) => ({
         liveFollowWindowUs: s.liveFollowWindowUs,
@@ -88,10 +179,14 @@ export const useProfilerViewStore = create<ProfilerViewState>()(
         legendsVisible: s.legendsVisible,
         perSystemLanesVisible: s.perSystemLanesVisible,
         gaugeCollapse: s.gaugeCollapse,
+        gaugeVisibility: s.gaugeVisibility,
+        engineOpVisibility: s.engineOpVisibility,
+        spanColorMode: s.spanColorMode,
       }),
       // v0 → v1: gaugeCollapse changed from `Record<string, boolean>` to `Record<string, TrackState>`.
-      // Old boolean true meant "collapsed"; map it to 'summary' which is the gauges-region equivalent
-      // of "collapsed to a spark-line in the label row". false → 'expanded'.
+      // v1 → v2: added gaugeVisibility / engineOpVisibility maps for the section-filter popup.
+      //   Defaults are empty maps (= every track visible). Pre-v2 persisted state has neither field,
+      //   which the spread initializer in the constructor handles cleanly.
       migrate: (persisted: unknown, fromVersion: number): Partial<ProfilerViewState> | undefined => {
         if (!persisted || typeof persisted !== 'object') return undefined;
         const p = persisted as Partial<ProfilerViewState> & { gaugeCollapse?: Record<string, unknown> };
@@ -106,6 +201,10 @@ export const useProfilerViewStore = create<ProfilerViewState>()(
             // Any other shape → drop the entry; falls back to default on first read.
           }
           p.gaugeCollapse = migrated;
+        }
+        if (fromVersion < 2) {
+          p.gaugeVisibility = p.gaugeVisibility ?? {};
+          p.engineOpVisibility = p.engineOpVisibility ?? {};
         }
         return p;
       },

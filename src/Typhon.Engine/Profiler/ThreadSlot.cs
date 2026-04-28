@@ -57,6 +57,13 @@ internal sealed class ThreadSlot
     public string OwnerThreadName;
 
     /// <summary>
+    /// Category of the current owning thread (Main / Worker / Pool / Other), captured at claim time. Cached so the
+    /// TCP catch-up replay can synthesize ThreadInfo records that include the kind for clients that connect after
+    /// the slot was claimed. Reset to <see cref="ThreadKind.Other"/> on retirement.
+    /// </summary>
+    public ThreadKind OwnerThreadKind;
+
+    /// <summary>
     /// Hot-path flag: when <c>false</c>, <c>TyphonEvent</c> skips the <see cref="System.Diagnostics.Activity.Current"/> lookup entirely,
     /// saving ~5–9 ns per span. Cleared via <c>TyphonEvent.SuppressActivityContextOnThisThread</c> by scheduler workers and the profiler consumer
     /// thread at their startup entry.

@@ -60,6 +60,13 @@ public static class TyphonProfiler
     }
 
     /// <summary>
+    /// Managed thread id of whichever thread called <see cref="Start"/>. The host's bootstrap flow is the
+    /// canonical "main" thread for the viewer. Zero while the profiler is stopped. Read by
+    /// <c>ThreadSlotRegistry.AssignClaim</c> to tag the corresponding slot's <c>ThreadKind</c>.
+    /// </summary>
+    public static int MainThreadId { get; private set; }
+
+    /// <summary>
     /// Attach an exporter. Must be called before <see cref="Start"/> — attaching while running throws.
     /// </summary>
     public static void AttachExporter(IProfilerExporter exporter)
@@ -154,6 +161,11 @@ public static class TyphonProfiler
                 GcTracing = new GcTracingHost();
                 GcTracing.Start();
             }
+
+            // Snapshot the host's bootstrap thread id so AssignClaim can tag its slot with ThreadKind.Main.
+            // Set BEFORE Running flips so the first emit-from-this-thread (which can happen synchronously inside
+            // the consumer/exporter Init paths above is in theory possible — defensive) sees a populated id.
+            MainThreadId = Environment.CurrentManagedThreadId;
 
             Running = true;
 
@@ -260,6 +272,7 @@ public static class TyphonProfiler
             ExporterCts = null;
             GcTracing = null;
             Running = false;
+            MainThreadId = 0;
 
             // Detach the safety-net hooks now that we've taken responsibility for the rest of teardown — both
             // for normal Stop callers and for the ProcessExit handler reentering itself (Stop is idempotent so a

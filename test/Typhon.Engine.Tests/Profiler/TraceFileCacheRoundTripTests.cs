@@ -294,6 +294,116 @@ public class TraceFileCacheRoundTripTests
     }
 
     [Test]
+    public void RoundTrip_SelfContained_PreservesSourceMetadata()
+    {
+        // Synthesize a payload that stands in for the engine's Init-frame body: TraceFileHeader bytes + system / archetype /
+        // component-type tables. The exact byte content is opaque to the cache layer — it's stored verbatim and re-emitted
+        // verbatim on read. We just need a recognizable pattern to assert byte-for-byte recovery.
+        var sourceMetadata = new byte[256];
+        for (var i = 0; i < sourceMetadata.Length; i++)
+        {
+            sourceMetadata[i] = (byte)((i * 7 + 13) & 0xFF);
+        }
+
+        var sessionId = new byte[32];
+        for (var i = 0; i < sessionId.Length; i++)
+        {
+            sessionId[i] = (byte)(0xA0 + i);
+        }
+
+        var path = Path.Combine(Path.GetTempPath(), $"trace-cache-selfcont-{Guid.NewGuid():N}.typhon-replay");
+        try
+        {
+            using (var fs = File.Create(path))
+            using (var writer = new TraceFileCacheWriter(fs))
+            {
+                // Single chunk so FoldedChunkData has content (cache layout invariant).
+                writer.BeginSection(CacheSectionId.FoldedChunkData);
+                var (chunkOffset, chunkComp, chunkUncomp) = writer.AppendLz4Chunk([1, 2, 3, 4]);
+
+                writer.BeginSection(CacheSectionId.ChunkManifest);
+                writer.WriteArray<ChunkManifestEntry>(
+                [
+                    new ChunkManifestEntry
+                    {
+                        FromTick = 1, ToTick = 2,
+                        CacheByteOffset = chunkOffset, CacheByteLength = chunkComp,
+                        EventCount = 1, UncompressedBytes = chunkUncomp,
+                    },
+                ]);
+
+                // The new section — verbatim source metadata.
+                writer.BeginSection(CacheSectionId.SourceMetadata);
+                writer.Write(sourceMetadata);
+
+                var header = new CacheHeader
+                {
+                    Flags = CacheHeaderFlags.IsSelfContained,
+                    SourceVersion = 4,
+                    ChunkerVersion = TraceFileCacheConstants.CurrentChunkerVersion,
+                    CreatedUtcTicks = 9999L,
+                };
+                unsafe
+                {
+                    for (var i = 0; i < 32; i++) header.SourceFingerprint[i] = sessionId[i];
+                }
+                writer.Finalize(header);
+            }
+
+            using var rs = File.OpenRead(path);
+            using var reader = new TraceFileCacheReader(rs);
+
+            Assert.That(reader.IsSelfContained, Is.True, "IsSelfContained should reflect the flag in Header.Flags.");
+            Assert.That((reader.Header.Flags & CacheHeaderFlags.IsSelfContained), Is.EqualTo(CacheHeaderFlags.IsSelfContained));
+            Assert.That(reader.SourceMetadataBytes.Length, Is.EqualTo(sourceMetadata.Length),
+                "Embedded source-metadata section should be recovered with the same byte length.");
+            Assert.That(reader.SourceMetadataBytes.SequenceEqual(sourceMetadata), Is.True,
+                "Embedded source-metadata bytes should round-trip byte-for-byte.");
+            // The 32-byte identifier carries an arbitrary session ID for self-contained caches — VerifyFingerprint should still match
+            // when callers pass the same identifier (it's a span comparison, not a file hash).
+            Assert.That(reader.VerifyFingerprint(sessionId), Is.True);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Test]
+    public void RoundTrip_SourceDerived_HasNoSelfContainedFlagOrMetadata()
+    {
+        // A normal source-derived cache (the existing pre-feature path) writes no SourceMetadata section and leaves Flags=0. Confirm both
+        // properties surface as false / empty so the open-time loader's branch correctly takes the source-file metadata path.
+        var path = Path.Combine(Path.GetTempPath(), $"trace-cache-srcderived-{Guid.NewGuid():N}.typhon-trace-cache");
+        try
+        {
+            using (var fs = File.Create(path))
+            using (var writer = new TraceFileCacheWriter(fs))
+            {
+                writer.BeginSection(CacheSectionId.SpanNameTable);
+                writer.WriteSpanNameTable(new Dictionary<int, string>());
+
+                var header = new CacheHeader
+                {
+                    Flags = 0,
+                    SourceVersion = 3,
+                    ChunkerVersion = TraceFileCacheConstants.CurrentChunkerVersion,
+                };
+                writer.Finalize(header);
+            }
+
+            using var rs = File.OpenRead(path);
+            using var reader = new TraceFileCacheReader(rs);
+            Assert.That(reader.IsSelfContained, Is.False);
+            Assert.That(reader.SourceMetadataBytes.IsEmpty, Is.True);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Test]
     public void SourceFingerprint_ChangesWhenContentChanges()
     {
         var path = Path.Combine(Path.GetTempPath(), $"fp-change-{Guid.NewGuid():N}.bin");

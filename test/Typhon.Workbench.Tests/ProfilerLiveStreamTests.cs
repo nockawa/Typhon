@@ -37,8 +37,12 @@ public sealed class ProfilerLiveStreamTests
     public void TearDown() => _factory.Dispose();
 
     [Test]
-    public async Task Stream_AfterAttach_EmitsMetadata_Heartbeat_AndTickFrames()
+    public async Task Stream_AfterAttach_EmitsMetadata_Heartbeat_AndDeltaFrames()
     {
+        // #289 — post-unification, the live SSE stream uses growth deltas instead of per-tick batches:
+        //   - "metadata" full snapshot on connect (kind metadata)
+        //   - "tickSummaryAdded" / "chunkAdded" / "globalMetricsUpdated" growth deltas
+        //   - "heartbeat" status frames
         await using var server = new MockTcpProfilerServer
         {
             BlockInterval = TimeSpan.FromMilliseconds(40),
@@ -46,14 +50,13 @@ public sealed class ProfilerLiveStreamTests
         };
         server.Start();
 
-        // Create an attach session.
         var attachResp = await _client.PostAsJsonAsync(
             "/api/sessions/attach",
             new CreateAttachSessionRequest($"127.0.0.1:{server.Port}"));
         attachResp.EnsureSuccessStatusCode();
         var session = JsonSerializer.Deserialize<SessionDto>(await attachResp.Content.ReadAsStringAsync(), Json)!;
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         var req = new HttpRequestMessage(HttpMethod.Get, $"/api/sessions/{session.SessionId}/profiler/stream");
         req.Headers.Add("X-Session-Token", session.SessionId.ToString());
 
@@ -63,13 +66,13 @@ public sealed class ProfilerLiveStreamTests
 
         var seenMetadata = false;
         var seenHeartbeat = false;
-        var seenTick = false;
+        var seenTickSummaryAdded = false;
         string tickJson = null;
         string metadataJson = null;
 
         using var stream = await resp.Content.ReadAsStreamAsync(cts.Token);
         using var reader = new StreamReader(stream);
-        while (!(seenMetadata && seenHeartbeat && seenTick))
+        while (!(seenMetadata && seenHeartbeat && seenTickSummaryAdded))
         {
             var line = await reader.ReadLineAsync(cts.Token);
             if (line == null) break;
@@ -88,8 +91,8 @@ public sealed class ProfilerLiveStreamTests
                 case "heartbeat":
                     seenHeartbeat = true;
                     break;
-                case "tick":
-                    seenTick = true;
+                case "tickSummaryAdded":
+                    seenTickSummaryAdded = true;
                     tickJson = payload;
                     break;
             }
@@ -97,9 +100,8 @@ public sealed class ProfilerLiveStreamTests
 
         Assert.That(seenMetadata, Is.True, "client expects a metadata frame on connect");
         Assert.That(seenHeartbeat, Is.True, "client expects a heartbeat frame with the initial connection status");
-        Assert.That(seenTick, Is.True, "client expects at least one tick frame from block-frame ingest");
+        Assert.That(seenTickSummaryAdded, Is.True, "client expects at least one tickSummaryAdded delta from block-frame ingest");
 
-        // Shape checks — only on fields the viewer actually reads.
         using (var metaDoc = JsonDocument.Parse(metadataJson!))
         {
             Assert.That(metaDoc.RootElement.GetProperty("kind").GetString(), Is.EqualTo("metadata"));
@@ -112,11 +114,10 @@ public sealed class ProfilerLiveStreamTests
 
         using (var tickDoc = JsonDocument.Parse(tickJson!))
         {
-            Assert.That(tickDoc.RootElement.GetProperty("kind").GetString(), Is.EqualTo("tick"));
-            Assert.That(tickDoc.RootElement.TryGetProperty("tick", out var tickProp), Is.True,
-                "tick frame must carry a non-null tick sub-object");
-            // LiveTickBatch has a tickNumber field — sanity check it deserialises as a positive integer.
-            Assert.That(tickProp.GetProperty("tickNumber").GetInt64(), Is.GreaterThan(0));
+            Assert.That(tickDoc.RootElement.GetProperty("kind").GetString(), Is.EqualTo("tickSummaryAdded"));
+            Assert.That(tickDoc.RootElement.TryGetProperty("tickSummary", out var summaryProp), Is.True,
+                "tickSummaryAdded frame must carry a non-null tickSummary sub-object");
+            Assert.That(summaryProp.GetProperty("tickNumber").GetUInt32(), Is.GreaterThan(0u));
         }
     }
 

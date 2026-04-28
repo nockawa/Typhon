@@ -1373,7 +1373,7 @@ public static class TyphonEvent
     /// thread's own slot (single-producer invariant preserved). The viewer uses these records to label lanes with real thread names.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void EmitThreadInfo(byte slot, int managedThreadId, string name)
+    internal static void EmitThreadInfo(byte slot, int managedThreadId, string name, ThreadKind kind)
     {
         if (!TelemetryConfig.ProfilerActive)
         {
@@ -1393,7 +1393,7 @@ public static class TyphonEvent
         if (System.Text.Encoding.UTF8.GetByteCount(nameSpan) <= nameBuf.Length)
         {
             byteCount = System.Text.Encoding.UTF8.GetBytes(nameSpan, nameBuf);
-            EmitThreadInfoCore(ring, slot, managedThreadId, nameBuf[..byteCount]);
+            EmitThreadInfoCore(ring, slot, managedThreadId, nameBuf[..byteCount], kind);
         }
         else
         {
@@ -1401,7 +1401,7 @@ public static class TyphonEvent
             try
             {
                 byteCount = System.Text.Encoding.UTF8.GetBytes(nameSpan, rented);
-                EmitThreadInfoCore(ring, slot, managedThreadId, rented.AsSpan(0, byteCount));
+                EmitThreadInfoCore(ring, slot, managedThreadId, rented.AsSpan(0, byteCount), kind);
             }
             finally
             {
@@ -1411,14 +1411,14 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void EmitThreadInfoCore(TraceRecordRing ring, byte slot, int managedThreadId, ReadOnlySpan<byte> nameUtf8)
+    private static void EmitThreadInfoCore(TraceRecordRing ring, byte slot, int managedThreadId, ReadOnlySpan<byte> nameUtf8, ThreadKind kind)
     {
         var size = ThreadInfoEventCodec.ComputeSize(nameUtf8.Length);
         if (!ring.TryReserve(size, out var dst))
         {
             return;
         }
-        ThreadInfoEventCodec.WriteThreadInfo(dst, slot, Stopwatch.GetTimestamp(), managedThreadId, nameUtf8, out _);
+        ThreadInfoEventCodec.WriteThreadInfo(dst, slot, Stopwatch.GetTimestamp(), managedThreadId, nameUtf8, kind, out _);
         ring.Publish();
     }
 

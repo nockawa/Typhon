@@ -45,8 +45,11 @@ public sealed class AttachSessionRuntimeTests
     }
 
     [Test]
-    public async Task BlockFrames_IncrementTickCount_AndFireTickReceived()
+    public async Task BlockFrames_IncrementTickSummaries_AndFireTickSummaryAdded()
     {
+        // #289: post-unification, "ticks received" means "TickSummaries the IncrementalCacheBuilder finalized". The
+        // builder finalizes tick N when TickStart(N+1) arrives — so 5 blocks → 4 finalized + 1 trailing (closed by the
+        // runtime's 250 ms trailing-tick timer once the stream goes quiet).
         await using var server = new MockTcpProfilerServer
         {
             BlockInterval = TimeSpan.FromMilliseconds(25),
@@ -59,10 +62,8 @@ public sealed class AttachSessionRuntimeTests
             $"127.0.0.1:{server.Port}", NullLogger.Instance, cts.Token);
 
         var tickEventCount = 0;
-        runtime.TickReceived += _ => Interlocked.Increment(ref tickEventCount);
+        runtime.TickSummaryAdded += _ => Interlocked.Increment(ref tickEventCount);
 
-        // Wait until the runtime reports at least 3 ticks received. A slightly looser budget than
-        // 5 × 25 ms = 125 ms so CI noise on slow runners doesn't flake this.
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (runtime.TickCount < 3 && DateTime.UtcNow < deadline)
         {
@@ -70,9 +71,9 @@ public sealed class AttachSessionRuntimeTests
         }
 
         Assert.That(runtime.TickCount, Is.GreaterThanOrEqualTo(3),
-            "mock emits 5 blocks at 25 ms cadence; at least 3 must land within 5 s");
+            "mock emits 5 blocks at 25 ms cadence; at least 3 must finalize within 5 s");
         Assert.That(tickEventCount, Is.GreaterThanOrEqualTo(3),
-            "TickReceived event must fire for every decoded batch");
+            "TickSummaryAdded event must fire for every finalized tick");
     }
 
     [Test]

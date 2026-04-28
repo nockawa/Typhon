@@ -47,6 +47,10 @@ app.Services.RegisterSessionShutdownHook();
 var gate = app.Services.GetRequiredService<BootstrapTokenGate>();
 app.Logger.LogInformation("Workbench bootstrap token written to {Path}", gate.TokenFilePath);
 
+// Sweep orphan profiler temp files left by prior crashes. Live attach sessions write LZ4-compressed chunks
+// to %TEMP%/typhon-workbench/{sessionId}.cache; on graceful shutdown the file is deleted, but a crash leaves it.
+LiveCacheTempFile.SweepOrphans(app.Logger);
+
 app.Run();
 
 /// <summary>

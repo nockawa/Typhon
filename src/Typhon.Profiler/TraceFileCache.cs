@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 
 namespace Typhon.Profiler;
@@ -31,12 +32,22 @@ public struct CacheHeader
     /// <summary>Cache format version. Current: 1. Bump on breaking layout changes.</summary>
     public ushort Version;
 
-    /// <summary>Flags (reserved).</summary>
+    /// <summary>
+    /// Flag bits. See <see cref="CacheHeaderFlags"/>. Bit 0 (<see cref="CacheHeaderFlags.IsSelfContained"/>) marks a cache that doesn't need a
+    /// sibling <c>.typhon-trace</c> source — its metadata tables (header / systems / archetypes / component types) are carried inside the
+    /// <see cref="CacheSectionId.SourceMetadata"/> section. Live-attach session saves write self-contained caches; readers that see the flag
+    /// skip the source-file open and project metadata from the embedded bytes. Bits 1-15: reserved (must write 0; readers ignore unknown bits).
+    /// </summary>
     public ushort Flags;
 
     /// <summary>
-    /// SHA-256 of (source mtime-ticks + source length + first 4 KB + last 4 KB). If the source file changes in any meaningful way, this mismatches
-    /// and the cache is discarded on next open. Cheap to compute (~1 ms regardless of source size) and collision-resistant enough for our use.
+    /// 32-byte identifier for invalidation / cache identity:
+    /// <list type="bullet">
+    /// <item><b>Source-derived caches</b> (default): SHA-256 of (source mtime-ticks + source length + first 4 KB + last 4 KB). If the source
+    /// file changes meaningfully, the fingerprint mismatches and the cache is discarded on next open. Cheap (~1 ms) and collision-resistant.</item>
+    /// <item><b>Self-contained caches</b> (<see cref="CacheHeaderFlags.IsSelfContained"/> set): no source file exists. The 32 bytes carry an
+    /// arbitrary session-derived identifier (e.g. session GUID + zero-padding); readers must NOT treat the value as a file fingerprint.</item>
+    /// </list>
     /// </summary>
     public unsafe fixed byte SourceFingerprint[32];
 
@@ -67,6 +78,40 @@ public struct CacheHeader
 
     public const uint MagicValue = 0x48_43_50_54; // 'T','P','C','H' little-endian
     public const ushort CurrentVersion = 1;
+
+    /// <summary>Byte offset of <see cref="SourceFingerprint"/> from the start of the struct. Single source of truth for callers that
+    /// need to patch the field via a span (e.g. the trailer-write path which constructs the header by value and copies the identifier
+    /// in via <see cref="System.Runtime.InteropServices.MemoryMarshal"/>). Computed from the field declaration order: Magic (4) +
+    /// Version (2) + Flags (2) = 8.</summary>
+    public const int SourceFingerprintOffset = 8;
+
+    /// <summary>
+    /// Copy the 32-byte <paramref name="identifier"/> into the <see cref="SourceFingerprint"/> slot of <paramref name="header"/>. Used
+    /// by trailer-write paths that build the header by value: source-derived close (fingerprint of the source file) and self-contained
+    /// save (arbitrary session-derived ID — readers must NOT treat the value as a hash; see <see cref="SourceFingerprint"/> doc).
+    /// </summary>
+    public static void SetIdentifier(ref CacheHeader header, ReadOnlySpan<byte> identifier)
+    {
+        if (identifier.Length < 32)
+        {
+            throw new System.ArgumentException("Identifier must be at least 32 bytes.", nameof(identifier));
+        }
+        var headerSpan = System.Runtime.InteropServices.MemoryMarshal.AsBytes(System.Runtime.InteropServices.MemoryMarshal.CreateSpan(ref header, 1));
+        identifier[..32].CopyTo(headerSpan.Slice(SourceFingerprintOffset, 32));
+    }
+}
+
+/// <summary>
+/// Flag bits for <see cref="CacheHeader.Flags"/>. The struct is 16 bits wide; bit 0 is currently the only assigned flag.
+/// </summary>
+public static class CacheHeaderFlags
+{
+    /// <summary>
+    /// Set when the cache is self-contained (no <c>.typhon-trace</c> source needed at open time). The
+    /// <see cref="CacheSectionId.SourceMetadata"/> section carries the source's header + system / archetype / component-type tables verbatim;
+    /// the loader projects metadata from those bytes instead of opening a source file. Used by live-attach session saves.
+    /// </summary>
+    public const ushort IsSelfContained = 0x0001;
 }
 
 /// <summary>
@@ -117,6 +162,16 @@ public enum CacheSectionId : ushort
 
     /// <summary>Flat copy of the source file's optional span-name intern table. Count prefix (u16) + entries (u16 id, short-string name).</summary>
     SpanNameTable = 6,
+
+    /// <summary>
+    /// Verbatim copy of the source's metadata prefix: <see cref="TraceFileHeader"/> + system definitions table + archetypes table +
+    /// component-types table, in the same wire format produced by <c>TraceFileWriter</c> (and shipped over TCP as the engine's Init frame
+    /// payload during attach). Optional — present iff <see cref="CacheHeaderFlags.IsSelfContained"/> is set on the header. Loaders detect
+    /// the flag and project metadata from these bytes via a <c>TraceFileReader</c> over a <see cref="System.IO.MemoryStream"/>, skipping
+    /// the source-file open entirely. Source-derived caches (the default) omit this section; their metadata still comes from the parent
+    /// <c>.typhon-trace</c> at open time.
+    /// </summary>
+    SourceMetadata = 7,
 }
 
 /// <summary>

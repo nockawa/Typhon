@@ -45,6 +45,7 @@ public sealed class TraceFileCacheReader : IDisposable
     // `chunkIdx` parameter and index directly into `_chunkManifest` instead, which is both simpler and strictly more expressive.
     private readonly List<SystemAggregateDuration> _systemAggregates = new();
     private readonly Dictionary<int, string> _spanNames = new();
+    private byte[] _sourceMetadataBytes;
     private GlobalMetricsFixed _globalMetrics;
     private CacheHeader _header;
     private bool _disposed;
@@ -76,14 +77,25 @@ public sealed class TraceFileCacheReader : IDisposable
     public string GetSourceFingerprintHex()
     {
         Span<byte> fp = stackalloc byte[32];
-        unsafe
-        {
-            fixed (byte* src = _header.SourceFingerprint)
-            {
-                new ReadOnlySpan<byte>(src, 32).CopyTo(fp);
-            }
-        }
+        CopySourceFingerprint(fp);
         return Convert.ToHexString(fp);
+    }
+
+    /// <summary>
+    /// Copies the 32-byte source fingerprint into <paramref name="destination"/>. For source-derived caches the bytes are a SHA-256
+    /// hash of the source file; for self-contained caches (<see cref="IsSelfContained"/>) they are an arbitrary session-derived
+    /// identifier and must not be treated as a hash.
+    /// </summary>
+    public unsafe void CopySourceFingerprint(Span<byte> destination)
+    {
+        if (destination.Length < 32)
+        {
+            throw new ArgumentException("Destination must be at least 32 bytes.", nameof(destination));
+        }
+        fixed (byte* src = _header.SourceFingerprint)
+        {
+            new ReadOnlySpan<byte>(src, 32).CopyTo(destination);
+        }
     }
 
     public IReadOnlyList<TickIndexEntry> TickIndex => _tickIndex;
@@ -92,6 +104,21 @@ public sealed class TraceFileCacheReader : IDisposable
     public ref readonly GlobalMetricsFixed GlobalMetrics => ref _globalMetrics;
     public IReadOnlyList<SystemAggregateDuration> SystemAggregates => _systemAggregates;
     public IReadOnlyDictionary<int, string> SpanNames => _spanNames;
+
+    /// <summary>
+    /// True when <see cref="CacheHeaderFlags.IsSelfContained"/> is set in the header. A self-contained cache carries the source metadata tables
+    /// (header / systems / archetypes / component types) inside its <see cref="CacheSectionId.SourceMetadata"/> section, so the loader does not
+    /// need to read a sibling <c>.typhon-trace</c> file.
+    /// </summary>
+    public bool IsSelfContained => (_header.Flags & CacheHeaderFlags.IsSelfContained) != 0;
+
+    /// <summary>
+    /// Verbatim bytes of the embedded source metadata: <see cref="TraceFileHeader"/> + system definitions table + archetypes table + component
+    /// types table, in the same wire format the engine produces. Empty span when the cache has no <see cref="CacheSectionId.SourceMetadata"/>
+    /// section (i.e., not self-contained). Callers project header / tables by feeding these bytes through a <c>TraceFileReader</c> over a
+    /// <see cref="System.IO.MemoryStream"/>.
+    /// </summary>
+    public ReadOnlySpan<byte> SourceMetadataBytes => _sourceMetadataBytes ?? [];
 
     /// <summary>
     /// Read a chunk's compressed bytes into <paramref name="compressedDestination"/>. The destination must be at least
@@ -319,6 +346,17 @@ public sealed class TraceFileCacheReader : IDisposable
         {
             LoadSpanNameTable(spanSec);
         }
+        if (_sectionsByid.TryGetValue(CacheSectionId.SourceMetadata, out var sourceMetaSec))
+        {
+            LoadSourceMetadata(sourceMetaSec);
+        }
+    }
+
+    private void LoadSourceMetadata(SectionTableEntry section)
+    {
+        _stream.Position = section.Offset;
+        _sourceMetadataBytes = new byte[section.Length];
+        _stream.ReadExactly(_sourceMetadataBytes);
     }
 
     private void LoadStructArray<T>(SectionTableEntry section, List<T> destination) where T : unmanaged

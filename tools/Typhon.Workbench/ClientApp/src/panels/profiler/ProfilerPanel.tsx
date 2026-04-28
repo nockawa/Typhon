@@ -74,10 +74,10 @@ export default function ProfilerPanel() {
     setViewRange({ startUs: 0, endUs: 0 });
   }, [metadata, setViewRange, isAttach]);
 
-  // Chunk cache (trace) + live tick assembly (attach). Single hook handles both modes — the live
-  // branch reads `recentTicks` from the session store, builds per-tick `TickData` incrementally,
-  // and returns the same shape TimeArea/TickOverview already consume.
-  const { ticks: timeAreaTicks, gaugeData, pendingRangesUs } = useProfilerCache(sessionId, isAttach);
+  // #289 — unified chunk cache for both modes. The replay path builds the cache once on session open;
+  // the live path's IncrementalCacheBuilder grows the manifest server-side and ships growth deltas, so
+  // useProfilerCache observes the same expanding manifest in either mode.
+  const { ticks: timeAreaTicks, gaugeData, threadInfos, pendingRangesUs } = useProfilerCache(sessionId, isAttach);
 
   // Auto-follow viewport: in live mode with Following enabled, keep the viewRange anchored to the
   // last `liveFollowWindowUs` µs of the newest tick. Pausing Follow freezes the viewport at
@@ -216,9 +216,9 @@ export default function ProfilerPanel() {
           <LiveWaitingOverlay status={connectionStatus} />
         ) : (
           <div className="flex h-full w-full flex-col overflow-hidden">
-            <TickOverview isLive={isAttach} liveTicks={isAttach ? timeAreaTicks : undefined} />
+            <TickOverview isLive={isAttach} />
             <div className="flex-1 min-h-0">
-              <TimeArea ticks={timeAreaTicks} gaugeData={gaugeData} threadNames={gaugeData.threadNames} pendingRangesUs={pendingRangesUs} isLive={isAttach} />
+              <TimeArea ticks={timeAreaTicks} gaugeData={gaugeData} threadNames={gaugeData.threadNames} threadInfos={threadInfos} pendingRangesUs={pendingRangesUs} isLive={isAttach} />
             </div>
           </div>
         )}

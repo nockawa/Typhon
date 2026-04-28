@@ -567,9 +567,13 @@ export interface TraceEvent {
   gcPauseDurationUs?: number;
   gcPromotedBytes?: number;
 
-  // ThreadInfo (kind 77). Emitted once per slot claim; carries the managed thread ID and the thread's name (if set).
+  // ThreadInfo (kind 77). Emitted once per slot claim; carries the managed thread ID, the thread's
+  // name (if set), and a 1-byte ThreadKind tag (Main=0, Worker=1, Pool=2, Other=3 — matches the
+  // engine's `Typhon.Profiler.ThreadKind`). The kind drives the filter tree's Main/Workers/Other
+  // subgrouping in trace mode (live mode reads it from the SSE delta).
   managedThreadId?: number;
   threadName?: string;
+  threadKind?: number;
 }
 
 /**

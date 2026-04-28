@@ -3,63 +3,63 @@ import { useEventSource } from '@/hooks/streams/useEventSource';
 import {
   useProfilerSessionStore,
   type LiveStreamPayload,
-  type LiveTickBatch,
 } from '@/stores/useProfilerSessionStore';
 
 /**
- * SSE subscription for the profiler live stream (Attach mode). Wraps {@link useEventSource} and dispatches
- * discriminated-union payloads into {@link useProfilerSessionStore}.
+ * SSE subscription for the profiler live delta stream (#289 unified pipeline).
  *
- * Tick batches are buffered in a ref and flushed at 10 Hz to prevent setState storms when the engine emits at
- * 60+ Hz. Metadata is pushed directly to the store (no invalidation round-trip — the payload already carries
- * the full DTO and UI reads from the store).
+ * Wraps {@link useEventSource} and dispatches the server's growth deltas into {@link useProfilerSessionStore}:
+ * `metadata` (full snapshot on connect), `tickSummaryAdded`, `chunkAdded`, `globalMetricsUpdated`,
+ * `heartbeat`, and `shutdown`.
  *
- * Heartbeats carry the server's connection status (`connected` / `reconnecting` / `disconnected`). The
- * `useEventSource` reconnect loop handles Workbench-server transport failures; the server-reported status
- * reflects the TCP link between the Workbench and the target Typhon app.
+ * **rAF-coalesced batching.** Each SSE message handler runs synchronously on the main thread; under heavy ingest
+ * (many chunkAdded + tickSummaryAdded per second from a busy engine), one-mutation-per-event meant N×O(N)
+ * `[...prev, entry]` array spreads + N×subscriber notifications per frame, which stuttered the UI. We now buffer
+ * incoming events in a ref and flush them via `requestAnimationFrame` so each native paint cycle applies AT MOST
+ * one batched mutation. The `applyLiveBatch` store action collapses the N appends into a single O(N+batchSize)
+ * spread + a single subscriber notification, regardless of how many events landed in the frame.
+ *
+ * Trade-off: deltas are visible to the UI ≤ one frame (~16 ms) later than they used to be. That's smaller than
+ * any human-perceptible cadence and well under the engine's chunk-flush period (200 ms), so user-facing UX is
+ * indistinguishable except smoother.
  */
-const TICK_FLUSH_INTERVAL_MS = 100;
-
 export function useProfilerLiveStream(sessionId: string | null) {
-  const setMetadata = useProfilerSessionStore((s) => s.setMetadata);
-  const setConnectionStatus = useProfilerSessionStore((s) => s.setConnectionStatus);
-  const appendLiveTicks = useProfilerSessionStore((s) => s.appendLiveTicks);
+  const applyLiveBatch = useProfilerSessionStore((s) => s.applyLiveBatch);
 
-  const pendingTicksRef = useRef<LiveTickBatch[]>([]);
+  // Buffered events accumulated between rAF flushes. Lives in a ref because:
+  //   - Mutating it must NOT trigger a React re-render (we only re-render via the store mutation in flush()).
+  //   - Identity stability lets the rAF callback read the latest batch without React closures going stale.
+  const bufferRef = useRef<LiveStreamPayload[]>([]);
+  const rafIdRef = useRef<number>(0);
+
+  const flush = useCallback(() => {
+    rafIdRef.current = 0;
+    const batch = bufferRef.current;
+    if (batch.length === 0) return;
+    bufferRef.current = [];
+    applyLiveBatch(batch);
+  }, [applyLiveBatch]);
 
   const onMessage = useCallback(
     (payload: LiveStreamPayload) => {
-      switch (payload.kind) {
-        case 'metadata':
-          setMetadata(payload.metadata);
-          break;
-        case 'tick':
-          pendingTicksRef.current.push(payload.tick);
-          break;
-        case 'heartbeat':
-          setConnectionStatus(payload.status);
-          break;
+      bufferRef.current.push(payload);
+      if (rafIdRef.current === 0) {
+        rafIdRef.current = requestAnimationFrame(flush);
       }
     },
-    [setMetadata, setConnectionStatus],
+    [flush],
   );
 
-  // 10 Hz flush — batches tick arrivals so store subscribers re-render at most every 100 ms instead of per tick.
+  // Cancel any pending flush on unmount / session change so a late-firing rAF can't hit a stale store.
   useEffect(() => {
-    if (!sessionId) return;
-    const flush = () => {
-      if (pendingTicksRef.current.length > 0) {
-        const batch = pendingTicksRef.current;
-        pendingTicksRef.current = [];
-        appendLiveTicks(batch);
-      }
-    };
-    const interval = setInterval(flush, TICK_FLUSH_INTERVAL_MS);
     return () => {
-      clearInterval(interval);
-      flush(); // Drain anything buffered at unmount.
+      if (rafIdRef.current !== 0) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = 0;
+      }
+      bufferRef.current = [];
     };
-  }, [sessionId, appendLiveTicks]);
+  }, [sessionId]);
 
   const url = sessionId ? `/api/sessions/${sessionId}/profiler/stream` : null;
   return useEventSource<LiveStreamPayload>(url, onMessage);

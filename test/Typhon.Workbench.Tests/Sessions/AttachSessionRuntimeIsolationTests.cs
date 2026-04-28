@@ -3,9 +3,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
 using NUnit.Framework;
+using Typhon.Workbench.Dtos.Profiler;
 using Typhon.Workbench.Fixtures;
 using Typhon.Workbench.Sessions;
-using Typhon.Profiler;
 
 namespace Typhon.Workbench.Tests.Sessions;
 
@@ -42,10 +42,10 @@ public sealed class AttachSessionRuntimeIsolationTests
 
         var subscriberA = 0;
         var subscriberB = 0;
-        LiveTickBatch latestA = null;
-        LiveTickBatch latestB = null;
-        a.TickReceived += batch => { Interlocked.Increment(ref subscriberA); latestA = batch; };
-        b.TickReceived += batch => { Interlocked.Increment(ref subscriberB); latestB = batch; };
+        TickSummaryDto latestA = null;
+        TickSummaryDto latestB = null;
+        a.TickSummaryAdded += summary => { Interlocked.Increment(ref subscriberA); latestA = summary; };
+        b.TickSummaryAdded += summary => { Interlocked.Increment(ref subscriberB); latestB = summary; };
 
         // Both runtimes must independently pass 3 ticks. Use a shared deadline so a stuck runtime
         // doesn't mask the other's progress.
@@ -63,10 +63,7 @@ public sealed class AttachSessionRuntimeIsolationTests
 
         Assert.That(latestA, Is.Not.Null);
         Assert.That(latestB, Is.Not.Null);
-        Assert.That(ReferenceEquals(latestA, latestB), Is.False,
-            "a shared singleton would have both subscribers seeing the same batch instance — this proves they don't");
-
-        // Metadata references must be distinct — confirms BuildMetadataDto is per-instance, not a static cached singleton.
+        // Metadata references must be distinct — confirms metadata is per-instance, not a static cached singleton.
         Assert.That(ReferenceEquals(a.Metadata, b.Metadata), Is.False);
     }
 

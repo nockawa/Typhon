@@ -1,10 +1,33 @@
 {
+  "_doc": "Typhon profiler config for the IOProfileRunner workload. Subsystem roots match the workload stages (see Program.cs RunWorkload):",
+  "_doc_stages": [
+    "spawnBurst / spawnCheckpointLoop  → ECS.Spawn + Storage.PageCache + Data.Transactions + Durability.WAL+Checkpoint",
+    "txFlood                           → Data.Transactions",
+    "transientChurn                    → Memory + ECS.Spawn",
+    "readBurst                         → Storage.PageCache (Fetch+DiskRead+Evict)",
+    "checkpointAfterSpawn / final…     → Durability.Checkpoint",
+    "gcChurn                           → covered by GcTracing"
+  ],
+  "_doc_skipped": [
+    "Scheduler / Runtime — runner bypasses TyphonRuntime; no DAG telemetry to capture.",
+    "Query — workload doesn't run any EcsQuery (only Spawn / direct DBE ops).",
+    "Spatial — no R-tree / spatial-grid traffic in this workload.",
+    "Concurrency — high-volume lock telemetry would dwarf the actual workload signal."
+  ],
+
   "Typhon": {
     "Profiler": {
       "Enabled": true,
+
       "GcTracing":         { "Enabled": true },
       "MemoryAllocations": { "Enabled": true },
-      "Gauges":            { "Enabled": true }
+      "Gauges":            { "Enabled": true },
+
+      "Storage":    { "Enabled": true },
+      "Memory":     { "Enabled": true },
+      "Data":       { "Enabled": true },
+      "ECS":        { "Enabled": true },
+      "Durability": { "Enabled": true }
     }
   }
 }

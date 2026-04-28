@@ -9,6 +9,7 @@ import { buildGaugeTooltipLines, type GaugeData } from '@/libs/profiler/canvas/g
 import { getStudioThemeTokens } from '@/libs/profiler/canvas/theme';
 import { GaugeTooltip } from '@/panels/profiler/components/GaugeTooltip';
 import { HelpOverlay } from '@/panels/profiler/components/HelpOverlay';
+import { TimeAreaFilterButton } from '@/panels/profiler/sections/TimeAreaFilterButton';
 import { getTrackHelpLines } from '@/libs/profiler/canvas/trackHelpLines';
 import { buildHoverTooltipLines } from '@/libs/profiler/canvas/hoverTooltipLines';
 import { registerAnimateViewport } from '@/shell/commands/profilerCommands';
@@ -41,6 +42,12 @@ interface Props {
    * falls back to `Slot N` when absent or empty.
    */
   threadNames?: Map<number, string>;
+  /**
+   * Slot → {name, kind} unified across replay and live modes (sourced from `useProfilerCache.threadInfos`).
+   * Drives the section-filter popup's Threads → Main / Workers / Other subgrouping. Replay traces older than
+   * cache v4 carry no kind byte; the popup defaults those slots to Other.
+   */
+  threadInfos?: Map<number, { name: string; kind: number }>;
   /** Pending-chunk µs-ranges from `useProfilerCache` — painted as a diagonal-stripe overlay. */
   pendingRangesUs: readonly { startUs: number; endUs: number }[];
   isLive?: boolean;
@@ -51,7 +58,7 @@ interface Props {
 const DRAG_THRESHOLD_PX = 3;
 const ZOOM_ANIMATION_MS = 800;
 
-export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap, pendingRangesUs, isLive = false, onGutterWidthChange }: Props): React.JSX.Element {
+export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap, threadInfos, pendingRangesUs, isLive = false, onGutterWidthChange }: Props): React.JSX.Element {
 
   // `metadata` is read for `threadNames` (slot-label lookup) + gating the wheel handler before the
   // session has any data. Not used to derive viewRange — that comes from the selection store.
@@ -90,6 +97,11 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
   const vpRef = useRef<Viewport>({ offsetX: viewRange.startUs, scaleX: 0.5, scrollY: 0 });
   const gutterWidthRef = useRef<number>(80);
   const lastEmittedGutterRef = useRef<number>(-1);
+  // React-state mirror of `gutterWidthRef`. Used to position the absolutely-positioned filter-icon
+  // overlay in the ruler gutter — needs a re-render to track gutter-width changes (label-width
+  // recomputation when slot/system names lengthen). Updated via the same throttling path as the
+  // upward `onGutterWidthChange` callback.
+  const [gutterWidth, setGutterWidth] = useState<number>(80);
   const crosshairXRef = useRef<number>(-1);
   const hoverRef = useRef<TimeAreaHover>(null);
   const dragRef = useRef<
@@ -99,9 +111,12 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
   >(null);
   const zoomAnimRef = useRef<{ from: TimeRange; to: TimeRange; startTime: number } | null>(null);
   const rafRef = useRef(0);
-  // Track collapse — component-local, session-scoped. The view store owns global toggles
-  // (legends, gauge region); per-track collapse is UI-only and resets with the session.
-  const [collapseState, setCollapseState] = useState<Record<string, TrackState>>({});
+  // Track collapse — session-store, ephemeral. Lives there (not view-store) because slot/system
+  // ids aren't stable across sessions; persisting would silently misalign collapse state with
+  // a different thread on the same slot index next run. Lifted out of component-local state so
+  // the section-filter popup can dispatch batch collapse / expand / double commands into it.
+  const collapseState = useProfilerSessionStore((s) => s.collapseState);
+  const setSingleCollapseState = useProfilerSessionStore((s) => s.setCollapseState);
   // Gauge tooltip — DOM overlay (not canvas) because multi-line coloured text is cleaner in
   // HTML. Updated when the hit-test lands on a gauge track; cleared when cursor leaves.
   const [gaugeTooltipState, setGaugeTooltipState] = useState<
@@ -163,8 +178,17 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
   }, [metadata]);
   const perSystemLanesVisible = useProfilerViewStore((s) => s.perSystemLanesVisible);
 
-  // Build layout once per (slotInfo, collapseState). `layoutRef` stamps the result so pointer
-  // handlers read the same structure the draw loop saw.
+  // Section-filter visibility maps from the filter popup. Slots/systems are session-ephemeral
+  // (`useProfilerSessionStore`); gauges/engine-ops are persisted (`useProfilerViewStore`). Each map's
+  // missing key = visible — see TimeAreaFilterButton for the popup that drives them.
+  const slotVisibility = useProfilerSessionStore((s) => s.slotVisibility);
+  const systemVisibility = useProfilerSessionStore((s) => s.systemVisibility);
+  const gaugeVisibility = useProfilerViewStore((s) => s.gaugeVisibility);
+  const engineOpVisibility = useProfilerViewStore((s) => s.engineOpVisibility);
+  const spanColorMode = useProfilerViewStore((s) => s.spanColorMode);
+
+  // Build layout once per (slotInfo, collapseState, visibility maps). `layoutRef` stamps the result
+  // so pointer handlers read the same structure the draw loop saw.
   const layoutRef = useRef<{ tracks: readonly TrackLayout[]; totalHeight: number }>({ tracks: [], totalHeight: 0 });
   const layout = useMemo(() => {
     const r = buildLayout({
@@ -178,10 +202,14 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
       activeSystems,
       systemNames,
       perSystemLanesVisible,
+      slotVisibility,
+      systemVisibility,
+      gaugeVisibility,
+      engineOpVisibility,
     });
     layoutRef.current = r;
     return r;
-  }, [slotInfo, collapseState, threadNames, gaugeRegionVisible, gaugeCollapse, activeSystems, systemNames, perSystemLanesVisible]);
+  }, [slotInfo, collapseState, threadNames, gaugeRegionVisible, gaugeCollapse, activeSystems, systemNames, perSystemLanesVisible, slotVisibility, systemVisibility, gaugeVisibility, engineOpVisibility]);
 
   const render = useCallback((): void => {
     const canvas = canvasRef.current;
@@ -192,11 +220,15 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
     // Measure gutter width from the widest label — uses the same font the draw path sets.
     const gutter = computeGutterWidth(ctx, layout.tracks, legendsVisible);
     gutterWidthRef.current = gutter;
-    if (onGutterWidthChange && lastEmittedGutterRef.current !== gutter) {
+    if (lastEmittedGutterRef.current !== gutter) {
       lastEmittedGutterRef.current = gutter;
-      const cb = onGutterWidthChange;
       const w = gutter;
-      queueMicrotask(() => cb(w));
+      // Defer the React state + parent-callback fan-out off the rAF tick — setState during render
+      // is a no-no, and queueMicrotask runs after the current frame's draw completes.
+      queueMicrotask(() => {
+        setGutterWidth(w);
+        onGutterWidthChange?.(w);
+      });
     }
 
     // Advance zoom animation if one's in flight. Each frame interpolates vp toward the target and
@@ -235,8 +267,9 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
       gaugeData,
       helpHover: helpHoverRef.current,
       pendingRangesUs,
+      spanColorMode,
     }, getStudioThemeTokens());
-  }, [layout, ticks, viewRange, legendsVisible, selection, applyViewRange, onGutterWidthChange, gaugeData, pendingRangesUs]);
+  }, [layout, ticks, viewRange, legendsVisible, selection, applyViewRange, onGutterWidthChange, gaugeData, pendingRangesUs, spanColorMode]);
 
   const scheduleRender = useCallback((): void => {
     cancelAnimationFrame(rafRef.current);
@@ -361,11 +394,9 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
             const next: TrackState = cur === 'summary' ? 'expanded' : cur === 'expanded' ? 'double' : 'summary';
             setGaugeCollapse(hit.trackId, next);
           } else {
-            setCollapseState((prev) => {
-              const cur = prev[hit.trackId] ?? 'expanded';
-              const next: TrackState = cur === 'summary' ? 'expanded' : 'summary';
-              return { ...prev, [hit.trackId]: next };
-            });
+            const cur = collapseState[hit.trackId] ?? 'expanded';
+            const next: TrackState = cur === 'summary' ? 'expanded' : 'summary';
+            setSingleCollapseState(hit.trackId, next);
           }
           e.preventDefault();
         }
@@ -401,7 +432,7 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
       };
       try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
     }
-  }, [ticks, gaugeCollapse, setGaugeCollapse, legendsVisible]);
+  }, [ticks, gaugeCollapse, setGaugeCollapse, collapseState, setSingleCollapseState, legendsVisible]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>): void => {
     const local = getLocal(e);
@@ -591,10 +622,12 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
       const delta = e.shiftKey ? e.deltaY : e.deltaX;
       vp.offsetX += delta / vp.scaleX;
     } else {
-      // Zoom around cursor
+      // Zoom around cursor.
+      // scaleX = pixels per microsecond. Floor at 0.0001 → ~10 s visible at 1000 px content width;
+      // ceiling at 10000 → ~0.1 ns visible at 1000 px (deep zoom-in for tight spans).
       const usAtMouse = vp.offsetX + mouseX / vp.scaleX;
       const factor = e.deltaY > 0 ? 0.85 : 1.18;
-      vp.scaleX = Math.max(0.001, Math.min(10000, vp.scaleX * factor));
+      vp.scaleX = Math.max(0.0001, Math.min(10000, vp.scaleX * factor));
       vp.offsetX = usAtMouse - mouseX / vp.scaleX;
     }
     applyViewRange({ startUs: vp.offsetX, endUs: vp.offsetX + contentWidth / vp.scaleX });
@@ -656,6 +689,26 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
         }}
       >
         <div style={{ height: layout.totalHeight, width: 1 }} aria-hidden />
+      </div>
+      {/*
+       * Section-filter icon. Sits at the right edge of the ruler row's gutter band — same horizontal
+       * column as the rest of the gutter labels. Click opens a Popover with the search input + tri-state
+       * tree (Gauges / Threads / Systems / Engine Operations). The button absorbs its own pointer events
+       * so it doesn't trigger the canvas's drag/zoom handlers underneath.
+       */}
+      <div
+        className="absolute"
+        style={{ left: gutterWidth - 22, top: 4 }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
+      >
+        <TimeAreaFilterButton
+          activeSlots={slotInfo.activeSlots}
+          activeSystems={activeSystems}
+          threadNamesBySlot={threadNames}
+          systemNamesByIdx={systemNames}
+          threadInfos={threadInfos}
+        />
       </div>
       {gaugeTooltipState && (
         <GaugeTooltip

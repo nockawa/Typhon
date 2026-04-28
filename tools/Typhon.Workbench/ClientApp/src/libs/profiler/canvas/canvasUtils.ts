@@ -294,3 +294,84 @@ export function drawTooltip(
 export function getSystemColor(index: number, palette: readonly string[] = SPAN_PALETTE): string {
   return palette[index % palette.length];
 }
+
+/** Deterministic hash of a string into an unsigned int — used by the per-name color path. */
+function hashString(s: string): number {
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) {
+    hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Log-scale duration → heat color. Maps span duration onto a blue → green → orange → red ramp on a
+ * log10 scale: 1 µs maps to deep blue, 1 ms to green, ~30 ms to orange, ≥1 s to deep red. Returns an
+ * HSL string (works in both themes — saturated mid-lightness reads on either background). The
+ * gradient is theme-agnostic so the perceptual mapping stays stable when toggling light/dark.
+ *
+ * Why log: real workloads span 6+ orders of magnitude in span duration (1 µs lookup, 1 s checkpoint).
+ * A linear gradient would render every span on the timeline as the same hue except a handful of
+ * outliers. Log-scale spreads them across the visible color range.
+ */
+export function durationHeatColor(durationUs: number): string {
+  const us = Math.max(1, durationUs);
+  // log10(1) = 0 → 1 µs ; log10(1e6) = 6 → 1 s. Clamp the upper end so anything ≥ 1 s pegs the red end.
+  const t = Math.max(0, Math.min(1, Math.log10(us) / 6));
+  // Hue 220 = blue, 0 = red. We sweep 220 → 0 as t goes 0 → 1 (i.e. shorter = blue, longer = red).
+  const hue = (1 - t) * 220;
+  return `hsl(${Math.round(hue)} 65% 50%)`;
+}
+
+/**
+ * Decide the bar-fill colour for a span based on the user's chosen color-by mode. Centralised here
+ * so the renderer's hot loop has one switch point and the FilterTree's "color spans by …" dropdown
+ * has one helper to call. `name` mirrors the pre-toggle behaviour (hash span.name into the palette).
+ */
+export function colorForSpan(
+  span: { name: string; threadSlot: number; depth?: number; durationUs: number },
+  mode: 'name' | 'thread' | 'depth' | 'duration',
+  palette: readonly string[],
+): string {
+  switch (mode) {
+    case 'thread':
+      return palette[span.threadSlot % palette.length];
+    case 'depth':
+      return palette[(span.depth ?? 0) % palette.length];
+    case 'duration':
+      return durationHeatColor(span.durationUs);
+    case 'name':
+    default:
+      return palette[hashString(span.name) % palette.length];
+  }
+}
+
+/**
+ * Colour for a scheduler chunk bar. Chunks are the top-level unit of work scheduled onto a thread,
+ * so they're conceptually all at depth 0 (no nesting). In `depth` mode they share one fixed slot —
+ * `palette[0]` — and only the nested span bars below differentiate by depth, which is what makes
+ * the "Depth" lens visually meaningful (otherwise depth mode would look identical to name mode for
+ * the entire chunk row, since chunks would still differ by `systemIndex`). The other modes mirror
+ * {@link colorForSpan}: thread picks by `threadSlot`, duration runs the heat ramp.
+ *
+ * Why this exists alongside `colorForSpan`: chunks are a distinct draw path (top-of-slot bar with
+ * label, vs. nested span bars below). Routing both through one switch keeps the user's "Color by …"
+ * choice consistent across the whole timeline rather than only affecting the inner spans.
+ */
+export function colorForChunk(
+  chunk: { systemIndex: number; threadSlot: number; durationUs: number },
+  mode: 'name' | 'thread' | 'depth' | 'duration',
+  palette: readonly string[],
+): string {
+  switch (mode) {
+    case 'thread':
+      return palette[chunk.threadSlot % palette.length];
+    case 'duration':
+      return durationHeatColor(chunk.durationUs);
+    case 'depth':
+      return palette[0];
+    case 'name':
+    default:
+      return palette[chunk.systemIndex % palette.length];
+  }
+}

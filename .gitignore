@@ -299,3 +299,7 @@ nul
 
 # Claude Code skill runtime state (wb-dev PIDs, logs, etc. — local-only, per-machine)
 .claude/state/
+
+**/*.typhon-trace
+**/*.typhon-trace-cache
+**/*.typhon-replay

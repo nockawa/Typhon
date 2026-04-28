@@ -14,6 +14,7 @@ import SchemaArchetypePanel from '@/panels/SchemaInspector/SchemaArchetypePanel'
 import SchemaIndexPanel from '@/panels/SchemaInspector/SchemaIndexPanel';
 import SchemaRelationshipsPanel from '@/panels/SchemaInspector/SchemaRelationshipsPanel';
 import ProfilerPanel from '@/panels/profiler/ProfilerPanel';
+import TopSpansPanel from '@/panels/profiler/TopSpansPanel';
 import { registerDockApi } from './commands/openSchemaBrowser';
 import { registerProfilerDockApi } from './commands/profilerCommands';
 import MigrationRequiredBanner from './banners/MigrationRequiredBanner';
@@ -34,6 +35,7 @@ const components: Record<string, React.FC<IDockviewPanelProps>> = {
   SchemaIndexes: SchemaIndexPanel,
   SchemaRelationships: SchemaRelationshipsPanel,
   Profiler: ProfilerPanel,
+  TopSpans: TopSpansPanel,
 };
 
 function buildDefaultLayout(api: DockviewReadyEvent['api'], kind: 'none' | 'open' | 'attach' | 'trace') {
@@ -55,11 +57,21 @@ function buildDefaultLayout(api: DockviewReadyEvent['api'], kind: 'none' | 'open
     });
     detail.api.setSize({ width: 320 });
 
-    api.addPanel({
+    const logs = api.addPanel({
       id: 'logs',
       component: 'Logs',
       title: 'Logs',
       position: { direction: 'below', referencePanel: profiler },
+    });
+
+    // Top spans — wide 7-column table for "what's the slowest in range?". Tab-stacks with Logs
+    // below the profiler so the wide horizontal table has the full bottom-strip width to itself,
+    // and doesn't crowd the more-vertical Detail strip on the right. User can drag it elsewhere.
+    api.addPanel({
+      id: 'top-spans',
+      component: 'TopSpans',
+      title: 'Top spans',
+      position: { referencePanel: logs },
     });
     return;
   }
@@ -157,6 +169,21 @@ export default function DockHost() {
         component: 'Profiler',
         title: 'Profiler',
       });
+    }
+
+    // Same safety net for the Top spans panel — added in a later build, so older saved layouts
+    // for trace/attach sessions won't have it. Tab-stack with Logs (or any existing panel) so it
+    // shows up without disturbing the rest of the user's layout. The user can drag it elsewhere.
+    if ((kind === 'trace' || kind === 'attach') && !event.api.getPanel('top-spans')) {
+      const ref = event.api.getPanel('logs') ?? event.api.getPanel('profiler');
+      if (ref) {
+        event.api.addPanel({
+          id: 'top-spans',
+          component: 'TopSpans',
+          title: 'Top spans',
+          position: { referencePanel: ref },
+        });
+      }
     }
 
     event.api.onDidLayoutChange(() => {

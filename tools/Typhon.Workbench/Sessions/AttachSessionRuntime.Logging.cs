@@ -42,4 +42,12 @@ public sealed partial class AttachSessionRuntime
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Attach: read-loop background task faulted")]
     private partial void LogReadLoopFaulted(System.Exception exception);
+
+    [LoggerMessage(Level = LogLevel.Warning,
+        Message = "Attach: SSE subscriber {Id} kicked — buffer full longer than the slow-subscriber timeout")]
+    private partial void LogSlowSubscriberKicked(System.Guid id);
+
+    [LoggerMessage(Level = LogLevel.Error,
+        Message = "Attach: reconnect rejected — Init signature changed; session marked unrecoverable")]
+    private partial void LogInitMismatchUnrecoverable();
 }

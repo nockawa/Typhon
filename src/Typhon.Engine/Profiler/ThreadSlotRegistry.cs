@@ -191,20 +191,49 @@ internal static class ThreadSlotRegistry
         }
         slot.ChainHead = slot.Buffer;
         slot.ChainTail = slot.Buffer;
-        slot.OwnerManagedThreadId = threadId;
         slot.CaptureActivityContext = SGlobalCaptureActivityContext;
+
+        // Resolve name + kind, then publish them BEFORE OwnerManagedThreadId. TcpExporter.BuildCatchupThreadInfoFrame
+        // uses OwnerManagedThreadId == 0 as the "AssignClaim mid-flight, skip me" sentinel; if we set ManagedThreadId
+        // first the catch-up could read a non-zero id while OwnerThreadName / OwnerThreadKind are still defaults and
+        // ship a stale record. By writing those two first, any non-zero ManagedThreadId observation implies both the
+        // name and kind fields are already populated (x64 store-store ordering).
+        var threadName = Thread.CurrentThread.Name;
+        var threadKind = ResolveThreadKind(threadId, threadName);
+        slot.OwnerThreadName = threadName;
+        slot.OwnerThreadKind = threadKind;
+        slot.OwnerManagedThreadId = threadId;
         SlotIndex = index;
         Releaser = new SlotReleaser(index);
         Interlocked.Increment(ref SActiveSlotCount);
 
-        // Emit a ThreadInfo record right after the claim so the viewer can label this lane with a real thread name instead of just "Slot N".
-        // This runs on the claiming thread, so the per-slot SPSC invariant is preserved (this thread is the sole writer of its ring). If the
-        // thread has no name set we pass null — the encoder writes a zero-length name and the viewer falls back to "Thread {id}" downstream.
-        // Cache on the slot so TCP exporters can replay ThreadInfo to late-connecting clients (mid-session live connect otherwise has no
-        // way to see this one-shot record — it was drained and fanned out long before the client connected).
-        var threadName = Thread.CurrentThread.Name;
-        slot.OwnerThreadName = threadName;
-        TyphonEvent.EmitThreadInfo((byte)index, threadId, threadName);
+        // Emit a ThreadInfo record right after the claim so the viewer can label this lane with a real thread name
+        // instead of just "Slot N". This runs on the claiming thread, so the per-slot SPSC invariant is preserved
+        // (this thread is the sole writer of its ring). If the thread has no name set we pass null — the encoder
+        // writes a zero-length name and the viewer falls back to a synthesized label using ThreadKind + managed id.
+        TyphonEvent.EmitThreadInfo((byte)index, threadId, threadName, threadKind);
+    }
+
+    /// <summary>
+    /// Categorize the current thread for the viewer's filter UI. Cascade — first match wins:
+    /// (1) the thread that called <c>TyphonProfiler.Start</c> is Main; (2) <c>Typhon.Worker-N</c> threads are
+    /// Worker; (3) ThreadPool callbacks are Pool; (4) anything else is Other.
+    /// </summary>
+    private static ThreadKind ResolveThreadKind(int threadId, string threadName)
+    {
+        if (threadId == TyphonProfiler.MainThreadId && TyphonProfiler.MainThreadId != 0)
+        {
+            return ThreadKind.Main;
+        }
+        if (threadName != null && threadName.StartsWith("Typhon.Worker-", StringComparison.Ordinal))
+        {
+            return ThreadKind.Worker;
+        }
+        if (Thread.CurrentThread.IsThreadPoolThread)
+        {
+            return ThreadKind.Pool;
+        }
+        return ThreadKind.Other;
     }
 
     /// <summary>
@@ -236,6 +265,7 @@ internal static class ThreadSlotRegistry
         {
             SSlots[slotIndex].Slot.OwnerManagedThreadId = 0;
             SSlots[slotIndex].Slot.OwnerThreadName = null;
+            SSlots[slotIndex].Slot.OwnerThreadKind = ThreadKind.Other;
             Interlocked.Decrement(ref SActiveSlotCount);
         }
     }
@@ -254,6 +284,8 @@ internal static class ThreadSlotRegistry
             SSlots[i].State = (int)SlotState.Free;
             var slot = SSlots[i].Slot;
             slot.OwnerManagedThreadId = 0;
+            slot.OwnerThreadName = null;
+            slot.OwnerThreadKind = ThreadKind.Other;
             slot.CaptureActivityContext = true;
             // Release any held spillovers back to the pool BEFORE resetting the primary, so a recycled buffer
             // doesn't carry a stale Next forward into the next test.
@@ -334,6 +366,8 @@ internal static class ThreadSlotRegistry
             if (Interlocked.CompareExchange(ref SSlots[idx].State, (int)SlotState.Free, (int)SlotState.Active) == (int)SlotState.Active)
             {
                 SSlots[idx].Slot.OwnerManagedThreadId = 0;
+                SSlots[idx].Slot.OwnerThreadName = null;
+                SSlots[idx].Slot.OwnerThreadKind = ThreadKind.Other;
                 Interlocked.Decrement(ref SActiveSlotCount);
             }
         }
