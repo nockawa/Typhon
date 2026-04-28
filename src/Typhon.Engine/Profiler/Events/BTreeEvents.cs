@@ -14,6 +14,8 @@ namespace Typhon.Engine.Profiler;
 /// </remarks>
 public ref struct BTreeInsertEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.BTreeInsert;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -38,6 +40,8 @@ public ref struct BTreeInsertEvent : ITraceEventEncoder
 /// <summary>B+Tree delete span — same no-payload shape as <see cref="BTreeInsertEvent"/>.</summary>
 public ref struct BTreeDeleteEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.BTreeDelete;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -58,6 +62,8 @@ public ref struct BTreeDeleteEvent : ITraceEventEncoder
 /// <summary>B+Tree node split span — same no-payload shape.</summary>
 public ref struct BTreeNodeSplitEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.BTreeNodeSplit;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -78,6 +84,8 @@ public ref struct BTreeNodeSplitEvent : ITraceEventEncoder
 /// <summary>B+Tree node merge span — same no-payload shape.</summary>
 public ref struct BTreeNodeMergeEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.BTreeNodeMerge;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

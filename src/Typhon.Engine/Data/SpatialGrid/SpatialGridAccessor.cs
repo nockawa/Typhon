@@ -49,6 +49,9 @@ public readonly struct SpatialGridAccessor
     /// <summary>Cell size in world units.</summary>
     public float CellSize { get { ThrowIfInvalid(); return _grid.Config.CellSize; } }
 
+    /// <summary>Compute the flat cell key for the given cell coordinates. Accounts for Morton encoding when enabled.</summary>
+    public int ComputeCellKey(int cellX, int cellY) { ThrowIfInvalid(); return _grid.ComputeCellKey(cellX, cellY); }
+
     // ═══════════════════════════════════════════════════════════════
     // Cell access
     // ═══════════════════════════════════════════════════════════════

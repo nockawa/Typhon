@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
@@ -63,11 +64,59 @@ internal sealed class TraceRecordRing
     // Producer-owned; consumer reads for diagnostics only (plain read on x64 is safe).
     private long _droppedEvents;
 
+    // Producer-owned per-kind drop counter. SPSC ring → no Interlocked needed; consumer reads at shutdown.
+    // Indexed by (byte)TraceEventKind, sized to cover the full byte range. Lazily allocated only when a typed
+    // TryReserve overload sees its first drop, so rings that never drop never pay the 2 KB.
+    private long[] _droppedByKind;
+
+    // Forward link in a per-slot chain of rings (see ThreadSlot.ChainHead/ChainTail + SpilloverRingPool). The
+    // producer assigns this exactly once when extending the chain to a freshly-acquired spillover; the consumer
+    // walks it via Volatile.Read to avoid the JIT hoisting a stale read out of the drain loop. After Reset() the
+    // link is cleared so a recycled buffer never carries a stale forward pointer back into the pool.
+    private TraceRecordRing _next;
+
+    /// <summary>
+    /// Producer-side setter for the forward link. Called exactly once per ring lifetime (when the producer extends
+    /// the chain on overflow) — after this point the producer has moved on to the new ring, so this ring's <c>_next</c>
+    /// is stable. The consumer reads it via <see cref="Next"/> with acquire semantics.
+    /// </summary>
+    internal void SetNext(TraceRecordRing next) => _next = next;
+
+    /// <summary>
+    /// Consumer-side reader for the forward link. <see cref="Volatile.Read"/> prevents the JIT from hoisting the read
+    /// out of the drain loop and forces an acquire-style fence on weakly-ordered architectures. On x64 TSO the
+    /// hardware already gives us release-on-store + acquire-on-load for free, so this is purely about JIT
+    /// reordering, but the volatile keeps the code portable.
+    /// </summary>
+    internal TraceRecordRing Next => Volatile.Read(ref _next);
+
     /// <summary>Total bytes the buffer can hold (a power of 2, ≥ 64).</summary>
     private int Capacity { get; }
 
     /// <summary>Total records dropped on this buffer due to overflow (single-writer, plain read OK).</summary>
     public long DroppedEvents => _droppedEvents;
+
+    /// <summary>
+    /// Per-kind drop count for this ring. Returns 0 for any kind that's never been dropped (or before this ring
+    /// has lazily allocated the counter array). Consumer-only — call from a quiesced state (e.g. shutdown).
+    /// </summary>
+    public long DroppedEventsForKind(byte kind) => _droppedByKind?[kind] ?? 0;
+
+    /// <summary>
+    /// Decrement the drop counters by one. Used by the chain-extension recovery path: when a typed
+    /// <see cref="TryReserve(int, byte, out Span{byte})"/> fails on this ring but a freshly-acquired spillover
+    /// satisfies the same record, the original failure was a transient overflow with recovery, not real data
+    /// loss — so the counters should reflect successful emission. SPSC: only the producer that just bumped the
+    /// drop counter calls this, immediately, on the same thread, so plain decrement is race-free.
+    /// </summary>
+    internal void RescindLastDrop(byte kind)
+    {
+        _droppedEvents--;
+        if (_droppedByKind != null)
+        {
+            _droppedByKind[kind]--;
+        }
+    }
 
     /// <summary>
     /// Consumer-only non-destructive emptiness check. Returns <c>true</c> when no records are pending for drain. Used by the consumer thread to
@@ -135,6 +184,25 @@ internal sealed class TraceRecordRing
     /// comparison — it will see the ring as still empty at this position.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Same as <see cref="TryReserve(int, out Span{byte})"/>, but on failure also records the drop against
+    /// <paramref name="kind"/> in a per-kind counter array — used by diagnostics to break down ring-overflow loss
+    /// by event type. Cheap on the success path (one extra parameter, no allocation, no array access). The kind
+    /// argument is the same byte that the caller is about to write into the record header's first byte; passing
+    /// it here just lets us bookkeep the drop without re-reading the header.
+    /// </summary>
+    public bool TryReserve(int size, byte kind, out Span<byte> destination)
+    {
+        if (TryReserve(size, out destination))
+        {
+            return true;
+        }
+        // Lazy-init the counter array on first drop so we don't allocate 2 KB per ring just for SPSC bookkeeping
+        // that never fires on a healthy workload.
+        (_droppedByKind ??= new long[256])[kind]++;
+        return false;
+    }
+
     public bool TryReserve(int size, out Span<byte> destination)
     {
         if (size < MinRecordSize)
@@ -256,7 +324,8 @@ internal sealed class TraceRecordRing
     /// <summary>
     /// Reset head/tail/drop counters to zero. Must not be called concurrently with <see cref="TryReserve"/>, <see cref="Publish"/>, or
     /// <see cref="Drain"/> — the slot-registry protocol guarantees this by transitioning a slot through <c>SlotState.Free</c> before the new owner
-    /// claims it.
+    /// claims it. Also clears the chain forward link and per-kind drop counters so a ring returned to the spillover pool can be re-acquired without
+    /// carrying stale state from its previous owner.
     /// </summary>
     public void Reset()
     {
@@ -264,5 +333,10 @@ internal sealed class TraceRecordRing
         _tail.Value = 0;
         _pendingHead = 0;
         _droppedEvents = 0;
+        _next = null;
+        if (_droppedByKind != null)
+        {
+            Array.Clear(_droppedByKind);
+        }
     }
 }

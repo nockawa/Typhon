@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
  Menubar,
  MenubarContent,
@@ -14,6 +14,7 @@ import { useThemeStore } from '@/stores/useThemeStore';
 import { useSchemaInspectorStore } from '@/stores/useSchemaInspectorStore';
 import CommandPalette from './CommandPalette';
 import ConnectDialog, { type ConnectTab } from './dialogs/ConnectDialog';
+import SaveReplayDialog from './dialogs/SaveReplayDialog';
 import NavButtons from './NavButtons';
 import PaletteTrigger from './PaletteTrigger';
 import {
@@ -23,6 +24,7 @@ import {
   openSchemaIndexes,
   openSchemaRelationships,
 } from './commands/openSchemaBrowser';
+import { openTopSpansPanel, registerOpenSaveReplay } from './commands/profilerCommands';
 import { logError, logInfo } from '@/stores/useLogStore';
 
 export default function MenuBar() {
@@ -36,9 +38,17 @@ export default function MenuBar() {
  const clearSession = useSessionStore((s) => s.clearSession);
  const toggleTheme = useThemeStore((s) => s.toggle);
  const hasComponentSelection = useSchemaInspectorStore((s) => s.selectedComponentType != null);
+ const isProfilerSession = kind === 'attach' || kind === 'trace';
 
  const [dialogOpen, setDialogOpen] = useState(false);
  const [initialTab, setInitialTab] = useState<ConnectTab>('open');
+ const [saveReplayOpen, setSaveReplayOpen] = useState(false);
+
+ // Register the dialog opener with the module-level slot so palette commands can trigger it. Mirrors registerProfilerDockApi.
+ useEffect(() => {
+   registerOpenSaveReplay(() => setSaveReplayOpen(true));
+   return () => registerOpenSaveReplay(null);
+ }, []);
 
  const openConnect = (tab: ConnectTab) => {
  setInitialTab(tab);
@@ -68,6 +78,14 @@ export default function MenuBar() {
  <MenubarItem onClick={() => openConnect('open')}>Open .typhon File…</MenubarItem>
  <MenubarItem onClick={() => openConnect('cached')}>Open .typhon-trace…</MenubarItem>
  <MenubarItem onClick={() => openConnect('attach')}>Attach to Engine…</MenubarItem>
+ <MenubarSeparator />
+ <MenubarItem
+   disabled={kind !== 'attach'}
+   onClick={() => setSaveReplayOpen(true)}
+   title={kind === 'attach' ? undefined : 'Available only during a live attach session'}
+ >
+   Save Session as .typhon-replay…
+ </MenubarItem>
  <MenubarSeparator />
  <MenubarItem onClick={() => openConnect('recent')}>Recent Files…</MenubarItem>
  </MenubarContent>
@@ -108,6 +126,14 @@ export default function MenuBar() {
  Component Relationships
  </MenubarItem>
  <MenubarSeparator />
+ <MenubarItem
+ disabled={!isProfilerSession}
+ onClick={openTopSpansPanel}
+ title={isProfilerSession ? undefined : 'Open a profiler trace or attach a session first'}
+ >
+ Top Spans
+ </MenubarItem>
+ <MenubarSeparator />
  <MenubarItem onClick={toggleTheme}>Toggle Dark / Light Mode</MenubarItem>
  </MenubarContent>
  </MenubarMenu>
@@ -144,6 +170,7 @@ export default function MenuBar() {
  </div>
 
  <ConnectDialog open={dialogOpen} initialTab={initialTab} onOpenChange={setDialogOpen} />
+ <SaveReplayDialog open={saveReplayOpen} onOpenChange={setSaveReplayOpen} />
  </header>
  );
 }

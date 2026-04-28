@@ -7,5 +7,18 @@ namespace AntHill;
 partial class Ant : Archetype<Ant>
 {
     public static readonly Comp<Position> Position = Register<Position>();
-    public static readonly Comp<Movement> Movement = Register<Movement>();
+    public static readonly Comp<Genetics> Genetics = Register<Genetics>();
+    public static readonly Comp<AntState> State = Register<AntState>();
+}
+
+[Archetype(101)]
+partial class Food : Archetype<Food>
+{
+    public static readonly Comp<FoodSource> Source = Register<FoodSource>();
+}
+
+[Archetype(102)]
+partial class Nest : Archetype<Nest>
+{
+    public static readonly Comp<NestInfo> Info = Register<NestInfo>();
 }

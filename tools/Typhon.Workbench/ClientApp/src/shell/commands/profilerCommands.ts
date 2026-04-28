@@ -31,6 +31,29 @@ export function openProfilerPanel(): void {
   });
 }
 
+/**
+ * Opens (or focuses) the Top Spans panel. Tab-stacks with Logs by default — same position the
+ * default trace/attach layout uses, so a user that closed the panel and re-opens it ends up with
+ * the same dock arrangement. Falls back to the Profiler reference if Logs isn't around either.
+ * No-op if the dock api isn't mounted yet.
+ */
+export function openTopSpansPanel(): void {
+  const api = registeredApi;
+  if (!api) return;
+  const existing = api.getPanel('top-spans');
+  if (existing) {
+    existing.focus();
+    return;
+  }
+  const ref = api.getPanel('logs') ?? api.getPanel('profiler');
+  api.addPanel({
+    id: 'top-spans',
+    component: 'TopSpans',
+    title: 'Top spans',
+    position: ref ? { referencePanel: ref } : undefined,
+  });
+}
+
 function zoomToFullTrace(): void {
   const metadata = useProfilerSessionStore.getState().metadata;
   const gm = metadata?.globalMetrics;
@@ -71,12 +94,29 @@ export function animateViewportToRange(target: TimeRange): void {
 }
 
 /**
+ * Save-replay dialog opener. MenuBar mounts the dialog and registers its setOpen callback here so palette commands and
+ * the View menu can both trigger it without prop-drilling through the dock layer. Same pattern as
+ * {@link registerProfilerDockApi}.
+ */
+let registeredOpenSaveReplay: (() => void) | null = null;
+
+export function registerOpenSaveReplay(fn: (() => void) | null): void {
+  registeredOpenSaveReplay = fn;
+}
+
+export function openSaveReplayDialog(): void {
+  registeredOpenSaveReplay?.();
+}
+
+/**
  * Profiler-module palette entries. Spread into `buildBaseCommands()` so they land alongside the
  * shell-level commands in the `Ctrl+K` palette.
  */
 export function buildProfilerPaletteCommands(): CommandItem[] {
   return [
     { id: 'profiler-open',           label: 'Open Profiler Panel',   keywords: 'profiler open show',               action: openProfilerPanel },
+    { id: 'profiler-top-spans',      label: 'Open Top Spans Panel',  keywords: 'profiler top spans table slow expensive sortable', action: openTopSpansPanel },
+    { id: 'profiler-save-replay',    label: 'Save Session as .typhon-replay…', keywords: 'save replay export attach session', action: openSaveReplayDialog },
     { id: 'profiler-toggle-gauges',  label: 'Toggle Gauge Region',   keywords: 'gauges canvas profiler g',         action: () => useProfilerViewStore.getState().toggleGaugeRegion() },
     { id: 'profiler-toggle-legends', label: 'Toggle Legends',        keywords: 'legends labels profiler l',        action: () => useProfilerViewStore.getState().toggleLegends() },
     { id: 'profiler-toggle-systems', label: 'Toggle Per-System Lanes', keywords: 'systems lanes profiler',         action: () => useProfilerViewStore.getState().togglePerSystemLanes() },

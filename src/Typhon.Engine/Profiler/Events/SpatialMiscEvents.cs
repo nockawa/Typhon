@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialTierIndexRebuild"/>.</summary>
 public ref struct SpatialTierIndexRebuildEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialTierIndexRebuild;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -31,6 +33,8 @@ public ref struct SpatialTierIndexRebuildEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialTriggerEval"/>.</summary>
 public ref struct SpatialTriggerEvalEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialTriggerEval;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

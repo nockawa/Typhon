@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SchedulerSystemSingleThreaded"/>.</summary>
 public ref struct SchedulerSystemSingleThreadedEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SchedulerSystemSingleThreaded;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -30,6 +32,8 @@ public ref struct SchedulerSystemSingleThreadedEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SchedulerWorkerIdle"/>.</summary>
 public ref struct SchedulerWorkerIdleEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SchedulerWorkerIdle;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -54,6 +58,8 @@ public ref struct SchedulerWorkerIdleEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SchedulerWorkerBetweenTick"/>.</summary>
 public ref struct SchedulerWorkerBetweenTickEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SchedulerWorkerBetweenTick;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -78,6 +84,8 @@ public ref struct SchedulerWorkerBetweenTickEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SchedulerDependencyFanOut"/>.</summary>
 public ref struct SchedulerDependencyFanOutEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SchedulerDependencyFanOut;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -102,6 +110,8 @@ public ref struct SchedulerDependencyFanOutEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SchedulerGraphBuild"/>.</summary>
 public ref struct SchedulerGraphBuildEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SchedulerGraphBuild;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -126,6 +136,8 @@ public ref struct SchedulerGraphBuildEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SchedulerGraphRebuild"/>. Design stub — no producer in Phase 4.</summary>
 public ref struct SchedulerGraphRebuildEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SchedulerGraphRebuild;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

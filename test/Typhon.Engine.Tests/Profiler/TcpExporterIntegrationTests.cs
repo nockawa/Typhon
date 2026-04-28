@@ -22,6 +22,7 @@ namespace Typhon.Engine.Tests.Profiler;
 /// server uses for live sessions, so a pass here validates the server's plumbing by proxy.
 /// </remarks>
 [TestFixture]
+[NonParallelizable] // shares static TyphonProfiler state with other fixtures running in parallel.
 public class TcpExporterIntegrationTests
 {
     private const int DiscoveryPort = 0; // ask OS for a free port
@@ -148,6 +149,92 @@ public class TcpExporterIntegrationTests
         {
             TyphonProfiler.Stop();
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // --live-wait gate (synchronous "block until first viewer attaches")
+    // ═══════════════════════════════════════════════════════════════════════
+
+    [Test]
+    public void LiveConnectTimeout_Zero_DoesNotBlock_DefaultBehavior()
+    {
+        int port;
+        using (var probe = new TcpListener(System.Net.IPAddress.Loopback, 0))
+        {
+            probe.Start();
+            port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+            probe.Stop();
+        }
+        var exporter = new TcpExporter(port, _registry.Profiler /* default 0 timeout */);
+        TyphonProfiler.AttachExporter(exporter);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        TyphonProfiler.Start(_registry.Profiler, BuildMetadata());
+        sw.Stop();
+        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(500), "Initialize must not block when timeout = 0");
+        Assert.That(exporter.HasClientEverConnected, Is.False);
+    }
+
+    [Test]
+    public void LiveConnectTimeout_BlocksUntilTimeoutWhenNoClientConnects()
+    {
+        int port;
+        using (var probe = new TcpListener(System.Net.IPAddress.Loopback, 0))
+        {
+            probe.Start();
+            port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+            probe.Stop();
+        }
+        var exporter = new TcpExporter(port, _registry.Profiler, liveConnectTimeoutMs: 250);
+        TyphonProfiler.AttachExporter(exporter);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        TyphonProfiler.Start(_registry.Profiler, BuildMetadata());
+        sw.Stop();
+        // Should block ~250 ms (allow some slack for thread scheduling) and ultimately time out without a client.
+        Assert.That(sw.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(200).And.LessThan(2000),
+            $"Initialize should block ~250ms; actual: {sw.ElapsedMilliseconds}ms");
+        Assert.That(exporter.HasClientEverConnected, Is.False, "no client connected → flag must stay false");
+    }
+
+    [Test]
+    public void LiveConnectTimeout_UnblocksWhenClientConnectsBeforeTimeout()
+    {
+        int port;
+        using (var probe = new TcpListener(System.Net.IPAddress.Loopback, 0))
+        {
+            probe.Start();
+            port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+            probe.Stop();
+        }
+        var exporter = new TcpExporter(port, _registry.Profiler, liveConnectTimeoutMs: 5000);
+        TyphonProfiler.AttachExporter(exporter);
+
+        // Schedule a client to connect after a short delay; verify Initialize unblocks shortly after.
+        var connectTask = System.Threading.Tasks.Task.Run(() =>
+        {
+            Thread.Sleep(150);
+            var client = new TcpClient();
+            ConnectWithRetry(client, "127.0.0.1", port, timeoutMs: 2000);
+            return client;
+        });
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        TyphonProfiler.Start(_registry.Profiler, BuildMetadata());
+        sw.Stop();
+
+        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
+            $"Initialize should unblock within ~150-300ms after client connects; actual: {sw.ElapsedMilliseconds}ms");
+        Assert.That(exporter.HasClientEverConnected, Is.True, "first-client signal must be set");
+
+        // Cleanup the client we spawned for the test.
+        var client = connectTask.Result;
+        try { client.Close(); } catch { }
+    }
+
+    [Test]
+    public void TcpExporter_RejectsNegativeLiveConnectTimeout()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new TcpExporter(0, _registry.Profiler, liveConnectTimeoutMs: -5));
     }
 
     private static ProfilerSessionMetadata BuildMetadata()

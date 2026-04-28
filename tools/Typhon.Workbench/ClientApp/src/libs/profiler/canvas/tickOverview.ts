@@ -19,6 +19,51 @@ export interface TickRow {
   eventCount: number;
 }
 
+/**
+ * Minimal shape consumed by {@link buildTickRows}: must surface the four fields below. Wider DTOs (e.g.
+ * `TickSummaryDto` from the OpenAPI client) satisfy this structurally.
+ */
+export interface TickSummaryLike {
+  tickNumber: number | string;
+  startUs: number | string;
+  durationUs: number | string;
+  eventCount: number | string;
+}
+
+/**
+ * Build {@link TickRow} entries from a tickSummaries array. Performs **boundary clamping**:
+ * `endUs := Math.min(startUs + durationUs, nextTick.startUs)` so consecutive ticks always butt up exactly.
+ *
+ * **Why the clamp.** The engine stores `TickSummary.DurationUs` as a 32-bit float on the wire while
+ * `StartUs` is a 64-bit double, so `start + duration` (computed as JS doubles after the float→double
+ * widen) can drift slightly past the next tick's wire `startUs`. Without clamping, strict-less-than
+ * overlap tests in {@link computeSelectionIdxRange} flip and a single-tick selection silently bleeds
+ * into the next tick. The original `durationUs` is preserved unchanged for renderers that size bars from
+ * it; only `endUs` is clamped.
+ *
+ * Real engine-idle gaps (next.startUs greater than start + duration) are preserved — the clamp uses
+ * `Math.min`, so it only trims overshoot, never extends.
+ */
+export function buildTickRows(summaries: readonly TickSummaryLike[] | null | undefined): TickRow[] {
+  if (!summaries || summaries.length === 0) return [];
+  const result: TickRow[] = new Array(summaries.length);
+  for (let i = 0; i < summaries.length; i++) {
+    const s = summaries[i];
+    const start = Number(s.startUs);
+    const duration = Number(s.durationUs);
+    const computedEnd = start + duration;
+    const nextStart = i + 1 < summaries.length ? Number(summaries[i + 1].startUs) : Number.POSITIVE_INFINITY;
+    result[i] = {
+      tickNumber: Number(s.tickNumber),
+      startUs: start,
+      endUs: Math.min(computedEnd, nextStart),
+      durationUs: duration,
+      eventCount: Number(s.eventCount),
+    };
+  }
+  return result;
+}
+
 /** Inputs to `drawTickOverview` and hit-test helpers. */
 export interface TickOverviewInputs {
   ticks: TickRow[];
@@ -26,6 +71,11 @@ export interface TickOverviewInputs {
   viewRange: TimeRange;
   /** Slice of ticks currently visible in the overview (pan state, separate from viewRange). */
   scrollWindow: { startIdx: number; endIdx: number };
+  /**
+   * Set true while the user is hovering the scrollbar track or actively dragging the thumb. Lets the renderer
+   * brighten the thumb during interaction. Optional — falsy by default.
+   */
+  scrollbarHovered?: boolean;
   /** Ticks that overlap viewRange. `-1`/`-1` if no overlap. */
   selection: { first: number; last: number };
   /** In-flight drag preview, or null if no drag. */
@@ -41,11 +91,28 @@ export interface TickOverviewInputs {
 }
 
 export const TIMELINE_HEIGHT = 80;
+/** y-offset of the top of the bar area inside the canvas. */
+export const BAR_AREA_TOP = 2;
+/** Pixel offset between the bottom of the bar area and the bottom of the canvas — reserved for tick-number labels and the (optional) scrollbar. */
+export const BAR_AREA_BOTTOM_RESERVED = 26;
 export const MAX_BAR_WIDTH = 10;
 /** Per-bar floor so individual ticks stay legible. Caps visible window at `floor(width/MIN_BAR_WIDTH)` ticks. */
 export const MIN_BAR_WIDTH = 4;
 /** Pixel threshold separating click from drag. */
 export const DRAG_THRESHOLD_PX = 3;
+
+/**
+ * Fixed bar width for the tick overview strip. One pixel wider than <see cref="MIN_BAR_WIDTH"/> so bars stay
+ * stable as the user pans / resizes — no more dynamic stretch from MIN_BAR_WIDTH..MAX_BAR_WIDTH. Visible window
+ * is <c>floor((width - BAR_LEFT_PAD) / BAR_WIDTH)</c> ticks; trailing bars render off-canvas as the user scrolls.
+ */
+export const BAR_WIDTH = MIN_BAR_WIDTH + 1;
+
+/**
+ * Left padding before the first bar. The first bar appeared half-cut without this — likely a 2-3 px parent CSS
+ * clip / border. Integer pixels so <c>fillRect</c> stays pixel-aligned.
+ */
+export const BAR_LEFT_PAD = 3;
 /**
  * Help-glyph geometry. Anchored at the top-right of the canvas (not the gutter — the overview sits alone
  * until the time-area section lands in 2b and provides a real gutter). `HELP_GLYPH_MARGIN_RIGHT` is the
@@ -55,6 +122,13 @@ export const HELP_GLYPH_MARGIN_RIGHT = 8;
 export const HELP_GLYPH_Y_BASELINE = 14;
 export const HELP_ICON_HIT_PAD = 4;
 export const HELP_ICON_GLYPH_WIDTH = 10;
+
+/** Scrollbar track height (px). Drawn between the bar area and the tick-number labels. */
+export const SCROLLBAR_HEIGHT = 5;
+/** Vertical gap (px) between the bar area's bottom and the scrollbar track. */
+export const SCROLLBAR_TOP_PAD = 1;
+/** Minimum thumb width (px) for usability — short thumbs become un-grabbable on long traces. */
+export const SCROLLBAR_MIN_THUMB_PX = 16;
 
 const OVERLAY_COLOR = OVERVIEW_PALETTE.selection + '40';
 const OVERLAY_BORDER = OVERVIEW_PALETTE.selection + 'B3';
@@ -89,8 +163,8 @@ export function drawTickOverview(
   ctx.lineTo(width, height - 0.5);
   ctx.stroke();
 
-  const barAreaHeight = height - 18;
-  const barAreaTop = 2;
+  const barAreaHeight = height - BAR_AREA_BOTTOM_RESERVED;
+  const barAreaTop = BAR_AREA_TOP;
 
   // P95 reference dashed line — drawn before bars so bars visually sit "under the ceiling". The P95 LABEL
   // is drawn much later (after bars + overlay) so its backdrop stays on top and actually reads.
@@ -103,18 +177,19 @@ export function drawTickOverview(
   ctx.stroke();
   ctx.setLineDash([]);
 
-  const barWidth = Math.min(width / visibleCount, MAX_BAR_WIDTH);
+  const barWidth = BAR_WIDTH;
 
   // Bars. Minimum 1 px height floor so very-short ticks (e.g. a fast ForceCheckpoint) stay visible.
   for (let i = sr.startIdx; i < sr.endIdx; i++) {
     const tick = ticks[i];
     const ratio = Math.min(tick.durationUs / p95, 1.0);
     const barH = Math.max(1, ratio * barAreaHeight);
-    const x = (i - sr.startIdx) * barWidth;
+    const x = BAR_LEFT_PAD + (i - sr.startIdx) * barWidth;
     const y = barAreaTop + barAreaHeight - barH;
 
     ctx.fillStyle = tick.durationUs > p95 ? theme.overviewP95 : theme.overviewBar;
-    ctx.fillRect(x + 0.5, y, Math.max(barWidth - 1, 1), barH);
+    // Integer coords + width-1 leaves a 1-px gap between bars without sub-pixel anti-aliasing.
+    ctx.fillRect(x, y, Math.max(barWidth - 1, 1), barH);
   }
 
   // Orange selection overlay — ticks overlapping viewRange.
@@ -122,8 +197,8 @@ export function drawTickOverview(
     const drawFirst = Math.max(selection.first, sr.startIdx);
     const drawLast = Math.min(selection.last, sr.endIdx - 1);
     if (drawFirst <= drawLast) {
-      const overlayStartX = (drawFirst - sr.startIdx) * barWidth;
-      const overlayEndX = (drawLast - sr.startIdx + 1) * barWidth;
+      const overlayStartX = BAR_LEFT_PAD + (drawFirst - sr.startIdx) * barWidth;
+      const overlayEndX = BAR_LEFT_PAD + (drawLast - sr.startIdx + 1) * barWidth;
       ctx.fillStyle = OVERLAY_COLOR;
       ctx.fillRect(overlayStartX, barAreaTop, overlayEndX - overlayStartX, barAreaHeight);
       ctx.strokeStyle = OVERLAY_BORDER;
@@ -172,7 +247,7 @@ export function drawTickOverview(
   ctx.textAlign = 'center';
   const labelEvery = Math.max(1, Math.floor(60 / barWidth));
   for (let i = sr.startIdx; i < sr.endIdx; i += labelEvery) {
-    const x = (i - sr.startIdx) * barWidth + barWidth / 2;
+    const x = BAR_LEFT_PAD + (i - sr.startIdx) * barWidth + barWidth / 2;
     ctx.fillText(`${ticks[i].tickNumber}`, x, height - 5);
   }
 
@@ -183,8 +258,8 @@ export function drawTickOverview(
     const clampedA = Math.max(sr.startIdx, a);
     const clampedB = Math.min(sr.endIdx - 1, b);
     if (clampedA <= clampedB) {
-      const x1 = (clampedA - sr.startIdx) * barWidth;
-      const x2 = (clampedB - sr.startIdx + 1) * barWidth;
+      const x1 = BAR_LEFT_PAD + (clampedA - sr.startIdx) * barWidth;
+      const x2 = BAR_LEFT_PAD + (clampedB - sr.startIdx + 1) * barWidth;
       ctx.fillStyle = OVERVIEW_PALETTE.selection + '30';
       ctx.fillRect(x1, barAreaTop, x2 - x1, barAreaHeight);
       ctx.strokeStyle = OVERLAY_BORDER;
@@ -238,29 +313,101 @@ export function drawTickOverview(
   // wrapper (see TickOverview.tsx) so it doesn't obstruct adjacent bars in the strip. The canvas
   // draw pass only highlights the hovered bar; content goes through HelpOverlay.
   if (!helpHovered && hover && hover.tickIdx >= sr.startIdx && hover.tickIdx < sr.endIdx) {
-    const x = (hover.tickIdx - sr.startIdx) * barWidth;
+    const x = BAR_LEFT_PAD + (hover.tickIdx - sr.startIdx) * barWidth;
     // Primary accent — chromatic outline that reads as "this is hovered" in both themes without feeling as
     // heavy as a jet-black foreground stroke does against a pale card in light mode.
     ctx.strokeStyle = theme.primary;
     ctx.lineWidth = 1.5;
     ctx.strokeRect(x, barAreaTop, barWidth, barAreaHeight);
   }
+
+  // Horizontal scrollbar — drawn only when the visible window doesn't cover all ticks. Sits between the bar
+  // area and the tick-number labels. Track = muted background; thumb = primary accent (brightened on hover).
+  // Geometry mirrors `computeScrollbarGeometry` so hit-tests in the React wrapper line up exactly.
+  const sbg = computeScrollbarGeometry(width, ticks.length, sr, barAreaTop, barAreaHeight);
+  if (sbg) {
+    ctx.fillStyle = theme.muted;
+    ctx.fillRect(sbg.trackX, sbg.trackY, sbg.trackW, sbg.trackH);
+    ctx.fillStyle = inputs.scrollbarHovered ? theme.primary : theme.mutedForeground;
+    ctx.fillRect(sbg.thumbX, sbg.trackY, sbg.thumbW, sbg.trackH);
+  }
+}
+
+/**
+ * Compute scrollbar track + thumb pixel rects for the current state. Returns <c>null</c> when the visible window
+ * already covers every tick (no need for a scrollbar). Shared by <see cref="drawTickOverview"/> and the React
+ * wrapper's hit-test logic so click coordinates resolve to the same target the renderer drew.
+ */
+export function computeScrollbarGeometry(
+  canvasWidth: number,
+  totalTicks: number,
+  scrollWindow: { startIdx: number; endIdx: number },
+  barAreaTop: number,
+  barAreaHeight: number,
+): { trackX: number; trackY: number; trackW: number; trackH: number; thumbX: number; thumbW: number } | null {
+  const visibleCount = scrollWindow.endIdx - scrollWindow.startIdx;
+  if (totalTicks <= 0 || visibleCount <= 0 || visibleCount >= totalTicks) {
+    return null;
+  }
+  const trackX = 0;
+  const trackY = barAreaTop + barAreaHeight + SCROLLBAR_TOP_PAD;
+  const trackW = canvasWidth;
+  const trackH = SCROLLBAR_HEIGHT;
+  // Thumb width is proportional to the fraction of total ticks we can see, with a usability floor.
+  const proportional = (visibleCount / totalTicks) * trackW;
+  const thumbW = Math.max(SCROLLBAR_MIN_THUMB_PX, proportional);
+  // Thumb left = startIdx normalized to [0, 1] mapped to [0, trackW - thumbW] so the thumb's right edge stops
+  // exactly at the track's right edge when scrollWindow is fully right-justified.
+  const maxStartIdx = totalTicks - visibleCount;
+  const startFrac = maxStartIdx > 0 ? scrollWindow.startIdx / maxStartIdx : 0;
+  const thumbX = startFrac * (trackW - thumbW);
+  return { trackX, trackY, trackW, trackH, thumbX, thumbW };
+}
+
+/**
+ * Hit-test for the scrollbar. Returns a <c>"thumb"</c> hit if the pointer is within the thumb (drag start), a
+ * <c>"track"</c> hit if it's elsewhere on the track (jump-to-here), or <c>null</c> if no scrollbar interaction.
+ */
+export function hitTestScrollbar(
+  mouseX: number,
+  mouseY: number,
+  canvasWidth: number,
+  totalTicks: number,
+  scrollWindow: { startIdx: number; endIdx: number },
+  barAreaTop: number,
+  barAreaHeight: number,
+): { kind: 'thumb' | 'track'; thumbX: number; thumbW: number } | null {
+  const sbg = computeScrollbarGeometry(canvasWidth, totalTicks, scrollWindow, barAreaTop, barAreaHeight);
+  if (sbg == null) {
+    return null;
+  }
+  // Generous vertical hit pad so the 5-px-tall scrollbar isn't fiddly to grab.
+  const hitPad = 4;
+  if (mouseY < sbg.trackY - hitPad || mouseY > sbg.trackY + sbg.trackH + hitPad) {
+    return null;
+  }
+  if (mouseX < sbg.trackX || mouseX > sbg.trackX + sbg.trackW) {
+    return null;
+  }
+  const onThumb = mouseX >= sbg.thumbX && mouseX <= sbg.thumbX + sbg.thumbW;
+  return { kind: onThumb ? 'thumb' : 'track', thumbX: sbg.thumbX, thumbW: sbg.thumbW };
 }
 
 /**
  * Translate an in-canvas mouse X to the tick index under it (within the current visible window), or `-1`.
- * Caller supplies the canvas width so this stays DOM-free.
+ * Bar width is the fixed <see cref="BAR_WIDTH"/>. <c>canvasWidth</c> kept in the signature for symmetry with
+ * <see cref="hitTestScrollbar"/> even though it isn't read — callers always pass it.
  */
 export function hitTestTick(
   mouseX: number,
-  canvasWidth: number,
+  _canvasWidth: number,
   scrollWindow: { startIdx: number; endIdx: number },
 ): number {
   const visibleCount = scrollWindow.endIdx - scrollWindow.startIdx;
   if (visibleCount <= 0) return -1;
-  const barWidth = Math.min(canvasWidth / visibleCount, MAX_BAR_WIDTH);
-  if (mouseX < 0 || mouseX >= visibleCount * barWidth) return -1;
-  return scrollWindow.startIdx + Math.floor(mouseX / barWidth);
+  const offsetMouseX = mouseX - BAR_LEFT_PAD;
+  if (offsetMouseX < 0 || offsetMouseX >= visibleCount * BAR_WIDTH) return -1;
+  return scrollWindow.startIdx + Math.floor(offsetMouseX / BAR_WIDTH);
 }
 
 /**

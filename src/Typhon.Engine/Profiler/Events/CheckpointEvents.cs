@@ -11,6 +11,8 @@ namespace Typhon.Engine.Profiler;
 /// </summary>
 public ref struct CheckpointCycleEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.CheckpointCycle;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -44,6 +46,8 @@ public ref struct CheckpointCycleEvent : ITraceEventEncoder
 /// <summary>Checkpoint collect-dirty-pages phase — no typed payload (span header only).</summary>
 public ref struct CheckpointCollectEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.CheckpointCollect;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -66,6 +70,8 @@ public ref struct CheckpointCollectEvent : ITraceEventEncoder
 /// </summary>
 public ref struct CheckpointWriteEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.CheckpointWrite;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -96,6 +102,8 @@ public ref struct CheckpointWriteEvent : ITraceEventEncoder
 /// <summary>Checkpoint fsync phase — no typed payload (span header only).</summary>
 public ref struct CheckpointFsyncEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.CheckpointFsync;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -118,6 +126,8 @@ public ref struct CheckpointFsyncEvent : ITraceEventEncoder
 /// </summary>
 public ref struct CheckpointTransitionEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.CheckpointTransition;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -150,6 +160,8 @@ public ref struct CheckpointTransitionEvent : ITraceEventEncoder
 /// </summary>
 public ref struct CheckpointRecycleEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.CheckpointRecycle;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

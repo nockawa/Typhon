@@ -10,6 +10,8 @@ namespace Typhon.Engine.Profiler;
 /// </summary>
 public ref struct TransactionCommitEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.TransactionCommit;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -48,6 +50,8 @@ public ref struct TransactionCommitEvent : ITraceEventEncoder
 
 public ref struct TransactionRollbackEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.TransactionRollback;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -87,6 +91,8 @@ public ref struct TransactionRollbackEvent : ITraceEventEncoder
 
 public ref struct TransactionCommitComponentEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.TransactionCommitComponent;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -126,6 +132,8 @@ public ref struct TransactionCommitComponentEvent : ITraceEventEncoder
 /// </summary>
 public ref struct TransactionPersistEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.TransactionRollback;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

@@ -5,6 +5,10 @@ import { simplifyTypeName } from '@/libs/simplifyTypeName';
 import { useSelectedResourceStore } from '@/stores/useSelectedResourceStore';
 import { useSchemaInspectorStore } from '@/stores/useSchemaInspectorStore';
 import { useProfilerSelectionStore } from '@/stores/useProfilerSelectionStore';
+import { useProfilerSessionStore } from '@/stores/useProfilerSessionStore';
+import { useProfilerViewStore } from '@/stores/useProfilerViewStore';
+import { useProfilerCache } from '@/hooks/profiler/useProfilerCache';
+import { useSessionStore } from '@/stores/useSessionStore';
 import { useComponentSchema } from '@/hooks/schema/useComponentSchema';
 import type { ComponentSchema, Field } from '@/hooks/schema/types';
 import ProfilerDetail from '@/panels/profiler/ProfilerDetail';
@@ -30,6 +34,18 @@ export default function DetailPanel() {
   const profilerSelected = useProfilerSelectionStore((s) => s.selected);
   const profilerTouchedAt = useProfilerSelectionStore((s) => s.touchedAt);
 
+  // Profiler session signals — used to render the range-stats fallback when no click selection has
+  // been made but the user is exploring a profiler trace. The fallback runs through the same
+  // ProfilerDetail entry point with `selection={null}` so the right pane stays consistent.
+  const profilerMetadata = useProfilerSessionStore((s) => s.metadata);
+  const sessionId = useSessionStore((s) => s.sessionId);
+  const sessionKind = useSessionStore((s) => s.kind);
+  const isProfilerSession = sessionKind === 'attach' || sessionKind === 'trace';
+  const viewRange = useProfilerViewStore((s) => s.viewRange);
+  // Hook is always called (Rules of Hooks); when not in a profiler session the cache returns empty
+  // arrays — cheap. Only feeds the fallback render path below.
+  const profilerCache = useProfilerCache(isProfilerSession ? sessionId : null, sessionKind === 'attach');
+
   const field: Field | undefined =
     selectedFieldName && schema
       ? schema.fields.find((f) => f.name === selectedFieldName)
@@ -38,6 +54,9 @@ export default function DetailPanel() {
   const fieldAvailable = !!field && !!schema;
   const resourceAvailable = !!resource;
   const profilerAvailable = profilerSelected !== null;
+  // The range-stats fallback is "available" whenever a profiler session is open and has metadata —
+  // viewRange is always defined; an empty viewRange just renders the empty-state inside the detail.
+  const profilerRangeFallbackAvailable = isProfilerSession && profilerMetadata !== null;
 
   // 3-way arbitration by recency. Each candidate's `at` is 0 when unavailable so they drop out
   // of the max comparison — that way a never-populated source can't accidentally win on a
@@ -48,6 +67,19 @@ export default function DetailPanel() {
   const winnerAt = Math.max(fieldAt, resourceAt, profilerAt);
 
   if (winnerAt === 0) {
+    // Nothing was clicked. If a profiler session is open, show the range-stats fallback over the
+    // current viewport — that way the right pane carries useful info even before the user picks a
+    // specific element. Outside profiler land, fall through to the empty prompt.
+    if (profilerRangeFallbackAvailable) {
+      return (
+        <ProfilerDetail
+          selection={null}
+          ticks={profilerCache.ticks}
+          tickSummaries={profilerMetadata?.tickSummaries as never}
+          viewRange={viewRange}
+        />
+      );
+    }
     return (
       <div className="flex h-full items-center justify-center bg-background">
         <p className="text-density-sm text-muted-foreground">

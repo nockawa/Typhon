@@ -36,8 +36,8 @@ function baseEvent(overrides: Partial<TraceEvent>): TraceEvent {
   };
 }
 
-function buildTick(tickNumber: number, events: TraceEvent[], isContinuation = false): TickData {
-  return processTickEvents(tickNumber, events, [], isContinuation);
+function buildTick(tickNumber: number, events: TraceEvent[]): TickData {
+  return processTickEvents(tickNumber, events, []);
 }
 
 describe('mergeTickData — intra-tick split fold', () => {
@@ -65,7 +65,7 @@ describe('mergeTickData — intra-tick split fold', () => {
     // directly so mergeTickData has something to concat.
     const a = buildTick(1, head);
     a.rawEvents = head;
-    const b = buildTick(1, tail, /* isContinuation */ true);
+    const b = buildTick(1, tail);
     b.rawEvents = tail;
 
     const merged = mergeTickData(a, b, []);

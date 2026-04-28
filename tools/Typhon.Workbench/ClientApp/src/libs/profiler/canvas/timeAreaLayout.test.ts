@@ -334,3 +334,110 @@ describe('timeAreaLayout.deriveSlotInfo', () => {
     expect(b.renderDepth).toBe(0);
   });
 });
+
+describe('timeAreaLayout.buildLayout — filter visibility', () => {
+  it('skips slots whose slotVisibility[idx] is false', () => {
+    const { tracks } = buildLayout({
+      activeSlots: [0, 1, 2],
+      slotsWithChunks: new Set(),
+      spanMaxDepthBySlot: new Map(),
+      threadNames: null,
+      collapseState: {},
+      gaugeRegionVisible: false,
+      gaugeCollapse: {},
+      activeSystems: [],
+      systemNames: null,
+      perSystemLanesVisible: false,
+      slotVisibility: { 1: false },
+    });
+    const ids = tracks.map((t) => t.id);
+    expect(ids).toContain('slot-0');
+    expect(ids).not.toContain('slot-1');
+    expect(ids).toContain('slot-2');
+  });
+
+  it('skips systems whose systemVisibility[idx] is false', () => {
+    const { tracks } = buildLayout({
+      activeSlots: [],
+      slotsWithChunks: new Set(),
+      spanMaxDepthBySlot: new Map(),
+      threadNames: null,
+      collapseState: {},
+      gaugeRegionVisible: false,
+      gaugeCollapse: {},
+      activeSystems: [3, 5, 7],
+      systemNames: null,
+      perSystemLanesVisible: true,
+      systemVisibility: { 5: false },
+    });
+    const ids = tracks.map((t) => t.id);
+    expect(ids).toContain('system-3');
+    expect(ids).not.toContain('system-5');
+    expect(ids).toContain('system-7');
+  });
+
+  it('skips engine-op tracks whose engineOpVisibility[id] is false', () => {
+    const { tracks } = buildLayout({
+      activeSlots: [],
+      slotsWithChunks: new Set(),
+      spanMaxDepthBySlot: new Map(),
+      threadNames: null,
+      collapseState: {},
+      gaugeRegionVisible: false,
+      gaugeCollapse: {},
+      activeSystems: [],
+      systemNames: null,
+      perSystemLanesVisible: false,
+      engineOpVisibility: { 'page-cache': false, 'disk-io': false },
+    });
+    const ids = tracks.map((t) => t.id);
+    expect(ids).toContain('phases');
+    expect(ids).not.toContain('page-cache');
+    expect(ids).not.toContain('disk-io');
+    expect(ids).toContain('transactions');
+    expect(ids).toContain('wal');
+    expect(ids).toContain('checkpoint');
+  });
+
+  it('skips gauges whose gaugeVisibility[id] is false', () => {
+    const { tracks } = buildLayout({
+      activeSlots: [],
+      slotsWithChunks: new Set(),
+      spanMaxDepthBySlot: new Map(),
+      threadNames: null,
+      collapseState: {},
+      gaugeRegionVisible: true,
+      gaugeCollapse: {},
+      activeSystems: [],
+      systemNames: null,
+      perSystemLanesVisible: false,
+      gaugeVisibility: { 'gauge-gc': false, 'gauge-memory': false },
+    });
+    const ids = tracks.map((t) => t.id);
+    expect(ids).not.toContain('gauge-gc');
+    expect(ids).not.toContain('gauge-memory');
+    expect(ids).toContain('gauge-persistence'); // others stay
+  });
+
+  it('absent visibility maps preserve the legacy "everything visible" behavior', () => {
+    const { tracks } = buildLayout({
+      activeSlots: [0, 1],
+      slotsWithChunks: new Set(),
+      spanMaxDepthBySlot: new Map(),
+      threadNames: null,
+      collapseState: {},
+      gaugeRegionVisible: false,
+      gaugeCollapse: {},
+      activeSystems: [3],
+      systemNames: null,
+      perSystemLanesVisible: true,
+    });
+    const ids = tracks.map((t) => t.id);
+    expect(ids).toEqual([
+      'ruler',
+      'slot-0', 'slot-1',
+      'system-3',
+      'phases', 'page-cache', 'disk-io', 'transactions', 'wal', 'checkpoint',
+    ]);
+  });
+});

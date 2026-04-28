@@ -23,13 +23,21 @@ namespace Typhon.Workbench.Sessions;
 /// <b>Disposal.</b> Cancels the background build, disposes the cache reader. Safe to call multiple times.
 /// </para>
 /// </remarks>
-public sealed partial class TraceSessionRuntime : IDisposable
+public sealed partial class TraceSessionRuntime : IDisposable, IChunkProvider
 {
+    /// <inheritdoc />
+    public bool IsReady => IsBuildComplete && Metadata != null;
     /// <summary>Public event-args shape for <see cref="BuildProgressChanged"/>. Neutral of internal builder types.</summary>
     public readonly record struct BuildProgressEventArgs(long BytesRead, long TotalBytes, int TickCount, long EventCount);
 
     private readonly string _filePath;
     private readonly string _cachePath;
+    /// <summary>
+    /// True when <see cref="_filePath"/> is a self-contained <c>.typhon-replay</c> file (its own cache, with embedded source metadata).
+    /// In that mode the file IS the cache — no sidecar to rebuild, no parent <c>.typhon-trace</c> to open. False for the conventional path
+    /// (open <c>.typhon-trace</c>, build/use <c>.typhon-trace-cache</c> sibling).
+    /// </summary>
+    private readonly bool _isReplayFile;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _cts = new();
     private readonly TaskCompletionSource<ProfilerMetadataDto> _metadataTcs =
@@ -39,11 +47,22 @@ public sealed partial class TraceSessionRuntime : IDisposable
     private string _buildError;
     private bool _disposed;
 
-    /// <summary>The source <c>.typhon-trace</c> path.</summary>
+    /// <summary>The source <c>.typhon-trace</c> path, OR a self-contained <c>.typhon-replay</c> path. Use <see cref="IsReplayFile"/>
+    /// to disambiguate.</summary>
     public string FilePath => _filePath;
 
-    /// <summary>The sidecar cache path (typically <c>&lt;filePath&gt;.typhon-trace-cache</c>).</summary>
+    /// <summary>
+    /// Path to the cache backing this session. For source <c>.typhon-trace</c> files, this is the sibling
+    /// <c>&lt;name&gt;.typhon-trace-cache</c>. For self-contained <c>.typhon-replay</c> files, the cache IS the input file —
+    /// this property equals <see cref="FilePath"/>. Don't compare the two strings to detect replays; use <see cref="IsReplayFile"/>.
+    /// </summary>
     public string CacheFilePath => _cachePath;
+
+    /// <summary>
+    /// True when <see cref="FilePath"/> is a self-contained <c>.typhon-replay</c>. Replay files embed their source metadata in the
+    /// <see cref="CacheSectionId.SourceMetadata"/> section, so no companion <c>.typhon-trace</c> exists or is needed.
+    /// </summary>
+    public bool IsReplayFile => _isReplayFile;
 
     /// <summary>Projected metadata — null until the background build completes.</summary>
     public ProfilerMetadataDto Metadata { get; private set; }
@@ -66,10 +85,11 @@ public sealed partial class TraceSessionRuntime : IDisposable
     /// <summary>Fires exactly once when the build fails. Subscribers receive the error message.</summary>
     public event Action<string> BuildFailed;
 
-    private TraceSessionRuntime(string filePath, string cachePath, ILogger logger)
+    private TraceSessionRuntime(string filePath, string cachePath, bool isReplayFile, ILogger logger)
     {
         _filePath = filePath;
         _cachePath = cachePath;
+        _isReplayFile = isReplayFile;
         _logger = logger;
     }
 
@@ -77,6 +97,12 @@ public sealed partial class TraceSessionRuntime : IDisposable
     /// Starts a new trace-session runtime. Throws <see cref="FileNotFoundException"/> synchronously if <paramref name="filePath"/>
     /// does not exist. Otherwise returns immediately — the sidecar cache is built on a background task.
     /// </summary>
+    /// <remarks>
+    /// Accepts both source <c>.typhon-trace</c> files (the conventional path: build/refresh a sidecar cache, open the cache, project
+    /// metadata using the source file) AND self-contained <c>.typhon-replay</c> files saved from a live attach session (no source, no
+    /// rebuild — open the file directly as a cache, project metadata from its embedded <see cref="CacheSectionId.SourceMetadata"/>
+    /// section). Detection is by extension: <c>.typhon-replay</c> ⇒ replay path, anything else ⇒ source-file path.
+    /// </remarks>
     public static TraceSessionRuntime Start(string filePath, ILogger logger)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
@@ -86,8 +112,11 @@ public sealed partial class TraceSessionRuntime : IDisposable
             throw new FileNotFoundException("Trace file not found.", fullPath);
         }
 
-        var cachePath = ProfilerCacheBuilder.GetCachePathFor(fullPath);
-        var runtime = new TraceSessionRuntime(fullPath, cachePath, logger);
+        var isReplayFile = string.Equals(Path.GetExtension(fullPath), ".typhon-replay", StringComparison.OrdinalIgnoreCase);
+        // For replay files the file IS the cache — no sibling rebuild path. For source traces, derive the conventional
+        // <name>.typhon-trace-cache sidecar path next to the source.
+        var cachePath = isReplayFile ? fullPath : ProfilerCacheBuilder.GetCachePathFor(fullPath);
+        var runtime = new TraceSessionRuntime(fullPath, cachePath, isReplayFile, logger);
         // Fault-continuation — BuildAsync already catches its own exceptions and faults the
         // metadata TCS, but if an unexpected error escapes its top-level try/catch the task becomes
         // unobserved. Logging it here gives us a diagnostic breadcrumb either way.
@@ -148,47 +177,69 @@ public sealed partial class TraceSessionRuntime : IDisposable
             var ct = _cts.Token;
             ct.ThrowIfCancellationRequested();
 
-            // Step 1 — check existing cache freshness via fingerprint. If the cache file exists AND its fingerprint matches the source's
-            // current fingerprint, skip the rebuild and reuse it. This keeps reopens under 100 ms for traces that haven't changed.
-            var fingerprint = new byte[32];
-            TraceFileCacheReader.ComputeSourceFingerprint(_filePath, fingerprint);
-
-            var needsRebuild = true;
-            if (File.Exists(_cachePath))
+            byte[] fingerprint;
+            if (_isReplayFile)
             {
-                try
+                // .typhon-replay: the file IS the cache. No source to fingerprint, no sibling to rebuild. Skip straight to opening
+                // the cache reader; the loader will read the embedded SourceMetadata section to project metadata.
+                fingerprint = new byte[32];
+                _reader = await OpenCacheWithRetryAsync(_cachePath, ct);
+                if (!_reader.IsSelfContained)
                 {
-                    using var probeStream = File.OpenRead(_cachePath);
-                    using var probeReader = new TraceFileCacheReader(probeStream);
-                    if (probeReader.VerifyFingerprint(fingerprint))
+                    throw new InvalidDataException(
+                        $"File '{_filePath}' has the .typhon-replay extension but is not a self-contained cache " +
+                        "(IsSelfContained flag is not set on the cache header). Was it saved from an old Workbench version?");
+                }
+                // Identifier slot in the cache header is a sessionId for self-contained caches, not a source-file fingerprint.
+                // Surface it through the metadata DTO for parity with the source-derived path.
+                _reader.CopySourceFingerprint(fingerprint);
+            }
+            else
+            {
+                // Step 1 — check existing cache freshness via fingerprint. If the cache file exists AND its fingerprint matches the source's
+                // current fingerprint, skip the rebuild and reuse it. This keeps reopens under 100 ms for traces that haven't changed.
+                fingerprint = new byte[32];
+                TraceFileCacheReader.ComputeSourceFingerprint(_filePath, fingerprint);
+
+                var needsRebuild = true;
+                if (File.Exists(_cachePath))
+                {
+                    try
                     {
-                        needsRebuild = false;
+                        using var probeStream = File.OpenRead(_cachePath);
+                        using var probeReader = new TraceFileCacheReader(probeStream);
+                        if (probeReader.VerifyFingerprint(fingerprint))
+                        {
+                            needsRebuild = false;
+                        }
+                    }
+                    catch
+                    {
+                        // Any open/read failure on the probe → rebuild. Old/incompatible cache versions land here.
+                        needsRebuild = true;
                     }
                 }
-                catch
+
+                if (needsRebuild)
                 {
-                    // Any open/read failure on the probe → rebuild. Old/incompatible cache versions land here.
-                    needsRebuild = true;
+                    var progress = new Progress<ProfilerCacheBuilder.BuildProgress>(p =>
+                    {
+                        BuildProgressChanged?.Invoke(new BuildProgressEventArgs(p.BytesRead, p.TotalBytes, p.TickCount, p.EventCount));
+                    });
+                    // Blocking synchronous call; Task.Run in Start already put us on a thread-pool thread, so no further scheduling needed.
+                    ProfilerCacheBuilder.Build(_filePath, _cachePath, progress);
                 }
-            }
 
-            if (needsRebuild)
-            {
-                var progress = new Progress<ProfilerCacheBuilder.BuildProgress>(p =>
-                {
-                    BuildProgressChanged?.Invoke(new BuildProgressEventArgs(p.BytesRead, p.TotalBytes, p.TickCount, p.EventCount));
-                });
-                // Blocking synchronous call; Task.Run in Start already put us on a thread-pool thread, so no further scheduling needed.
-                ProfilerCacheBuilder.Build(_filePath, _cachePath, progress);
+                // Step 2 — open the cache reader with a Windows-MMF-style retry loop (defense against fresh-write-then-read races on NTFS).
+                _reader = await OpenCacheWithRetryAsync(_cachePath, ct);
             }
-
-            // Step 2 — open the cache reader with a Windows-MMF-style retry loop (defense against fresh-write-then-read races on NTFS).
-            _reader = await OpenCacheWithRetryAsync(_cachePath, ct);
 
             // Step 3 — project the metadata DTO. This is cheap (<10 ms even for 500K-tick traces) because the sections are already
             // loaded into memory by the reader's constructor.
-            _timestampFrequency = ReadSourceTimestampFrequency(_filePath);
-            var metadata = BuildMetadataDto(_reader, _filePath, _timestampFrequency, fingerprint);
+            _timestampFrequency = _isReplayFile
+                ? ReadTimestampFrequencyFromMetadataBytes(_reader.SourceMetadataBytes)
+                : ReadSourceTimestampFrequency(_filePath);
+            var metadata = BuildMetadataDto(_reader, _filePath, _timestampFrequency, fingerprint, _isReplayFile);
 
             Metadata = metadata;
             _metadataTcs.TrySetResult(metadata);
@@ -236,65 +287,107 @@ public sealed partial class TraceSessionRuntime : IDisposable
     }
 
     /// <summary>
-    /// Projects the cache reader's sections into a wire-ready metadata DTO. Source file is read once to extract system / archetype /
-    /// component tables (which the cache doesn't keep — the builder only consumes them for aggregate computation).
+    /// Walks a <see cref="TraceFileReader"/> positioned at offset 0 (header + 3 tables) and projects each into the wire DTO shape. Shared
+    /// between the source-file path and the embedded-metadata path so both produce byte-identical metadata DTOs.
+    /// </summary>
+    private static (ProfilerHeaderDto, SystemDefinitionDto[], ArchetypeDto[], ComponentTypeDto[]) ProjectHeaderAndTables(TraceFileReader traceReader)
+    {
+        var h = traceReader.ReadHeader();
+        var headerDto = new ProfilerHeaderDto(
+            Version: h.Version,
+            TimestampFrequency: h.TimestampFrequency,
+            BaseTickRate: h.BaseTickRate,
+            WorkerCount: h.WorkerCount,
+            SystemCount: h.SystemCount,
+            ArchetypeCount: h.ArchetypeCount,
+            ComponentTypeCount: h.ComponentTypeCount,
+            CreatedUtcTicks: h.CreatedUtcTicks,
+            SamplingSessionStartQpc: h.SamplingSessionStartQpc);
+
+        var systemRecords = traceReader.ReadSystemDefinitions();
+        var systems = new SystemDefinitionDto[systemRecords.Count];
+        for (var i = 0; i < systemRecords.Count; i++)
+        {
+            var sr = systemRecords[i];
+            systems[i] = new SystemDefinitionDto(
+                Index: sr.Index,
+                Name: sr.Name,
+                Type: sr.Type,
+                Priority: sr.Priority,
+                IsParallel: sr.IsParallel,
+                TierFilter: sr.TierFilter,
+                Predecessors: sr.Predecessors,
+                Successors: sr.Successors);
+        }
+
+        var archetypeRecords = traceReader.ReadArchetypes();
+        var archetypes = new ArchetypeDto[archetypeRecords.Count];
+        for (var i = 0; i < archetypeRecords.Count; i++)
+        {
+            archetypes[i] = new ArchetypeDto(archetypeRecords[i].ArchetypeId, archetypeRecords[i].Name);
+        }
+
+        var componentRecords = traceReader.ReadComponentTypes();
+        var componentTypes = new ComponentTypeDto[componentRecords.Count];
+        for (var i = 0; i < componentRecords.Count; i++)
+        {
+            componentTypes[i] = new ComponentTypeDto(componentRecords[i].ComponentTypeId, componentRecords[i].Name);
+        }
+
+        return (headerDto, systems, archetypes, componentTypes);
+    }
+
+    /// <summary>
+    /// Equivalent of <see cref="ReadSourceTimestampFrequency"/> for self-contained replay files: parse the embedded
+    /// <see cref="CacheSectionId.SourceMetadata"/> bytes to recover the source's <c>TraceFileHeader.TimestampFrequency</c>.
+    /// </summary>
+    private static long ReadTimestampFrequencyFromMetadataBytes(ReadOnlySpan<byte> metadataBytes)
+    {
+        if (metadataBytes.IsEmpty)
+        {
+            throw new InvalidDataException("Self-contained cache has no SourceMetadata bytes — cannot read timestamp frequency.");
+        }
+        // The reader needs a Stream. Copy to a heap array (small — typically < 4 KB for header + tables) and wrap in a MemoryStream.
+        var copy = metadataBytes.ToArray();
+        using var ms = new MemoryStream(copy, writable: false);
+        using var reader = new TraceFileReader(ms);
+        var header = reader.ReadHeader();
+        return header.TimestampFrequency;
+    }
+
+    /// <summary>
+    /// Projects the cache reader's sections into a wire-ready metadata DTO. For source-derived caches the header / system / archetype /
+    /// component tables are read from <paramref name="sourcePath"/> (the parent <c>.typhon-trace</c>). For self-contained caches
+    /// (<paramref name="isReplayFile"/> true) those same tables are read from the cache's embedded
+    /// <see cref="CacheSectionId.SourceMetadata"/> bytes — no source file is opened.
     /// </summary>
     private static ProfilerMetadataDto BuildMetadataDto(
         TraceFileCacheReader reader,
         string sourcePath,
         long timestampFrequency,
-        byte[] fingerprint)
+        byte[] fingerprint,
+        bool isReplayFile)
     {
-        // Read source tables (header is already read by ReadSourceTimestampFrequency, but we need the tables — re-open and walk).
         ProfilerHeaderDto headerDto;
         SystemDefinitionDto[] systems;
         ArchetypeDto[] archetypes;
         ComponentTypeDto[] componentTypes;
 
-        using (var fs = File.OpenRead(sourcePath))
-        using (var traceReader = new TraceFileReader(fs))
+        if (isReplayFile)
         {
-            var h = traceReader.ReadHeader();
-            headerDto = new ProfilerHeaderDto(
-                Version: h.Version,
-                TimestampFrequency: h.TimestampFrequency,
-                BaseTickRate: h.BaseTickRate,
-                WorkerCount: h.WorkerCount,
-                SystemCount: h.SystemCount,
-                ArchetypeCount: h.ArchetypeCount,
-                ComponentTypeCount: h.ComponentTypeCount,
-                CreatedUtcTicks: h.CreatedUtcTicks,
-                SamplingSessionStartQpc: h.SamplingSessionStartQpc);
-
-            var systemRecords = traceReader.ReadSystemDefinitions();
-            systems = new SystemDefinitionDto[systemRecords.Count];
-            for (var i = 0; i < systemRecords.Count; i++)
-            {
-                var sr = systemRecords[i];
-                systems[i] = new SystemDefinitionDto(
-                    Index: sr.Index,
-                    Name: sr.Name,
-                    Type: sr.Type,
-                    Priority: sr.Priority,
-                    IsParallel: sr.IsParallel,
-                    TierFilter: sr.TierFilter,
-                    Predecessors: sr.Predecessors,
-                    Successors: sr.Successors);
-            }
-
-            var archetypeRecords = traceReader.ReadArchetypes();
-            archetypes = new ArchetypeDto[archetypeRecords.Count];
-            for (var i = 0; i < archetypeRecords.Count; i++)
-            {
-                archetypes[i] = new ArchetypeDto(archetypeRecords[i].ArchetypeId, archetypeRecords[i].Name);
-            }
-
-            var componentRecords = traceReader.ReadComponentTypes();
-            componentTypes = new ComponentTypeDto[componentRecords.Count];
-            for (var i = 0; i < componentRecords.Count; i++)
-            {
-                componentTypes[i] = new ComponentTypeDto(componentRecords[i].ComponentTypeId, componentRecords[i].Name);
-            }
+            // Pull header + tables out of the embedded SourceMetadata section. Bytes are in the same wire format the engine produced
+            // — TraceFileReader walks them identically over a MemoryStream.
+            var metaCopy = reader.SourceMetadataBytes.ToArray();
+            using var ms = new MemoryStream(metaCopy, writable: false);
+            using var traceReader = new TraceFileReader(ms);
+            (headerDto, systems, archetypes, componentTypes) = ProjectHeaderAndTables(traceReader);
+        }
+        else
+        {
+            // Read source tables (header is already read by ReadSourceTimestampFrequency, but we need the tables — re-open and walk).
+            using var fs = File.OpenRead(sourcePath);
+            using var traceReader = new TraceFileReader(fs);
+            (headerDto, systems, archetypes, componentTypes) = ProjectHeaderAndTables(traceReader);
         }
 
         // Tick summaries, manifest, metrics, aggregates all come from the cache reader (already in memory).

@@ -80,11 +80,13 @@ export function appendGaugeTracks(
   labelRowHeight: number,
   trackGap: number,
   regionVisible: boolean = true,
+  gaugeVisibility?: Record<string, boolean>,
 ): number {
   if (!regionVisible) return startY;
 
   let y = startY;
   for (const group of GAUGE_GROUPS) {
+    if (gaugeVisibility?.[group.id] === false) continue;
     const state = collapseState[group.id] ?? group.defaultState;
     const bodyHeight =
       state === 'summary' ? summaryStripHeight :

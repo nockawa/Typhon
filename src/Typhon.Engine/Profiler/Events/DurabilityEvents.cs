@@ -11,6 +11,8 @@ namespace Typhon.Engine.Profiler;
 
 public ref struct DurabilityWalQueueDrainEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityWalQueueDrain;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int BytesAligned;
     public int FrameCount;
@@ -22,6 +24,8 @@ public ref struct DurabilityWalQueueDrainEvent : ITraceEventEncoder
 
 public ref struct DurabilityWalOsWriteEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityWalOsWrite;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int BytesAligned;
     public int FrameCount;
@@ -34,6 +38,8 @@ public ref struct DurabilityWalOsWriteEvent : ITraceEventEncoder
 
 public ref struct DurabilityWalSignalEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityWalSignal;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public long HighLsn;
     public readonly int ComputeSize() => DurabilityWalEventCodec.ComputeSizeSignal(TraceIdHi != 0 || TraceIdLo != 0);
@@ -44,6 +50,8 @@ public ref struct DurabilityWalSignalEvent : ITraceEventEncoder
 
 public ref struct DurabilityWalBufferEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityWalBuffer;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int BytesAligned;
     public int Pad;
@@ -55,6 +63,8 @@ public ref struct DurabilityWalBufferEvent : ITraceEventEncoder
 
 public ref struct DurabilityWalBackpressureEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityWalBackpressure;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public uint WaitUs;
     public int ProducerThread;
@@ -68,6 +78,8 @@ public ref struct DurabilityWalBackpressureEvent : ITraceEventEncoder
 
 public ref struct DurabilityCheckpointWriteBatchEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityCheckpointWriteBatch;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int WriteBatchSize;
     public int StagingAllocated;
@@ -79,6 +91,8 @@ public ref struct DurabilityCheckpointWriteBatchEvent : ITraceEventEncoder
 
 public ref struct DurabilityCheckpointBackpressureEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityCheckpointBackpressure;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public uint WaitMs;
     public byte Exhausted;
@@ -90,6 +104,8 @@ public ref struct DurabilityCheckpointBackpressureEvent : ITraceEventEncoder
 
 public ref struct DurabilityCheckpointSleepEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityCheckpointSleep;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public uint SleepMs;
     public byte WakeReason;
@@ -103,6 +119,8 @@ public ref struct DurabilityCheckpointSleepEvent : ITraceEventEncoder
 
 public ref struct DurabilityRecoveryDiscoverEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryDiscover;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int SegCount;
     public long TotalBytes;
@@ -115,6 +133,8 @@ public ref struct DurabilityRecoveryDiscoverEvent : ITraceEventEncoder
 
 public ref struct DurabilityRecoverySegmentEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityRecoverySegment;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int SegId;
     public int RecCount;
@@ -128,6 +148,8 @@ public ref struct DurabilityRecoverySegmentEvent : ITraceEventEncoder
 
 public ref struct DurabilityRecoveryFpiEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryFpi;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int FpiCount;
     public int RepairedCount;
@@ -140,6 +162,8 @@ public ref struct DurabilityRecoveryFpiEvent : ITraceEventEncoder
 
 public ref struct DurabilityRecoveryRedoEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryRedo;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int RecordsReplayed;
     public int UowsReplayed;
@@ -152,6 +176,8 @@ public ref struct DurabilityRecoveryRedoEvent : ITraceEventEncoder
 
 public ref struct DurabilityRecoveryUndoEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryUndo;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int VoidedUowCount;
     public readonly int ComputeSize() => DurabilityRecoveryEventCodec.ComputeSizeUndo(TraceIdHi != 0 || TraceIdLo != 0);
@@ -162,6 +188,8 @@ public ref struct DurabilityRecoveryUndoEvent : ITraceEventEncoder
 
 public ref struct DurabilityRecoveryTickFenceEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryTickFence;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int TickFenceCount;
     public int Entries;

@@ -2,7 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>AntHill.ProfileRunner</RootNamespace>
+    <RootNamespace>AntHill</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>default</LangVersion>
   </PropertyGroup>
@@ -12,5 +12,20 @@
                       ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
     <ProjectReference Include="..\..\..\src\Typhon.Generators\Typhon.Generators.csproj"
                       ReferenceOutputAssembly="false" OutputItemType="Analyzer" />
+  </ItemGroup>
+  <!-- Share source files from the AntHill Godot project (no Godot dependency) -->
+  <ItemGroup>
+    <Compile Include="..\ECS\Components.cs" Link="ECS\Components.cs" />
+    <Compile Include="..\ECS\Archetypes.cs" Link="ECS\Archetypes.cs" />
+    <Compile Include="..\Engine\TyphonBridge.cs" Link="Engine\TyphonBridge.cs" />
+    <Compile Include="..\Engine\RenderBridge.cs" Link="Engine\RenderBridge.cs" />
+    <Compile Include="..\Engine\ProfilerSetup.cs" Link="Engine\ProfilerSetup.cs" />
+    <Compile Include="..\AI\AntAI.cs" Link="AI\AntAI.cs" />
+    <Compile Include="..\Pheromone\PheromoneGrid.cs" Link="Pheromone\PheromoneGrid.cs" />
+  </ItemGroup>
+  <!-- Shared telemetry configuration: single source of truth at ..\typhon.telemetry.json.
+       Linked here so MSBuild copies it to the ProfileRunner's output directory too. -->
+  <ItemGroup>
+    <Content Include="..\typhon.telemetry.json" Link="typhon.telemetry.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

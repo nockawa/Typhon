@@ -152,7 +152,7 @@ export function processEventsInWorker(events: TraceEvent[], systems: SystemDef[]
   const slotIdx = pickSlot();
   const w = ensureSlot(slotIdx);
   if (!w) {
-    return Promise.resolve(buildTickDataFromEvents(events, systems, /*continuationTickNumber=*/-1));
+    return Promise.resolve(buildTickDataFromEvents(events, systems));
   }
 
   const slot = pool[slotIdx];
@@ -185,7 +185,7 @@ export function processBinaryInWorker(
     // main thread already owns the ArrayBuffer.
     const raw = decompressLz4Block(new Uint8Array(compressed), uncompressedBytes);
     const events = decodeChunkBinary(raw, fromTick, ticksPerUs, isContinuation);
-    return Promise.resolve(buildTickDataFromEvents(events, systems, isContinuation ? fromTick : -1));
+    return Promise.resolve(buildTickDataFromEvents(events, systems));
   }
 
   const slot = pool[slotIdx];

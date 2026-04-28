@@ -115,4 +115,6 @@ public sealed class LiveTraceEvent
     // Thread info
     public int? ManagedThreadId { get; init; }
     public string ThreadName { get; init; }
+    /// <summary>Producer-thread category — drives the viewer's filter tree's Main / Workers / Other split.</summary>
+    public ThreadKind? ThreadKind { get; init; }
 }

@@ -22,16 +22,8 @@ import { processTickEvents, type TickData } from '../model/traceModel';
  * <b>Edge cases preserved:</b> a chunk with exactly one tick retains rawEvents (it's both first and last). A chunk with
  * two ticks retains both. Continuation chunks always retain rawEvents on their first tick (which IS the merge candidate
  * with the previous chunk's last tick).
- *
- * @param continuationTickNumber Tick number to pass <c>isContinuation=true</c> to <c>processTickEvents</c>; use -1 when
- *   the chunk is not a continuation. Only the first tick of a continuation chunk gets the flag; subsequent ticks (if any)
- *   begin with their own TickStart and are structurally normal.
  */
-export function buildTickDataFromEvents(
-  events: TraceEvent[],
-  systems: SystemDef[],
-  continuationTickNumber: number,
-): TickData[] {
+export function buildTickDataFromEvents(events: TraceEvent[], systems: SystemDef[]): TickData[] {
   if (events.length === 0) return [];
 
   const byTick = new Map<number, TraceEvent[]>();
@@ -46,8 +38,7 @@ export function buildTickDataFromEvents(
 
   const result: TickData[] = [];
   for (const [tickNumber, bucket] of byTick) {
-    const isContinuation = tickNumber === continuationTickNumber;
-    result.push(processTickEvents(tickNumber, bucket, systems, isContinuation));
+    result.push(processTickEvents(tickNumber, bucket, systems));
   }
   result.sort((a, b) => a.tickNumber - b.tickNumber);
 

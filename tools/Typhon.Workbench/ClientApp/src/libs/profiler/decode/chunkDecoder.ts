@@ -50,12 +50,55 @@ const SPAN_FLAGS_HAS_TRACE_CONTEXT = 0x01;
  * Malformed records (size less than header, size overruns slice, or size exceeds ushort range) stop the walk early — partial results remain
  * returned. Mirrors the server's behavior and keeps the viewer useful on truncated traces.
  */
+/**
+ * True for kinds whose wire format is the 12-byte common header + per-kind payload only — no 25-byte span-header extension. Must mirror
+ * `TraceEventKindExtensions.IsSpan` (negated) in `src/Typhon.Profiler/TraceEventKind.cs`. Kept in this file (rather than `model/types.ts`)
+ * because it's purely a wire-decode concern; renderer code never branches on it.
+ *
+ * If you add a new instant-style kind on the C# side, add it here too. The list of carve-out ranges below is structured the same way as the
+ * C# IsSpan body so the two stay in lockstep visually.
+ */
+function isInstantKind(v: number): boolean {
+  if (v < 10) return true;                                                 // pre-#243 instants (TickStart..MemoryAllocEvent)
+  if (v === TraceEventKind.PerTickSnapshot || v === TraceEventKind.ThreadInfo) return true; // 76, 77
+  if (v >= 90 && v <= 116) return true;                                    // Concurrency tracing (Phase 2, #280)
+  // Spatial tracing (Phase 3, #281) — mixed; instants are 127-135, 137, 140-142, 144, 145.
+  if ((v >= 127 && v <= 135) || v === 137 || (v >= 140 && v <= 142) || v === 144 || v === 145) return true;
+  // Scheduler & Runtime tracing (Phase 4, #282) — mixed; instants:
+  //   146-148 (System Start/Completion/QueueWait), 151 (WorkerWake), 153 (Dispense),
+  //   154 (DependencyReady), 156-158 (Overload trio), 161-162 (UoWCreate/Flush).
+  if ((v >= 146 && v <= 148) || v === 151 || v === 153 || v === 154
+      || (v >= 156 && v <= 158) || v === 161 || v === 162) return true;
+  if (v >= 166 && v <= 172) return true;                                   // Storage & Memory (Phase 5, #283) — 165 is the only span
+  // Data plane (Phase 6, #284) — instants: 176, 178, 180, 182-183, 185-186.
+  if (v === 176 || v === 178 || v === 180 || v === 182 || v === 183 || v === 185 || v === 186) return true;
+  // Query / ECS (Phase 7, #285) — instants: 191, 197, 200, 202-203, 206-208, 211-213.
+  if (v === 191 || v === 197 || v === 200 || v === 202 || v === 203 || v === 206
+      || v === 207 || v === 208 || v === 211 || v === 212 || v === 213) return true;
+  // Durability (Phase 8, #286) — instants: 217-218, 220, 225, 228, 233-234.
+  if (v === 217 || v === 218 || v === 220 || v === 225 || v === 228 || v === 233 || v === 234) return true;
+  return false;
+}
+
 export function decodeChunkBinary(bytes: Uint8Array, firstTick: number, ticksPerUs: number, isContinuation: boolean): TraceEvent[] {
   const reader = new BinaryReader(bytes);
   const events: TraceEvent[] = [];
-  // Continuation → seed at firstTick directly (no decrement, no waiting for TickStart).
-  // Normal → seed at firstTick - 1 so the first TickStart increments the counter to firstTick.
-  let currentTick = isContinuation ? firstTick : firstTick - 1;
+  // Seed currentTick at firstTick directly. Records in this chunk's [fromTick, toTick) range — which is what the
+  // manifest entry SAYS they are — should be tagged with tickNumber within that range, never below firstTick.
+  //
+  // The pre-#289 OLD behavior was `firstTick - 1` for normal chunks: assume first record is TickStart, let the
+  // increment-on-TickStart bump up to firstTick. That broke when the consumer thread's per-block sort by startTs
+  // pulled records from worker slots (whose timestamps are slightly earlier than the main thread's TickStart) in
+  // FRONT of TickStart in the byte stream — those records got tagged firstTick-1 (= 0 for chunk 1!), polluting tick
+  // 0 with worker activity from a real later tick. Symptom: tick 0's TickData.endUs extended past its real
+  // pre-tick window into worker territory, breaking visibility math downstream.
+  //
+  // New behavior: seed at firstTick, suppress the increment for the chunk's FIRST TickStart record (when present).
+  // Subsequent TickStart records increment normally (handles multi-tick chunks). Continuation chunks AND tick-0
+  // synthetic chunks have no TickStart at the head, so suppression is moot for them — the flag starts as already-
+  // consumed.
+  let currentTick = firstTick;
+  let suppressFirstTickStartIncrement = !isContinuation && firstTick > 0;
   let pos = 0;
 
   while (pos + COMMON_HEADER_SIZE <= reader.length) {
@@ -70,18 +113,24 @@ export function decodeChunkBinary(bytes: Uint8Array, firstTick: number, ticksPer
     const timestampUs = startTs / ticksPerUs;
 
     if (kindByte === TraceEventKind.TickStart) {
-      currentTick++;
+      if (suppressFirstTickStartIncrement) {
+        suppressFirstTickStartIncrement = false;   // consume the head TickStart without incrementing
+      } else {
+        currentTick++;
+      }
     }
 
     const kind = kindByte as TraceEventKind;
     let evt: TraceEvent | null;
 
-    // PerTickSnapshot (kind 76) and ThreadInfo (kind 77) are numerically in the span range but have INSTANT wire shape — no span header
-    // extension after the common header. Route them to the instant branch explicitly; otherwise readSpanHeader would read 25 bytes of
-    // payload as span metadata and mis-align every subsequent record in the chunk. Mirrors the server's IsSpan() carve-out — any future
-    // instant-style kind with numeric value ≥ 10 must be added to this list AND to TraceEventKindExtensions.IsSpan on the C# side.
-    if (kindByte < 10 || kind === TraceEventKind.PerTickSnapshot || kind === TraceEventKind.ThreadInfo) {
-      evt = decodeInstant(reader, pos, kind, threadSlot, currentTick, timestampUs, ticksPerUs);
+    // Instant vs span discrimination — must mirror C# `TraceEventKindExtensions.IsSpan` at
+    // `TraceEventKind.cs:903` exactly. Numeric kinds ≥ 10 are MOSTLY spans, but #277 (Tracing
+    // Instrumentation Expansion) added many instant-shaped kinds in the ≥ 10 range whose wire
+    // format omits the 25-byte span header extension. Routing them through readSpanHeader reads
+    // 25 bytes of payload as span metadata, producing nonsense durationUs (big end time) and
+    // parent/child links (deep stack), even though `pos += size` keeps subsequent records aligned.
+    if (isInstantKind(kindByte)) {
+      evt = decodeInstant(reader, pos, kind, threadSlot, currentTick, timestampUs, ticksPerUs, size);
     } else {
       evt = decodeSpan(reader, pos, kind, threadSlot, currentTick, timestampUs, ticksPerUs);
     }
@@ -108,6 +157,7 @@ function decodeInstant(
   tickNumber: number,
   timestampUs: number,
   ticksPerUs: number,
+  recordSize: number,
 ): TraceEvent | null {
   const payloadOffset = pos + COMMON_HEADER_SIZE;
 
@@ -160,7 +210,7 @@ function decodeInstant(
       return decodeGcEnd(reader, pos, threadSlot, tickNumber, timestampUs, ticksPerUs);
 
     case TraceEventKind.ThreadInfo:
-      return decodeThreadInfo(reader, pos, threadSlot, tickNumber, timestampUs);
+      return decodeThreadInfo(reader, pos, threadSlot, tickNumber, timestampUs, recordSize);
 
     default:
       return null;
@@ -174,8 +224,9 @@ function decodeInstant(
 const utf8Decoder = new TextDecoder('utf-8');
 
 /**
- * Decode a ThreadInfo (kind 77) record. Wire: <c>i32 managedThreadId, u16 nameByteCount, byte[nameByteCount] nameUtf8</c> after the
- * common header.
+ * Decode a ThreadInfo (kind 77) record. Wire: <c>i32 managedThreadId, u16 nameByteCount, byte[nameByteCount] nameUtf8, u8 threadKind</c>
+ * after the common header. <c>threadKind</c> was added in cache v4 (Main / Worker / Pool / Other);
+ * pre-v4 records lack it and we surface it as <c>undefined</c> so the consumer can fall back.
  */
 function decodeThreadInfo(
   reader: BinaryReader,
@@ -183,11 +234,16 @@ function decodeThreadInfo(
   threadSlot: number,
   tickNumber: number,
   timestampUs: number,
+  recordSize: number,
 ): TraceEvent {
   const o = pos + COMMON_HEADER_SIZE;
   const managedThreadId = reader.readI32(o);
   const nameByteCount = reader.readU16(o + 4);
   const threadName = nameByteCount > 0 ? reader.readUtf8(o + 6, nameByteCount, utf8Decoder) : undefined;
+  // Trailing 1-byte ThreadKind. Position = common header + 4 (mtid) + 2 (nameLen) + nameByteCount.
+  // Older records may stop right after the name bytes; guard with the recordSize.
+  const kindOffset = o + 6 + nameByteCount;
+  const threadKind = kindOffset < pos + recordSize ? reader.readU8(kindOffset) : undefined;
   return {
     kind: TraceEventKind.ThreadInfo,
     threadSlot,
@@ -195,6 +251,7 @@ function decodeThreadInfo(
     timestampUs,
     managedThreadId,
     threadName,
+    threadKind,
   };
 }
 

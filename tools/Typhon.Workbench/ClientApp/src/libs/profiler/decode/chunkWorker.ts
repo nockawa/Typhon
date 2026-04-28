@@ -65,18 +65,14 @@ ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
   try {
     let tickData: TickData[];
     if (msg.type === 'process') {
-      tickData = buildTickDataFromEvents(msg.events, msg.systems, /*continuationTickNumber=*/-1);
+      tickData = buildTickDataFromEvents(msg.events, msg.systems);
     } else {
       // Binary path: decompress → decode → group + derive per-tick shapes. ArrayBuffer was transferred into the worker and is now owned here,
       // so the Uint8Array view is safe to use without copying.
       const compressed = new Uint8Array(msg.compressed);
       const raw = decompressLz4Block(compressed, msg.uncompressedBytes);
       const events = decodeChunkBinary(raw, msg.fromTick, msg.ticksPerUs, msg.isContinuation);
-      // For continuation chunks, the FIRST tick (fromTick) is a tick-continuation — processTickEvents must skip the
-      // "malformed: no TickStart" warning. Any subsequent ticks in the same chunk begin with their own TickStart, so they
-      // are structurally normal. Encode "no continuation" as tickNumber=-1 so the callee can compare without Option types.
-      const continuationTickNumber = msg.isContinuation ? msg.fromTick : -1;
-      tickData = buildTickDataFromEvents(events, msg.systems, continuationTickNumber);
+      tickData = buildTickDataFromEvents(events, msg.systems);
     }
     ctx.postMessage({ type: 'processed', requestId: msg.requestId, tickData });
   } catch (err) {

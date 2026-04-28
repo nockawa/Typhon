@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialQueryAabb"/>. Stats payload, no coords.</summary>
 public ref struct SpatialQueryAabbEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialQueryAabb;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -32,6 +34,8 @@ public ref struct SpatialQueryAabbEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialQueryRadius"/>.</summary>
 public ref struct SpatialQueryRadiusEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialQueryRadius;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -57,6 +61,8 @@ public ref struct SpatialQueryRadiusEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialQueryRay"/>.</summary>
 public ref struct SpatialQueryRayEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialQueryRay;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -82,6 +88,8 @@ public ref struct SpatialQueryRayEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialQueryFrustum"/>.</summary>
 public ref struct SpatialQueryFrustumEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialQueryFrustum;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -107,6 +115,8 @@ public ref struct SpatialQueryFrustumEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialQueryKnn"/>.</summary>
 public ref struct SpatialQueryKnnEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialQueryKnn;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -132,6 +142,8 @@ public ref struct SpatialQueryKnnEvent : ITraceEventEncoder
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialQueryCount"/>.</summary>
 public ref struct SpatialQueryCountEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.SpatialQueryCount;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

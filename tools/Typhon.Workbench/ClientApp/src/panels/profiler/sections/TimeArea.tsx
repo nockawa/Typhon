@@ -9,6 +9,7 @@ import { buildGaugeTooltipLines, type GaugeData } from '@/libs/profiler/canvas/g
 import { getStudioThemeTokens } from '@/libs/profiler/canvas/theme';
 import { GaugeTooltip } from '@/panels/profiler/components/GaugeTooltip';
 import { HelpOverlay } from '@/panels/profiler/components/HelpOverlay';
+import { TimeAreaFilterButton } from '@/panels/profiler/sections/TimeAreaFilterButton';
 import { getTrackHelpLines } from '@/libs/profiler/canvas/trackHelpLines';
 import { buildHoverTooltipLines } from '@/libs/profiler/canvas/hoverTooltipLines';
 import { registerAnimateViewport } from '@/shell/commands/profilerCommands';
@@ -34,6 +35,19 @@ interface Props {
   ticks: TickData[];
   /** Gauge-region data bundle from `useProfilerCache`. */
   gaugeData: GaugeData;
+  /**
+   * Slot → thread-name mapping accumulated from `ThreadInfo` records (kind 77). Sourced from
+   * `useProfilerCache`'s gauge bundle (the hook's `ProfilerGaugeData` carries it; the renderer-side
+   * `GaugeData` type doesn't, so it's surfaced as its own prop). Used to label thread lanes —
+   * falls back to `Slot N` when absent or empty.
+   */
+  threadNames?: Map<number, string>;
+  /**
+   * Slot → {name, kind} unified across replay and live modes (sourced from `useProfilerCache.threadInfos`).
+   * Drives the section-filter popup's Threads → Main / Workers / Other subgrouping. Replay traces older than
+   * cache v4 carry no kind byte; the popup defaults those slots to Other.
+   */
+  threadInfos?: Map<number, { name: string; kind: number }>;
   /** Pending-chunk µs-ranges from `useProfilerCache` — painted as a diagonal-stripe overlay. */
   pendingRangesUs: readonly { startUs: number; endUs: number }[];
   isLive?: boolean;
@@ -44,15 +58,24 @@ interface Props {
 const DRAG_THRESHOLD_PX = 3;
 const ZOOM_ANIMATION_MS = 800;
 
-export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = false, onGutterWidthChange }: Props): React.JSX.Element {
-  void isLive; // live-follow hooks land in 2c/2d once gauges are in
+export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap, threadInfos, pendingRangesUs, isLive = false, onGutterWidthChange }: Props): React.JSX.Element {
 
   // `metadata` is read for `threadNames` (slot-label lookup) + gating the wheel handler before the
   // session has any data. Not used to derive viewRange — that comes from the selection store.
   const metadata = useProfilerSessionStore((s) => s.metadata);
+  const setLiveFollowActive = useProfilerSessionStore((s) => s.setLiveFollowActive);
   const viewRange = useProfilerViewStore((s) => s.viewRange);
   const setViewRange = useProfilerViewStore((s) => s.setViewRange);
   const legendsVisible = useProfilerViewStore((s) => s.legendsVisible);
+
+  // Centralised viewRange mutation. In live mode, any explicit user pan/zoom must pause auto-follow
+  // so the next tick batch (≤100 ms) doesn't snap viewRange back to the live tail. Funnel every
+  // wheel-zoom / drag-pan / mid-button-pan / tween site through this helper to keep that contract
+  // in one place. Mirrors the same pattern in `TickOverview.applyViewRange`.
+  const applyViewRange = useCallback((r: TimeRange) => {
+    if (isLive) setLiveFollowActive(false);
+    setViewRange(r);
+  }, [isLive, setLiveFollowActive, setViewRange]);
   const gaugeRegionVisible = useProfilerViewStore((s) => s.gaugeRegionVisible);
   const gaugeCollapse = useProfilerViewStore((s) => s.gaugeCollapse);
   const setGaugeCollapse = useProfilerViewStore((s) => s.setGaugeCollapse);
@@ -66,6 +89,7 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollOverlayRef = useRef<HTMLDivElement>(null);
 
   // Viewport snapshot — mutated imperatively by wheel + drag handlers before the next rAF. `scrollY`
   // is 0 while there's no vertical scrolling; when the layout's total height exceeds the container
@@ -73,18 +97,26 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
   const vpRef = useRef<Viewport>({ offsetX: viewRange.startUs, scaleX: 0.5, scrollY: 0 });
   const gutterWidthRef = useRef<number>(80);
   const lastEmittedGutterRef = useRef<number>(-1);
+  // React-state mirror of `gutterWidthRef`. Used to position the absolutely-positioned filter-icon
+  // overlay in the ruler gutter — needs a re-render to track gutter-width changes (label-width
+  // recomputation when slot/system names lengthen). Updated via the same throttling path as the
+  // upward `onGutterWidthChange` callback.
+  const [gutterWidth, setGutterWidth] = useState<number>(80);
   const crosshairXRef = useRef<number>(-1);
   const hoverRef = useRef<TimeAreaHover>(null);
   const dragRef = useRef<
     | { mode: 'select'; startX: number; currentX: number; moved: boolean }
-    | { mode: 'pan'; startClientX: number; startOffsetX: number; moved: boolean }
+    | { mode: 'pan'; startClientX: number; startClientY: number; startOffsetX: number; startScrollY: number; moved: boolean }
     | null
   >(null);
   const zoomAnimRef = useRef<{ from: TimeRange; to: TimeRange; startTime: number } | null>(null);
   const rafRef = useRef(0);
-  // Track collapse — component-local, session-scoped. The view store owns global toggles
-  // (legends, gauge region); per-track collapse is UI-only and resets with the session.
-  const [collapseState, setCollapseState] = useState<Record<string, TrackState>>({});
+  // Track collapse — session-store, ephemeral. Lives there (not view-store) because slot/system
+  // ids aren't stable across sessions; persisting would silently misalign collapse state with
+  // a different thread on the same slot index next run. Lifted out of component-local state so
+  // the section-filter popup can dispatch batch collapse / expand / double commands into it.
+  const collapseState = useProfilerSessionStore((s) => s.collapseState);
+  const setSingleCollapseState = useProfilerSessionStore((s) => s.setCollapseState);
   // Gauge tooltip — DOM overlay (not canvas) because multi-line coloured text is cleaner in
   // HTML. Updated when the hit-test lands on a gauge track; cleared when cursor leaves.
   const [gaugeTooltipState, setGaugeTooltipState] = useState<
@@ -107,7 +139,32 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
   const slotInfo = useMemo(() => deriveSlotInfo(ticks), [ticks]);
   const activeSystems = useMemo(() => deriveActiveSystems(ticks), [ticks]);
 
-  const threadNames = (metadata as { threadNames?: Record<number, string> } | null)?.threadNames ?? null;
+  // Thread names come from the `threadNames` prop — a `Map<slot, name>` that `aggregateGaugeData`
+  // accumulates from `ThreadInfo` records (kind 77) as ticks are decoded. Trace + live both feed
+  // it from `useProfilerCache.gaugeData.threadNames`. The previous code read from
+  // `metadata.threadNames` which never existed on the server DTO, so lane labels were always
+  // falling back to "Slot N". `buildLayout` wants a plain `Record<number, string>`, so convert
+  // the Map (memoised on its identity — the chunk cache hands back the same reference until a new
+  // ThreadInfo lands).
+  // Depend on `threadNamesMap.size` in addition to the Map ref. The persistent Map (live mode's
+  // `liveThreadNamesRef.current` and trace mode's `cache.threadNames`) keeps a stable reference
+  // across renders to avoid unnecessary downstream invalidation, but its content GROWS as new
+  // ThreadInfo records arrive (and on the trace side, as new chunks land). Reference-only deps
+  // would cache the empty-Map result even after entries are added. Size as a secondary dep makes
+  // the memo re-run whenever the Map gets bigger — append-only is the only mutation we do.
+  // The Map ref is intentionally stable across renders (the persistent caches in
+  // `useProfilerCache.liveThreadNamesRef` and `chunkCache.threadNames` mutate in place to survive
+  // ring-buffer / chunk eviction). Reference-only deps would cache the empty-Map result even after
+  // entries are added, so we also depend on `size` — append-only is the only mutation we do, so
+  // size is a reliable freshness signal.
+  const threadNamesSize = threadNamesMap?.size ?? 0;
+  const threadNames = useMemo<Record<number, string> | null>(() => {
+    void threadNamesSize;
+    if (!threadNamesMap || threadNamesMap.size === 0) return null;
+    const out: Record<number, string> = {};
+    for (const [slot, name] of threadNamesMap) out[slot] = name;
+    return out;
+  }, [threadNamesMap, threadNamesSize]);
   // `metadata.systems` is a DTO-level array; map to `{[systemIndex]: name}` for O(1) lookup.
   const systemNames = useMemo(() => {
     const systems = metadata?.systems;
@@ -121,8 +178,17 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
   }, [metadata]);
   const perSystemLanesVisible = useProfilerViewStore((s) => s.perSystemLanesVisible);
 
-  // Build layout once per (slotInfo, collapseState). `layoutRef` stamps the result so pointer
-  // handlers read the same structure the draw loop saw.
+  // Section-filter visibility maps from the filter popup. Slots/systems are session-ephemeral
+  // (`useProfilerSessionStore`); gauges/engine-ops are persisted (`useProfilerViewStore`). Each map's
+  // missing key = visible — see TimeAreaFilterButton for the popup that drives them.
+  const slotVisibility = useProfilerSessionStore((s) => s.slotVisibility);
+  const systemVisibility = useProfilerSessionStore((s) => s.systemVisibility);
+  const gaugeVisibility = useProfilerViewStore((s) => s.gaugeVisibility);
+  const engineOpVisibility = useProfilerViewStore((s) => s.engineOpVisibility);
+  const spanColorMode = useProfilerViewStore((s) => s.spanColorMode);
+
+  // Build layout once per (slotInfo, collapseState, visibility maps). `layoutRef` stamps the result
+  // so pointer handlers read the same structure the draw loop saw.
   const layoutRef = useRef<{ tracks: readonly TrackLayout[]; totalHeight: number }>({ tracks: [], totalHeight: 0 });
   const layout = useMemo(() => {
     const r = buildLayout({
@@ -136,10 +202,14 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
       activeSystems,
       systemNames,
       perSystemLanesVisible,
+      slotVisibility,
+      systemVisibility,
+      gaugeVisibility,
+      engineOpVisibility,
     });
     layoutRef.current = r;
     return r;
-  }, [slotInfo, collapseState, threadNames, gaugeRegionVisible, gaugeCollapse, activeSystems, systemNames, perSystemLanesVisible]);
+  }, [slotInfo, collapseState, threadNames, gaugeRegionVisible, gaugeCollapse, activeSystems, systemNames, perSystemLanesVisible, slotVisibility, systemVisibility, gaugeVisibility, engineOpVisibility]);
 
   const render = useCallback((): void => {
     const canvas = canvasRef.current;
@@ -150,11 +220,15 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
     // Measure gutter width from the widest label — uses the same font the draw path sets.
     const gutter = computeGutterWidth(ctx, layout.tracks, legendsVisible);
     gutterWidthRef.current = gutter;
-    if (onGutterWidthChange && lastEmittedGutterRef.current !== gutter) {
+    if (lastEmittedGutterRef.current !== gutter) {
       lastEmittedGutterRef.current = gutter;
-      const cb = onGutterWidthChange;
       const w = gutter;
-      queueMicrotask(() => cb(w));
+      // Defer the React state + parent-callback fan-out off the rAF tick — setState during render
+      // is a no-no, and queueMicrotask runs after the current frame's draw completes.
+      queueMicrotask(() => {
+        setGutterWidth(w);
+        onGutterWidthChange?.(w);
+      });
     }
 
     // Advance zoom animation if one's in flight. Each frame interpolates vp toward the target and
@@ -166,7 +240,7 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
       const t = 1 - (1 - rawT) * (1 - rawT) * (1 - rawT); // ease-out cubic
       const curStart = anim.from.startUs + (anim.to.startUs - anim.from.startUs) * t;
       const curEnd = anim.from.endUs + (anim.to.endUs - anim.from.endUs) * t;
-      setViewRange({ startUs: curStart, endUs: curEnd });
+      applyViewRange({ startUs: curStart, endUs: curEnd });
       if (rawT >= 1) {
         zoomAnimRef.current = null;
       } else {
@@ -193,8 +267,9 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
       gaugeData,
       helpHover: helpHoverRef.current,
       pendingRangesUs,
+      spanColorMode,
     }, getStudioThemeTokens());
-  }, [layout, ticks, viewRange, legendsVisible, selection, setViewRange, onGutterWidthChange, gaugeData, pendingRangesUs]);
+  }, [layout, ticks, viewRange, legendsVisible, selection, applyViewRange, onGutterWidthChange, gaugeData, pendingRangesUs, spanColorMode]);
 
   const scheduleRender = useCallback((): void => {
     cancelAnimationFrame(rafRef.current);
@@ -319,11 +394,9 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
             const next: TrackState = cur === 'summary' ? 'expanded' : cur === 'expanded' ? 'double' : 'summary';
             setGaugeCollapse(hit.trackId, next);
           } else {
-            setCollapseState((prev) => {
-              const cur = prev[hit.trackId] ?? 'expanded';
-              const next: TrackState = cur === 'summary' ? 'expanded' : 'summary';
-              return { ...prev, [hit.trackId]: next };
-            });
+            const cur = collapseState[hit.trackId] ?? 'expanded';
+            const next: TrackState = cur === 'summary' ? 'expanded' : 'summary';
+            setSingleCollapseState(hit.trackId, next);
           }
           e.preventDefault();
         }
@@ -334,18 +407,32 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
       const mode: 'select' | 'pan' = e.shiftKey ? 'pan' : 'select';
       e.preventDefault();
       if (mode === 'pan') {
-        dragRef.current = { mode: 'pan', startClientX: e.clientX, startOffsetX: vpRef.current.offsetX, moved: false };
+        dragRef.current = {
+          mode: 'pan',
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          startOffsetX: vpRef.current.offsetX,
+          startScrollY: vpRef.current.scrollY,
+          moved: false,
+        };
       } else {
         dragRef.current = { mode: 'select', startX: local.mx, currentX: local.mx, moved: false };
       }
       try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
     } else if (e.button === 1) {
-      // Middle-drag → pan
+      // Middle-drag → pan (X and Y)
       e.preventDefault();
-      dragRef.current = { mode: 'pan', startClientX: e.clientX, startOffsetX: vpRef.current.offsetX, moved: false };
+      dragRef.current = {
+        mode: 'pan',
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startOffsetX: vpRef.current.offsetX,
+        startScrollY: vpRef.current.scrollY,
+        moved: false,
+      };
       try { canvas.setPointerCapture(e.pointerId); } catch { /* noop */ }
     }
-  }, [ticks, gaugeCollapse, setGaugeCollapse, legendsVisible]);
+  }, [ticks, gaugeCollapse, setGaugeCollapse, collapseState, setSingleCollapseState, legendsVisible]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>): void => {
     const local = getLocal(e);
@@ -364,18 +451,36 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
         drag.currentX = local.mx;
       } else {
         const dxClient = e.clientX - drag.startClientX;
-        if (!drag.moved && Math.abs(dxClient) < DRAG_THRESHOLD_PX) return;
+        const dyClient = e.clientY - drag.startClientY;
+        if (!drag.moved && Math.abs(dxClient) < DRAG_THRESHOLD_PX && Math.abs(dyClient) < DRAG_THRESHOLD_PX) return;
         drag.moved = true;
+
+        // Horizontal pan — translates pointer delta into world µs via the current X scale.
         const deltaUs = -dxClient / vpRef.current.scaleX;
         vpRef.current.offsetX = drag.startOffsetX + deltaUs;
         const canvas = canvasRef.current;
         if (canvas) {
           const rect = canvas.getBoundingClientRect();
           const contentWidth = rect.width - gutterWidthRef.current;
-          setViewRange({
+          applyViewRange({
             startUs: vpRef.current.offsetX,
             endUs: vpRef.current.offsetX + contentWidth / vpRef.current.scaleX,
           });
+        }
+
+        // Vertical pan — grab-and-drag UX: dragging the cursor down should reveal content above
+        // (i.e. scroll up), so subtract the client-Y delta. Clamp to [0, totalHeight - viewport]
+        // so we never overshoot the bottom of the layout. We push the new scrollY into the
+        // overlay's scrollTop so the native scrollbar thumb tracks the drag, and the renderer
+        // already reads vp.scrollY directly so the next scheduleRender() picks it up.
+        const overlay = scrollOverlayRef.current;
+        const containerH = canvas?.getBoundingClientRect().height ?? 0;
+        const maxScroll = Math.max(0, layoutRef.current.totalHeight - containerH);
+        const proposed = drag.startScrollY - dyClient;
+        const clamped = Math.max(0, Math.min(maxScroll, proposed));
+        vpRef.current.scrollY = clamped;
+        if (overlay && Math.abs(overlay.scrollTop - clamped) > 0.5) {
+          overlay.scrollTop = clamped;
         }
       }
       scheduleRender();
@@ -425,7 +530,7 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
       setHoverTooltipState(null);
     }
     scheduleRender();
-  }, [ticks, scheduleRender, setViewRange, gaugeTooltipState, legendsVisible, helpTooltipState, hoverTooltipState]);
+  }, [ticks, scheduleRender, applyViewRange, gaugeTooltipState, legendsVisible, helpTooltipState, hoverTooltipState]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>): void => {
     const drag = dragRef.current;
@@ -517,13 +622,15 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
       const delta = e.shiftKey ? e.deltaY : e.deltaX;
       vp.offsetX += delta / vp.scaleX;
     } else {
-      // Zoom around cursor
+      // Zoom around cursor.
+      // scaleX = pixels per microsecond. Floor at 0.0001 → ~10 s visible at 1000 px content width;
+      // ceiling at 10000 → ~0.1 ns visible at 1000 px (deep zoom-in for tight spans).
       const usAtMouse = vp.offsetX + mouseX / vp.scaleX;
       const factor = e.deltaY > 0 ? 0.85 : 1.18;
-      vp.scaleX = Math.max(0.001, Math.min(10000, vp.scaleX * factor));
+      vp.scaleX = Math.max(0.0001, Math.min(10000, vp.scaleX * factor));
       vp.offsetX = usAtMouse - mouseX / vp.scaleX;
     }
-    setViewRange({ startUs: vp.offsetX, endUs: vp.offsetX + contentWidth / vp.scaleX });
+    applyViewRange({ startUs: vp.offsetX, endUs: vp.offsetX + contentWidth / vp.scaleX });
     scheduleRender();
   };
 
@@ -561,6 +668,48 @@ export default function TimeArea({ ticks, gaugeData, pendingRangesUs, isLive = f
         onPointerLeave={onPointerLeave}
         onDoubleClick={onDoubleClick}
       />
+      {/*
+       * Vertical scroll overlay. Sits on the right edge of the canvas as a thin native-scrollbar
+       * gutter — when its phantom inner is taller than the gutter, the browser's overflow scrollbar
+       * appears and the user can drag it. We forward the resulting `scrollTop` to `vpRef.current.scrollY`
+       * so the canvas redraws with the correct vertical offset (`drawTimeArea` already honours
+       * `vp.scrollY`). The gutter is 14px wide — wide enough for a visible Windows scrollbar without
+       * eating much canvas real-estate. We don't shrink the canvas to make room because the renderer
+       * already reserves trailing margin and the overlap is harmless.
+       *
+       * The overlay only hosts the scrollbar — no pointer events for the rest of the canvas (zoom,
+       * pan, drag, hit-test) are affected, since the rest of the canvas is left exposed.
+       */}
+      <div
+        ref={scrollOverlayRef}
+        className="absolute inset-y-0 right-0 w-[14px] overflow-y-auto"
+        onScroll={(e) => {
+          vpRef.current.scrollY = e.currentTarget.scrollTop;
+          scheduleRender();
+        }}
+      >
+        <div style={{ height: layout.totalHeight, width: 1 }} aria-hidden />
+      </div>
+      {/*
+       * Section-filter icon. Sits at the right edge of the ruler row's gutter band — same horizontal
+       * column as the rest of the gutter labels. Click opens a Popover with the search input + tri-state
+       * tree (Gauges / Threads / Systems / Engine Operations). The button absorbs its own pointer events
+       * so it doesn't trigger the canvas's drag/zoom handlers underneath.
+       */}
+      <div
+        className="absolute"
+        style={{ left: gutterWidth - 22, top: 4 }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onWheel={(e) => e.stopPropagation()}
+      >
+        <TimeAreaFilterButton
+          activeSlots={slotInfo.activeSlots}
+          activeSystems={activeSystems}
+          threadNamesBySlot={threadNames}
+          systemNamesByIdx={systemNames}
+          threadInfos={threadInfos}
+        />
+      </div>
       {gaugeTooltipState && (
         <GaugeTooltip
           lines={buildGaugeTooltipLines(

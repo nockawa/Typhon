@@ -87,9 +87,11 @@ public sealed partial class SessionsController : ControllerBase
             && string.Equals(a.EndpointAddress, request.EndpointAddress, StringComparison.OrdinalIgnoreCase));
 
         // AttachSessionRuntime.StartAsync does 3 × 2 s upfront TCP retry; throws WorkbenchException(503) on total failure.
-        var runtime = await AttachSessionRuntime.StartAsync(request.EndpointAddress, _logger, ct);
+        // Session id is generated up front so the live cache temp file path matches the public sessionId.
+        var sessionId = Guid.NewGuid();
+        var runtime = await AttachSessionRuntime.StartAsync(sessionId, request.EndpointAddress, _logger, ct);
 
-        var session = new AttachSession(Guid.NewGuid(), request.EndpointAddress, runtime);
+        var session = new AttachSession(sessionId, request.EndpointAddress, runtime);
         _sessions.Create(session);
         LogSessionCreated(session.Id, "attach");
         return CreatedAtAction(nameof(GetSession), new { id = session.Id }, ToDto(session));
@@ -108,12 +110,13 @@ public sealed partial class SessionsController : ControllerBase
             throw new WorkbenchException(404, "trace_file_not_found", $"Trace file not found: {resolvedFile}");
         }
 
-        // Validate file magic up-front — rejects sidecar caches ("TPCH") and any non-trace file immediately with
-        // 400 rather than creating a session that'll fault its background build and flood /metadata with 500s.
-        ValidateTraceFileMagic(resolvedFile);
+        // Validate file magic up-front — rejects unrelated files immediately with 400 rather than creating a session that'll fault its
+        // background build and flood /metadata with 500s. Both .typhon-trace ("TYTR") and .typhon-replay ("TPCH" + IsSelfContained) are
+        // accepted; TraceSessionRuntime detects which by extension and takes the right load path.
+        ValidateTraceOrReplayMagic(resolvedFile);
 
         // Single-session-per-file invariant matches the Open-mode pattern (above). Reopens are cheap because
-        // the sidecar cache is fingerprint-cached on disk.
+        // the sidecar cache is fingerprint-cached on disk (or, for replay files, the file IS the cache).
         _sessions.RemoveWhere(s => s is TraceSession ts && string.Equals(ts.FilePath, resolvedFile, StringComparison.OrdinalIgnoreCase));
 
         var runtime = TraceSessionRuntime.Start(resolvedFile, _logger);
@@ -179,11 +182,12 @@ public sealed partial class SessionsController : ControllerBase
     private partial void LogSessionCreated(Guid sessionId, string mode);
 
     /// <summary>
-    /// Checks the first 4 bytes of <paramref name="path"/> against <c>TraceFileHeader.MagicValue</c> ("TYTR"). Throws
-    /// 400 with a human-readable reason if the magic doesn't match — the most common hit is the user accidentally
-    /// pasting the <c>.typhon-trace-cache</c> sidecar (magic "TPCH") instead of the source trace.
+    /// Validates the file at <paramref name="path"/> as either a <c>.typhon-trace</c> source (magic "TYTR") OR a
+    /// <c>.typhon-replay</c> self-contained cache (magic "TPCH"). Throws 400 with a human-readable reason on any other content. The
+    /// extension determines the expected magic — opening a <c>.typhon-trace-cache</c> file (TPCH magic but conventional sidecar role)
+    /// from the trace open dialog is rejected with a hint to open the parent <c>.typhon-trace</c> instead.
     /// </summary>
-    private static void ValidateTraceFileMagic(string path)
+    private static void ValidateTraceOrReplayMagic(string path)
     {
         Span<byte> magicBytes = stackalloc byte[4];
         try
@@ -200,17 +204,31 @@ public sealed partial class SessionsController : ControllerBase
         }
 
         var magic = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(magicBytes);
+        var extension = Path.GetExtension(path);
+        var isReplay = string.Equals(extension, ".typhon-replay", StringComparison.OrdinalIgnoreCase);
+
+        if (isReplay)
+        {
+            if (magic == Typhon.Profiler.CacheHeader.MagicValue)
+            {
+                return;
+            }
+            var asAscii = System.Text.Encoding.ASCII.GetString(magicBytes);
+            throw new WorkbenchException(400, "invalid_replay_file",
+                $"File magic is '{asAscii}' (0x{magic:X8}); expected 'TPCH' for a .typhon-replay file.");
+        }
+
+        // Default: source .typhon-trace file with TYTR magic.
         if (magic == Typhon.Profiler.TraceFileHeader.MagicValue)
         {
             return;
         }
 
-        // Decode the magic into a human-readable reason. Sidecar cache = "TPCH" (0x48435054) is the common mistake.
-        var asAscii = System.Text.Encoding.ASCII.GetString(magicBytes);
-        const uint TpchMagic = 0x48435054;
-        var hint = magic == TpchMagic
-            ? "This looks like a .typhon-trace-cache sidecar. Open the matching source .typhon-trace file instead."
-            : $"File magic is '{asAscii}' (0x{magic:X8}); expected 'TYTR' for a .typhon-trace file.";
+        // Common-mistake hint: a TPCH file with .typhon-trace-cache extension is the auto-built sidecar; the user should open the parent.
+        var ascii = System.Text.Encoding.ASCII.GetString(magicBytes);
+        var hint = magic == Typhon.Profiler.CacheHeader.MagicValue
+            ? "This looks like a .typhon-trace-cache sidecar. Open the matching source .typhon-trace file instead, or use .typhon-replay extension if this is a saved replay file."
+            : $"File magic is '{ascii}' (0x{magic:X8}); expected 'TYTR' for a .typhon-trace file.";
         throw new WorkbenchException(400, "invalid_trace_file", hint);
     }
 }

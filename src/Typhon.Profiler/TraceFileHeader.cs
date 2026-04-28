@@ -59,6 +59,9 @@ public struct TraceFileHeader
     /// <summary>File magic constant: ASCII "TYTR".</summary>
     public const uint MagicValue = 0x52_54_59_54; // 'T','Y','T','R' little-endian
 
-    /// <summary>Current format version.</summary>
-    public const ushort CurrentVersion = 3;
+    /// <summary>
+    /// Current format version. Bumped to 4 when ThreadInfo records gained the trailing <see cref="ThreadKind"/> byte
+    /// (#289 follow-up). Older v3 files would silently miss the byte; the version gate forces a regenerate.
+    /// </summary>
+    public const ushort CurrentVersion = 4;
 }

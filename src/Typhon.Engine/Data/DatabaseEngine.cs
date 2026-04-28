@@ -288,6 +288,21 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// </summary>
     internal SpatialGrid SpatialGrid => _spatialGrid;
 
+    /// <summary>
+    /// Mark a single entity slot as dirty in the cluster dirty bitmap. Call from game systems that use the direct
+    /// cluster iteration path (<see cref="ClusterRef{TArch}.GetSpan{T}"/>) and need migration detection or WAL
+    /// tracking. The <paramref name="chunkId"/> comes from <see cref="ClusterRef{TArch}.ChunkId"/>.
+    /// Thread-safe (uses <see cref="System.Threading.Interlocked.Or"/> internally via <c>SetDirty</c>).
+    /// </summary>
+    [PublicAPI]
+    public void MarkClusterSlotDirty(int archetypeId, int chunkId, int slotIndex)
+    {
+        if (archetypeId >= 0 && archetypeId < _archetypeStates.Length)
+        {
+            _archetypeStates[archetypeId]?.ClusterState?.SetDirty(chunkId, slotIndex);
+        }
+    }
+
     /// <summary>Raised during schema migration to report progress to subscribers.</summary>
     [PublicAPI]
     public event EventHandler<MigrationProgressEventArgs> OnMigrationProgress;
@@ -1510,8 +1525,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 int srcSlot = req.SourceSlotIndex;
                 int destCellKey = req.DestCellKey;
 
-                // 1. Read entity id from source slot (needed before any reallocation pointer invalidation).
+                // 0. Stale-source guard: verify the source slot's occupancy bit is still set.
+                // The detection phase reads occupancy through a read-only accessor (no ChangeSet → DC not bumped). If
+                // checkpoint decremented DC to 0 between detection and execution, the page may have been evicted and
+                // reloaded from disk with stale occupancy data. Skip the migration — the entity was already migrated
+                // in a previous tick and the detection saw phantom occupancy.
                 byte* srcPrimaryPre = hasClusterAccessor ? clusterAccessor.GetChunkAddress(srcChunkId, true) : transientClusterAccessor.GetChunkAddress(srcChunkId, true);
+                ulong srcOcc = *(ulong*)srcPrimaryPre;
+                if ((srcOcc & (1UL << srcSlot)) == 0)
+                {
+                    continue;
+                }
+
+                // 1. Read entity id from source slot (needed before any reallocation pointer invalidation).
                 long entityPK = *(long*)(srcPrimaryPre + layout.EntityIdsOffset + srcSlot * 8);
 
                 // 2. Claim destination slot in the target cell. May allocate a new cluster (new chunk id).
@@ -1748,6 +1774,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 clusterAccessor.Dispose();
             }
             changeSet.SaveChanges();
+            changeSet.ReleaseExcessDirtyMarks();
 
             // Reset queue for next tick BEFORE any re-throw path can escape. Leaving entries in the queue after a mid-batch exception would cause the next
             // tick's ExecuteMigrations to re-attempt already-applied migrations, double-allocating destination slots and orphaning source clusters.

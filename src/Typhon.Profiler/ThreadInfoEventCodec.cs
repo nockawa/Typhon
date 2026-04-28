@@ -6,8 +6,9 @@ using System.Text;
 namespace Typhon.Profiler;
 
 /// <summary>
-/// Decoded form of a <see cref="TraceEventKind.ThreadInfo"/> record — per-slot thread identity (managed thread ID + UTF-8 name) emitted once
-/// when a producer thread claims its slot. Lets the viewer label lanes with something meaningful instead of just "Slot N".
+/// Decoded form of a <see cref="TraceEventKind.ThreadInfo"/> record — per-slot thread identity (managed thread ID +
+/// UTF-8 name + <see cref="ThreadKind"/>) emitted once when a producer thread claims its slot. Lets the viewer label
+/// lanes and group them by kind in its filter UI.
 /// </summary>
 public readonly struct ThreadInfoEventData
 {
@@ -18,12 +19,16 @@ public readonly struct ThreadInfoEventData
     /// <summary>UTF-8-encoded name bytes, sliced from the original record. Caller converts to string on demand.</summary>
     public ReadOnlyMemory<byte> NameUtf8 { get; }
 
-    public ThreadInfoEventData(byte threadSlot, long timestamp, int managedThreadId, ReadOnlyMemory<byte> nameUtf8)
+    /// <summary>Producer-thread category — drives the viewer's filter tree's Main/Workers/Other split.</summary>
+    public ThreadKind Kind { get; }
+
+    public ThreadInfoEventData(byte threadSlot, long timestamp, int managedThreadId, ReadOnlyMemory<byte> nameUtf8, ThreadKind kind)
     {
         ThreadSlot = threadSlot;
         Timestamp = timestamp;
         ManagedThreadId = managedThreadId;
         NameUtf8 = nameUtf8;
+        Kind = kind;
     }
 
     /// <summary>Decode <see cref="NameUtf8"/> as a <see cref="string"/>. Allocates.</summary>
@@ -36,21 +41,22 @@ public readonly struct ThreadInfoEventData
 /// offset 12..15  i32  ManagedThreadId
 /// offset 16..17  u16  NameByteCount
 /// offset 18+     byte[NameByteCount] NameUtf8
+/// offset 18+N    u8   ThreadKind
 /// </code>
-/// Total wire size: 12 + 4 + 2 + NameByteCount bytes.
+/// Total wire size: 12 + 4 + 2 + NameByteCount + 1 bytes.
 /// </summary>
 public static class ThreadInfoEventCodec
 {
     private const int PrefixSize = TraceRecordHeader.CommonHeaderSize + 4 + 2;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static int ComputeSize(int nameByteCount) => PrefixSize + nameByteCount;
+    public static int ComputeSize(int nameByteCount) => PrefixSize + nameByteCount + 1;
 
     /// <summary>
     /// Encode a ThreadInfo record. Caller has pre-computed <paramref name="nameUtf8"/> (via <see cref="Encoding.UTF8"/>).
     /// </summary>
-    public static void WriteThreadInfo(Span<byte> destination, byte threadSlot, long timestamp, int managedThreadId, ReadOnlySpan<byte> nameUtf8, 
-        out int bytesWritten)
+    public static void WriteThreadInfo(Span<byte> destination, byte threadSlot, long timestamp, int managedThreadId,
+        ReadOnlySpan<byte> nameUtf8, ThreadKind kind, out int bytesWritten)
     {
         if (nameUtf8.Length > ushort.MaxValue)
         {
@@ -64,6 +70,7 @@ public static class ThreadInfoEventCodec
         BinaryPrimitives.WriteInt32LittleEndian(p, managedThreadId);
         BinaryPrimitives.WriteUInt16LittleEndian(p[4..], (ushort)nameUtf8.Length);
         nameUtf8.CopyTo(p[6..]);
+        p[6 + nameUtf8.Length] = (byte)kind;
 
         bytesWritten = size;
     }
@@ -86,7 +93,11 @@ public static class ThreadInfoEventCodec
         var managedThreadId = BinaryPrimitives.ReadInt32LittleEndian(p);
         var nameByteCount = BinaryPrimitives.ReadUInt16LittleEndian(p[4..]);
         var nameMemory = source.Slice(PrefixSize, nameByteCount);
+        // Trailing ThreadKind byte. Records produced by pre-#289-bump engines lack it; size check guards.
+        var threadKind = size >= PrefixSize + nameByteCount + 1
+            ? (ThreadKind)span[PrefixSize + nameByteCount]
+            : ThreadKind.Other;
 
-        return new ThreadInfoEventData(threadSlot, timestamp, managedThreadId, nameMemory);
+        return new ThreadInfoEventData(threadSlot, timestamp, managedThreadId, nameMemory, threadKind);
     }
 }

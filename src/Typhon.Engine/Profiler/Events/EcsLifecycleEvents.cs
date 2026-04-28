@@ -15,6 +15,8 @@ namespace Typhon.Engine.Profiler;
 /// </summary>
 public ref struct EcsSpawnEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsSpawn;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -60,6 +62,8 @@ public ref struct EcsSpawnEvent : ITraceEventEncoder
 /// </summary>
 public ref struct EcsDestroyEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsDestroy;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -106,6 +110,8 @@ public ref struct EcsDestroyEvent : ITraceEventEncoder
 /// </summary>
 public ref struct EcsViewRefreshEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.EcsViewRefresh;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

@@ -133,47 +133,100 @@ internal sealed class ProfilerConsumerThread : HighResolutionTimerServiceBase
             }
 
             var slot = ThreadSlotRegistry.GetSlot(i);
-            var buffer = slot.Buffer;
-            if (buffer == null)
+            var primary = slot.Buffer;
+            if (primary == null)
             {
                 continue;
             }
 
-            var remaining = _mergeScratch.Length - bytesDrained;
-            if (remaining <= 0)
+            // Walk the slot's chain forward from ChainHead. Drain each ring, recycling spillovers back to the pool
+            // when their buffer empties AND a successor is observed. The primary (slot.Buffer) is never recycled —
+            // it stays attached for the slot's lifetime and is reused across re-claims.
+            //
+            // Termination conditions per ring:
+            //   - destination span runs out (merge scratch full)  → break outer
+            //   - record count saturates                          → break outer
+            //   - current head ring still has data after drain    → stop on this slot, try this ring next pass
+            //   - current head ring empty AND has no successor    → stop on this slot, primary is fully drained
+            //   - current head ring empty AND has successor       → recycle (if spillover), advance ChainHead
+            var head = slot.ChainHead;
+            var slotDoneOuter = false;
+            while (head != null && !slotDoneOuter)
             {
-                break;
-            }
-
-            var drained = buffer.Drain(_mergeScratch.AsSpan(bytesDrained, remaining));
-
-            // Walk the newly-drained bytes to build the offsets + keys index. The timestamp extraction here is free: the common-header bytes
-            // we're already reading for the size field live in the same 64 B cache line as the ts field at +4..+12. Doing the extraction
-            // during the walk means the sort phase can stay entirely on the keys array without dereferencing _mergeScratch per-comparison.
-            var walkPos = bytesDrained;
-            var walkEnd = bytesDrained + drained;
-            while (walkPos < walkEnd)
-            {
-                if (recordCount >= _offsets.Length)
+                var remaining = _mergeScratch.Length - bytesDrained;
+                if (remaining <= 0)
                 {
-                    break;  // shouldn't happen — offsets sized for the worst-case min-record density
+                    slotDoneOuter = true;
+                    break;
+                }
+                var drained = head.Drain(_mergeScratch.AsSpan(bytesDrained, remaining));
+
+                // Walk the newly-drained bytes to build the offsets + keys index. Same logic as the pre-chain
+                // implementation — the chain just feeds the same merge buffer through multiple Drain calls.
+                var walkPos = bytesDrained;
+                var walkEnd = bytesDrained + drained;
+                while (walkPos < walkEnd)
+                {
+                    if (recordCount >= _offsets.Length)
+                    {
+                        slotDoneOuter = true;  // can't index any more records this pass
+                        break;
+                    }
+
+                    var headerSpan = _mergeScratch.AsSpan(walkPos);
+                    var size = BinaryPrimitives.ReadUInt16LittleEndian(headerSpan);
+                    if (size == 0 || walkPos + size > walkEnd)
+                    {
+                        slotDoneOuter = true;  // defensive stop on corrupt data
+                        break;
+                    }
+
+                    _offsets[recordCount] = walkPos;
+                    _keys[recordCount] = BinaryPrimitives.ReadInt64LittleEndian(headerSpan[4..]);
+                    recordCount++;
+                    walkPos += size;
+                }
+                bytesDrained = walkPos;
+
+                if (slotDoneOuter || drained == 0 && !head.IsEmpty)
+                {
+                    // Either we ran out of merge buffer, or Drain stopped on a record-doesn't-fit boundary; either
+                    // way the head ring still has data. Don't advance — pick up where we left off next pass.
+                    break;
                 }
 
-                var headerSpan = _mergeScratch.AsSpan(walkPos);
-                var size = BinaryPrimitives.ReadUInt16LittleEndian(headerSpan);
-                if (size == 0 || walkPos + size > walkEnd)
+                if (!head.IsEmpty)
                 {
-                    break;  // defensive stop on corrupt data
+                    // Head still has data (we drained some but not all this pass). Stop here.
+                    break;
                 }
 
-                _offsets[recordCount] = walkPos;
-                _keys[recordCount] = BinaryPrimitives.ReadInt64LittleEndian(headerSpan[4..]);
-                recordCount++;
-                walkPos += size;
-            }
-            bytesDrained = walkPos;
+                // Head is empty. Can we advance to the next ring?
+                var next = head.Next;
+                if (next == null)
+                {
+                    // No successor — head is the producer's current ChainTail OR the producer hasn't extended yet.
+                    // Either way, nothing to advance to.
+                    break;
+                }
 
-            if (state == (int)SlotState.Retiring && buffer.IsEmpty)
+                // Empty head AND has successor → recycle (if it's a spillover) and advance ChainHead.
+                var spent = head;
+                head = next;
+                slot.ChainHead = head;
+                if (spent != primary)
+                {
+                    SpilloverRingPool.Release(spent);
+                }
+            }
+
+            // A retiring slot can only be freed once its entire chain has fully collapsed back to an empty primary
+            // with no successor — the producer is dead and can never extend again, so eventually that condition
+            // will hold across subsequent drain passes.
+            if (state == (int)SlotState.Retiring
+                && slot.ChainHead == primary
+                && primary.IsEmpty
+                && primary.Next == null)
             {
                 ThreadSlotRegistry.FreeRetiringSlot(i);
             }
@@ -318,10 +371,14 @@ internal sealed class ProfilerConsumerThread : HighResolutionTimerServiceBase
             {
                 continue;
             }
-            var buffer = ThreadSlotRegistry.GetSlot(i).Buffer;
-            if (buffer != null)
+            // Walk the chain forward from ChainHead to count pending bytes across the primary AND any spillovers.
+            // Without this walk, FinalDrainAndComplete would terminate while spillover rings still hold data.
+            var slot = ThreadSlotRegistry.GetSlot(i);
+            var ring = slot.ChainHead;
+            while (ring != null)
             {
-                total += buffer.BytesPending;
+                total += ring.BytesPending;
+                ring = ring.Next;
             }
         }
         return total;
@@ -350,7 +407,7 @@ internal sealed class ProfilerConsumerThread : HighResolutionTimerServiceBase
     }
 
 
-    /// <summary>Returns <c>true</c> iff every active/retiring slot's ring has no pending records.</summary>
+    /// <summary>Returns <c>true</c> iff every active/retiring slot's chain (primary + spillovers) has no pending records.</summary>
     private static bool AllSlotsEmpty()
     {
         var scanLimit = ThreadSlotRegistry.HighWaterMark;
@@ -362,10 +419,16 @@ internal sealed class ProfilerConsumerThread : HighResolutionTimerServiceBase
                 continue;
             }
             var slot = ThreadSlotRegistry.GetSlot(i);
-            var buffer = slot.Buffer;
-            if (buffer != null && !buffer.IsEmpty)
+            // Walk the chain — FinalDrainAndComplete would otherwise terminate prematurely while spillovers
+            // still hold records.
+            var ring = slot.ChainHead;
+            while (ring != null)
             {
-                return false;
+                if (!ring.IsEmpty)
+                {
+                    return false;
+                }
+                ring = ring.Next;
             }
         }
         return true;

@@ -9,6 +9,8 @@ namespace Typhon.Engine.Profiler;
 
 public ref struct RuntimeSubscriptionSubscriberEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeSubscriptionSubscriber;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public uint SubscriberId;
     public ushort ViewId;
@@ -22,6 +24,8 @@ public ref struct RuntimeSubscriptionSubscriberEvent : ITraceEventEncoder
 
 public ref struct RuntimeSubscriptionDeltaBuildEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeSubscriptionDeltaBuild;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public ushort ViewId;
     public int Added;
@@ -36,6 +40,8 @@ public ref struct RuntimeSubscriptionDeltaBuildEvent : ITraceEventEncoder
 
 public ref struct RuntimeSubscriptionDeltaSerializeEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeSubscriptionDeltaSerialize;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public uint ClientId;
     public ushort ViewId;
@@ -50,6 +56,8 @@ public ref struct RuntimeSubscriptionDeltaSerializeEvent : ITraceEventEncoder
 
 public ref struct RuntimeSubscriptionTransitionBeginSyncEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeSubscriptionTransitionBeginSync;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public uint ClientId;
     public ushort ViewId;
@@ -63,6 +71,8 @@ public ref struct RuntimeSubscriptionTransitionBeginSyncEvent : ITraceEventEncod
 
 public ref struct RuntimeSubscriptionOutputCleanupEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeSubscriptionOutputCleanup;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int DeadCount;
     public int DeregCount;
@@ -75,6 +85,8 @@ public ref struct RuntimeSubscriptionOutputCleanupEvent : ITraceEventEncoder
 
 public ref struct RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.RuntimeSubscriptionDeltaDirtyBitmapSupplement;
+
     public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int ModifiedFromRing;
     public int SupplementCount;

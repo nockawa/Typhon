@@ -75,8 +75,25 @@ export interface ChunkCacheState {
       gcEvents: GcEvent[];
       gcSuspensions: GcSuspensionEvent[];
       threadNames: Map<number, string>;
+      threadKinds: Map<number, number>;
     };
   } | null;
+  /**
+   * Persistent slot → thread-name map. ThreadInfo records are emitted ONCE per slot at slot-claim time and live in the
+   * pre-tick bucket of the FIRST chunk only (the cache builder prepends pre-tick records to chunk 1's binary). If chunk 1
+   * isn't currently loaded — e.g., the user dragged a viewRange to a later region of the trace — the per-assembly
+   * `threadNames` aggregation walks only the resident chunks and finds nothing. Persisting the map across chunk loads /
+   * evictions matches the metadata-not-per-tick-data nature of ThreadInfo: once a slot's name is observed, it stays. The
+   * accumulator is mutated during chunk insertion (`storeChunk`); `assembleTickViewAndNumbers` returns this map directly
+   * instead of recomputing per call. Cleared only when the cache itself is recreated (new session / fingerprint change).
+   */
+  threadNames: Map<number, string>;
+  /**
+   * Persistent slot → ThreadKind map (Main=0, Worker=1, Pool=2, Other=3) — same chunk-eviction-survives
+   * lifecycle as {@link threadNames}. Drives the filter tree's Main/Workers/Other subgrouping in trace
+   * mode. Empty for pre-v4 traces where ThreadInfo records lack the trailing kind byte.
+   */
+  threadKinds: Map<number, number>;
 }
 
 /**
@@ -119,6 +136,8 @@ export function createChunkCache(budgetBytes: number = DEFAULT_BUDGET, opfsStore
     opfsStore,
     overBudgetWarned: false,
     failedChunks: new Map(),
+    threadNames: new Map(),
+    threadKinds: new Map(),
   };
 }
 
@@ -228,19 +247,11 @@ export async function ensureRangeLoaded(
  * The returned array is newly allocated on every call; callers should re-reference (setTrace) to trigger Preact re-render.
  * Prefer <see cref="assembleTickViewAndNumbers"/> when the caller needs both arrays — saves a second sort + second iteration.
  */
-export function assembleTickView(cache: ChunkCacheState, systems: SystemDef[]): TickData[] {
-  return assembleTickViewAndNumbers(cache, systems).tickData;
-}
-
 /**
- * Build both the flat TickData array AND the parallel tickNumbers array in a single pass. Single sort of cache entries (was duplicated
- * across `assembleTickView` and `assembleTickNumbers`), single inner-loop traversal of each chunk's ticks. For a 200 MB cache budget that's
- * ~50 chunks — the savings here aren't huge per call, but the function fires on every chunk load during pan/zoom, so halving the work is
- * worth the few extra lines.
- *
- * Also folds gauge snapshots + memory alloc events into cross-tick aggregates via <see cref="aggregateGaugeData"/>. These are returned
- * alongside the tick arrays so callers can refresh <c>ProcessedTrace.gaugeSeries</c> / <c>gaugeCapacities</c> /
- * <c>memoryAllocEvents</c> in the same pass rather than walking the cache a second time.
+ * Build the flat TickData array, parallel tickNumbers array, and the cross-tick aggregates (gauge series, memory
+ * alloc events, GC events / suspensions, thread names) in a single pass over the resident chunks. Single sort of
+ * cache entries, single inner-loop traversal of each chunk's ticks. The function fires on every viewport effect
+ * during pan/zoom; the memo at the top short-circuits when entriesVersion hasn't changed.
  */
 export function assembleTickViewAndNumbers(cache: ChunkCacheState, systems: SystemDef[]): {
   tickData: TickData[];
@@ -251,6 +262,7 @@ export function assembleTickViewAndNumbers(cache: ChunkCacheState, systems: Syst
   gcEvents: GcEvent[];
   gcSuspensions: GcSuspensionEvent[];
   threadNames: Map<number, string>;
+  threadKinds: Map<number, number>;
 } {
   // ── Memo short-circuit ────────────────────────────────────────────────────────────────────────────────────────────
   // assembleTickViewAndNumbers runs on EVERY viewport effect — which fires on every pan, zoom, and wheel event. When the
@@ -316,8 +328,15 @@ export function assembleTickViewAndNumbers(cache: ChunkCacheState, systems: Syst
   for (const idx of mergedIndices) {
     tickData[idx].rawEvents = [];
   }
-  const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames } = aggregateGaugeData(tickData);
-  const result = { tickData, tickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames };
+  const { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions } = aggregateGaugeData(tickData);
+  // Use the cache-level persistent thread-name map rather than the per-assembly aggregator's
+  // result. The aggregator only sees currently-resident ticks; if chunk 1 (where pre-tick
+  // ThreadInfo records live) has been evicted or never loaded for the current viewRange, the
+  // aggregator returns an empty map even though we saw the names earlier. The persistent map on
+  // the cache survives evictions — see `cache.threadNames` docs and the harvest in `loadChunk`.
+  const threadNames = cache.threadNames;
+  const threadKinds = cache.threadKinds;
+  const result = { tickData, tickNumbers, gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames, threadKinds };
   // Snapshot the version at which this result was computed. Any future call with the same version returns the same result via the
   // short-circuit at the top. Invalidated automatically when entries mutate (loadChunk ↑, evict ↑).
   cache.lastAssembly = { version: cache.entriesVersion, result };
@@ -365,11 +384,6 @@ export function viewRangeToTickRange(
   if (lastIdx < firstIdx) return null;                      // no tick overlaps [fromUs, toUs)
 
   return { fromTick: summary[firstIdx].tickNumber, toTick: summary[lastIdx].tickNumber + 1 };
-}
-
-/** Extract a sorted array of tickNumbers from the current cache — updated alongside assembleTickView. */
-export function assembleTickNumbers(cache: ChunkCacheState, systems: SystemDef[]): number[] {
-  return assembleTickViewAndNumbers(cache, systems).tickNumbers;
 }
 
 /**
@@ -528,6 +542,22 @@ async function loadChunk(
     cache.entries.set(chunkIdx, loaded);
     cache.entriesVersion++;
     cache.totalBytes += byteSize;
+    // Harvest ThreadInfo entries from this chunk's tickData into the persistent cache-level map.
+    // ThreadInfo records are emitted ONCE per slot at slot-claim time and only live in chunk 1's
+    // pre-tick bucket (cache builder prepends pre-tick records to chunk 1's binary). Walk every
+    // tick's threadInfos here so the slot→name map survives chunk eviction — without this, a user
+    // whose viewRange doesn't currently overlap chunk 1 sees lane labels regress to "Slot N".
+    // First observation wins (re-claims under the same slot would emit a fresh ThreadInfo, which we
+    // intentionally honour via the `set` overwrite — matches `aggregateGaugeData`'s behavior).
+    for (const td of tickData) {
+      if (td.threadInfos.length === 0) continue;
+      for (const info of td.threadInfos) {
+        cache.threadNames.set(info.threadSlot, info.name);
+        if (info.kind !== undefined) {
+          cache.threadKinds.set(info.threadSlot, info.kind);
+        }
+      }
+    }
     // Successful decode clears any prior failure record for this chunk. A transient error (network blip, server restart
     // mid-request) would otherwise leave a stale entry in failedChunks that suppresses future retries for the retry-after
     // window even though the chunk is demonstrably fine now.

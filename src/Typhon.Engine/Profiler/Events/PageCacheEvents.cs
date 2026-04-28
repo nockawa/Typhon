@@ -15,6 +15,8 @@ namespace Typhon.Engine.Profiler;
 /// </remarks>
 public ref struct PageCacheFetchEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.PageCacheFetch;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -41,6 +43,8 @@ public ref struct PageCacheFetchEvent : ITraceEventEncoder
 /// </summary>
 public ref struct PageCacheDiskReadEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.PageCacheDiskRead;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -63,6 +67,8 @@ public ref struct PageCacheDiskReadEvent : ITraceEventEncoder
 
 public ref struct PageCacheDiskWriteEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.PageCacheDiskWrite;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -94,6 +100,8 @@ public ref struct PageCacheDiskWriteEvent : ITraceEventEncoder
 
 public ref struct PageCacheAllocatePageEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.PageCacheAllocatePage;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -116,6 +124,8 @@ public ref struct PageCacheAllocatePageEvent : ITraceEventEncoder
 
 public ref struct PageCacheFlushEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.PageCacheFlush;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;
@@ -141,6 +151,8 @@ public ref struct PageCacheFlushEvent : ITraceEventEncoder
 /// </summary>
 public ref struct PageCacheBackpressureEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.PageCacheBackpressure;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

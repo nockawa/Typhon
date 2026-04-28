@@ -1,0 +1,34 @@
+{
+  "Typhon": {
+    "Profiler": {
+      "Enabled": true,
+
+      "Gauges": { "Enabled": true },
+
+      "Scheduler": {
+        "Enabled": true,
+        "Gauges": {
+          "TransitionLatency": { "Enabled": true },
+          "WorkerUtilization": { "Enabled": true },
+          "StragglerGap":      { "Enabled": true }
+        }
+      },
+
+      "Spatial": { "Enabled": true },
+
+      "Data": {
+        "Enabled": true,
+        "Transaction": { "Enabled": true },
+        "MVCC":  { "Enabled": false },
+        "Index": { "Enabled": false }
+      },
+
+      "Runtime": {
+        "Enabled": true,
+        "Phase":        { "Enabled": true },
+        "Transaction":  { "Enabled": true },
+        "Subscription": { "Enabled": false }
+      }
+    }
+  }
+}

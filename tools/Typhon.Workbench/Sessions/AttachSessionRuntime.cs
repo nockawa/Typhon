@@ -1,50 +1,44 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.IO;
+using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 using Typhon.Profiler;
 using Typhon.Workbench.Dtos.Profiler;
-using ProfilerRecordDecoder = Typhon.Profiler.RecordDecoder;
 
 namespace Typhon.Workbench.Sessions;
 
 /// <summary>
-/// Per-session equivalent of the old singleton <c>LiveSessionService</c> — owns the TCP connection to a running Typhon
-/// app's profiler exporter, decodes v3 record frames, and fans out per-tick <see cref="LiveTickBatch"/> values to SSE
-/// subscribers via bounded channels.
+/// Live-attach session runtime. Owns the TCP connection to a running Typhon engine's profiler exporter, drives an
+/// <see cref="IncrementalCacheBuilder"/> from incoming Block frames, and fans deltas out to SSE subscribers.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Connect semantics.</b> <see cref="StartAsync"/> attempts the first TCP connect with 3 × 2 s upfront retry. On
-/// total failure it throws <see cref="WorkbenchException"/> with HTTP 503, which the controller surfaces as
-/// <c>ProblemDetails</c>. Once the first connect succeeds the runtime lives, and the background read loop silently
-/// reconnects on later <see cref="SocketException"/> / <see cref="IOException"/> (same 2 s cadence as the old code).
+/// <b>Architectural note (#289).</b> Phase 3 of the live-replay unification: this runtime no longer decodes records into
+/// <c>LiveTickBatch</c> structures. The engine's wire bytes are decompressed and fed straight into the same
+/// <see cref="IncrementalCacheBuilder"/> the replay pipeline uses, producing a chunk manifest and tick summaries identical
+/// in shape to a sealed <c>.typhon-trace-cache</c> file. Chunk bytes go to a <see cref="LiveCacheTempFile"/> and become
+/// addressable via <see cref="ReadChunkCompressedAsync"/>; ticks and chunks fan out as growth deltas over SSE.
 /// </para>
 /// <para>
-/// <b>Metadata.</b> The first <see cref="LiveFrameType.Init"/> frame is projected into a <see cref="ProfilerMetadataDto"/>
-/// and stored on <see cref="Metadata"/>. <see cref="MetadataReady"/> resolves at the same time. Tick summaries / chunk
-/// manifest / global metrics start empty in Phase 1b — Phase 2 will grow them server-side as blocks arrive.
+/// <b>Connect semantics.</b> <see cref="StartAsync"/> attempts the first TCP connect with 3 × 2 s upfront retry. On total
+/// failure it throws <see cref="WorkbenchException"/> with HTTP 503. Once the first connect succeeds the runtime lives, and
+/// the background read loop silently reconnects on later <see cref="SocketException"/> / <see cref="IOException"/>.
 /// </para>
 /// <para>
-/// <b>Tick derivation.</b> The wire format doesn't carry a tick number on non-<c>TickStart</c> records; the decoder
-/// counts <c>TickStart</c> records and stamps every following record with the current value.
+/// <b>Reconnect Init compatibility.</b> If the engine reconnects with a fresh Init frame whose system / archetype /
+/// component-type signature differs from the original, we mark the session unrecoverable and emit a <c>shutdown</c> SSE
+/// frame. The client then reconnects to a fresh sessionId.
 /// </para>
 /// <para>
-/// <b>Known limitation — tick counter reset on reconnect.</b> When the TCP link drops and the runtime reconnects,
-/// the decoder is re-created (<c>_decoder = null</c> in the read loop's catch path) and the tick counter restarts
-/// from 1 after the next <c>Init</c> frame. Clients tracking absolute tick progression will see a discontinuity
-/// across the reconnect boundary. This matches the behaviour of the retired <c>Typhon.Profiler.Server</c> —
-/// preserving it keeps client expectations stable across the port. Fixing it properly requires the engine to
-/// include the current tick number in every <c>Init</c> frame (so the decoder can seed its counter on reconnect),
-/// which is a wire-protocol change out of scope for this PR.
-/// </para>
-/// <para>
-/// <b>Disposal.</b> Cancels the read loop, closes the socket, completes every subscriber channel. Safe to call
-/// multiple times.
+/// <b>Disposal.</b> Cancels the read loop, closes the socket, disposes the builder + temp file, completes every subscriber
+/// channel. Safe to call multiple times.
 /// </para>
 /// </remarks>
-public sealed partial class AttachSessionRuntime : IDisposable
+public sealed partial class AttachSessionRuntime : IDisposable, IChunkProvider
 {
     private const int DefaultPort = 9100;
     private const int ConnectRetryCount = 3;
@@ -52,6 +46,22 @@ public sealed partial class AttachSessionRuntime : IDisposable
     private const int ReconnectDelayMs = 2000;
     private const int MaxFrameBytes = 8 * 1024 * 1024;
 
+    /// <summary>Force-flush the in-progress chunk every N ms so partial chunks become visible to clients.</summary>
+    private const int FlushChunkTimerMs = 200;
+
+    /// <summary>If no records arrived in this window AND a tick is open, finalize the trailing tick using event timestamps.</summary>
+    private const int TrailingTickTimerMs = 250;
+
+    /// <summary>Coalesce GlobalMetricsUpdated SSE deltas to at most one per N ms.</summary>
+    private const int GlobalMetricsTimerMs = 1000;
+
+    /// <summary>Per-subscriber bounded delta channel: SSE clients buffer up to this many deltas before being kicked.</summary>
+    private const int SubscriberBufferSize = 1000;
+
+    /// <summary>Max time to wait when the buffer is full before disconnecting a slow subscriber.</summary>
+    private const int SlowSubscriberTimeoutMs = 1000;
+
+    private readonly Guid _sessionId;
     private readonly string _endpointAddress;
     private readonly string _host;
     private readonly int _port;
@@ -59,25 +69,86 @@ public sealed partial class AttachSessionRuntime : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly TaskCompletionSource<ProfilerMetadataDto> _metadataTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly ConcurrentDictionary<Guid, Channel<LiveTickBatch>> _subscribers = new();
+    private readonly ConcurrentDictionary<Guid, Channel<LiveStreamEventDto>> _subscribers = new();
+    private readonly object _builderLock = new();
 
-    private ProfilerRecordDecoder _decoder;
+    /// <summary>Header DTO captured at first Init — used to detect cross-reconnect signature mismatches.</summary>
+    private ProfilerHeaderDto _initialHeader;
+    private SystemDefinitionDto[] _initialSystems = [];
+    private ArchetypeDto[] _initialArchetypes = [];
+    private ComponentTypeDto[] _initialComponentTypes = [];
+    private string _initialSignature;
+
+    /// <summary>
+    /// Verbatim bytes of the first Init frame's payload (TraceFileHeader + system / archetype / component-type tables in
+    /// <c>TraceFileWriter</c> wire format). Captured on first Init so the live save-as-replay flow can write them verbatim into a
+    /// <see cref="CacheSectionId.SourceMetadata"/> section, producing a self-contained <c>.typhon-replay</c> file that opens with no
+    /// source <c>.typhon-trace</c>.
+    /// </summary>
+    private byte[] _initialMetadataBytes;
+
+    private LiveCacheTempFile _tempFile;
+    private IncrementalCacheBuilder _builder;
+    private long _timestampFrequency;
     private byte[] _rawBlockBuffer = [];
-    private long _tickCount;
+    private long _lastBlockReceivedTicks;
+
+    /// <summary>
+    /// Slot → ThreadInfo (name + managed thread id). Populated by walking each Block's records for
+    /// <see cref="TraceEventKind.ThreadInfo"/>. Surfaced on the metadata snapshot and via <c>threadInfoAdded</c>
+    /// SSE deltas so the client knows slot names without having to fetch any chunk.
+    /// </summary>
+    private readonly Dictionary<byte, ThreadInfoDto> _threadInfos = new();
+
+    /// <summary>Mutable list views — owning lock is <see cref="_builderLock"/>. Snapshots fan out via <see cref="Metadata"/>.</summary>
+    private readonly List<TickSummaryDto> _tickSummaries = new(capacity: 4096);
+    private readonly List<ChunkManifestEntryDto> _chunkManifest = new(capacity: 256);
+    private GlobalMetricsDto _globalMetrics = ZeroMetrics;
+
+    /// <summary>Cached metadata snapshot — invalidated on every state change, lazily rebuilt on access.</summary>
+    private volatile ProfilerMetadataDto _metadataSnapshot;
+
+    private Timer _flushChunkTimer;
+    private Timer _trailingTickTimer;
+    private Timer _globalMetricsTimer;
+
     private volatile string _connectionStatus = "connecting";
+    private volatile bool _unrecoverable;
     private bool _disposed;
+
+    private static readonly GlobalMetricsDto ZeroMetrics = new(0, 0, 0, 0, 0, 0, 0, []);
 
     /// <summary>Engine endpoint as provided by the client (e.g. <c>"localhost:9100"</c>).</summary>
     public string EndpointAddress => _endpointAddress;
 
-    /// <summary>Metadata built from the Init frame. <c>null</c> until the first Init arrives.</summary>
-    public ProfilerMetadataDto Metadata { get; private set; }
+    /// <summary>Metadata snapshot. <c>null</c> until the first Init arrives. Grows over the session's lifetime.</summary>
+    public ProfilerMetadataDto Metadata
+    {
+        get
+        {
+            var snap = _metadataSnapshot;
+            if (snap != null)
+            {
+                return snap;
+            }
+            return BuildSnapshotLocked();
+        }
+    }
 
     /// <summary>Resolves with the metadata DTO once the first Init frame arrives. Faults if the runtime is disposed before that.</summary>
     public Task<ProfilerMetadataDto> MetadataReady => _metadataTcs.Task;
 
-    /// <summary>Total ticks broadcast during the current session (survives reconnects → the decoder resets on reconnect).</summary>
-    public long TickCount => Interlocked.Read(ref _tickCount);
+    /// <summary>Number of finalized ticks currently in the metadata snapshot.</summary>
+    public long TickCount
+    {
+        get
+        {
+            lock (_builderLock)
+            {
+                return _tickSummaries.Count;
+            }
+        }
+    }
 
     /// <summary>Current connection status — <c>"connected"</c>, <c>"reconnecting"</c>, or <c>"disconnected"</c>.</summary>
     public string ConnectionStatus => _connectionStatus;
@@ -85,8 +156,26 @@ public sealed partial class AttachSessionRuntime : IDisposable
     /// <summary>True while the TCP socket is currently held open.</summary>
     public bool IsConnected => _connectionStatus == "connected";
 
-    /// <summary>Fires once per-tick batch — subscribers (SSE handlers) forward into their subscriber channels.</summary>
-    public event Action<LiveTickBatch> TickReceived;
+    /// <summary>Set when an Init mismatch on reconnect made the session unrecoverable.</summary>
+    public bool IsUnrecoverable => _unrecoverable;
+
+    /// <inheritdoc />
+    public bool IsReady => _builder != null;
+
+    /// <inheritdoc />
+    public long TimestampFrequency => _timestampFrequency;
+
+    /// <summary>Fires once per tick the builder finalizes — SSE handlers forward as <c>tickSummaryAdded</c> deltas.</summary>
+    public event Action<TickSummaryDto> TickSummaryAdded;
+
+    /// <summary>Fires once per chunk the builder flushes — SSE handlers forward as <c>chunkAdded</c> deltas.</summary>
+    public event Action<ChunkManifestEntryDto> ChunkAdded;
+
+    /// <summary>Fires ~1 Hz with the latest global metrics — SSE handlers forward as <c>globalMetricsUpdated</c>.</summary>
+    public event Action<GlobalMetricsDto> GlobalMetricsUpdated;
+
+    /// <summary>Fires once per discovered (slot, name) — SSE handlers forward as <c>threadInfoAdded</c>.</summary>
+    public event Action<ThreadInfoDto> ThreadInfoAdded;
 
     /// <summary>Fires once per Init frame (so once on first connect, once per reconnect with fresh metadata).</summary>
     public event Action<ProfilerMetadataDto> MetadataReceived;
@@ -94,8 +183,12 @@ public sealed partial class AttachSessionRuntime : IDisposable
     /// <summary>Fires when the connection state changes. SSE handlers emit heartbeat frames when this fires.</summary>
     public event Action<string> ConnectionStateChanged;
 
-    private AttachSessionRuntime(string endpointAddress, string host, int port, ILogger logger)
+    /// <summary>Fires when the engine sends a Shutdown frame — terminal.</summary>
+    public event Action<string> ShutdownReceived;
+
+    private AttachSessionRuntime(Guid sessionId, string endpointAddress, string host, int port, ILogger logger)
     {
+        _sessionId = sessionId;
         _endpointAddress = endpointAddress;
         _host = host;
         _port = port;
@@ -103,14 +196,20 @@ public sealed partial class AttachSessionRuntime : IDisposable
     }
 
     /// <summary>
-    /// Starts a new attach-session runtime. Performs 3 × 2 s upfront TCP connect retry before returning; throws
-    /// <see cref="WorkbenchException"/> (HTTP 503) if all attempts fail so the controller can surface a clean error.
-    /// On success the read loop kicks off on the thread pool and the runtime is returned live.
+    /// Starts a new attach-session runtime. Performs 3 × 2 s upfront TCP connect retry before returning.
     /// </summary>
     public static async Task<AttachSessionRuntime> StartAsync(string endpointAddress, ILogger logger, CancellationToken ct)
+        => await StartAsync(Guid.NewGuid(), endpointAddress, logger, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Overload that accepts an explicit session id — used by <c>SessionsController</c> so the temp file path matches the
+    /// public <c>sessionId</c> from <see cref="SessionManager"/>.
+    /// </summary>
+    public static async Task<AttachSessionRuntime> StartAsync(Guid sessionId, string endpointAddress, ILogger logger, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpointAddress);
         var (host, port) = ParseEndpoint(endpointAddress);
+        var ipv4 = await ResolveIPv4Async(host, ct);
 
         TcpClient tcp = null;
         Exception lastError = null;
@@ -120,7 +219,7 @@ public sealed partial class AttachSessionRuntime : IDisposable
             tcp = new TcpClient();
             try
             {
-                await tcp.ConnectAsync(host, port, ct);
+                await tcp.ConnectAsync(ipv4, port, ct);
                 tcp.NoDelay = true;
                 break;
             }
@@ -150,13 +249,16 @@ public sealed partial class AttachSessionRuntime : IDisposable
                 lastError);
         }
 
-        var runtime = new AttachSessionRuntime(endpointAddress, host, port, logger);
+        var runtime = new AttachSessionRuntime(sessionId, endpointAddress, host, port, logger);
         runtime.LogStarting(host, port);
         runtime.SetConnectionStatus("connected");
         runtime.LogConnected(host, port);
-        // Detach: the read loop runs until the session is disposed or the socket dies. We fire it
-        // with a fault-continuation so an unhandled exception doesn't disappear into TaskScheduler.
-        // UnobservedTaskException — it lands in the logger where we can actually diagnose it.
+
+        // Periodic timers — fire only after StartAsync returns to avoid racing with construction.
+        runtime._flushChunkTimer = new Timer(runtime.OnFlushChunkTimer, null, FlushChunkTimerMs, FlushChunkTimerMs);
+        runtime._trailingTickTimer = new Timer(runtime.OnTrailingTickTimer, null, TrailingTickTimerMs, TrailingTickTimerMs);
+        runtime._globalMetricsTimer = new Timer(runtime.OnGlobalMetricsTimer, null, GlobalMetricsTimerMs, GlobalMetricsTimerMs);
+
         _ = Task.Run(() => runtime.ReadLoopAsync(tcp))
             .ContinueWith(
                 t => runtime.LogReadLoopFaulted(t.Exception!),
@@ -167,14 +269,45 @@ public sealed partial class AttachSessionRuntime : IDisposable
     }
 
     /// <summary>Creates a subscriber channel and returns its reader. Use <see cref="Unsubscribe"/> on teardown.</summary>
-    public (Guid Id, ChannelReader<LiveTickBatch> Reader) Subscribe()
+    public (Guid Id, ChannelReader<LiveStreamEventDto> Reader) Subscribe()
     {
-        var channel = Channel.CreateBounded<LiveTickBatch>(
-            new BoundedChannelOptions(64) { FullMode = BoundedChannelFullMode.DropOldest });
+        // Wait mode + 1000-delta buffer per subscriber. If a slow subscriber fills the buffer, the writer (BroadcastDelta)
+        // waits up to SlowSubscriberTimeoutMs and then drops the channel; the subscriber then reconnects fresh.
+        var channel = Channel.CreateBounded<LiveStreamEventDto>(
+            new BoundedChannelOptions(SubscriberBufferSize) { FullMode = BoundedChannelFullMode.Wait });
         var id = Guid.NewGuid();
         _subscribers[id] = channel;
         LogSubscriberConnected(id, _subscribers.Count);
         return (id, channel.Reader);
+    }
+
+    /// <summary>
+    /// User-initiated disconnect. Cancels the read loop and any in-flight reconnect attempts so the runtime settles on
+    /// <c>"disconnected"</c>. Does NOT dispose the runtime — the metadata snapshot stays accessible.
+    /// </summary>
+    public void RequestDisconnect()
+    {
+        if (_disposed) return;
+        try { _cts.Cancel(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// Snapshot of the (slot → ThreadInfo) mapping accumulated so far. SSE handlers replay this on connect so a
+    /// late-attaching subscriber sees thread names without having to wait for the engine to re-emit them.
+    /// </summary>
+    public IReadOnlyList<ThreadInfoDto> GetThreadInfosSnapshot()
+    {
+        lock (_threadInfos)
+        {
+            var arr = new ThreadInfoDto[_threadInfos.Count];
+            var i = 0;
+            foreach (var kv in _threadInfos)
+            {
+                arr[i++] = kv.Value;
+            }
+            return arr;
+        }
     }
 
     /// <summary>Removes a subscriber channel and completes it. No-op if the subscriber is already gone.</summary>
@@ -187,10 +320,196 @@ public sealed partial class AttachSessionRuntime : IDisposable
         }
     }
 
+    /// <inheritdoc />
+    public ValueTask<ChunkManifestEntry> GetChunkManifestEntryAsync(int chunkIdx)
+    {
+        ThrowIfDisposed();
+        if (_builder == null)
+        {
+            throw new InvalidOperationException("Runtime not ready — Init has not been received yet.");
+        }
+        lock (_builderLock)
+        {
+            if ((uint)chunkIdx >= (uint)_builder.ChunkManifest.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(chunkIdx),
+                    $"Chunk index {chunkIdx} out of range (manifest has {_builder.ChunkManifest.Count} entries).");
+            }
+            return ValueTask.FromResult(_builder.ChunkManifest[chunkIdx]);
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask<(byte[] Bytes, int Length)> ReadChunkCompressedAsync(int chunkIdx)
+    {
+        ThrowIfDisposed();
+        if (_builder == null || _tempFile == null)
+        {
+            throw new InvalidOperationException("Runtime not ready — Init has not been received yet.");
+        }
+        ChunkManifestEntry entry;
+        lock (_builderLock)
+        {
+            if ((uint)chunkIdx >= (uint)_builder.ChunkManifest.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(chunkIdx));
+            }
+            entry = _builder.ChunkManifest[chunkIdx];
+        }
+        var bytes = ArrayPool<byte>.Shared.Rent((int)entry.CacheByteLength);
+        // Open a fresh reader stream — multiple chunk requests can run concurrently with the writer (FileShare.ReadWrite).
+        using (var reader = _tempFile.OpenReader())
+        {
+            reader.Position = entry.CacheByteOffset;
+            reader.ReadExactly(bytes.AsSpan(0, (int)entry.CacheByteLength));
+        }
+        return ValueTask.FromResult((bytes, (int)entry.CacheByteLength));
+    }
+
+    /// <summary>
+    /// Snapshot the current live session into a self-contained <c>.typhon-replay</c> file at <paramref name="outputPath"/>. Returns the
+    /// number of bytes written. The file embeds the source metadata tables (header + systems + archetypes + component types) so it opens
+    /// with no companion <c>.typhon-trace</c> required.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The save runs under <see cref="_builderLock"/> for the duration of the chunk re-feed + trailer write. This serializes the save with
+    /// live record processing — record decoding pauses for the duration. Acceptable for an interactive user-initiated save against a
+    /// typically-modest live session (a few MB to ~100 MB of cache, sub-second to a few seconds of disk I/O). For very large sessions a
+    /// future optimization is a snapshot-then-write pattern (capture the manifest under lock, stream chunks lock-free, brief lock for the
+    /// trailer write); not built today since save events are rare and the back-pressure cost is small.
+    /// </para>
+    /// <para>
+    /// The <see cref="ChunkManifestEntry.CacheByteOffset"/> values stored in the live temp file are absolute offsets within that file.
+    /// When re-feeding into the new <see cref="FileCacheSink"/>, the sink computes fresh offsets within its own FoldedChunkData section.
+    /// We deliberately don't go through <see cref="IncrementalCacheBuilder.WriteTrailerTo"/> here — the builder's live manifest still
+    /// references temp-file offsets and must remain unchanged so live chunk-fetches keep working. Instead we assemble a fresh relocated
+    /// manifest as chunks are appended and call <see cref="FileCacheSink.WriteTrailer"/> directly.
+    /// </para>
+    /// </remarks>
+    public async Task<long> SaveSessionAsync(string outputPath, CancellationToken ct)
+    {
+        ThrowIfDisposed();
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
+        if (_builder == null || _tempFile == null || _initialMetadataBytes == null)
+        {
+            throw new InvalidOperationException("Save not available — Init has not been received yet.");
+        }
+
+        // Resolve + validate target dir up front so we fail fast before holding any lock.
+        var fullPath = Path.GetFullPath(outputPath);
+        var parentDir = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrEmpty(parentDir) || !Directory.Exists(parentDir))
+        {
+            throw new DirectoryNotFoundException($"Parent directory does not exist: {parentDir}");
+        }
+
+        return await Task.Run(() => SaveSessionCore(fullPath, ct), ct).ConfigureAwait(false);
+    }
+
+    private long SaveSessionCore(string outputPath, CancellationToken ct)
+    {
+        using var sink = FileCacheSink.Create(outputPath);
+
+        // Pre-rent scratch buffers sized for the largest possible chunk. Intra-tick splitting (chunker v8) caps at
+        // IntraTickByteCap (= 2 × ByteCap) for genuinely pathological dense ticks; renting at that ceiling means
+        // the loop never has to grow the buffer mid-save.
+        var compressedScratch = ArrayPool<byte>.Shared.Rent(TraceFileCacheConstants.IntraTickByteCap);
+        var uncompressedScratch = ArrayPool<byte>.Shared.Rent(TraceFileCacheConstants.IntraTickByteCap);
+        try
+        {
+            using var reader = _tempFile.OpenReader();
+            lock (_builderLock)
+            {
+                ct.ThrowIfCancellationRequested();
+                _builder.FinalizePendingState();
+
+                // Build the relocated manifest as we re-feed chunks. The new sink's offsets differ from the temp file's; we deliberately
+                // do NOT mutate the builder's live manifest (live chunk-fetches must keep working). We construct a fresh array here and
+                // pass it to FileCacheSink.WriteTrailer below.
+                var liveManifest = _builder.ChunkManifest;
+                var relocatedManifest = new ChunkManifestEntry[liveManifest.Count];
+
+                for (var i = 0; i < liveManifest.Count; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var entry = liveManifest[i];
+
+                    var compLen = (int)entry.CacheByteLength;
+                    var uncompLen = (int)entry.UncompressedBytes;
+
+                    reader.Position = entry.CacheByteOffset;
+                    reader.ReadExactly(compressedScratch.AsSpan(0, compLen));
+                    var decoded = K4os.Compression.LZ4.LZ4Codec.Decode(
+                        compressedScratch.AsSpan(0, compLen),
+                        uncompressedScratch.AsSpan(0, uncompLen));
+                    if (decoded != uncompLen)
+                    {
+                        throw new InvalidDataException(
+                            $"LZ4 decode size mismatch for chunk [{entry.FromTick}, {entry.ToTick}): expected {uncompLen}, got {decoded}.");
+                    }
+
+                    var (newOffset, newCompLen, newUncompLen) = sink.AppendChunk(uncompressedScratch.AsSpan(0, uncompLen));
+                    relocatedManifest[i] = new ChunkManifestEntry
+                    {
+                        FromTick = entry.FromTick,
+                        ToTick = entry.ToTick,
+                        CacheByteOffset = newOffset,
+                        CacheByteLength = newCompLen,
+                        EventCount = entry.EventCount,
+                        UncompressedBytes = newUncompLen,
+                        Flags = entry.Flags,
+                    };
+                }
+
+                // Snapshot trailer inputs from the builder. Held under lock so the snapshot is internally consistent.
+                var tickSummaries = new TickSummary[_builder.TickSummaries.Count];
+                for (var i = 0; i < tickSummaries.Length; i++) tickSummaries[i] = _builder.TickSummaries[i];
+
+                var systemAggregates = _builder.GetSystemAggregatesSnapshot();
+                var globalMetrics = _builder.CurrentGlobalMetrics;
+
+                // Span names: copy under lock — the builder's dictionary may be mutated by future Block decodes.
+                var spanNames = new Dictionary<int, string>(_builder.SpanNames);
+
+                // Build the cache header. Identifier slot carries the sessionId (32 bytes after zero-padding the 16-byte GUID), plainly
+                // documented in CacheHeader.SourceFingerprint as "arbitrary identifier when IsSelfContained". The flag tells the loader
+                // to project metadata from the SourceMetadata section instead of opening a parent .typhon-trace.
+                var cacheHeader = new CacheHeader
+                {
+                    Flags = CacheHeaderFlags.IsSelfContained,
+                    SourceVersion = (ushort)_initialHeader.Version,
+                    ChunkerVersion = TraceFileCacheConstants.CurrentChunkerVersion,
+                    CreatedUtcTicks = DateTime.UtcNow.Ticks,
+                };
+                Span<byte> identifier = stackalloc byte[32];
+                _sessionId.TryWriteBytes(identifier);
+                CacheHeader.SetIdentifier(ref cacheHeader, identifier);
+
+                sink.WriteTrailer(
+                    tickSummaries,
+                    globalMetrics,
+                    systemAggregates,
+                    relocatedManifest,
+                    spanNames,
+                    _initialMetadataBytes,
+                    cacheHeader);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(compressedScratch);
+            ArrayPool<byte>.Shared.Return(uncompressedScratch);
+        }
+
+        return new FileInfo(outputPath).Length;
+    }
+
     private async Task ReadLoopAsync(TcpClient initialSocket)
     {
         var ct = _cts.Token;
         var socket = initialSocket;
+        var streamEnd = StreamEndReason.ConnectionLost;
 
         while (!ct.IsCancellationRequested)
         {
@@ -198,16 +517,16 @@ public sealed partial class AttachSessionRuntime : IDisposable
             {
                 using (socket)
                 {
-                    await ProcessStreamAsync(socket.GetStream(), ct);
+                    streamEnd = await ProcessStreamAsync(socket.GetStream(), ct);
                 }
-                // Graceful stream end (Shutdown frame, clean close).
             }
             catch (SocketException) when (!ct.IsCancellationRequested)
             {
-                // Engine dropped — reconnect.
+                streamEnd = StreamEndReason.ConnectionLost;
             }
             catch (IOException) when (!ct.IsCancellationRequested)
             {
+                streamEnd = StreamEndReason.ConnectionLost;
                 LogConnectionLost();
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -216,31 +535,36 @@ public sealed partial class AttachSessionRuntime : IDisposable
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
+                streamEnd = StreamEndReason.ConnectionLost;
                 LogUnexpectedError(ex);
             }
 
             socket = null;
             if (ct.IsCancellationRequested) break;
 
-            SetConnectionStatus("reconnecting");
-            _decoder = null;
+            if (streamEnd == StreamEndReason.Shutdown || streamEnd == StreamEndReason.Unrecoverable)
+            {
+                break;
+            }
 
-            // Silent reconnect loop — 2 s between attempts until we succeed or the runtime is disposed.
+            SetConnectionStatus("reconnecting");
+
             while (!ct.IsCancellationRequested)
             {
                 try
                 {
                     await Task.Delay(ReconnectDelayMs, ct);
+                    var ipv4 = await ResolveIPv4Async(_host, ct);
                     var next = new TcpClient();
-                    await next.ConnectAsync(_host, _port, ct);
+                    await next.ConnectAsync(ipv4, _port, ct);
                     next.NoDelay = true;
                     socket = next;
                     SetConnectionStatus("connected");
                     LogConnected(_host, _port);
                     break;
                 }
-                catch (SocketException) { /* retry silently */ }
-                catch (IOException) { /* retry silently */ }
+                catch (SocketException) { }
+                catch (IOException) { }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             }
         }
@@ -248,7 +572,14 @@ public sealed partial class AttachSessionRuntime : IDisposable
         SetConnectionStatus("disconnected");
     }
 
-    private async Task ProcessStreamAsync(NetworkStream stream, CancellationToken ct)
+    private enum StreamEndReason
+    {
+        ConnectionLost,
+        Shutdown,
+        Unrecoverable,
+    }
+
+    private async Task<StreamEndReason> ProcessStreamAsync(NetworkStream stream, CancellationToken ct)
     {
         var headerBuf = new byte[LiveStreamProtocol.FrameHeaderSize];
 
@@ -260,10 +591,9 @@ public sealed partial class AttachSessionRuntime : IDisposable
             if (length < 0 || length > MaxFrameBytes)
             {
                 LogMalformedFrame(type.ToString(), $"invalid length {length}");
-                return;
+                return StreamEndReason.ConnectionLost;
             }
 
-            // Pool buffers to keep LOH pressure down: blocks routinely exceed 85 KB at high-fanout workloads.
             var payload = length > 0 ? ArrayPool<byte>.Shared.Rent(length) : [];
             try
             {
@@ -275,7 +605,10 @@ public sealed partial class AttachSessionRuntime : IDisposable
                 switch (type)
                 {
                     case LiveFrameType.Init:
-                        HandleInit(payload, length);
+                        if (!HandleInit(payload, length))
+                        {
+                            return StreamEndReason.Unrecoverable;
+                        }
                         break;
 
                     case LiveFrameType.Block:
@@ -284,7 +617,9 @@ public sealed partial class AttachSessionRuntime : IDisposable
 
                     case LiveFrameType.Shutdown:
                         LogShutdownReceived();
-                        return;
+                        ShutdownReceived?.Invoke("engine_shutdown");
+                        BroadcastDelta(new LiveStreamEventDto(Kind: "shutdown", Status: "engine_shutdown"));
+                        return StreamEndReason.Shutdown;
 
                     default:
                         LogUnknownFrame((byte)type);
@@ -303,12 +638,14 @@ public sealed partial class AttachSessionRuntime : IDisposable
                 }
             }
         }
+
+        return StreamEndReason.ConnectionLost;
     }
 
-    private void HandleInit(byte[] payload, int length)
+    private bool HandleInit(byte[] payload, int length)
     {
-        // INIT payload = first four sections of a .typhon-trace file (header + systems + archetypes + componentTypes).
-        // Wrap the exact slice (pool buffer may be larger) in a MemoryStream and reuse TraceFileReader.
+        // Parse exactly as before: the Init payload is the first four sections of a .typhon-trace file (header + systems +
+        // archetypes + componentTypes). Wrap in a non-owning MemoryStream slice so TraceFileReader can drive its parser.
         using var ms = new MemoryStream(payload, index: 0, count: length, writable: false);
         using var reader = new TraceFileReader(ms);
         reader.ReadHeader();
@@ -316,86 +653,65 @@ public sealed partial class AttachSessionRuntime : IDisposable
         reader.ReadArchetypes();
         reader.ReadComponentTypes();
 
-        _decoder = new ProfilerRecordDecoder(reader.Header.TimestampFrequency);
-        Interlocked.Exchange(ref _tickCount, 0);
+        var headerDto = ProjectHeader(reader);
+        var systems = ProjectSystems(reader);
+        var archetypes = ProjectArchetypes(reader);
+        var componentTypes = ProjectComponentTypes(reader);
 
-        var metadata = BuildMetadataDto(reader);
-        Metadata = metadata;
-        _metadataTcs.TrySetResult(metadata);
-        MetadataReceived?.Invoke(metadata);
+        var newSignature = ComputeInitSignature(headerDto, systems, archetypes, componentTypes);
+
+        if (_builder == null)
+        {
+            // First connect — initialize everything.
+            _initialHeader = headerDto;
+            _initialSystems = systems;
+            _initialArchetypes = archetypes;
+            _initialComponentTypes = componentTypes;
+            _initialSignature = newSignature;
+            _timestampFrequency = headerDto.TimestampFrequency;
+            // Capture the raw Init payload bytes — needed verbatim for the SourceMetadata section if the user later saves the live session
+            // as a self-contained .typhon-replay. The byte format here matches what TraceFileWriter emits for header + tables.
+            _initialMetadataBytes = new byte[length];
+            Array.Copy(payload, 0, _initialMetadataBytes, 0, length);
+
+            _tempFile = LiveCacheTempFile.Create(_sessionId);
+            var profilerHeader = new ProfilerHeader { Version = (ushort)headerDto.Version, TimestampFrequency = headerDto.TimestampFrequency };
+            // Use the sessionId as the fingerprint (no source file to hash). The 32-byte fingerprint slot in the cache header isn't
+            // surfaced to the client for live sessions; we just need a valid 32-byte value.
+            Span<byte> fingerprint = stackalloc byte[32];
+            _sessionId.TryWriteBytes(fingerprint);
+            _builder = new IncrementalCacheBuilder(_tempFile.Sink, ownsSink: false, profilerHeader, fingerprint, new Dictionary<int, string>());
+            _builder.TickFinalized += OnBuilderTickFinalized;
+            _builder.ChunkFlushed += OnBuilderChunkFlushed;
+
+            var snapshot = BuildSnapshotLocked();
+            _metadataTcs.TrySetResult(snapshot);
+            MetadataReceived?.Invoke(snapshot);
+            BroadcastDelta(new LiveStreamEventDto(Kind: "metadata", Metadata: snapshot));
+            LogInitReceived(reader.Systems.Count, reader.Header.WorkerCount, reader.Header.BaseTickRate);
+            return true;
+        }
+
+        // Reconnect — match signatures.
+        if (newSignature != _initialSignature)
+        {
+            _unrecoverable = true;
+            LogInitMismatchUnrecoverable();
+            ShutdownReceived?.Invoke("init_mismatch");
+            BroadcastDelta(new LiveStreamEventDto(Kind: "shutdown", Status: "init_mismatch"));
+            return false;
+        }
+        // Same signature → continue feeding from where we left off. The builder's internal tick counter survives the
+        // reconnect, so subsequent TickStart records resume the same tickNumber sequence.
         LogInitReceived(reader.Systems.Count, reader.Header.WorkerCount, reader.Header.BaseTickRate);
-    }
-
-    private static ProfilerMetadataDto BuildMetadataDto(TraceFileReader reader)
-    {
-        var h = reader.Header;
-        var headerDto = new ProfilerHeaderDto(
-            Version: h.Version,
-            TimestampFrequency: h.TimestampFrequency,
-            BaseTickRate: h.BaseTickRate,
-            WorkerCount: h.WorkerCount,
-            SystemCount: h.SystemCount,
-            ArchetypeCount: h.ArchetypeCount,
-            ComponentTypeCount: h.ComponentTypeCount,
-            CreatedUtcTicks: h.CreatedUtcTicks,
-            SamplingSessionStartQpc: h.SamplingSessionStartQpc);
-
-        var systems = new SystemDefinitionDto[reader.Systems.Count];
-        for (var i = 0; i < reader.Systems.Count; i++)
-        {
-            var sr = reader.Systems[i];
-            systems[i] = new SystemDefinitionDto(
-                Index: sr.Index,
-                Name: sr.Name,
-                Type: sr.Type,
-                Priority: sr.Priority,
-                IsParallel: sr.IsParallel,
-                TierFilter: sr.TierFilter,
-                Predecessors: sr.Predecessors,
-                Successors: sr.Successors);
-        }
-
-        var archetypes = new ArchetypeDto[reader.Archetypes.Count];
-        for (var i = 0; i < reader.Archetypes.Count; i++)
-        {
-            archetypes[i] = new ArchetypeDto(reader.Archetypes[i].ArchetypeId, reader.Archetypes[i].Name);
-        }
-
-        var componentTypes = new ComponentTypeDto[reader.ComponentTypes.Count];
-        for (var i = 0; i < reader.ComponentTypes.Count; i++)
-        {
-            componentTypes[i] = new ComponentTypeDto(reader.ComponentTypes[i].ComponentTypeId, reader.ComponentTypes[i].Name);
-        }
-
-        // Live sessions start empty — tick summaries / manifest / metrics grow as blocks arrive (deferred to Phase 2).
-        // Fingerprint is empty for attach sessions (no source file to hash); clients that care can use session id instead.
-        return new ProfilerMetadataDto(
-            Fingerprint: string.Empty,
-            Header: headerDto,
-            Systems: systems,
-            Archetypes: archetypes,
-            ComponentTypes: componentTypes,
-            SpanNames: new Dictionary<int, string>(),
-            GlobalMetrics: new GlobalMetricsDto(
-                GlobalStartUs: 0,
-                GlobalEndUs: 0,
-                MaxTickDurationUs: 0,
-                MaxSystemDurationUs: 0,
-                P95TickDurationUs: 0,
-                TotalEvents: 0,
-                TotalTicks: 0,
-                SystemAggregates: []),
-            TickSummaries: [],
-            ChunkManifest: [],
-            GcSuspensions: []);
+        return true;
     }
 
     private void HandleBlock(byte[] payload, int length)
     {
-        var decoder = _decoder;
-        if (decoder == null || Metadata == null)
+        if (_builder == null)
         {
-            // Block arrived before Init — engine bug or mid-session reconnect race. Drop silently.
+            // Block before Init — engine bug or mid-session reconnect race. Drop silently.
             return;
         }
 
@@ -405,11 +721,11 @@ public sealed partial class AttachSessionRuntime : IDisposable
             return;
         }
 
-        var (uncompressedBytes, compressedBytes, recordCount) = TraceBlockEncoder.ReadBlockHeader(payload);
-        if (uncompressedBytes < 0 || compressedBytes < 0 || recordCount < 0
+        var (uncompressedBytes, compressedBytes, _) = TraceBlockEncoder.ReadBlockHeader(payload);
+        if (uncompressedBytes < 0 || compressedBytes < 0
             || length < TraceBlockEncoder.BlockHeaderSize + compressedBytes)
         {
-            LogMalformedFrame("Block", $"inconsistent block header (u={uncompressedBytes}, c={compressedBytes}, n={recordCount})");
+            LogMalformedFrame("Block", $"inconsistent block header (u={uncompressedBytes}, c={compressedBytes})");
             return;
         }
 
@@ -432,50 +748,233 @@ public sealed partial class AttachSessionRuntime : IDisposable
             return;
         }
 
-        var decoded = new List<LiveTraceEvent>(recordCount);
-        decoder.DecodeBlock(_rawBlockBuffer.AsSpan(0, uncompressedBytes), decoded);
+        Volatile.Write(ref _lastBlockReceivedTicks, DateTime.UtcNow.Ticks);
 
-        if (decoded.Count == 0) return;
+        // Walk for ThreadInfo records BEFORE feeding the builder. The builder treats records as opaque bytes; we
+        // need the slot→name mapping surfaced to the client via SSE delta + metadata snapshot regardless of which
+        // chunk a record happens to land in (otherwise late-arriving worker ThreadInfo records get buried in
+        // unloaded chunks).
+        ExtractThreadInfos(_rawBlockBuffer.AsSpan(0, uncompressedBytes));
 
-        // Records within a block are timestamp-ordered and TickStart precedes its tick's records — contiguous runs.
-        var runStart = 0;
-        var runTick = decoded[0].TickNumber;
-        for (var i = 1; i < decoded.Count; i++)
+        lock (_builderLock)
         {
-            if (decoded[i].TickNumber != runTick)
+            _builder.FeedRawRecords(_rawBlockBuffer.AsSpan(0, uncompressedBytes));
+        }
+    }
+
+    /// <summary>
+    /// Walk a raw record buffer for <see cref="TraceEventKind.ThreadInfo"/> records and populate
+    /// <see cref="_threadInfos"/>. Mirrors the relevant parts of <see cref="RecordDecoder.DecodeThreadInfo"/>.
+    /// Wire format: u16 size, u8 kind (=ThreadInfo), u8 threadSlot, i64 timestamp, then payload —
+    /// i32 managedThreadId, u16 nameByteCount, UTF-8 name bytes, u8 ThreadKind (Main=0/Worker=1/Pool=2/Other=3).
+    /// </summary>
+    private void ExtractThreadInfos(ReadOnlySpan<byte> records)
+    {
+        const int CommonHeaderSize = 12;
+        var pos = 0;
+        while (pos + CommonHeaderSize <= records.Length)
+        {
+            var size = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(records[pos..]);
+            if (size < CommonHeaderSize || pos + size > records.Length)
             {
-                EmitTickBatch(runTick, decoded, runStart, i);
-                runStart = i;
-                runTick = decoded[i].TickNumber;
+                break;
+            }
+            var kind = (TraceEventKind)records[pos + 2];
+            if (kind != TraceEventKind.ThreadInfo)
+            {
+                pos += size;
+                continue;
+            }
+            var threadSlot = records[pos + 3];
+            var payloadOffset = pos + CommonHeaderSize;
+            if (payloadOffset + 6 > pos + size)
+            {
+                pos += size;
+                continue;
+            }
+            var managedThreadId = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(records[payloadOffset..]);
+            var nameByteCount = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(records[(payloadOffset + 4)..]);
+            string name = null;
+            if (nameByteCount > 0 && nameByteCount <= 4096 && payloadOffset + 6 + nameByteCount <= pos + size)
+            {
+                try { name = System.Text.Encoding.UTF8.GetString(records.Slice(payloadOffset + 6, nameByteCount)); }
+                catch (System.Text.DecoderFallbackException) { name = null; }
+            }
+            // Trailing u8 ThreadKind (cache/wire v4+). Older records omit it; default to Other (=3).
+            byte threadKind = 3;
+            var kindOffset = payloadOffset + 6 + nameByteCount;
+            if (kindOffset < pos + size)
+            {
+                threadKind = records[kindOffset];
+            }
+            ThreadInfoDto dto;
+            bool added;
+            lock (_threadInfos)
+            {
+                if (_threadInfos.TryGetValue(threadSlot, out var existing)
+                    && existing.Name == name
+                    && existing.ManagedThreadId == managedThreadId
+                    && existing.Kind == threadKind)
+                {
+                    pos += size;
+                    continue;
+                }
+                dto = new ThreadInfoDto(threadSlot, name ?? string.Empty, managedThreadId, threadKind);
+                _threadInfos[threadSlot] = dto;
+                added = true;
+            }
+            if (added)
+            {
+                _metadataSnapshot = null;
+                ThreadInfoAdded?.Invoke(dto);
+                BroadcastDelta(new LiveStreamEventDto(Kind: "threadInfoAdded", ThreadInfo: dto));
+            }
+            pos += size;
+        }
+    }
+
+    private void OnBuilderTickFinalized(TickSummary summary)
+    {
+        // Builder fires synchronously inside FeedRawRecords (which we already hold _builderLock for). Project to DTO and
+        // append; SSE delta fanout happens outside the lock to avoid back-pressure on the read loop.
+        var dto = new TickSummaryDto(
+            TickNumber: summary.TickNumber,
+            StartUs: summary.StartUs,
+            DurationUs: summary.DurationUs,
+            EventCount: summary.EventCount,
+            MaxSystemDurationUs: summary.MaxSystemDurationUs,
+            ActiveSystemsBitmask: summary.ActiveSystemsBitmask.ToString());
+        _tickSummaries.Add(dto);
+        _metadataSnapshot = null;
+        TickSummaryAdded?.Invoke(dto);
+        BroadcastDelta(new LiveStreamEventDto(Kind: "tickSummaryAdded", TickSummary: dto));
+    }
+
+    private void OnBuilderChunkFlushed(ChunkManifestEntry entry)
+    {
+        var isContinuation = (entry.Flags & TraceFileCacheConstants.FlagIsContinuation) != 0;
+        var dto = new ChunkManifestEntryDto(
+            FromTick: entry.FromTick,
+            ToTick: entry.ToTick,
+            EventCount: entry.EventCount,
+            IsContinuation: isContinuation);
+        _chunkManifest.Add(dto);
+        _metadataSnapshot = null;
+        ChunkAdded?.Invoke(dto);
+        BroadcastDelta(new LiveStreamEventDto(Kind: "chunkAdded", ChunkEntry: dto));
+    }
+
+    private void OnFlushChunkTimer(object _)
+    {
+        if (_disposed || _builder == null) return;
+        try
+        {
+            lock (_builderLock)
+            {
+                _builder.FlushCurrentChunk();
             }
         }
-        EmitTickBatch(runTick, decoded, runStart, decoded.Count);
+        catch (ObjectDisposedException) { /* shutting down */ }
     }
 
-    private void EmitTickBatch(int tickNumber, List<LiveTraceEvent> source, int startInclusive, int endExclusive)
+    private void OnTrailingTickTimer(object _)
     {
-        var count = endExclusive - startInclusive;
-        if (count == 0) return;
-
-        var events = new LiveTraceEvent[count];
-        source.CopyTo(startInclusive, events, 0, count);
-
-        var batch = new LiveTickBatch
+        if (_disposed || _builder == null) return;
+        // Only finalize the trailing tick if no records have arrived in the last window. Otherwise we'd race the builder's
+        // own tick-on-TickStart finalization and double-count.
+        var last = Volatile.Read(ref _lastBlockReceivedTicks);
+        if (last == 0) return;
+        var elapsedMs = (DateTime.UtcNow.Ticks - last) / TimeSpan.TicksPerMillisecond;
+        if (elapsedMs < TrailingTickTimerMs) return;
+        try
         {
-            TickNumber = tickNumber,
-            Events = events,
-        };
-
-        Interlocked.Increment(ref _tickCount);
-        TickReceived?.Invoke(batch);
-        BroadcastBatch(batch);
+            lock (_builderLock)
+            {
+                _builder.FlushTrailingTick();
+            }
+        }
+        catch (ObjectDisposedException) { }
     }
 
-    private void BroadcastBatch(LiveTickBatch batch)
+    private void OnGlobalMetricsTimer(object _)
     {
-        foreach (var (_, channel) in _subscribers)
+        if (_disposed || _builder == null) return;
+        try
         {
-            channel.Writer.TryWrite(batch); // DropOldest absorbs slow subscribers — bounded channel policy.
+            GlobalMetricsDto metrics;
+            lock (_builderLock)
+            {
+                metrics = ProjectGlobalMetrics(_builder.CurrentGlobalMetrics);
+                _globalMetrics = metrics;
+                _metadataSnapshot = null;
+            }
+            GlobalMetricsUpdated?.Invoke(metrics);
+            BroadcastDelta(new LiveStreamEventDto(Kind: "globalMetricsUpdated", GlobalMetrics: metrics));
+        }
+        catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// Build a fresh snapshot from the current state. Called rarely (HTTP /metadata, SSE connect, after invalidation).
+    /// Holds <see cref="_builderLock"/> briefly to copy the lists into arrays.
+    /// </summary>
+    private ProfilerMetadataDto BuildSnapshotLocked()
+    {
+        TickSummaryDto[] tickSummariesArr;
+        ChunkManifestEntryDto[] chunkManifestArr;
+        GlobalMetricsDto metrics;
+        lock (_builderLock)
+        {
+            tickSummariesArr = _tickSummaries.ToArray();
+            chunkManifestArr = _chunkManifest.ToArray();
+            metrics = _globalMetrics;
+        }
+        var snap = new ProfilerMetadataDto(
+            Fingerprint: string.Empty,
+            Header: _initialHeader ?? new ProfilerHeaderDto(0, 0, 0, 0, 0, 0, 0, 0, 0),
+            Systems: _initialSystems,
+            Archetypes: _initialArchetypes,
+            ComponentTypes: _initialComponentTypes,
+            SpanNames: new Dictionary<int, string>(),
+            GlobalMetrics: metrics,
+            TickSummaries: tickSummariesArr,
+            ChunkManifest: chunkManifestArr,
+            GcSuspensions: []);
+        _metadataSnapshot = snap;
+        return snap;
+    }
+
+    private void BroadcastDelta(LiveStreamEventDto delta)
+    {
+        if (_subscribers.Count == 0) return;
+        foreach (var (id, channel) in _subscribers)
+        {
+            // Fast path: TryWrite. If the buffer is full, kick off a bounded async write that disconnects the slow client
+            // after SlowSubscriberTimeoutMs. Doing this synchronously here would back-pressure the TCP read loop.
+            if (channel.Writer.TryWrite(delta))
+            {
+                continue;
+            }
+            _ = WriteWithTimeoutAsync(id, channel, delta);
+        }
+    }
+
+    private async Task WriteWithTimeoutAsync(Guid id, Channel<LiveStreamEventDto> channel, LiveStreamEventDto delta)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(SlowSubscriberTimeoutMs);
+            await channel.Writer.WriteAsync(delta, cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            LogSlowSubscriberKicked(id);
+            channel.Writer.TryComplete();
+            _subscribers.TryRemove(id, out _);
+        }
+        catch (ChannelClosedException)
+        {
+            // Subscriber already gone — nothing to do.
         }
     }
 
@@ -484,12 +983,149 @@ public sealed partial class AttachSessionRuntime : IDisposable
         if (_connectionStatus == status) return;
         _connectionStatus = status;
         ConnectionStateChanged?.Invoke(status);
+        BroadcastDelta(new LiveStreamEventDto(Kind: "heartbeat", Status: status));
+    }
+
+    private static string ComputeInitSignature(ProfilerHeaderDto header, SystemDefinitionDto[] systems, ArchetypeDto[] archetypes, ComponentTypeDto[] componentTypes)
+    {
+        // Cheap stable signature: SHA-256 of a deterministic textual rendering. Collisions across genuinely-different engines
+        // would require both (a) the same primitive header and (b) the exact same definition tables — fine for our use.
+        using var sha = SHA256.Create();
+        using var ms = new MemoryStream();
+        using var bw = new BinaryWriter(ms);
+        bw.Write(header.Version);
+        bw.Write(header.TimestampFrequency);
+        bw.Write(header.BaseTickRate);
+        bw.Write(header.WorkerCount);
+        bw.Write(header.SystemCount);
+        bw.Write(header.ArchetypeCount);
+        bw.Write(header.ComponentTypeCount);
+        foreach (var s in systems)
+        {
+            bw.Write(s.Index);
+            bw.Write(s.Name);
+            bw.Write(s.Type);
+            bw.Write(s.Priority);
+            bw.Write(s.IsParallel);
+            bw.Write(s.TierFilter);
+            foreach (var p in s.Predecessors) bw.Write(p);
+            foreach (var p in s.Successors) bw.Write(p);
+        }
+        foreach (var a in archetypes)
+        {
+            bw.Write(a.ArchetypeId);
+            bw.Write(a.Name);
+        }
+        foreach (var c in componentTypes)
+        {
+            bw.Write(c.ComponentTypeId);
+            bw.Write(c.Name);
+        }
+        bw.Flush();
+        var hash = sha.ComputeHash(ms.ToArray());
+        return Convert.ToHexString(hash);
+    }
+
+    private static GlobalMetricsDto ProjectGlobalMetrics(GlobalMetricsFixed metrics)
+        => new(
+            GlobalStartUs: metrics.GlobalStartUs,
+            GlobalEndUs: metrics.GlobalEndUs,
+            MaxTickDurationUs: metrics.MaxTickDurationUs,
+            MaxSystemDurationUs: metrics.MaxSystemDurationUs,
+            P95TickDurationUs: metrics.P95TickDurationUs,
+            TotalEvents: metrics.TotalEvents,
+            TotalTicks: metrics.TotalTicks,
+            SystemAggregates: []);
+
+    private static ProfilerHeaderDto ProjectHeader(TraceFileReader reader)
+    {
+        var h = reader.Header;
+        return new ProfilerHeaderDto(
+            Version: h.Version,
+            TimestampFrequency: h.TimestampFrequency,
+            BaseTickRate: h.BaseTickRate,
+            WorkerCount: h.WorkerCount,
+            SystemCount: h.SystemCount,
+            ArchetypeCount: h.ArchetypeCount,
+            ComponentTypeCount: h.ComponentTypeCount,
+            CreatedUtcTicks: h.CreatedUtcTicks,
+            SamplingSessionStartQpc: h.SamplingSessionStartQpc);
+    }
+
+    private static SystemDefinitionDto[] ProjectSystems(TraceFileReader reader)
+    {
+        var arr = new SystemDefinitionDto[reader.Systems.Count];
+        for (var i = 0; i < reader.Systems.Count; i++)
+        {
+            var sr = reader.Systems[i];
+            arr[i] = new SystemDefinitionDto(
+                Index: sr.Index,
+                Name: sr.Name,
+                Type: sr.Type,
+                Priority: sr.Priority,
+                IsParallel: sr.IsParallel,
+                TierFilter: sr.TierFilter,
+                Predecessors: sr.Predecessors,
+                Successors: sr.Successors);
+        }
+        return arr;
+    }
+
+    private static ArchetypeDto[] ProjectArchetypes(TraceFileReader reader)
+    {
+        var arr = new ArchetypeDto[reader.Archetypes.Count];
+        for (var i = 0; i < reader.Archetypes.Count; i++)
+        {
+            arr[i] = new ArchetypeDto(reader.Archetypes[i].ArchetypeId, reader.Archetypes[i].Name);
+        }
+        return arr;
+    }
+
+    private static ComponentTypeDto[] ProjectComponentTypes(TraceFileReader reader)
+    {
+        var arr = new ComponentTypeDto[reader.ComponentTypes.Count];
+        for (var i = 0; i < reader.ComponentTypes.Count; i++)
+        {
+            arr[i] = new ComponentTypeDto(reader.ComponentTypes[i].ComponentTypeId, reader.ComponentTypes[i].Name);
+        }
+        return arr;
+    }
+
+    private static async Task<IPAddress> ResolveIPv4Async(string host, CancellationToken ct)
+    {
+        if (IPAddress.TryParse(host, out var literal) && literal.AddressFamily == AddressFamily.InterNetwork)
+        {
+            return literal;
+        }
+
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(host, AddressFamily.InterNetwork, ct);
+        }
+        catch (SocketException ex)
+        {
+            throw new WorkbenchException(
+                StatusCodes.Status503ServiceUnavailable,
+                "attach_dns_failed",
+                $"Failed to resolve '{host}' to an IPv4 address: {ex.Message}",
+                ex);
+        }
+
+        if (addresses.Length == 0)
+        {
+            throw new WorkbenchException(
+                StatusCodes.Status503ServiceUnavailable,
+                "attach_dns_failed",
+                $"Host '{host}' resolved to zero IPv4 addresses. The Workbench connects to the engine over IPv4 only.");
+        }
+
+        return addresses[0];
     }
 
     private static (string Host, int Port) ParseEndpoint(string endpoint)
     {
         var trimmed = endpoint.Trim();
-        // IPv6 literals are bracketed ("[::1]:9100"); we don't accept those yet — keep parsing simple.
         var idx = trimmed.LastIndexOf(':');
         if (idx < 0) return (trimmed, DefaultPort);
         var host = trimmed[..idx];
@@ -504,12 +1140,29 @@ public sealed partial class AttachSessionRuntime : IDisposable
         return (host, port);
     }
 
+    private void ThrowIfDisposed()
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(AttachSessionRuntime));
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        try { _flushChunkTimer?.Dispose(); } catch { }
+        try { _trailingTickTimer?.Dispose(); } catch { }
+        try { _globalMetricsTimer?.Dispose(); } catch { }
         try { _cts.Cancel(); } catch { }
         try { _cts.Dispose(); } catch { }
+        try
+        {
+            lock (_builderLock)
+            {
+                _builder?.Dispose();
+            }
+        }
+        catch { }
+        try { _tempFile?.Dispose(); } catch { }
         if (!_metadataTcs.Task.IsCompleted)
         {
             _metadataTcs.TrySetException(new ObjectDisposedException(nameof(AttachSessionRuntime)));

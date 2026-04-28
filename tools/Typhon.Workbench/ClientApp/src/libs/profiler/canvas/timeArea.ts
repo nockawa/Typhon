@@ -2,12 +2,14 @@ import type { ChunkSpan, SpanData, TickData } from '@/libs/profiler/model/traceM
 import type { TimeRange, TrackLayout, Viewport } from '@/libs/profiler/model/uiTypes';
 import type { ProfilerSelection } from '@/stores/useProfilerSelectionStore';
 import {
+  colorForChunk,
+  colorForSpan,
   computeGridStep,
   formatDuration,
   formatRulerLabel,
-  getSystemColor,
   setupCanvas,
 } from './canvasUtils';
+import type { SpanColorMode } from '@/stores/useProfilerViewStore';
 import { drawGaugeSummaryStrip, GROUP_RENDERERS, type GaugeData } from './gauges/renderers';
 import { GAUGE_TRACK_ID_SET, getGaugeGroupSpec } from './gauges/region';
 import type { StudioTheme } from './theme';
@@ -47,7 +49,9 @@ export const HELP_ICON_GLYPH_WIDTH = 10; // painted size of the "?" character
 export const HELP_ICON_BG_HEIGHT = 14;   // painted backdrop height around the "?" glyph
 export const HELP_ICON_RIGHT_PAD = 7;    // right-edge inset inside the gutter (glyph sits ~7 px from the border)
 export const HELP_ICON_HIT_PAD = 4;      // extra px of hit zone around the glyph on all sides
-const TICK_BOUNDARY_COLOR_ALPHA = 'rgba(120, 120, 130, 0.3)'; // dashed line between ticks — pure structural chrome, readable in both themes
+// Tick boundary dashes + tick-number labels share the over-P95 accent color (theme-adapted: magenta-pink in light
+// theme, bright cyan in dark theme) so they read as a coherent "tick demarcation" visual band, separate from the
+// muted ruler-time labels above.
 
 // Coalescing state pool — sized at 8 depths (spans > depth 8 are vanishingly rare in Typhon). One
 // shared pool is safe because `drawTimeArea` is single-threaded per frame and flushes between slots.
@@ -96,27 +100,6 @@ function relativeLuminance(hex: string): number {
   }
   const lin = (c: number): number => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-}
-
-// Deterministic name → span-palette slot. Cache is keyed by palette identity so the dark and light
-// palettes each get their own interned map — same name resolves to the matching slot in whichever
-// palette the current theme carries.
-const _nameColorCacheByPalette = new WeakMap<readonly string[], Map<string, string>>();
-function nameToColor(name: string, palette: readonly string[]): string {
-  let cache = _nameColorCacheByPalette.get(palette);
-  if (!cache) {
-    cache = new Map();
-    _nameColorCacheByPalette.set(palette, cache);
-  }
-  const hit = cache.get(name);
-  if (hit !== undefined) return hit;
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
-  }
-  const c = palette[(hash >>> 0) % palette.length];
-  cache.set(name, c);
-  return c;
 }
 
 // Diagonal-stripe pattern painted over tick ranges whose chunk data hasn't arrived yet. Gives the
@@ -223,6 +206,11 @@ export interface TimeAreaInputs {
    * stale canvas. Empty when everything's resident (or the cache isn't ready).
    */
   pendingRangesUs: readonly { startUs: number; endUs: number }[];
+  /**
+   * How to colour span bars on slot lanes. Sourced from `useProfilerViewStore.spanColorMode`.
+   * Threaded through to {@link drawSlotLane} so the renderer's hot loop has a stable lookup.
+   */
+  spanColorMode: SpanColorMode;
 }
 
 /**
@@ -239,7 +227,7 @@ export function drawTimeArea(
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
-  const { tracks, viewRange, vp, gutterWidth, legendsVisible, visibleTicks, ticks, selection, dragSelection, crosshairX, gaugeData, helpHover, pendingRangesUs } = inputs;
+  const { tracks, viewRange, vp, gutterWidth, legendsVisible, visibleTicks, ticks, selection, dragSelection, crosshairX, gaugeData, helpHover, pendingRangesUs, spanColorMode } = inputs;
   const contentWidth = width - gutterWidth;
 
   // Sync vp from viewRange if they've drifted — matches old client's eager-sync block so the first
@@ -389,7 +377,7 @@ export function drawTimeArea(
     // chunk row; chunks never span ticks so the visible-only subset is sufficient + faster).
     if (track.id.startsWith('slot-')) {
       const threadSlot = Number.parseInt(track.id.slice(5), 10);
-      drawSlotLane(ctx, track, threadSlot, ticks, visibleTicks, visStartUs, visEndUs, gutterWidth, width, pxOfUs, ty, selection, theme);
+      drawSlotLane(ctx, track, threadSlot, ticks, visibleTicks, visStartUs, visEndUs, gutterWidth, width, pxOfUs, ty, selection, theme, spanColorMode);
       continue;
     }
 
@@ -397,7 +385,7 @@ export function drawTimeArea(
     // the slot-lane chunk row.
     if (track.id.startsWith('system-')) {
       const systemIdx = Number.parseInt(track.id.slice(7), 10);
-      drawSystemLane(ctx, track, systemIdx, visibleTicks, gutterWidth, width, pxOfUs, ty, selection, theme);
+      drawSystemLane(ctx, track, systemIdx, visibleTicks, gutterWidth, width, pxOfUs, ty, selection, theme, spanColorMode);
       continue;
     }
 
@@ -418,6 +406,30 @@ export function drawTimeArea(
 
   // Restore clip before overlays (crosshair + drag selection span full height)
   ctx.restore();
+
+  // ─── GC pause bands ──────────────────────────────────────────────────────────────────────────
+  // Faint full-height red tint over every `GcSuspension` window inside the viewport. Renders
+  // ACROSS ALL LANES (slot, system, ops, gauges) so a 2 ms pause buried in the middle of a 3 ms
+  // tick is instantly visible as a vertical stripe — answers "why was this tick so slow?"
+  // without expanding the GC gauge. Low alpha (~13 %) so bars still read clearly through the
+  // tint. Drawn AFTER track content (sits on top of bars) but BEFORE crosshair / drag-selection
+  // so those interactive overlays still read crisp.
+  //
+  // Skips the ruler area (Y < RULER_HEIGHT) so timestamp labels stay legible — same convention
+  // the crosshair uses. X-clipped to the content area so the gutter labels aren't tinted either.
+  if (gaugeData.gcSuspensions.length > 0) {
+    ctx.fillStyle = 'rgba(232, 93, 77, 0.13)';  // CACHE_EXCLUSIVE_COLOR @ ~13% alpha
+    const bandTop = RULER_HEIGHT;
+    const bandHeight = height - RULER_HEIGHT;
+    for (const sus of gaugeData.gcSuspensions) {
+      const susEndUs = sus.startUs + sus.durationUs;
+      if (susEndUs <= visStartUs || sus.startUs >= visEndUs) continue;
+      const x1 = Math.max(pxOfUs(sus.startUs), gutterWidth);
+      const x2 = Math.min(pxOfUs(susEndUs), width);
+      const w = x2 - x1;
+      if (w >= 1) ctx.fillRect(x1, bandTop, w, bandHeight);
+    }
+  }
 
   // ─── Overlays (crosshair + drag-selection) ───────────────────────────────────────────────────
   if (crosshairX >= gutterWidth) {
@@ -468,7 +480,7 @@ function drawRuler(ctx: CanvasRenderingContext2D, r: RulerCtx, theme: StudioThem
 
   // Absolute anchor at the left edge
   ctx.fillStyle = theme.foreground;
-  ctx.font = '9px monospace';
+  ctx.font = '10px monospace';
   ctx.textAlign = 'left';
   ctx.fillText(formatRulerLabel(leftEdgeUs - baseUs), gutterWidth + 4, ty + 16);
 
@@ -483,7 +495,7 @@ function drawRuler(ctx: CanvasRenderingContext2D, r: RulerCtx, theme: StudioThem
     ctx.lineTo(x, height);
     ctx.stroke();
     ctx.fillStyle = theme.mutedForeground;
-    ctx.font = '9px monospace';
+    ctx.font = '10px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(`+${formatRulerLabel(t - leftEdgeUs)}`, Math.round(x), ty + 16);
   }
@@ -509,9 +521,9 @@ function drawRuler(ctx: CanvasRenderingContext2D, r: RulerCtx, theme: StudioThem
     lastLabeledX = x;
   }
 
-  // Dashed tick boundaries (same line that carries the T{number} label above)
+  // Dashed tick boundaries — shared accent color with the tick-number labels below (theme.overviewP95).
   ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = TICK_BOUNDARY_COLOR_ALPHA;
+  ctx.strokeStyle = theme.overviewP95;
   ctx.lineWidth = 1;
   for (const tick of labeled) {
     const x = pxOfUs(tick.startUs);
@@ -522,13 +534,13 @@ function drawRuler(ctx: CanvasRenderingContext2D, r: RulerCtx, theme: StudioThem
   }
   ctx.setLineDash([]);
 
-  // Tick-number labels
-  ctx.fillStyle = theme.mutedForeground;
-  ctx.font = '9px monospace';
+  // Tick-number labels — over-P95 accent color, prefixed with `#` so they read as tick numbers (not raw ints).
+  ctx.fillStyle = theme.overviewP95;
+  ctx.font = '10px monospace';
   ctx.textAlign = 'center';
   for (const tick of labeled) {
     const x = pxOfUs(tick.startUs);
-    ctx.fillText(`${tick.tickNumber}`, Math.round(x), ty + 8);
+    ctx.fillText(`#${tick.tickNumber}`, Math.round(x), ty + 8);
   }
   // Suppress unused-var lint (width kept in the signature for future pending-chunk overlay).
   void width;
@@ -600,6 +612,7 @@ function drawSlotLane(
   ty: number,
   selection: ProfilerSelection | null,
   theme: StudioTheme,
+  spanColorMode: SpanColorMode,
 ): void {
   const chunkRowHeight = track.chunkRowHeight ?? 0;
   const spanRegionTop = ty + chunkRowHeight;
@@ -614,7 +627,7 @@ function drawSlotLane(
         const x2 = pxOfUs(chunk.endUs);
         if (x2 < gutterWidth || x1 > width) continue;
         const w = Math.max(x2 - x1, MIN_RECT_WIDTH);
-        ctx.fillStyle = getSystemColor(chunk.systemIndex, theme.spans);
+        ctx.fillStyle = colorForChunk(chunk, spanColorMode, theme.spans);
         ctx.fillRect(x1, ty + 1, w, chunkRowHeight - 2);
         if (selection && selection.kind === 'chunk' && isSameChunk(selection.chunk, chunk)) {
           ctx.strokeStyle = theme.selectedOutline;
@@ -626,7 +639,7 @@ function drawSlotLane(
           ctx.beginPath();
           ctx.rect(x1, ty + 1, w, chunkRowHeight - 2);
           ctx.clip();
-          ctx.fillStyle = readableOnBar(getSystemColor(chunk.systemIndex, theme.spans), theme);
+          ctx.fillStyle = readableOnBar(colorForChunk(chunk, spanColorMode, theme.spans), theme);
           ctx.font = '10px monospace';
           ctx.textAlign = 'left';
           const label = chunk.isParallel ? `${chunk.systemName}[${chunk.chunkIndex}]` : chunk.systemName;
@@ -712,7 +725,7 @@ function drawSlotLane(
           continue;
         }
         flushDepth(d);
-        const c = nameToColor(span.name, theme.spans);
+        const c = colorForSpan(span, spanColorMode, theme.spans);
         if (c !== prevFill) { ctx.fillStyle = c; prevFill = c; }
         ctx.fillRect(x1, sy, w, SPAN_ROW_HEIGHT - 2);
         coalX1[d] = x1;
@@ -724,7 +737,7 @@ function drawSlotLane(
 
       // Wide bar
       flushDepth(d);
-      const c = nameToColor(span.name, theme.spans);
+      const c = colorForSpan(span, spanColorMode, theme.spans);
       if (c !== prevFill) { ctx.fillStyle = c; prevFill = c; }
       ctx.fillRect(x1, sy, w, SPAN_ROW_HEIGHT - 2);
 
@@ -739,7 +752,7 @@ function drawSlotLane(
         ctx.beginPath();
         ctx.rect(x1, sy, actualWidth, SPAN_ROW_HEIGHT - 2);
         ctx.clip();
-        ctx.fillStyle = readableOnBar(nameToColor(span.name, theme.spans), theme);
+        ctx.fillStyle = readableOnBar(colorForSpan(span, spanColorMode, theme.spans), theme);
         ctx.font = '12px monospace';
         ctx.textAlign = 'left';
         // Clamp the text's X to the visible-left edge so the label stays readable when the bar's
@@ -780,6 +793,7 @@ function drawSystemLane(
   ty: number,
   selection: ProfilerSelection | null,
   theme: StudioTheme,
+  spanColorMode: SpanColorMode,
 ): void {
   const rowHeight = track.height;
   for (const tick of visibleTicks) {
@@ -789,7 +803,7 @@ function drawSystemLane(
       const x2 = pxOfUs(chunk.endUs);
       if (x2 < gutterWidth || x1 > width) continue;
       const w = Math.max(x2 - x1, MIN_RECT_WIDTH);
-      ctx.fillStyle = getSystemColor(chunk.systemIndex, theme.spans);
+      ctx.fillStyle = colorForChunk(chunk, spanColorMode, theme.spans);
       ctx.fillRect(x1, ty + 1, w, rowHeight - 2);
       if (selection && selection.kind === 'chunk' && isSameChunk(selection.chunk, chunk)) {
         ctx.strokeStyle = theme.selectedOutline;
@@ -857,7 +871,10 @@ function drawPhases(
         ctx.beginPath();
         ctx.rect(x1, ty + 1, w, PHASE_TRACK_HEIGHT - 2);
         ctx.clip();
-        ctx.fillStyle = theme.foreground;
+        // Phase bar fill is always a dark colour (slot 0 of either timeline palette is the deep
+        // purple identity), so the label needs the textOnDarkBar token in both themes — the previous
+        // `theme.foreground` produced dark-on-dark text in light mode.
+        ctx.fillStyle = theme.textOnDarkBar;
         ctx.font = '9px monospace';
         ctx.textAlign = 'left';
         ctx.fillText(`${phase.phaseName} (${formatDuration(phase.durationUs)})`, x1 + 3, ty + 12);

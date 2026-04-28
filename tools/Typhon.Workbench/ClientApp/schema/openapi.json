@@ -6,7 +6,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:5000/"
+      "url": "http://127.0.0.1:5200/"
     }
   ],
   "paths": {
@@ -57,6 +57,29 @@
       }
     },
     "/api/sessions/{sessionId}/profiler/build-progress": {
+      "get": {
+        "tags": [
+          "Profiler"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/profiler/stream": {
       "get": {
         "tags": [
           "Profiler"
@@ -212,6 +235,108 @@
         }
       }
     },
+    "/api/fixtures/trace": {
+      "post": {
+        "tags": [
+          "Fixtures"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTraceFixtureRequestDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTraceFixtureRequestDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTraceFixtureRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTraceFixtureResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fixtures/mock-profiler": {
+      "post": {
+        "tags": [
+          "Fixtures"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartMockProfilerRequestDto"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartMockProfilerRequestDto"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartMockProfilerRequestDto"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartMockProfilerResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/fixtures/mock-profiler/{port}": {
+      "delete": {
+        "tags": [
+          "Fixtures"
+        ],
+        "parameters": [
+          {
+            "name": "port",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -247,6 +372,79 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProfilerMetadataDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/profiler/disconnect": {
+      "post": {
+        "tags": [
+          "Profiler"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/profiler/save-replay": {
+      "post": {
+        "tags": [
+          "Profiler"
+        ],
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveReplayRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveReplayRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveReplayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveReplayResponse"
                 }
               }
             }
@@ -1138,6 +1336,56 @@
           }
         }
       },
+      "CreateTraceFixtureRequestDto": {
+        "required": [
+          "tickCount",
+          "instantsPerTick"
+        ],
+        "type": "object",
+        "properties": {
+          "tickCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "instantsPerTick": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "CreateTraceFixtureResponseDto": {
+        "required": [
+          "traceFilePath",
+          "tickCount"
+        ],
+        "type": "object",
+        "properties": {
+          "traceFilePath": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "tickCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
       "CreateTraceSessionRequest": {
         "required": [
           "filePath"
@@ -1714,6 +1962,43 @@
           }
         }
       },
+      "SaveReplayRequest": {
+        "required": [
+          "path"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "SaveReplayResponse": {
+        "required": [
+          "path",
+          "bytesWritten"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "bytesWritten": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "SessionDiagnosticDto": {
         "required": [
           "componentName",
@@ -1805,6 +2090,49 @@
             "items": {
               "$ref": "#/components/schemas/SessionDiagnosticDto"
             }
+          }
+        }
+      },
+      "StartMockProfilerRequestDto": {
+        "required": [
+          "blockIntervalMs",
+          "maxBlocks"
+        ],
+        "type": "object",
+        "properties": {
+          "blockIntervalMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "maxBlocks": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "StartMockProfilerResponseDto": {
+        "required": [
+          "port"
+        ],
+        "type": "object",
+        "properties": {
+          "port": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
           }
         }
       },

@@ -6,6 +6,8 @@ namespace Typhon.Engine.Profiler;
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.StoragePageCacheDirtyWalk"/>.</summary>
 public ref struct StoragePageCacheDirtyWalkEvent : ITraceEventEncoder
 {
+    public static byte Kind => (byte)TraceEventKind.StoragePageCacheDirtyWalk;
+
     public byte ThreadSlot;
     public long StartTimestamp;
     public ulong SpanId;

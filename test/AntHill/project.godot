@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="AntHill"
-run/main_scene="uid://c6165nwv08y0v"
+run/main_scene="res://Scenes/Main.tscn"
 config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 config/icon="res://icon.svg"
 

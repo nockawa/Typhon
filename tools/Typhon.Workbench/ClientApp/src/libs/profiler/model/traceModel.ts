@@ -8,26 +8,6 @@ import {
   FIXED_AT_INIT_GAUGES,
 } from './types';
 
-/**
- * Counts malformed ticks (seen events but no TickStart) per page-load and routes warnings to the console with a cap so a
- * catastrophically broken trace can't spam the console. Reset on a new trace load via <see cref="resetMalformedTickCounter"/>.
- */
-let _malformedTickCount = 0;
-const _MALFORMED_TICK_LOG_CAP = 5;
-function warnMalformedTick(tickNumber: number): void {
-  _malformedTickCount++;
-  if (_malformedTickCount <= _MALFORMED_TICK_LOG_CAP) {
-    console.warn(`[trace] malformed tick ${tickNumber}: no TickStart/TickEnd observed — reset to (0, 0). Possible producer-ring overflow or truncated trace.`);
-    if (_malformedTickCount === _MALFORMED_TICK_LOG_CAP) {
-      console.warn(`[trace] ${_MALFORMED_TICK_LOG_CAP} malformed ticks logged — further warnings suppressed for this session.`);
-    }
-  }
-}
-/** Called from the trace-load path (<see cref="processTrace"/>) to reset the per-session counter so each trace open gets its own log budget. */
-export function resetMalformedTickCounter(): void {
-  _malformedTickCount = 0;
-}
-
 /** A chunk span: one rectangle in the Gantt chart */
 export interface ChunkSpan {
   systemIndex: number;
@@ -301,6 +281,8 @@ export interface ThreadInfoEvent {
   managedThreadId: number;
   name: string;
   timestampUs: number;
+  /** Engine's `Typhon.Profiler.ThreadKind` (Main=0, Worker=1, Pool=2, Other=3). Undefined for pre-v4 traces. */
+  kind?: number;
 }
 
 /** Processed trace ready for rendering */
@@ -389,8 +371,6 @@ function generateSystemColors(count: number): string[] {
 
 /** Process raw records into renderable tick structures */
 export function processTrace(metadata: TraceMetadata, events: TraceEvent[]): ProcessedTrace {
-  // Reset the per-session malformed-tick counter so each trace open gets its own log budget.
-  resetMalformedTickCounter();
   const systems = metadata.systems;
   const systemColors = generateSystemColors(systems.length);
 
@@ -411,7 +391,7 @@ export function processTrace(metadata: TraceMetadata, events: TraceEvent[]): Pro
 
   for (const [tickNumber, tickEvents] of tickMap) {
     // processTrace takes full-session event arrays (file-upload path) — every tick is self-contained, never a continuation.
-    const tickData = processTickEvents(tickNumber, tickEvents, systems, /*isContinuation=*/false);
+    const tickData = processTickEvents(tickNumber, tickEvents, systems);
     if (tickData.durationUs > maxTickDurationUs) {
       maxTickDurationUs = tickData.durationUs;
     }
@@ -487,7 +467,10 @@ export function findTickIndex(trace: ProcessedTrace, tickNumber: number): number
   return trace.ticks.findIndex(t => t.tickNumber === tickNumber);
 }
 
-export function processTickEvents(tickNumber: number, events: TraceEvent[], systems: SystemDef[], isContinuation: boolean): TickData {
+/**
+ * Build a {@link TickData} from a tick's raw events.
+ */
+export function processTickEvents(tickNumber: number, events: TraceEvent[], systems: SystemDef[]): TickData {
   let startUs = Infinity;
   let endUs = -Infinity;
 
@@ -619,12 +602,15 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
         // ThreadInfo lands in the ring as soon as a thread claims its slot. We pass the record through here so the cross-tick
         // aggregation in aggregateGaugeData can fold it into metadata.threadNames. A slot without a set Thread.Name arrives with
         // an empty/undefined name — skip those so the viewer can fall back to "Slot {n}" rather than showing a blank label.
+        // `threadKind` is the v4+ trailing byte (Main / Worker / Pool / Other) — drives the filter
+        // tree's per-kind subgrouping in trace mode.
         if (evt.threadName && evt.threadName.length > 0) {
           threadInfos.push({
             threadSlot: evt.threadSlot,
             managedThreadId: evt.managedThreadId ?? 0,
             name: evt.threadName,
             timestampUs: evt.timestampUs,
+            kind: evt.threadKind,
           });
         }
         break;
@@ -763,24 +749,26 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
     }
   }
 
-  // Malformed-tick guard: if neither a TickStart nor a TickEnd was observed for this tick (e.g., producer-ring overflow or
-  // interrupted trace), startUs stays at Infinity and endUs at -Infinity. Reset to a benign (0, 0) so later viewport math
-  // doesn't propagate NaN, but surface it via a console.warn so the user sees their trace has malformed regions instead of
-  // silently treating them as zero-duration spans at time 0. First N such ticks are logged with their tick number; beyond
-  // that a single summary warning fires so a catastrophically broken trace doesn't spam the console.
-  //
-  // Exception: tickNumber === 0 is the PRE-TICK bucket, not a real tick. Typhon ticks are 1-based; the chunk decoder seeds
-  // currentTick = firstTick - 1 (= 0 for the first chunk), and events emitted before the first TickStart — which v6 of the
-  // cache builder deliberately prepends to the first chunk's byte stream (MemoryAllocEvent, GcStart, GcEnd, GcSuspension) —
-  // get tagged with 0. Those events correctly flow into gcEvents / memoryAllocEvents etc. via aggregateGaugeData; the warning
-  // was a false positive. Suppress it and still set startUs/endUs to 0 so downstream math stays safe.
+  // No TickStart observed for this tick (continuation chunk where the previous chunk already consumed it,
+  // or the tickNumber==0 pre-tick bucket carrying records emitted before the first TickStart). Derive the
+  // time window from the events themselves so spans land at their real timestamps; without this, ticks
+  // with [startUs=0, endUs=0] are filtered out by TimeArea's per-tick viewport overlap check.
   if (startUs === Infinity) {
-    // Suppress the warning for continuation chunks — they legitimately have no TickStart (the previous chunk already
-    // consumed it), so "startUs = Infinity" here is expected, not a malformed-trace indicator. Same reasoning covers
-    // the tickNumber==0 pre-tick case. The malformed warning fires only when we had a real, complete chunk expected to
-    // contain a TickStart and genuinely didn't — at that point it's a useful signal about a broken trace.
-    if (tickNumber > 0 && !isContinuation) warnMalformedTick(tickNumber);
-    startUs = 0;
+    let minTs = Infinity;
+    let maxTs = -Infinity;
+    for (const span of spans) {
+      if (span.startUs < minTs) minTs = span.startUs;
+      const e = span.endUs ?? span.startUs;
+      if (e > maxTs) maxTs = e;
+    }
+    if (minTs !== Infinity) {
+      startUs = minTs;
+    } else {
+      startUs = 0;
+    }
+    if (endUs === -Infinity) {
+      endUs = maxTs > startUs ? maxTs : startUs;
+    }
   }
   if (endUs === -Infinity) endUs = startUs;
 
@@ -1035,7 +1023,7 @@ export function mergeTickData(a: TickData, b: TickData, systems: SystemDef[]): T
   // head of the combined event stream. Not a continuation. Note: rawEvents on the merged result is intentionally preserved
   // so a subsequent chain fold (mergeTickData(mergeTickData(t1,t2), t3)) has the cumulative raw events available. The caller
   // (assembleTickViewAndNumbers) is responsible for wiping rawEvents on the FINAL merged result once no more folds can fire.
-  return processTickEvents(a.tickNumber, combined, systems, /*isContinuation=*/false);
+  return processTickEvents(a.tickNumber, combined, systems);
 }
 
 /**
@@ -1051,6 +1039,11 @@ export function aggregateGaugeData(ticks: TickData[]): {
   gcSuspensions: GcSuspensionEvent[];
   /** Slot → thread name map, folded from <see cref="ThreadInfoEvent"/>s across all ticks. First name wins for a given slot. */
   threadNames: Map<number, string>;
+  /**
+   * Slot → ThreadKind byte (Main=0, Worker=1, Pool=2, Other=3). Sourced from the v4+ trailing byte
+   * on ThreadInfo records. Empty for pre-v4 traces — the filter UI then defaults all slots to Other.
+   */
+  threadKinds: Map<number, number>;
 } {
   const gaugeSeries = new Map<GaugeId, GaugeSeries>();
   const gaugeCapacities = new Map<GaugeId, number>();
@@ -1058,6 +1051,7 @@ export function aggregateGaugeData(ticks: TickData[]): {
   const gcEvents: GcEvent[] = [];
   const gcSuspensions: GcSuspensionEvent[] = [];
   const threadNames = new Map<number, string>();
+  const threadKinds = new Map<number, number>();
 
   for (const tick of ticks) {
     if (tick.gaugeSnapshot !== undefined) {
@@ -1106,11 +1100,14 @@ export function aggregateGaugeData(ticks: TickData[]): {
     if (tick.threadInfos.length > 0) {
       for (const info of tick.threadInfos) {
         threadNames.set(info.threadSlot, info.name);
+        if (info.kind !== undefined) {
+          threadKinds.set(info.threadSlot, info.kind);
+        }
       }
     }
   }
 
-  return { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames };
+  return { gaugeSeries, gaugeCapacities, memoryAllocEvents, gcEvents, gcSuspensions, threadNames, threadKinds };
 }
 
 /** Maximum ticks to keep in memory during live streaming (~50s at 60Hz). */
@@ -1146,7 +1143,7 @@ export function processTickAndAppend(
   events: TraceEvent[]
 ): ProcessedTrace {
   // processTickAndAppend is the live-session path — each tick arrives with its own TickStart, never a continuation.
-  const tickData = processTickEvents(tickNumber, events, trace.metadata.systems, /*isContinuation=*/false);
+  const tickData = processTickEvents(tickNumber, events, trace.metadata.systems);
 
   const ticks = [...trace.ticks, tickData];
   const tickNumbers = [...trace.tickNumbers, tickNumber];
