@@ -1,5 +1,6 @@
 import { formatDuration } from './canvasUtils';
 import type { TimeAreaHover } from './timeAreaHitTest';
+import { TraceEventKind } from '@/libs/profiler/model/types';
 
 /**
  * Build the text lines shown in the TimeArea's hover tooltip for span / chunk / phase / mini-row-op
@@ -25,6 +26,14 @@ export function buildHoverTooltipLines(hover: TimeAreaHover): string[] | null {
       if (s.kickoffDurationUs !== undefined && s.kickoffDurationUs !== s.durationUs) {
         lines.push(`Kickoff: ${formatDuration(s.kickoffDurationUs)}`);
       }
+      // Kind-specific metadata from the rawEvent. ClusterMigration: archetype + entity count + total
+      // component instances moved (entities × per-entity slot count). The `componentCount` value comes
+      // from the engine's wire-additive payload; on traces produced by older engines it's undefined.
+      if (s.kind === TraceEventKind.ClusterMigration && s.rawEvent) {
+        if (s.rawEvent.archetypeId !== undefined) lines.push(`Archetype: #${s.rawEvent.archetypeId}`);
+        if (s.rawEvent.migrationCount !== undefined) lines.push(`Entities: ${s.rawEvent.migrationCount.toLocaleString()}`);
+        if (s.rawEvent.componentCount !== undefined) lines.push(`Components: ${s.rawEvent.componentCount.toLocaleString()}`);
+      }
       return lines;
     }
     case 'chunk': {
@@ -46,6 +55,17 @@ export function buildHoverTooltipLines(hover: TimeAreaHover): string[] | null {
         `Tick: ${hover.tickNumber}`,
         `Duration: ${formatDuration(p.durationUs)}`,
       ];
+    }
+    case 'phase-marker': {
+      const m = hover.marker;
+      const lines = [
+        `Marker: ${m.label}`,
+        `Tick: ${hover.tickNumber}`,
+      ];
+      if (m.detail !== undefined) {
+        lines.push(m.detail);
+      }
+      return lines;
     }
     case 'mini-row-op': {
       const op = hover.op;

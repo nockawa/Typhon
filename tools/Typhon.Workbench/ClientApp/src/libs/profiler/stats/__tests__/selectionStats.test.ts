@@ -21,6 +21,7 @@ function makeTick(overrides: Partial<TickData> = {}): TickData {
     durationUs: 100,
     chunks: [],
     phases: [],
+    phaseMarkers: [],
     skips: [],
     spans: [],
     spanEndMaxRunning: empty,

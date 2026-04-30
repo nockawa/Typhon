@@ -38,7 +38,17 @@ public partial class DagScheduler
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void InspectorTickEnd(long tickNumber, long timestamp) => TyphonEvent.EmitTickEnd(timestamp, 0, 1);
+    private void InspectorTickEnd(long tickNumber, long timestamp)
+    {
+        // overloadLevel + tickMultiplier reflect the values IN EFFECT during this tick — set by the previous tick's
+        // OverloadDetector.Update at the end of ComputeAndRecordTelemetry, so by the time we're here they describe
+        // the regime this tick just ran under. The current tick's detector update happens AFTER this emit (line ~490
+        // in ExecuteTickMultiThreaded), which is the right ordering: the change applies to the NEXT tick.
+        // Issue #289 follow-up: this used to be hardcoded (0, 1) so every TickSummary recorded a healthy state.
+        var overloadLevel = (byte)Math.Min((int)_overloadDetector.CurrentLevel, byte.MaxValue);
+        var multiplier = (byte)Math.Min(_tickMultiplier, byte.MaxValue);
+        TyphonEvent.EmitTickEnd(timestamp, overloadLevel, multiplier);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void InspectorSystemReady(int sysIdx, long timestamp) => TyphonEvent.EmitSystemReady((ushort)sysIdx, 0, timestamp);

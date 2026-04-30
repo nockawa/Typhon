@@ -76,6 +76,13 @@ export function convertTickSummaries(dtos: TickSummaryDto[] | null | undefined):
     eventCount: toInt(s.eventCount),
     maxSystemDurationUs: toFloat(s.maxSystemDurationUs),
     activeSystemsBitmask: s.activeSystemsBitmask ?? '0',
+    // v9 fields — undefined on v8 traces (orval marks them optional). Default to 0 so consumers don't have to null-check.
+    overloadLevel: s.overloadLevel ?? 0,
+    tickMultiplier: s.tickMultiplier ?? 0,
+    metronomeWaitUs: s.metronomeWaitUs ?? 0,
+    metronomeIntentClass: s.metronomeIntentClass ?? 0,
+    consecutiveOverrun: s.consecutiveOverrun ?? 0,
+    consecutiveUnderrun: s.consecutiveUnderrun ?? 0,
   }));
 }
 

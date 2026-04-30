@@ -126,11 +126,16 @@ public sealed class UnitOfWork : IDisposable
     /// Transitions the UoW to <see cref="UnitOfWorkState.WalDurable"/> AND records the commit in the <see cref="UowRegistry"/>. Single source of truth for
     /// "UoW is now durable" so the gauge counter increments exactly once per UoW, regardless of how many transactions the UoW hosts. MaxTSN is passed as 0 —
     /// the field is recorded on the registry entry but is not read by any production code path (gauge increment is the only observable effect).
+    /// <para>
+    /// The shared <see cref="ChangeSet"/> is forwarded to <see cref="UowRegistry.RecordCommit"/> so the registry page mutation piggybacks on the UoW's
+    /// dirty-page accounting instead of triggering a synchronous SaveChanges (page CRC + RandomAccess.WriteAsync + fsync) on the TickDriver thread. In WAL
+    /// mode the registry page is durable via the WAL record anyway; the on-disk registry copy is a checkpoint cache that the next checkpoint cycle writes.
+    /// </para>
     /// </summary>
     private void TransitionToWalDurable()
     {
         _state = UnitOfWorkState.WalDurable;
-        _dbe.UowRegistry?.RecordCommit(_uowId, 0);
+        _dbe.UowRegistry?.RecordCommit(_uowId, 0, ChangeSet);
     }
 
     /// <summary>

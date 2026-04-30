@@ -726,8 +726,39 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// Called by the game loop at each tick boundary.
     /// </summary>
     /// <param name="tickNumber">Monotonic tick identifier.</param>
+    /// <param name="changeSet">Caller-supplied ChangeSet for shared dirty-page tracking across the whole tick fence (typically the per-tick UoW's
+    /// shared ChangeSet — see <see cref="UnitOfWork.ChangeSet"/>). When null, a one-shot local ChangeSet is created and committed by this method itself
+    /// (test/admin path: tests that invoke <c>WriteTickFence</c> directly without a UoW retain their original behaviour).</param>
     /// <returns>Highest LSN written, or 0 if nothing was serialized.</returns>
-    public long WriteTickFence(long tickNumber)
+    public long WriteTickFence(long tickNumber, ChangeSet changeSet = null)
+    {
+        // When the caller doesn't supply a ChangeSet (e.g., tests that invoke WriteTickFence outside a UoW), we own the lifecycle: create a fresh
+        // ChangeSet, thread it through the per-table tick-fence callees, and commit it ourselves at the end. Production callers (TyphonRuntime)
+        // pass _currentUow.ChangeSet so dirty-page tracking is consolidated with everything else this tick — UoW.Flush handles the actual writeback.
+        bool ownChangeSet = changeSet == null;
+        if (ownChangeSet)
+        {
+            changeSet = MMF.CreateChangeSet();
+        }
+
+        long highestLSN;
+        try
+        {
+            highestLSN = WriteTickFenceCore(tickNumber, changeSet);
+        }
+        finally
+        {
+            if (ownChangeSet)
+            {
+                changeSet.SaveChanges();
+                changeSet.ReleaseExcessDirtyMarks();
+            }
+        }
+
+        return highestLSN;
+    }
+
+    private long WriteTickFenceCore(long tickNumber, ChangeSet changeSet)
     {
         long highestLSN = 0;
         using var epochGuard = EpochGuard.Enter(EpochManager);
@@ -881,7 +912,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // Must run even without WAL (indexes are in-memory structures independent of WAL).
             if (table.HasShadowableIndexes)
             {
-                ProcessShadowEntries(table);
+                ProcessShadowEntries(table, changeSet);
             }
 
             // Spatial index maintenance: iterate dirty entities, update R-Tree positions.
@@ -890,7 +921,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             // uses the fat AABB stored in the tree node. Only the final position matters.
             if (table.SpatialIndex != null && table.SpatialIndex.FieldInfo.Mode == SpatialMode.Dynamic)
             {
-                ProcessSpatialEntries(table, dirtyBits);
+                ProcessSpatialEntries(table, dirtyBits, changeSet);
             }
 
             // Archive dirty bitmap into ring buffer for interest management delta queries
@@ -898,7 +929,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
 
         // Cluster tick fence: serialize dirty cluster-backed entity data to WAL
-        WriteClusterTickFence(tickNumber, ref highestLSN);
+        WriteClusterTickFence(tickNumber, ref highestLSN, changeSet);
 
         if (highestLSN > 0)
         {
@@ -958,7 +989,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         }
     }
 
-    private unsafe void WriteClusterTickFence(long tickNumber, ref long highestLSN)
+    private unsafe void WriteClusterTickFence(long tickNumber, ref long highestLSN, ChangeSet changeSet)
     {
         // Issue #233: drain all deferred wake requests collected during parallel system execution. Must run once BEFORE the per-archetype loop so each
         // archetype's DormancySweep (below) sees up-to-date WakePending states and skips those clusters instead of re-sleeping them.
@@ -1040,7 +1071,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 // MUST run regardless of entryCount — destroyed entities with pending shadows need index cleanup.
                 if (clusterState.IndexSlots != null)
                 {
-                    ProcessClusterShadowEntries(clusterState, engineState);
+                    ProcessClusterShadowEntries(clusterState, engineState, changeSet);
                     RecomputeClusterZoneMaps(clusterState, dirtyBits);
                 }
 
@@ -1055,7 +1086,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     // cleared via dirty-bit clear, destination slots serialized via dirty-bit set).
                     if (clusterState.PendingMigrationCount > 0)
                     {
-                        ExecuteMigrations(clusterState, engineState, meta.ArchetypeId, ref dirtyBits);
+                        ExecuteMigrations(clusterState, engineState, meta.ArchetypeId, ref dirtyBits, changeSet);
                     }
                     else
                     {
@@ -1438,6 +1469,30 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
+    /// In-place ClusterEntityRecord field updater consumed by <see cref="RawValuePagedHashMap{TKey,TStore}.TryUpdateInPlace"/>
+    /// during migration. Patches the 4-byte ClusterChunkId and 1-byte SlotIndex fields without rewriting the rest of the record.
+    /// Struct (not ref struct) so it can sit on the stack as a local in <see cref="ExecuteMigrations"/> and pass through `ref`.
+    /// </summary>
+    private readonly unsafe struct ClusterLocationUpdater : IRawValueUpdater
+    {
+        private readonly int _chunkId;
+        private readonly byte _slotIndex;
+
+        public ClusterLocationUpdater(int chunkId, byte slotIndex)
+        {
+            _chunkId = chunkId;
+            _slotIndex = slotIndex;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Update(byte* valueBytes)
+        {
+            ClusterEntityRecordAccessor.SetClusterChunkId(valueBytes, _chunkId);
+            ClusterEntityRecordAccessor.SetSlotIndex(valueBytes, _slotIndex);
+        }
+    }
+
+    /// <summary>
     /// Execute all pending cell-crossing migrations queued by <see cref="DetectClusterMigrations"/>.
     /// Called at the cluster tick fence, AFTER detection, BEFORE the cluster tick fence WAL publish loop.
     /// Issue #229 Phase 3.
@@ -1469,7 +1524,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// <see cref="DirtyBitmapRing"/> and <see cref="ArchetypeClusterState.PreviousTickDirtySnapshot"/> both observe
     /// the grown array, keeping interest management and next-tick change dispatch consistent.</para>
     /// </remarks>
-    private unsafe void ExecuteMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ushort archetypeId, ref long[] dirtyBits)
+    private unsafe void ExecuteMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ushort archetypeId, ref long[] dirtyBits, ChangeSet changeSet)
     {
         int count = clusterState.PendingMigrationCount;
         if (count == 0)
@@ -1481,18 +1536,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         long startTimestamp = Stopwatch.GetTimestamp();
 
-        using var migrationScope = TyphonEvent.BeginClusterMigration(archetypeId, count);
-
-        var grid = _spatialGrid;
         var layout = clusterState.Layout;
         int componentCount = layout.ComponentCount;
+        // Total component instances moved this batch — surfaces in the profiler tooltip alongside the entity count
+        // so users see the actual data-shuffling cost (a 3-component archetype migrating 1300 entities moves 3900
+        // component slots' worth of data, not just 1300).
+        using var migrationScope = TyphonEvent.BeginClusterMigration(archetypeId, count, count * componentCount);
+
+        var grid = _spatialGrid;
         ushort transientMask = layout.TransientSlotMask;
         ref var ss = ref clusterState.SpatialSlot;
         int spatialCompSlot = ss.Slot;
         int spatialCompOffset = layout.ComponentOffset(spatialCompSlot);
         int spatialCompSize = layout.ComponentSize(spatialCompSlot);
-
-        var changeSet = MMF.CreateChangeSet();
 
         // Single-assignment accessor construction (TYPHON004 forbids the default→reassign pattern).
         bool hasClusterAccessor = clusterState.ClusterSegment != null;
@@ -1506,8 +1562,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
         ChunkAccessor<PersistentStore> emAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(changeSet);
 
-        // Reusable buffer for reading/writing ClusterEntityRecord. Max versioned-slot count determines the size.
-        byte* recordPtr = stackalloc byte[ClusterEntityRecordAccessor.BaseRecordSize + EntityRecordAccessor.MaxComponentCount * sizeof(int)];
         // Narrowphase scratch for the #230 Phase 1 per-cell index migration hook. Hoisted out of the
         // migration loop to avoid CA2014 stack-pressure accumulation — a batch of thousands of migrations
         // would otherwise allocate 32 bytes per iteration that can't be released until ExecuteMigrations
@@ -1717,17 +1771,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 //    its stale (srcChunkId, srcSlot) pointer until a subsequent spawn reclaimed that slot, at which point the stale EntityMap entry would
                 //    resolve to the unrelated new entity's bytes. Unpack explicitly (unsigned shift to avoid sign extension on the top bit).
                 //    Regression test: Migration_ThenSubsequentSpawn_ReclaimingSourceSlot_DoesNotCorruptMigratedEntity.
+                //    In-place primitive (TryUpdateInPlace) — single hash → bucket → chain scan, mutate the 5 bytes that change
+                //    (4-byte ChunkId + 1-byte SlotIndex) under the bucket's OLC write lock. Halves the EntityMap stage cost vs the
+                //    pre-#TBD TryGet+Upsert pair which did two chain scans + a full-record stack copy + double OLC traversal.
+                //    Returns false if the entity is already gone (destroy race precondition from Q9 says the occupancy pre-mask
+                //    should have filtered this out, but the no-op return preserves the same forgiving semantics as before).
                 long entityKey = entityPK >>> 12;
-                if (engineState.EntityMap.TryGet(entityKey, recordPtr, ref emAccessor))
-                {
-                    ClusterEntityRecordAccessor.SetClusterChunkId(recordPtr, dstChunkId);
-                    ClusterEntityRecordAccessor.SetSlotIndex(recordPtr, (byte)dstSlot);
-                    engineState.EntityMap.Upsert(entityKey, recordPtr, ref emAccessor, changeSet);
-                }
-                
-                // else: EntityMap lookup miss — entity is gone (e.g. destroyed in the same tick AND its slot was concurrently reclaimed). The destroy-race
-                // precondition from Q9 says the occupancy pre-mask should have filtered this out before we ever enqueued the request. If we get here we
-                // silently skip the EntityMap update; the source ReleaseSlot below still runs correctly.
+                var clusterLocationUpdater = new ClusterLocationUpdater(dstChunkId, (byte)dstSlot);
+                engineState.EntityMap.TryUpdateInPlace(entityKey, ref clusterLocationUpdater, ref emAccessor, changeSet);
 
                 // 10. Release the source slot. Clears occupancy, EnabledBits, EntityId, decrements cell.EntityCount, detaches the cluster from its cell pool
                 // if it became empty.
@@ -1773,8 +1824,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 clusterAccessor.Dispose();
             }
-            changeSet.SaveChanges();
-            changeSet.ReleaseExcessDirtyMarks();
+
+            // saveChanges and ReleaseExcessDirtyMarks are deliberately NOT called here. ExecuteMigrations operates on the UoW's shared ChangeSet (passed
+            // by the caller through WriteClusterTickFence → WriteTickFence). The UoW owns the commit lifecycle: in WAL mode SaveChanges is never called
+            // (WAL records replace direct page writes); in WAL-less GroupCommit/Deferred modes UoW.Flush invokes SaveChanges + FlushToDisk centrally;
+            // ReleaseExcessDirtyMarks happens once at UoW disposal. See claude/overview/02-execution.md §2.1 (UoW lifecycle) and §2.3 (durability modes).
+            // Test/admin callers that invoke WriteTickFence without a UoW get a one-shot local ChangeSet created and committed by WriteTickFence itself.
 
             // Reset queue for next tick BEFORE any re-throw path can escape. Leaving entries in the queue after a mid-batch exception would cause the next
             // tick's ExecuteMigrations to re-attempt already-applied migrations, double-allocating destination slots and orphaning source clusters.
@@ -1804,7 +1859,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// Reads current field values from cluster SoA, compares with captured old values, and calls B+Tree.Move for changes.
     /// Called at tick boundary from <see cref="WriteClusterTickFence"/>.
     /// </summary>
-    private unsafe void ProcessClusterShadowEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState)
+    private unsafe void ProcessClusterShadowEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ChangeSet changeSet)
     {
         // Quick check: any shadow buffers non-empty? Skip allocation if all empty.
         bool anyShadow = false;
@@ -1827,7 +1882,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             return;
         }
 
-        var changeSet = MMF.CreateChangeSet();
         var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
 
         try
@@ -1928,7 +1982,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         finally
         {
             clusterAccessor.Dispose();
-            changeSet.SaveChanges();
+            // SaveChanges deliberately omitted: caller (WriteTickFence) owns the ChangeSet lifecycle. See ExecuteMigrations finally for full rationale.
         }
 
         clusterState.ClusterShadowBitmap.Clear();
@@ -1939,7 +1993,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// the shadow was captured.
     /// Called at tick boundary from <see cref="WriteTickFence"/>.
     /// </summary>
-    private void ProcessShadowEntries(ComponentTable table)
+    private void ProcessShadowEntries(ComponentTable table, ChangeSet changeSet)
     {
         var fields = table.IndexedFieldInfos;
         var buffers = table.FieldShadowBuffers;
@@ -1975,9 +2029,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             {
                 var index = ifi.PersistentIndex;
 
-                // ChangeSet required for index write operations (Move/MoveValue may trigger TAIL segment growth for AllowMultiple indexes). Created per-field,
-                // saved after processing.
-                var changeSet = MMF.CreateChangeSet();
+                // ChangeSet required for index write operations (Move/MoveValue may trigger TAIL segment growth for AllowMultiple indexes).
+                // Reuse the caller's shared ChangeSet — UoW owns the commit lifecycle (see WriteTickFence).
                 var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
                 var idxAccessor = index.Segment.CreateChunkAccessor(changeSet);
                 try
@@ -1988,7 +2041,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                 {
                     compAccessor.Dispose();
                     idxAccessor.Dispose();
-                    changeSet.SaveChanges();
                 }
             }
 
@@ -2091,10 +2143,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// Iterate dirty entities from the tick fence snapshot and update spatial R-Tree positions.
     /// For each dirty entity: if not destroyed, call UpdateSpatial (fat AABB containment check → possible reinsert).
     /// </summary>
-    private unsafe void ProcessSpatialEntries(ComponentTable table, long[] dirtyBits)
+    private unsafe void ProcessSpatialEntries(ComponentTable table, long[] dirtyBits, ChangeSet changeSet)
     {
         var state = table.SpatialIndex;
-        var changeSet = MMF.CreateChangeSet();
 
         // Hoist accessor creation before the entity loop (same pattern as B+Tree batch index maintenance)
         var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
@@ -2138,7 +2189,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             bpAccessor.Dispose();
             treeAccessor.Dispose();
             compAccessor.Dispose();
-            changeSet.SaveChanges();
+            // SaveChanges deliberately omitted: caller (WriteTickFence) owns the ChangeSet lifecycle.
         }
 
         // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB.

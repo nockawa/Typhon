@@ -17,6 +17,16 @@ public sealed partial class DagScheduler
         var targetMs = 1000f / _options.BaseTickRate;
         var overrunRatio = actualMs / targetMs;
 
+        // Effective ratio for the OverloadDetector — measured against the CURRENT multiplier-adjusted budget rather than the 1× base target. Issue #289
+        // follow-up: with the base-rate ratio, a workload that fits comfortably at multiplier=N is still classified as "overrun" because it exceeds
+        // the 1× target — so deescalation never fires and the engine is trapped at max throttle even when there's slack. Switching the detector to use the
+        // effective ratio lets the multiplier self-stabilise: it ramps UP under base-rate overrun (because effective ratio at low mult ≈ base ratio), and
+        // ramps DOWN once the throttled budget is comfortable.
+        // The display-side `overrunRatio` (kind-242 event, level-change event, log warning, OverloadStrip chart) keeps the BASE-rate semantic — that's what
+        // the user expects to see when they ask "is this tick overrunning the engine target?".
+        var multiplierClamped = Math.Max(1, _tickMultiplier);
+        var effectiveRatio = actualMs / (targetMs * multiplierClamped);
+
         // Tick-to-tick interval: the real period seen by the simulation
         var tickIntervalMs = 0f;
         if (_previousTickStart > 0)
@@ -57,8 +67,8 @@ public sealed partial class DagScheduler
                             // We approximate: theoretical = actual if perfectly balanced. The gap is the deviation.
                             // Use a simpler metric: chunk_work × totalChunks / parallelism (but we don't know chunk_work).
                             // Fall back to: gap = 0 when only 1 worker touched it, otherwise report raw duration as-is.
-                            // For v1, just record duration. The straggler gap will be more meaningful when we have
-                            // per-chunk timing data from actual Pipeline integration.
+                            // For v1, just record duration. The straggler gap will be more meaningful when we have per-chunk timing data from actual
+                            // Pipeline integration.
                             sm.StragglerGapUs = 0f; // Placeholder — refined in Pipeline integration (#196)
                         }
                     }
@@ -80,10 +90,11 @@ public sealed partial class DagScheduler
             queueDepth += _eventQueues[i].Count;
         }
 
-        // Update overload state machine
+        // Update overload state machine — uses the EFFECTIVE ratio (vs current multiplier-adjusted target) so the detector can recognise headroom at high
+        // multipliers and step the throttle back down. See the comment at the top of this method for why effectiveRatio ≠ overrunRatio under throttle.
         var previousLevel = _overloadDetector.CurrentLevel;
         var previousMul = _tickMultiplier;
-        var levelChanged = _overloadDetector.Update(overrunRatio, queueDepth);
+        var levelChanged = _overloadDetector.Update(effectiveRatio, queueDepth);
         _tickMultiplier = _overloadDetector.TickMultiplier;
 
         if (levelChanged)
@@ -96,6 +107,20 @@ public sealed partial class DagScheduler
                 OnCriticalOverloadCallback?.Invoke();
             }
         }
+
+        // Per-tick OverloadDetector gauge (issue #289 follow-up). Carries the full state used to drive
+        // escalation/deescalation decisions so an offline trace can audit *why* the engine throttled —
+        // not just the level transitions (which only fire on change). Default-OFF leaf flag,
+        // <c>Scheduler:Overload:Detector:Enabled</c>, controls emission.
+        Profiler.TyphonEvent.EmitSchedulerOverloadDetector(
+            _currentTickNumber,
+            overrunRatio,
+            (ushort)Math.Min(_overloadDetector.ConsecutiveOverrunTicks, ushort.MaxValue),
+            (ushort)Math.Min(_overloadDetector.ConsecutiveUnderrunTicks, ushort.MaxValue),
+            (ushort)Math.Min(_overloadDetector.ConsecutiveQueueGrowthTicks, ushort.MaxValue),
+            queueDepth,
+            (byte)_overloadDetector.CurrentLevel,
+            (byte)Math.Min(_tickMultiplier, byte.MaxValue));
 
         var tickTelemetry = new TickTelemetry
         {

@@ -52,9 +52,14 @@ public static class TyphonEvent
     // when the profiler is off, the JIT still dead-code-eliminates the entire prologue including this array access. When the profiler is on,
     // the cost is one predictable cache-hot load + branch per factory call (~1 ns).
     //
-    // Defaults: the 5 PageCache.* kinds are suppressed. PageCacheFetch is the dangerous one — called on every ChunkAccessor.GetPage in hot
-    // loops, easily millions/sec on a read-heavy workload. We suppress all five page-cache kinds together for consistency; users running a
-    // cache-miss investigation opt specific ones back in via UnsuppressKind.
+    // Defaults: the deny-list is reserved for truly extreme-frequency kinds (≥10⁵ events/sec on realistic workloads) where accidentally
+    // enabling them via the JSON config would saturate the trace ring buffer in microseconds. Diagnostic-grade kinds — those that fire
+    // at most a few hundred times per second (per-tick checkpoints, per-UoW state transitions, async I/O completions) — are gated solely
+    // by their JSON category and do NOT live here. Operators who want them flip the parent category in typhon.telemetry.json.
+    //
+    // The original deny-list grouped everything page-cache-related "for consistency" with PageCacheFetch (the actual killer at millions/sec),
+    // and everything WAL/UoW-related with WalFrame. That overshot — kinds like PageCacheFlushCompleted (≪1/sec) ended up unreachable from
+    // config alone, forcing a C# UnsuppressKind call just to diagnose a slow flush. The 2026-04-30 re-tier removed those.
     //
     // Replaces the pre-#243 TelemetryConfig.PagedMMFSpanCacheMiss / PagedMMFSpanIOOnly flags, which were compile-time gates for the old
     // TyphonActivitySource.StartActivity call path. The typed-event profiler has a single coarse gate (ProfilerActive) plus this fine-grained
@@ -64,24 +69,18 @@ public static class TyphonEvent
 
     static TyphonEvent()
     {
+        // Page cache: only PageCacheFetch is truly extreme (every ChunkAccessor.GetPage in hot loops, easily millions/sec on read-heavy
+        // workloads). The other 9 page-cache kinds (DiskRead/Write/Flush kickoffs + their async Completed peers + AllocatePage + Evicted
+        // + Backpressure) all fire at the rate of disk operations or eviction events — orders of magnitude less. Those are gated solely
+        // by Storage:PageCache:Enabled in the JSON config now.
         SuppressedKinds[(int)TraceEventKind.PageCacheFetch] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheDiskRead] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheDiskWrite] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheAllocatePage] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheFlush] = true;
-        SuppressedKinds[(int)TraceEventKind.PageEvicted] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheDiskReadCompleted] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheDiskWriteCompleted] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheFlushCompleted] = true;
-        SuppressedKinds[(int)TraceEventKind.PageCacheBackpressure] = true;
 
-        // Phase 6 — Extreme-frequency Data plane leaves stay deny-listed even when their
-        // leaf gate flips on; operators must call UnsuppressKind to opt in for forensic runs.
+        // Data plane: high-frequency MVCC and B+Tree leaves stay deny-listed even when Data:* flips on in JSON.
         SuppressedKinds[(int)TraceEventKind.DataMvccChainWalk] = true;
         SuppressedKinds[(int)TraceEventKind.DataIndexBTreeSearch] = true;
         SuppressedKinds[(int)TraceEventKind.DataIndexBTreeNodeCow] = true;
 
-        // Phase 7 — Extreme/high-frequency Query / ECS:View leaves stay deny-listed.
+        // Extreme/high-frequency Query / ECS:View leaves.
         SuppressedKinds[(int)TraceEventKind.QueryExecuteIterate] = true;
         SuppressedKinds[(int)TraceEventKind.QueryExecuteFilter] = true;
         SuppressedKinds[(int)TraceEventKind.QueryExecutePagination] = true;
@@ -89,13 +88,12 @@ public static class TyphonEvent
         SuppressedKinds[(int)TraceEventKind.EcsViewProcessEntry] = true;
         SuppressedKinds[(int)TraceEventKind.EcsViewProcessEntryOr] = true;
 
-        // Phase 8 — Extreme-frequency Durability leaves stay deny-listed (belt-and-suspenders Q3).
+        // Durability: only WalFrame qualifies (one record per commit on a high-throughput workload = 10⁴+/sec). RecoveryRecord is startup-only;
+        // UoW State/Deadline fire at the per-tick rate (~60-300/sec at 60 TPS) and are exactly what an operator wants to see when diagnosing
+        // a slow UoW.Flush. Both came off the deny-list — they are gated by Durability:* in JSON like the rest.
         SuppressedKinds[(int)TraceEventKind.DurabilityWalFrame] = true;
-        SuppressedKinds[(int)TraceEventKind.DurabilityRecoveryRecord] = true;
-        SuppressedKinds[(int)TraceEventKind.DurabilityUowState] = true;
-        SuppressedKinds[(int)TraceEventKind.DurabilityUowDeadline] = true;
 
-        // Phase 9 — High-frequency Subscription leaves deny-listed (Q5).
+        // High-frequency Subscription leaves.
         SuppressedKinds[(int)TraceEventKind.RuntimeSubscriptionSubscriber] = true;
         SuppressedKinds[(int)TraceEventKind.RuntimeSubscriptionDeltaSerialize] = true;
     }
@@ -696,8 +694,9 @@ public static class TyphonEvent
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.ClusterMigration"/> span.</summary>
+    /// <param name="componentCount">Total component instances moved this batch (entities × per-entity slot count). Surfaces in the viewer's tooltip alongside entity count.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ClusterMigrationEvent BeginClusterMigration(ushort archetypeId, int migrationCount)
+    public static ClusterMigrationEvent BeginClusterMigration(ushort archetypeId, int migrationCount, int componentCount)
     {
         if (!BeginPrologue(TraceEventKind.ClusterMigration, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -715,6 +714,37 @@ public static class TyphonEvent
             TraceIdLo = traceIdLo,
             ArchetypeId = archetypeId,
             MigrationCount = migrationCount,
+            ComponentCount = componentCount,
+        };
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Runtime tick lifecycle phase span
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Begin a <see cref="TraceEventKind.RuntimePhaseSpan"/> span covering one tick lifecycle phase. Child spans started inside the phase
+    /// attach via <c>parentSpanId</c>, giving the profiler view a correct parent-child hierarchy in the phase track. Replaces the pre-existing
+    /// <c>EmitPhaseStart</c>+<c>EmitPhaseEnd</c> instant pair on the producer side.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimePhaseSpanEvent BeginRuntimePhase(TickPhase phase)
+    {
+        if (!BeginPrologue(TraceEventKind.RuntimePhaseSpan, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
+                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+        {
+            return default;
+        }
+        return new RuntimePhaseSpanEvent
+        {
+            ThreadSlot = (byte)slotIdx,
+            StartTimestamp = startTs,
+            SpanId = spanId,
+            ParentSpanId = parentSpanId,
+            PreviousSpanId = previousSpanId,
+            TraceIdHi = traceIdHi,
+            TraceIdLo = traceIdLo,
+            Phase = (byte)phase,
         };
     }
 
@@ -2484,11 +2514,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialGridCellTierChange(int cellKey, byte oldTier, byte newTier)
     {
-        if (!TelemetryConfig.SpatialGridCellTierChangeActive) return;
+        if (!TelemetryConfig.SpatialGridCellTierChangeActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialGridEventCodec.CellTierChangeSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialGridEventCodec.CellTierChangeSize, out var dst))
+        {
+            return;
+        }
+
         SpatialGridEventCodec.WriteCellTierChange(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), cellKey, oldTier, newTier);
         ring.Publish();
     }
@@ -2497,11 +2539,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialGridOccupancyChange(int cellKey, sbyte delta, ushort occBefore, ushort occAfter)
     {
-        if (!TelemetryConfig.SpatialGridOccupancyChangeActive) return;
+        if (!TelemetryConfig.SpatialGridOccupancyChangeActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialGridEventCodec.OccupancyChangeSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialGridEventCodec.OccupancyChangeSize, out var dst))
+        {
+            return;
+        }
+
         SpatialGridEventCodec.WriteOccupancyChange(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), cellKey, delta, occBefore, occAfter);
         ring.Publish();
     }
@@ -2510,11 +2564,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialGridClusterCellAssign(int clusterChunkId, int cellKey, ushort archetypeId)
     {
-        if (!TelemetryConfig.SpatialGridClusterCellAssignActive) return;
+        if (!TelemetryConfig.SpatialGridClusterCellAssignActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialGridEventCodec.ClusterCellAssignSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialGridEventCodec.ClusterCellAssignSize, out var dst))
+        {
+            return;
+        }
+
         SpatialGridEventCodec.WriteClusterCellAssign(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), clusterChunkId, cellKey, archetypeId);
         ring.Publish();
     }
@@ -2525,11 +2591,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialCellIndexAdd(int cellKey, int slot, int clusterChunkId, int capacity)
     {
-        if (!TelemetryConfig.SpatialCellIndexAddActive) return;
+        if (!TelemetryConfig.SpatialCellIndexAddActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialCellIndexEventCodec.AddSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialCellIndexEventCodec.AddSize, out var dst))
+        {
+            return;
+        }
+
         SpatialCellIndexEventCodec.WriteAdd(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), cellKey, slot, clusterChunkId, capacity);
         ring.Publish();
     }
@@ -2538,11 +2616,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialCellIndexUpdate(int cellKey, int slot)
     {
-        if (!TelemetryConfig.SpatialCellIndexUpdateActive) return;
+        if (!TelemetryConfig.SpatialCellIndexUpdateActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialCellIndexEventCodec.UpdateSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialCellIndexEventCodec.UpdateSize, out var dst))
+        {
+            return;
+        }
+
         SpatialCellIndexEventCodec.WriteUpdate(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), cellKey, slot);
         ring.Publish();
     }
@@ -2551,11 +2641,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialCellIndexRemove(int cellKey, int slot, int swappedClusterId)
     {
-        if (!TelemetryConfig.SpatialCellIndexRemoveActive) return;
+        if (!TelemetryConfig.SpatialCellIndexRemoveActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialCellIndexEventCodec.RemoveSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialCellIndexEventCodec.RemoveSize, out var dst))
+        {
+            return;
+        }
+
         SpatialCellIndexEventCodec.WriteRemove(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), cellKey, slot, swappedClusterId);
         ring.Publish();
     }
@@ -2566,11 +2668,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialClusterMigrationDetect(ushort archetypeId, int clusterChunkId, int oldCellKey, int newCellKey)
     {
-        if (!TelemetryConfig.SpatialClusterMigrationDetectActive) return;
+        if (!TelemetryConfig.SpatialClusterMigrationDetectActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialClusterMigrationEventCodec.DetectSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialClusterMigrationEventCodec.DetectSize, out var dst))
+        {
+            return;
+        }
+
         SpatialClusterMigrationEventCodec.WriteDetect(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), archetypeId, clusterChunkId, oldCellKey, newCellKey);
         ring.Publish();
     }
@@ -2579,11 +2693,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialClusterMigrationQueue(ushort archetypeId, int clusterChunkId, ushort queueLen)
     {
-        if (!TelemetryConfig.SpatialClusterMigrationQueueActive) return;
+        if (!TelemetryConfig.SpatialClusterMigrationQueueActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialClusterMigrationEventCodec.QueueSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialClusterMigrationEventCodec.QueueSize, out var dst))
+        {
+            return;
+        }
+
         SpatialClusterMigrationEventCodec.WriteQueue(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), archetypeId, clusterChunkId, queueLen);
         ring.Publish();
     }
@@ -2592,11 +2718,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialClusterMigrationHysteresis(ushort archetypeId, int clusterChunkId, float escapeDistSq)
     {
-        if (!TelemetryConfig.SpatialClusterMigrationHysteresisActive) return;
+        if (!TelemetryConfig.SpatialClusterMigrationHysteresisActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialClusterMigrationEventCodec.HysteresisSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialClusterMigrationEventCodec.HysteresisSize, out var dst))
+        {
+            return;
+        }
+
         SpatialClusterMigrationEventCodec.WriteHysteresis(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), archetypeId, clusterChunkId, escapeDistSq);
         ring.Publish();
     }
@@ -2627,11 +2765,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialTierIndexVersionSkip(ushort archetypeId, int version, byte reason)
     {
-        if (!TelemetryConfig.SpatialTierIndexVersionSkipActive) return;
+        if (!TelemetryConfig.SpatialTierIndexVersionSkipActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialTierIndexEventCodec.VersionSkipSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialTierIndexEventCodec.VersionSkipSize, out var dst))
+        {
+            return;
+        }
+
         SpatialTierIndexEventCodec.WriteVersionSkip(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), archetypeId, version, reason);
         ring.Publish();
     }
@@ -2684,11 +2834,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialMaintainAabbValidate(long entityPK, ushort componentTypeId, byte opcode)
     {
-        if (!TelemetryConfig.SpatialMaintainAabbValidateActive) return;
+        if (!TelemetryConfig.SpatialMaintainAabbValidateActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialMaintainEventCodec.AabbValidateSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialMaintainEventCodec.AabbValidateSize, out var dst))
+        {
+            return;
+        }
+
         SpatialMaintainEventCodec.WriteAabbValidate(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), entityPK, componentTypeId, opcode);
         ring.Publish();
     }
@@ -2697,11 +2859,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialMaintainBackPointerWrite(int componentChunkId, int leafChunkId, ushort slotIndex)
     {
-        if (!TelemetryConfig.SpatialMaintainBackPointerWriteActive) return;
+        if (!TelemetryConfig.SpatialMaintainBackPointerWriteActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialMaintainEventCodec.BackPointerWriteSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialMaintainEventCodec.BackPointerWriteSize, out var dst))
+        {
+            return;
+        }
+
         SpatialMaintainEventCodec.WriteBackPointerWrite(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), componentChunkId, leafChunkId, slotIndex);
         ring.Publish();
     }
@@ -2712,11 +2886,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialTriggerRegion(byte op, ushort regionId, uint categoryMask)
     {
-        if (!TelemetryConfig.SpatialTriggerRegionActive) return;
+        if (!TelemetryConfig.SpatialTriggerRegionActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialTriggerEventCodec.RegionSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialTriggerEventCodec.RegionSize, out var dst))
+        {
+            return;
+        }
+
         SpatialTriggerEventCodec.WriteRegion(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), op, regionId, categoryMask);
         ring.Publish();
     }
@@ -2745,11 +2931,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialTriggerOccupantDiff(ushort regionId, ushort prevCount, ushort currCount, ushort enterCount, ushort leaveCount)
     {
-        if (!TelemetryConfig.SpatialTriggerOccupantDiffActive) return;
+        if (!TelemetryConfig.SpatialTriggerOccupantDiffActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialTriggerEventCodec.OccupantDiffSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialTriggerEventCodec.OccupantDiffSize, out var dst))
+        {
+            return;
+        }
+
         SpatialTriggerEventCodec.WriteOccupantDiff(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), regionId, prevCount, currCount, enterCount, leaveCount);
         ring.Publish();
     }
@@ -2758,11 +2956,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialTriggerCacheInvalidate(ushort regionId, int oldVersion, int newVersion)
     {
-        if (!TelemetryConfig.SpatialTriggerCacheInvalidateActive) return;
+        if (!TelemetryConfig.SpatialTriggerCacheInvalidateActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SpatialTriggerEventCodec.CacheInvalidateSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SpatialTriggerEventCodec.CacheInvalidateSize, out var dst))
+        {
+            return;
+        }
+
         SpatialTriggerEventCodec.WriteCacheInvalidate(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), regionId, oldVersion, newVersion);
         ring.Publish();
     }
@@ -2781,11 +2991,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerSystemStartExecution(ushort sysIdx)
     {
-        if (!TelemetryConfig.SchedulerSystemStartExecutionActive) return;
+        if (!TelemetryConfig.SchedulerSystemStartExecutionActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerSystemEventCodec.StartExecutionSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerSystemEventCodec.StartExecutionSize, out var dst))
+        {
+            return;
+        }
+
         SchedulerSystemEventCodec.WriteStartExecution(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), sysIdx);
         ring.Publish();
     }
@@ -2794,11 +3016,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerSystemCompletion(ushort sysIdx, byte reason, uint durationUs)
     {
-        if (!TelemetryConfig.SchedulerSystemCompletionActive) return;
+        if (!TelemetryConfig.SchedulerSystemCompletionActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerSystemEventCodec.CompletionSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerSystemEventCodec.CompletionSize, out var dst))
+        {
+            return;
+        }
+
         SchedulerSystemEventCodec.WriteCompletion(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), sysIdx, reason, durationUs);
         ring.Publish();
     }
@@ -2807,11 +3041,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerSystemQueueWait(ushort sysIdx, uint queueWaitUs)
     {
-        if (!TelemetryConfig.SchedulerSystemQueueWaitActive) return;
+        if (!TelemetryConfig.SchedulerSystemQueueWaitActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerSystemEventCodec.QueueWaitSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerSystemEventCodec.QueueWaitSize, out var dst))
+        {
+            return;
+        }
+
         SchedulerSystemEventCodec.WriteQueueWait(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), sysIdx, queueWaitUs);
         ring.Publish();
     }
@@ -2863,11 +3109,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerWorkerWake(byte workerId, uint delayUs)
     {
-        if (!TelemetryConfig.SchedulerWorkerWakeActive) return;
+        if (!TelemetryConfig.SchedulerWorkerWakeActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerWorkerEventCodec.WakeSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerWorkerEventCodec.WakeSize, out var dst))
+        {
+            return;
+        }
+
         SchedulerWorkerEventCodec.WriteWake(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), workerId, delayUs);
         ring.Publish();
     }
@@ -2898,11 +3156,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerDispense(ushort sysIdx, int chunkIdx, byte workerId)
     {
-        if (!TelemetryConfig.SchedulerDispenseActive) return;
+        if (!TelemetryConfig.SchedulerDispenseActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerDispenseEventCodec.Size, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerDispenseEventCodec.Size, out var dst))
+        {
+            return;
+        }
+
         SchedulerDispenseEventCodec.Write(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), sysIdx, chunkIdx, workerId);
         ring.Publish();
     }
@@ -2913,11 +3183,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerDependencyReady(ushort fromSysIdx, ushort toSysIdx, ushort fanOut, ushort predRemain)
     {
-        if (!TelemetryConfig.SchedulerDependencyReadyActive) return;
+        if (!TelemetryConfig.SchedulerDependencyReadyActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerDependencyEventCodec.ReadySize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerDependencyEventCodec.ReadySize, out var dst))
+        {
+            return;
+        }
+
         SchedulerDependencyEventCodec.WriteReady(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), fromSysIdx, toSysIdx, fanOut, predRemain);
         ring.Publish();
     }
@@ -2948,11 +3230,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerOverloadLevelChange(byte prevLvl, byte newLvl, float ratio, int queueDepth, byte oldMul, byte newMul)
     {
-        if (!TelemetryConfig.SchedulerOverloadLevelChangeActive) return;
+        if (!TelemetryConfig.SchedulerOverloadLevelChangeActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerOverloadEventCodec.LevelChangeSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerOverloadEventCodec.LevelChangeSize, out var dst))
+        {
+            return;
+        }
+
         SchedulerOverloadEventCodec.WriteLevelChange(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), prevLvl, newLvl, ratio, queueDepth, oldMul, newMul);
         ring.Publish();
     }
@@ -2961,11 +3255,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerOverloadSystemShed(ushort sysIdx, byte level, ushort divisor, byte decision)
     {
-        if (!TelemetryConfig.SchedulerOverloadSystemShedActive) return;
+        if (!TelemetryConfig.SchedulerOverloadSystemShedActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerOverloadEventCodec.SystemShedSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerOverloadEventCodec.SystemShedSize, out var dst))
+        {
+            return;
+        }
+
         SchedulerOverloadEventCodec.WriteSystemShed(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), sysIdx, level, divisor, decision);
         ring.Publish();
     }
@@ -2974,12 +3280,103 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSchedulerOverloadTickMultiplier(long tick, byte multiplier, byte intervalTicks)
     {
-        if (!TelemetryConfig.SchedulerOverloadTickMultiplierActive) return;
+        if (!TelemetryConfig.SchedulerOverloadTickMultiplierActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(SchedulerOverloadEventCodec.TickMultiplierSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(SchedulerOverloadEventCodec.TickMultiplierSize, out var dst))
+        {
+            return;
+        }
+
         SchedulerOverloadEventCodec.WriteTickMultiplier(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), tick, multiplier, intervalTicks);
+        ring.Publish();
+    }
+
+    /// <summary>
+    /// Emit <see cref="TraceEventKind.SchedulerOverloadDetector"/> — per-tick OverloadDetector state snapshot.
+    /// Called once per tick from <c>DagScheduler.ComputeAndRecordTelemetry</c> after the detector update.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitSchedulerOverloadDetector(long tick, float overrunRatio, ushort consecutiveOverrun, ushort consecutiveUnderrun, 
+        ushort consecutiveQueueGrowth, int queueDepth, byte level, byte multiplier)
+    {
+        if (!TelemetryConfig.SchedulerOverloadDetectorActive)
+        {
+            return;
+        }
+
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
+        var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
+        if (ring == null || !ring.TryReserve(SchedulerMetronomeEventCodec.DetectorSize, out var dst))
+        {
+            return;
+        }
+
+        SchedulerMetronomeEventCodec.WriteDetector(dst, (byte)slotIdx, Stopwatch.GetTimestamp(),
+            tick, overrunRatio, consecutiveOverrun, consecutiveUnderrun, consecutiveQueueGrowth,
+            queueDepth, level, multiplier);
+        ring.Publish();
+    }
+
+    // ── Scheduler:Metronome (kind 241) — issue #289 follow-up ───────────────
+
+    /// <summary>
+    /// Emit <see cref="TraceEventKind.SchedulerMetronomeWait"/> — span covering the timer thread's
+    /// inter-tick wait (Sleep→Yield→Spin). Called by <c>HighResolutionTimerServiceBase</c>'s
+    /// <c>OnWaitComplete</c> hook after each wait completes (via <see cref="DagScheduler"/>'s override).
+    /// </summary>
+    /// <remarks>
+    /// Bypasses <see cref="BeginPrologue"/> because we control the start timestamp (it was captured
+    /// at wait-loop entry, not at call-time), but mints a real <see cref="SpanIdGenerator"/> id so
+    /// each emitted span is uniquely addressable. <c>parentSpanId</c> is left at 0 — the wait has
+    /// no lexically enclosing span on the timer thread.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void EmitSchedulerMetronomeWait(long startTimestamp, long endTimestamp, long scheduledTimestamp, byte multiplier, byte intentClass, 
+        byte phaseFlags)
+    {
+        if (!TelemetryConfig.SchedulerMetronomeWaitActive)
+        {
+            return;
+        }
+
+        var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
+        var slot = ThreadSlotRegistry.GetSlot(slotIdx);
+        var ring = slot.Buffer;
+        if (ring == null)
+        {
+            return;
+        }
+
+        var size = SchedulerMetronomeEventCodec.ComputeSizeWait(hasTraceContext: false);
+        if (!ring.TryReserve(size, out var dst))
+        {
+            return;
+        }
+
+        var spanId = SpanIdGenerator.NextId(slotIdx, slot);
+        SchedulerMetronomeEventCodec.EncodeWait(dst, (byte)slotIdx, startTimestamp, endTimestamp,
+            spanId, parentSpanId: 0,
+            scheduledTimestamp, multiplier, intentClass, phaseFlags, out _);
         ring.Publish();
     }
 
@@ -3032,11 +3429,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitRuntimePhaseUoWCreate(long tick)
     {
-        if (!TelemetryConfig.RuntimePhaseUoWCreateActive) return;
+        if (!TelemetryConfig.RuntimePhaseUoWCreateActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(RuntimeEventCodec.UoWCreateSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(RuntimeEventCodec.UoWCreateSize, out var dst))
+        {
+            return;
+        }
+
         RuntimeEventCodec.WriteUoWCreate(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), tick);
         ring.Publish();
     }
@@ -3045,11 +3454,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitRuntimePhaseUoWFlush(long tick, int changeCount)
     {
-        if (!TelemetryConfig.RuntimePhaseUoWFlushActive) return;
+        if (!TelemetryConfig.RuntimePhaseUoWFlushActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(RuntimeEventCodec.UoWFlushSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(RuntimeEventCodec.UoWFlushSize, out var dst))
+        {
+            return;
+        }
+
         RuntimeEventCodec.WriteUoWFlush(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), tick, changeCount);
         ring.Publish();
     }
@@ -3208,11 +3629,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitStorageSegmentCreate(int segmentId, int pageCount)
     {
-        if (!TelemetryConfig.StorageSegmentCreateActive) return;
+        if (!TelemetryConfig.StorageSegmentCreateActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(StorageSegmentEventCodec.CreateLoadSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(StorageSegmentEventCodec.CreateLoadSize, out var dst))
+        {
+            return;
+        }
+
         StorageSegmentEventCodec.WriteCreate(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), segmentId, pageCount);
         ring.Publish();
     }
@@ -3221,11 +3654,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitStorageSegmentGrow(int segmentId, int oldLen, int newLen)
     {
-        if (!TelemetryConfig.StorageSegmentGrowActive) return;
+        if (!TelemetryConfig.StorageSegmentGrowActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(StorageSegmentEventCodec.GrowSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(StorageSegmentEventCodec.GrowSize, out var dst))
+        {
+            return;
+        }
+
         StorageSegmentEventCodec.WriteGrow(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), segmentId, oldLen, newLen);
         ring.Publish();
     }
@@ -3234,11 +3679,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitStorageSegmentLoad(int segmentId, int pageCount)
     {
-        if (!TelemetryConfig.StorageSegmentLoadActive) return;
+        if (!TelemetryConfig.StorageSegmentLoadActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(StorageSegmentEventCodec.CreateLoadSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(StorageSegmentEventCodec.CreateLoadSize, out var dst))
+        {
+            return;
+        }
+
         StorageSegmentEventCodec.WriteLoad(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), segmentId, pageCount);
         ring.Publish();
     }
@@ -3247,11 +3704,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitStorageChunkSegmentGrow(int stride, int oldCap, int newCap)
     {
-        if (!TelemetryConfig.StorageChunkSegmentGrowActive) return;
+        if (!TelemetryConfig.StorageChunkSegmentGrowActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(StorageMiscEventCodec.ChunkSegmentGrowSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(StorageMiscEventCodec.ChunkSegmentGrowSize, out var dst))
+        {
+            return;
+        }
+
         StorageMiscEventCodec.WriteChunkSegmentGrow(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), stride, oldCap, newCap);
         ring.Publish();
     }
@@ -3260,11 +3729,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitStorageFileHandle(byte op, int filePathId, byte modeOrReason)
     {
-        if (!TelemetryConfig.StorageFileHandleEnabledActive) return;
+        if (!TelemetryConfig.StorageFileHandleEnabledActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(StorageMiscEventCodec.FileHandleSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(StorageMiscEventCodec.FileHandleSize, out var dst))
+        {
+            return;
+        }
+
         StorageMiscEventCodec.WriteFileHandle(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), op, filePathId, modeOrReason);
         ring.Publish();
     }
@@ -3273,11 +3754,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitStorageOccupancyMapGrow(int oldCap, int newCap)
     {
-        if (!TelemetryConfig.StorageOccupancyMapGrowActive) return;
+        if (!TelemetryConfig.StorageOccupancyMapGrowActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(StorageMiscEventCodec.OccupancyMapGrowSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(StorageMiscEventCodec.OccupancyMapGrowSize, out var dst))
+        {
+            return;
+        }
+
         StorageMiscEventCodec.WriteOccupancyMapGrow(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), oldCap, newCap);
         ring.Publish();
     }
@@ -3289,11 +3782,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitMemoryAlignmentWaste(int size, int alignment, ushort wastePctHundredths)
     {
-        if (!TelemetryConfig.MemoryAlignmentWasteActive) return;
+        if (!TelemetryConfig.MemoryAlignmentWasteActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(MemoryAlignmentWasteEventCodec.Size, out var dst)) return;
+        if (ring == null || !ring.TryReserve(MemoryAlignmentWasteEventCodec.Size, out var dst))
+        {
+            return;
+        }
+
         MemoryAlignmentWasteEventCodec.Write(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), size, alignment, wastePctHundredths);
         ring.Publish();
     }
@@ -3306,9 +3811,13 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DataTransactionInitEvent BeginDataTransactionInit(long tsn, ushort uowId)
     {
-        if (!TelemetryConfig.DataTransactionInitActive) return default;
+        if (!TelemetryConfig.DataTransactionInitActive)
+        {
+            return default;
+        }
+
         if (!BeginPrologue(TraceEventKind.DataTransactionInit, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+                out var previousSpanId, out var traceIdHi, out var traceIdLo))
         {
             return default;
         }
@@ -3324,9 +3833,13 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DataTransactionPrepareEvent BeginDataTransactionPrepare(long tsn)
     {
-        if (!TelemetryConfig.DataTransactionPrepareActive) return default;
+        if (!TelemetryConfig.DataTransactionPrepareActive)
+        {
+            return default;
+        }
+
         if (!BeginPrologue(TraceEventKind.DataTransactionPrepare, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+                out var previousSpanId, out var traceIdHi, out var traceIdLo))
         {
             return default;
         }
@@ -3341,9 +3854,13 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DataTransactionValidateEvent BeginDataTransactionValidate(long tsn, int entryCount)
     {
-        if (!TelemetryConfig.DataTransactionValidateActive) return default;
+        if (!TelemetryConfig.DataTransactionValidateActive)
+        {
+            return default;
+        }
+
         if (!BeginPrologue(TraceEventKind.DataTransactionValidate, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+                out var previousSpanId, out var traceIdHi, out var traceIdLo))
         {
             return default;
         }
@@ -3358,11 +3875,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataTransactionConflict(long tsn, long pk, int componentTypeId, byte conflictType)
     {
-        if (!TelemetryConfig.DataTransactionConflictActive) return;
+        if (!TelemetryConfig.DataTransactionConflictActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DataTransactionEventCodec.ConflictSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DataTransactionEventCodec.ConflictSize, out var dst))
+        {
+            return;
+        }
+
         DataTransactionEventCodec.WriteConflict(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), tsn, pk, componentTypeId, conflictType);
         ring.Publish();
     }
@@ -3371,9 +3900,13 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DataTransactionCleanupEvent BeginDataTransactionCleanup(long tsn, int entityCount)
     {
-        if (!TelemetryConfig.DataTransactionCleanupActive) return default;
+        if (!TelemetryConfig.DataTransactionCleanupActive)
+        {
+            return default;
+        }
+
         if (!BeginPrologue(TraceEventKind.DataTransactionCleanup, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+                out var previousSpanId, out var traceIdHi, out var traceIdLo))
         {
             return default;
         }
@@ -3388,12 +3921,28 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataMvccChainWalk(long tsn, byte chainLen, byte visibility)
     {
-        if (!TelemetryConfig.DataMvccChainWalkActive) return;
-        if (SuppressedKinds[(int)TraceEventKind.DataMvccChainWalk]) return;
+        if (!TelemetryConfig.DataMvccChainWalkActive)
+        {
+            return;
+        }
+
+        if (SuppressedKinds[(int)TraceEventKind.DataMvccChainWalk])
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DataMvccEventCodec.ChainWalkSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DataMvccEventCodec.ChainWalkSize, out var dst))
+        {
+            return;
+        }
+
         DataMvccEventCodec.WriteChainWalk(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), tsn, chainLen, visibility);
         ring.Publish();
     }
@@ -3402,9 +3951,13 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DataMvccVersionCleanupEvent BeginDataMvccVersionCleanup(long pk)
     {
-        if (!TelemetryConfig.DataMvccVersionCleanupActive) return default;
+        if (!TelemetryConfig.DataMvccVersionCleanupActive)
+        {
+            return default;
+        }
+
         if (!BeginPrologue(TraceEventKind.DataMvccVersionCleanup, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+                out var previousSpanId, out var traceIdHi, out var traceIdLo))
         {
             return default;
         }
@@ -3419,12 +3972,28 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataIndexBTreeSearch(byte retryReason, byte restartCount)
     {
-        if (!TelemetryConfig.DataIndexBTreeSearchActive) return;
-        if (SuppressedKinds[(int)TraceEventKind.DataIndexBTreeSearch]) return;
+        if (!TelemetryConfig.DataIndexBTreeSearchActive)
+        {
+            return;
+        }
+
+        if (SuppressedKinds[(int)TraceEventKind.DataIndexBTreeSearch])
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.SearchSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.SearchSize, out var dst))
+        {
+            return;
+        }
+
         DataIndexBTreeEventCodec.WriteSearch(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), retryReason, restartCount);
         ring.Publish();
     }
@@ -3433,9 +4002,13 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DataIndexBTreeRangeScanEvent BeginDataIndexBTreeRangeScan()
     {
-        if (!TelemetryConfig.DataIndexBTreeRangeScanActive) return default;
+        if (!TelemetryConfig.DataIndexBTreeRangeScanActive)
+        {
+            return default;
+        }
+
         if (!BeginPrologue(TraceEventKind.DataIndexBTreeRangeScan, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+                out var previousSpanId, out var traceIdHi, out var traceIdLo))
         {
             return default;
         }
@@ -3451,11 +4024,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataIndexBTreeRangeScanRevalidate(byte restartCount)
     {
-        if (!TelemetryConfig.DataIndexBTreeRangeScanRevalidateActive) return;
+        if (!TelemetryConfig.DataIndexBTreeRangeScanRevalidateActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.RevalidateSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.RevalidateSize, out var dst))
+        {
+            return;
+        }
+
         DataIndexBTreeEventCodec.WriteRevalidate(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), restartCount);
         ring.Publish();
     }
@@ -3464,11 +4049,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataIndexBTreeRebalanceFallback(byte reason)
     {
-        if (!TelemetryConfig.DataIndexBTreeRebalanceFallbackActive) return;
+        if (!TelemetryConfig.DataIndexBTreeRebalanceFallbackActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.RebalanceFallbackSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.RebalanceFallbackSize, out var dst))
+        {
+            return;
+        }
+
         DataIndexBTreeEventCodec.WriteRebalanceFallback(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), reason);
         ring.Publish();
     }
@@ -3477,9 +4074,13 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DataIndexBTreeBulkInsertEvent BeginDataIndexBTreeBulkInsert(int bufferId, int entryCount)
     {
-        if (!TelemetryConfig.DataIndexBTreeBulkInsertActive) return default;
+        if (!TelemetryConfig.DataIndexBTreeBulkInsertActive)
+        {
+            return default;
+        }
+
         if (!BeginPrologue(TraceEventKind.DataIndexBTreeBulkInsert, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
+                out var previousSpanId, out var traceIdHi, out var traceIdLo))
         {
             return default;
         }
@@ -3494,11 +4095,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataIndexBTreeRoot(byte op, int rootChunkId, byte height)
     {
-        if (!TelemetryConfig.DataIndexBTreeRootActive) return;
+        if (!TelemetryConfig.DataIndexBTreeRootActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.RootSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.RootSize, out var dst))
+        {
+            return;
+        }
+
         DataIndexBTreeEventCodec.WriteRoot(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), op, rootChunkId, height);
         ring.Publish();
     }
@@ -3507,12 +4120,28 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataIndexBTreeNodeCow(int srcChunkId, int dstChunkId)
     {
-        if (!TelemetryConfig.DataIndexBTreeNodeCowActive) return;
-        if (SuppressedKinds[(int)TraceEventKind.DataIndexBTreeNodeCow]) return;
+        if (!TelemetryConfig.DataIndexBTreeNodeCowActive)
+        {
+            return;
+        }
+
+        if (SuppressedKinds[(int)TraceEventKind.DataIndexBTreeNodeCow])
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.NodeCowSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DataIndexBTreeEventCodec.NodeCowSize, out var dst))
+        {
+            return;
+        }
+
         DataIndexBTreeEventCodec.WriteNodeCow(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), srcChunkId, dstChunkId);
         ring.Publish();
     }
@@ -3524,43 +4153,87 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryParseEvent BeginQueryParse(ushort predicateCount, byte branchCount)
     {
-        if (!TelemetryConfig.QueryParseActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryParse, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryParseActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryParse, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryParseEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, PredicateCount = predicateCount, BranchCount = branchCount };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryParseDnfEvent BeginQueryParseDnf(ushort inBranches, ushort outBranches)
     {
-        if (!TelemetryConfig.QueryParseDnfActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryParseDnf, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryParseDnfActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryParseDnf, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryParseDnfEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, InBranches = inBranches, OutBranches = outBranches };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryPlanEvent BeginQueryPlan(byte evaluatorCount, ushort indexFieldIdx, long rangeMin, long rangeMax)
     {
-        if (!TelemetryConfig.QueryPlanEnabledActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryPlan, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryPlanEnabledActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryPlan, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryPlanEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, EvaluatorCount = evaluatorCount, IndexFieldIdx = indexFieldIdx, RangeMin = rangeMin, RangeMax = rangeMax };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryEstimateEvent BeginQueryEstimate(ushort fieldIdx, long cardinality)
     {
-        if (!TelemetryConfig.QueryEstimateActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryEstimate, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryEstimateActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryEstimate, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryEstimateEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, FieldIdx = fieldIdx, Cardinality = cardinality };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitQueryPlanPrimarySelect(byte candidates, byte winnerIdx, byte reason)
     {
-        if (!TelemetryConfig.QueryPlanPrimarySelectActive) return;
+        if (!TelemetryConfig.QueryPlanPrimarySelectActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(QueryEventCodec.PrimarySelectSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(QueryEventCodec.PrimarySelectSize, out var dst))
+        {
+            return;
+        }
+
         QueryEventCodec.WritePrimarySelect(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), candidates, winnerIdx, reason);
         ring.Publish();
     }
@@ -3568,51 +4241,103 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryPlanSortEvent BeginQueryPlanSort(byte evaluatorCount, uint sortNs)
     {
-        if (!TelemetryConfig.QueryPlanSortActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryPlanSort, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryPlanSortActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryPlanSort, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryPlanSortEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, EvaluatorCount = evaluatorCount, SortNs = sortNs };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryExecuteIndexScanEvent BeginQueryExecuteIndexScan(ushort primaryFieldIdx, byte mode)
     {
-        if (!TelemetryConfig.QueryExecuteIndexScanActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryExecuteIndexScan, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryExecuteIndexScanActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryExecuteIndexScan, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryExecuteIndexScanEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, PrimaryFieldIdx = primaryFieldIdx, Mode = mode };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryExecuteIterateEvent BeginQueryExecuteIterate()
     {
-        if (!TelemetryConfig.QueryExecuteIterateActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryExecuteIterate, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryExecuteIterateActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryExecuteIterate, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryExecuteIterateEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryExecuteFilterEvent BeginQueryExecuteFilter(byte filterCount)
     {
-        if (!TelemetryConfig.QueryExecuteFilterActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryExecuteFilter, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryExecuteFilterActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryExecuteFilter, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryExecuteFilterEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, FilterCount = filterCount };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryExecutePaginationEvent BeginQueryExecutePagination(int skip, int take)
     {
-        if (!TelemetryConfig.QueryExecutePaginationActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryExecutePagination, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryExecutePaginationActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryExecutePagination, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryExecutePaginationEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, Skip = skip, Take = take };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitQueryExecuteStorageMode(byte mode)
     {
-        if (!TelemetryConfig.QueryExecuteStorageModeActive) return;
+        if (!TelemetryConfig.QueryExecuteStorageModeActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(QueryEventCodec.StorageModeSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(QueryEventCodec.StorageModeSize, out var dst))
+        {
+            return;
+        }
+
         QueryEventCodec.WriteStorageMode(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), mode);
         ring.Publish();
     }
@@ -3620,8 +4345,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static QueryCountEvent BeginQueryCount()
     {
-        if (!TelemetryConfig.QueryCountActive) return default;
-        if (!BeginPrologue(TraceEventKind.QueryCount, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.QueryCountActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.QueryCount, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new QueryCountEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 
@@ -3630,19 +4363,39 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static EcsQueryConstructEvent BeginEcsQueryConstruct(ushort targetArchId, byte polymorphic, byte maskSize)
     {
-        if (!TelemetryConfig.EcsQueryConstructActive) return default;
-        if (!BeginPrologue(TraceEventKind.EcsQueryConstruct, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.EcsQueryConstructActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.EcsQueryConstruct, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new EcsQueryConstructEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, TargetArchId = targetArchId, Polymorphic = polymorphic, MaskSize = maskSize };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsQueryMaskAnd(ushort bitsBefore, ushort bitsAfter, byte opType)
     {
-        if (!TelemetryConfig.EcsQueryMaskAndActive) return;
+        if (!TelemetryConfig.EcsQueryMaskAndActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsQueryDepthEventCodec.MaskAndSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsQueryDepthEventCodec.MaskAndSize, out var dst))
+        {
+            return;
+        }
+
         EcsQueryDepthEventCodec.WriteMaskAnd(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), bitsBefore, bitsAfter, opType);
         ring.Publish();
     }
@@ -3650,19 +4403,39 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static EcsQuerySubtreeExpandEvent BeginEcsQuerySubtreeExpand(ushort subtreeCount, ushort rootId)
     {
-        if (!TelemetryConfig.EcsQuerySubtreeExpandActive) return default;
-        if (!BeginPrologue(TraceEventKind.EcsQuerySubtreeExpand, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.EcsQuerySubtreeExpandActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.EcsQuerySubtreeExpand, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new EcsQuerySubtreeExpandEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SubtreeCount = subtreeCount, RootId = rootId };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsQueryConstraintEnabled(ushort typeId, byte enableBit)
     {
-        if (!TelemetryConfig.EcsQueryConstraintEnabledActive) return;
+        if (!TelemetryConfig.EcsQueryConstraintEnabledActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsQueryDepthEventCodec.ConstraintEnabledSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsQueryDepthEventCodec.ConstraintEnabledSize, out var dst))
+        {
+            return;
+        }
+
         EcsQueryDepthEventCodec.WriteConstraintEnabled(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), typeId, enableBit);
         ring.Publish();
     }
@@ -3670,11 +4443,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsQuerySpatialAttach(byte spatialType, float qbX1, float qbY1, float qbX2, float qbY2)
     {
-        if (!TelemetryConfig.EcsQuerySpatialAttachActive) return;
+        if (!TelemetryConfig.EcsQuerySpatialAttachActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsQueryDepthEventCodec.SpatialAttachSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsQueryDepthEventCodec.SpatialAttachSize, out var dst))
+        {
+            return;
+        }
+
         EcsQueryDepthEventCodec.WriteSpatialAttach(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), spatialType, qbX1, qbY1, qbX2, qbY2);
         ring.Publish();
     }
@@ -3684,16 +4469,32 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static EcsViewRefreshPullEvent BeginEcsViewRefreshPull(uint queryNs, ushort archetypeMaskBits)
     {
-        if (!TelemetryConfig.EcsViewRefreshPullActive) return default;
-        if (!BeginPrologue(TraceEventKind.EcsViewRefreshPull, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.EcsViewRefreshPullActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.EcsViewRefreshPull, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new EcsViewRefreshPullEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, QueryNs = queryNs, ArchetypeMaskBits = archetypeMaskBits };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static EcsViewIncrementalDrainEvent BeginEcsViewIncrementalDrain()
     {
-        if (!TelemetryConfig.EcsViewIncrementalDrainActive) return default;
-        if (!BeginPrologue(TraceEventKind.EcsViewIncrementalDrain, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.EcsViewIncrementalDrainActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.EcsViewIncrementalDrain, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new EcsViewIncrementalDrainEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 
@@ -3704,11 +4505,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsViewDeltaBufferOverflow(long currentTsn, long tailTsn, ushort marginPagesLost)
     {
-        if (!TelemetryConfig.EcsViewDeltaBufferOverflowActive) return;
+        if (!TelemetryConfig.EcsViewDeltaBufferOverflowActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsViewEventCodec.DeltaBufferOverflowSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsViewEventCodec.DeltaBufferOverflowSize, out var dst))
+        {
+            return;
+        }
+
         EcsViewEventCodec.WriteDeltaBufferOverflow(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), currentTsn, tailTsn, marginPagesLost);
         ring.Publish();
     }
@@ -3716,11 +4529,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsViewProcessEntry(long pk, ushort fieldIdx, byte pass)
     {
-        if (!TelemetryConfig.EcsViewProcessEntryActive) return;
+        if (!TelemetryConfig.EcsViewProcessEntryActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsViewEventCodec.ProcessEntrySize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsViewEventCodec.ProcessEntrySize, out var dst))
+        {
+            return;
+        }
+
         EcsViewEventCodec.WriteProcessEntry(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), pk, fieldIdx, pass);
         ring.Publish();
     }
@@ -3728,11 +4553,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsViewProcessEntryOr(long pk, byte branchCount, uint bitmapDelta)
     {
-        if (!TelemetryConfig.EcsViewProcessEntryOrActive) return;
+        if (!TelemetryConfig.EcsViewProcessEntryOrActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsViewEventCodec.ProcessEntryOrSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsViewEventCodec.ProcessEntryOrSize, out var dst))
+        {
+            return;
+        }
+
         EcsViewEventCodec.WriteProcessEntryOr(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), pk, branchCount, bitmapDelta);
         ring.Publish();
     }
@@ -3740,27 +4577,55 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static EcsViewRefreshFullEvent BeginEcsViewRefreshFull(int oldCount, int newCount, uint requeryNs)
     {
-        if (!TelemetryConfig.EcsViewRefreshFullActive) return default;
-        if (!BeginPrologue(TraceEventKind.EcsViewRefreshFull, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.EcsViewRefreshFullActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.EcsViewRefreshFull, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new EcsViewRefreshFullEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, OldCount = oldCount, NewCount = newCount, RequeryNs = requeryNs };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static EcsViewRefreshFullOrEvent BeginEcsViewRefreshFullOr(int oldCount, int newCount, byte branchCount)
     {
-        if (!TelemetryConfig.EcsViewRefreshFullOrActive) return default;
-        if (!BeginPrologue(TraceEventKind.EcsViewRefreshFullOr, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.EcsViewRefreshFullOrActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.EcsViewRefreshFullOr, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new EcsViewRefreshFullOrEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, OldCount = oldCount, NewCount = newCount, BranchCount = branchCount };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsViewRegistryRegister(ushort viewId, ushort fieldIdx, ushort regCount)
     {
-        if (!TelemetryConfig.EcsViewRegistryRegisterActive) return;
+        if (!TelemetryConfig.EcsViewRegistryRegisterActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsViewEventCodec.RegistrySize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsViewEventCodec.RegistrySize, out var dst))
+        {
+            return;
+        }
+
         EcsViewEventCodec.WriteRegistryRegister(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), viewId, fieldIdx, regCount);
         ring.Publish();
     }
@@ -3768,11 +4633,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsViewRegistryDeregister(ushort viewId, ushort fieldIdx, ushort regCount)
     {
-        if (!TelemetryConfig.EcsViewRegistryDeregisterActive) return;
+        if (!TelemetryConfig.EcsViewRegistryDeregisterActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsViewEventCodec.RegistrySize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsViewEventCodec.RegistrySize, out var dst))
+        {
+            return;
+        }
+
         EcsViewEventCodec.WriteRegistryDeregister(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), viewId, fieldIdx, regCount);
         ring.Publish();
     }
@@ -3780,11 +4657,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsViewDeltaCacheMiss(long pk, byte reason)
     {
-        if (!TelemetryConfig.EcsViewDeltaCacheMissActive) return;
+        if (!TelemetryConfig.EcsViewDeltaCacheMissActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(EcsViewEventCodec.DeltaCacheMissSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(EcsViewEventCodec.DeltaCacheMissSize, out var dst))
+        {
+            return;
+        }
+
         EcsViewEventCodec.WriteDeltaCacheMiss(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), pk, reason);
         ring.Publish();
     }
@@ -3798,35 +4687,71 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityWalQueueDrainEvent BeginDurabilityWalQueueDrain(int bytesAligned, int frameCount)
     {
-        if (!TelemetryConfig.DurabilityWalQueueDrainActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityWalQueueDrain, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityWalQueueDrainActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityWalQueueDrain, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityWalQueueDrainEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, BytesAligned = bytesAligned, FrameCount = frameCount };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityWalOsWriteEvent BeginDurabilityWalOsWrite(int bytesAligned, int frameCount, long highLsn)
     {
-        if (!TelemetryConfig.DurabilityWalOsWriteActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityWalOsWrite, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityWalOsWriteActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityWalOsWrite, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityWalOsWriteEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, BytesAligned = bytesAligned, FrameCount = frameCount, HighLsn = highLsn };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityWalSignalEvent BeginDurabilityWalSignal(long highLsn)
     {
-        if (!TelemetryConfig.DurabilityWalSignalActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityWalSignal, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityWalSignalActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityWalSignal, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityWalSignalEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, HighLsn = highLsn };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityWalGroupCommit(ushort triggerMs, int producerThread)
     {
-        if (!TelemetryConfig.DurabilityWalGroupCommitActive) return;
+        if (!TelemetryConfig.DurabilityWalGroupCommitActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DurabilityWalEventCodec.GroupCommitSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DurabilityWalEventCodec.GroupCommitSize, out var dst))
+        {
+            return;
+        }
+
         DurabilityWalEventCodec.WriteGroupCommit(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), triggerMs, producerThread);
         ring.Publish();
     }
@@ -3834,11 +4759,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityWalQueue(byte drainAttempt, int dataLen, byte waitReason)
     {
-        if (!TelemetryConfig.DurabilityWalQueueActive) return;
+        if (!TelemetryConfig.DurabilityWalQueueActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DurabilityWalEventCodec.QueueSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DurabilityWalEventCodec.QueueSize, out var dst))
+        {
+            return;
+        }
+
         DurabilityWalEventCodec.WriteQueue(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), drainAttempt, dataLen, waitReason);
         ring.Publish();
     }
@@ -3846,8 +4783,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityWalBufferEvent BeginDurabilityWalBuffer(int bytesAligned, int pad)
     {
-        if (!TelemetryConfig.DurabilityWalBufferActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityWalBuffer, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityWalBufferActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityWalBuffer, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityWalBufferEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, BytesAligned = bytesAligned, Pad = pad };
     }
 
@@ -3855,12 +4800,28 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityWalFrame(ushort frameCount, uint crcStart)
     {
-        if (!TelemetryConfig.DurabilityWalFrameActive) return;
-        if (SuppressedKinds[(int)TraceEventKind.DurabilityWalFrame]) return;
+        if (!TelemetryConfig.DurabilityWalFrameActive)
+        {
+            return;
+        }
+
+        if (SuppressedKinds[(int)TraceEventKind.DurabilityWalFrame])
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DurabilityWalEventCodec.FrameSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DurabilityWalEventCodec.FrameSize, out var dst))
+        {
+            return;
+        }
+
         DurabilityWalEventCodec.WriteFrame(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), frameCount, crcStart);
         ring.Publish();
     }
@@ -3868,8 +4829,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityWalBackpressureEvent BeginDurabilityWalBackpressure(uint waitUs, int producerThread)
     {
-        if (!TelemetryConfig.DurabilityWalBackpressureActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityWalBackpressure, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityWalBackpressureActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityWalBackpressure, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityWalBackpressureEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, WaitUs = waitUs, ProducerThread = producerThread };
     }
 
@@ -3878,24 +4847,48 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityCheckpointWriteBatchEvent BeginDurabilityCheckpointWriteBatch(int writeBatchSize, int stagingAllocated)
     {
-        if (!TelemetryConfig.DurabilityCheckpointWriteBatchActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointWriteBatch, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityCheckpointWriteBatchActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointWriteBatch, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityCheckpointWriteBatchEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, WriteBatchSize = writeBatchSize, StagingAllocated = stagingAllocated };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityCheckpointBackpressureEvent BeginDurabilityCheckpointBackpressure(uint waitMs, byte exhausted)
     {
-        if (!TelemetryConfig.DurabilityCheckpointBackpressureActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointBackpressure, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityCheckpointBackpressureActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointBackpressure, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityCheckpointBackpressureEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, WaitMs = waitMs, Exhausted = exhausted };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityCheckpointSleepEvent BeginDurabilityCheckpointSleep(uint sleepMs, byte wakeReason)
     {
-        if (!TelemetryConfig.DurabilityCheckpointSleepActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointSleep, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityCheckpointSleepActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointSleep, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityCheckpointSleepEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SleepMs = sleepMs, WakeReason = wakeReason };
     }
 
@@ -3904,11 +4897,23 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityRecoveryStart(long checkpointLsn, byte reason)
     {
-        if (!TelemetryConfig.DurabilityRecoveryStartActive) return;
+        if (!TelemetryConfig.DurabilityRecoveryStartActive)
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DurabilityRecoveryEventCodec.StartSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DurabilityRecoveryEventCodec.StartSize, out var dst))
+        {
+            return;
+        }
+
         DurabilityRecoveryEventCodec.WriteStart(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), checkpointLsn, reason);
         ring.Publish();
     }
@@ -3916,16 +4921,32 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityRecoveryDiscoverEvent BeginDurabilityRecoveryDiscover(int segCount, long totalBytes, int firstSegId)
     {
-        if (!TelemetryConfig.DurabilityRecoveryDiscoverActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryDiscover, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityRecoveryDiscoverActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryDiscover, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityRecoveryDiscoverEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SegCount = segCount, TotalBytes = totalBytes, FirstSegId = firstSegId };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityRecoverySegmentEvent BeginDurabilityRecoverySegment(int segId)
     {
-        if (!TelemetryConfig.DurabilityRecoverySegmentActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoverySegment, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityRecoverySegmentActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityRecoverySegment, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityRecoverySegmentEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SegId = segId, RecCount = 0, Bytes = 0, Truncated = 0 };
     }
 
@@ -3933,12 +4954,28 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityRecoveryRecord(byte chunkType, long lsn, int size)
     {
-        if (!TelemetryConfig.DurabilityRecoveryRecordActive) return;
-        if (SuppressedKinds[(int)TraceEventKind.DurabilityRecoveryRecord]) return;
+        if (!TelemetryConfig.DurabilityRecoveryRecordActive)
+        {
+            return;
+        }
+
+        if (SuppressedKinds[(int)TraceEventKind.DurabilityRecoveryRecord])
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DurabilityRecoveryEventCodec.RecordSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DurabilityRecoveryEventCodec.RecordSize, out var dst))
+        {
+            return;
+        }
+
         DurabilityRecoveryEventCodec.WriteRecord(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), chunkType, lsn, size);
         ring.Publish();
     }
@@ -3946,32 +4983,64 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityRecoveryFpiEvent BeginDurabilityRecoveryFpi(int fpiCount)
     {
-        if (!TelemetryConfig.DurabilityRecoveryFpiActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryFpi, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityRecoveryFpiActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryFpi, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityRecoveryFpiEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, FpiCount = fpiCount, RepairedCount = 0, Mismatches = 0 };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityRecoveryRedoEvent BeginDurabilityRecoveryRedo()
     {
-        if (!TelemetryConfig.DurabilityRecoveryRedoActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryRedo, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityRecoveryRedoActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryRedo, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityRecoveryRedoEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityRecoveryUndoEvent BeginDurabilityRecoveryUndo(int voidedUowCount)
     {
-        if (!TelemetryConfig.DurabilityRecoveryUndoActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryUndo, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityRecoveryUndoActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryUndo, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityRecoveryUndoEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, VoidedUowCount = voidedUowCount };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static DurabilityRecoveryTickFenceEvent BeginDurabilityRecoveryTickFence()
     {
-        if (!TelemetryConfig.DurabilityRecoveryTickFenceActive) return default;
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryTickFence, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.DurabilityRecoveryTickFenceActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryTickFence, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new DurabilityRecoveryTickFenceEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 
@@ -3981,12 +5050,28 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityUowState(byte from, byte to, ushort uowId, byte reason)
     {
-        if (!TelemetryConfig.DurabilityUowStateActive) return;
-        if (SuppressedKinds[(int)TraceEventKind.DurabilityUowState]) return;
+        if (!TelemetryConfig.DurabilityUowStateActive)
+        {
+            return;
+        }
+
+        if (SuppressedKinds[(int)TraceEventKind.DurabilityUowState])
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DurabilityUowEventCodec.StateSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DurabilityUowEventCodec.StateSize, out var dst))
+        {
+            return;
+        }
+
         DurabilityUowEventCodec.WriteState(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), from, to, uowId, reason);
         ring.Publish();
     }
@@ -3995,12 +5080,28 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityUowDeadline(long deadline, long remaining, byte expired)
     {
-        if (!TelemetryConfig.DurabilityUowDeadlineActive) return;
-        if (SuppressedKinds[(int)TraceEventKind.DurabilityUowDeadline]) return;
+        if (!TelemetryConfig.DurabilityUowDeadlineActive)
+        {
+            return;
+        }
+
+        if (SuppressedKinds[(int)TraceEventKind.DurabilityUowDeadline])
+        {
+            return;
+        }
+
         var slotIdx = ThreadSlotRegistry.GetOrAssignSlot();
-        if (slotIdx < 0) return;
+        if (slotIdx < 0)
+        {
+            return;
+        }
+
         var ring = ThreadSlotRegistry.GetSlot(slotIdx).Buffer;
-        if (ring == null || !ring.TryReserve(DurabilityUowEventCodec.DeadlineSize, out var dst)) return;
+        if (ring == null || !ring.TryReserve(DurabilityUowEventCodec.DeadlineSize, out var dst))
+        {
+            return;
+        }
+
         DurabilityUowEventCodec.WriteDeadline(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), deadline, remaining, expired);
         ring.Publish();
     }
@@ -4013,8 +5114,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static RuntimeSubscriptionSubscriberEvent BeginRuntimeSubscriptionSubscriber(uint subscriberId, ushort viewId, int deltaCount)
     {
-        if (!TelemetryConfig.RuntimeSubscriptionSubscriberActive) return default;
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionSubscriber, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.RuntimeSubscriptionSubscriberActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionSubscriber, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new RuntimeSubscriptionSubscriberEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SubscriberId = subscriberId, ViewId = viewId, DeltaCount = deltaCount };
     }
 
@@ -4022,8 +5131,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static RuntimeSubscriptionDeltaBuildEvent BeginRuntimeSubscriptionDeltaBuild(ushort viewId)
     {
-        if (!TelemetryConfig.RuntimeSubscriptionDeltaBuildActive) return default;
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaBuild, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.RuntimeSubscriptionDeltaBuildActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaBuild, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new RuntimeSubscriptionDeltaBuildEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, ViewId = viewId };
     }
 
@@ -4031,8 +5148,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static RuntimeSubscriptionDeltaSerializeEvent BeginRuntimeSubscriptionDeltaSerialize(uint clientId, ushort viewId, byte format)
     {
-        if (!TelemetryConfig.RuntimeSubscriptionDeltaSerializeActive) return default;
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaSerialize, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.RuntimeSubscriptionDeltaSerializeActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaSerialize, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new RuntimeSubscriptionDeltaSerializeEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, ClientId = clientId, ViewId = viewId, Format = format };
     }
 
@@ -4040,8 +5165,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static RuntimeSubscriptionTransitionBeginSyncEvent BeginRuntimeSubscriptionTransitionBeginSync(uint clientId, ushort viewId, int entitySnapshot)
     {
-        if (!TelemetryConfig.RuntimeSubscriptionTransitionBeginSyncActive) return default;
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionTransitionBeginSync, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.RuntimeSubscriptionTransitionBeginSyncActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionTransitionBeginSync, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new RuntimeSubscriptionTransitionBeginSyncEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, ClientId = clientId, ViewId = viewId, EntitySnapshot = entitySnapshot };
     }
 
@@ -4049,8 +5182,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static RuntimeSubscriptionOutputCleanupEvent BeginRuntimeSubscriptionOutputCleanup()
     {
-        if (!TelemetryConfig.RuntimeSubscriptionOutputCleanupActive) return default;
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionOutputCleanup, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.RuntimeSubscriptionOutputCleanupActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionOutputCleanup, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new RuntimeSubscriptionOutputCleanupEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 
@@ -4058,8 +5199,16 @@ public static class TyphonEvent
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent BeginRuntimeSubscriptionDeltaDirtyBitmapSupplement()
     {
-        if (!TelemetryConfig.RuntimeSubscriptionDeltaDirtyBitmapSupplementActive) return default;
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaDirtyBitmapSupplement, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo)) return default;
+        if (!TelemetryConfig.RuntimeSubscriptionDeltaDirtyBitmapSupplementActive)
+        {
+            return default;
+        }
+
+        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaDirtyBitmapSupplement, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
+        {
+            return default;
+        }
+
         return new RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 }

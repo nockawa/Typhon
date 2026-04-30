@@ -48,13 +48,25 @@ public record ComponentTypeDto(int ComponentTypeId, string Name);
 
 /// <summary>Per-tick overview row. Used to render the tick-overview strip at the top of the Profiler panel.</summary>
 /// <param name="ActiveSystemsBitmask">64-bit bitmask of active system indices. Serialized as decimal string to preserve precision.</param>
+/// <param name="OverloadLevel">From <c>TickEnd</c> payload. 0=Normal, 1=Level1, 2=Level2, 3=TickRateModulation, 4=PlayerShedding. v9+, zero on older traces.</param>
+/// <param name="TickMultiplier">Effective rate multiplier (chain: 1, 2, 3, 4, 6). >1 means engine voluntarily throttled. v9+, zero on older traces.</param>
+/// <param name="MetronomeWaitUs">Metronome wait duration that PRECEDED this tick (µs, saturated at 65535). v9+, zero on older traces. Issue #289.</param>
+/// <param name="MetronomeIntentClass">0=CatchUp, 1=Throttled, 2=Headroom. v9+, zero on older traces.</param>
+/// <param name="ConsecutiveOverrun">OverloadDetector's consecutive-overrun streak at end-of-tick. v11+, zero on older.</param>
+/// <param name="ConsecutiveUnderrun">OverloadDetector's consecutive-underrun streak at end-of-tick (climbs to <c>DeescalationTicks</c> for deescalation). v11+, zero on older.</param>
 public record TickSummaryDto(
     uint TickNumber,
     double StartUs,
     float DurationUs,
     uint EventCount,
     float MaxSystemDurationUs,
-    string ActiveSystemsBitmask);
+    string ActiveSystemsBitmask,
+    byte OverloadLevel,
+    byte TickMultiplier,
+    ushort MetronomeWaitUs,
+    byte MetronomeIntentClass,
+    ushort ConsecutiveOverrun,
+    ushort ConsecutiveUnderrun);
 
 /// <summary>One entry of the chunk manifest — tells the client which chunk covers a given tick range.</summary>
 public record ChunkManifestEntryDto(

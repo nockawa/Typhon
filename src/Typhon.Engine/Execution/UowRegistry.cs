@@ -325,7 +325,7 @@ internal unsafe class UowRegistry : IDisposable
     /// <remarks>
     /// Without WAL (#53), state goes directly to Committed (skipping WalDurable).
     /// </remarks>
-    public void RecordCommit(ushort uowId, long maxTSN)
+    public void RecordCommit(ushort uowId, long maxTSN, ChangeSet externalCs = null)
     {
         if (uowId == 0)
         {
@@ -340,7 +340,7 @@ internal unsafe class UowRegistry : IDisposable
                 entry.CommittedTicks = Stopwatch.GetTimestamp();
                 entry.MaxTSN = maxTSN;
                 return entry;
-            });
+            }, externalCs);
         }
 
         // Set committed bitmap bit
@@ -582,21 +582,29 @@ internal unsafe class UowRegistry : IDisposable
 
     /// <summary>
     /// Writes multiple fields of a registry entry using a transform delegate. Caller must be inside an EpochGuard.
+    /// When <paramref name="externalCS"/> is supplied, the page mutation is registered against it and SaveChanges is left to the caller (matches the
+    /// pattern in <see cref="WriteEntryState"/> + <see cref="InitializeEntry"/>). Used by RecordCommit on the per-tick UoW.Flush path so the registry
+    /// page write piggybacks on the UoW's shared ChangeSet instead of triggering a synchronous disk write+fsync on the TickDriver thread.
     /// </summary>
-    private void WriteEntryFields(int slotIndex, long epoch, Func<UowRegistryEntry, UowRegistryEntry> transform)
+    private void WriteEntryFields(int slotIndex, long epoch, Func<UowRegistryEntry, UowRegistryEntry> transform, ChangeSet externalCS = null)
     {
         var (segPageIndex, itemIndex) = LogicalSegment<PersistentStore>.GetItemLocation(slotIndex, EntrySize);
         var page = LatchPageExclusive(segPageIndex, epoch, out var memPageIdx);
         var byteOffset = (page.IsRoot ? LogicalSegment<PersistentStore>.RootHeaderIndexSectionLength : 0) + (itemIndex * EntrySize);
 
-        var cs = _mmf.CreateChangeSet();
+        var cs = externalCS ?? _mmf.CreateChangeSet();
         cs.AddByMemPageIndex(memPageIdx);
 
         var entries = page.RawData<UowRegistryEntry>(byteOffset, 1);
         entries[0] = transform(entries[0]);
 
         _mmf.UnlatchPageExclusive(memPageIdx);
-        cs.SaveChanges();
+
+        // When using an external ChangeSet, the caller (UoW.Flush via RecordCommit) handles flushing through the UoW's lifecycle.
+        if (externalCS == null)
+        {
+            cs.SaveChanges();
+        }
     }
 
     /// <summary>

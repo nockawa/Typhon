@@ -29,6 +29,28 @@ export interface PhaseSpan {
   startUs: number;
   endUs: number;
   durationUs: number;
+  /**
+   * SpanId of the underlying RuntimePhaseSpan record. Used by the Detail pane so the user can read the
+   * phase's id and cross-reference it against `parentSpanId` on child spans (e.g. to verify that a
+   * `PageCacheFlush` is actually attached to the `UoW Flush` phase). Undefined for legacy traces that only
+   * carry the deprecated PhaseStart/PhaseEnd instant pair.
+   */
+  spanId?: string;
+}
+
+/**
+ * Single-point marker rendered as a glyph in the phase track. Surfaces tick-lifecycle landmarks that aren't durations
+ * (UoW create / UoW flush, future overload transitions). Drawn alongside {@link PhaseSpan} bars by `drawPhases`.
+ */
+export interface PhaseMarker {
+  /** TraceEventKind value — drives the glyph shape and tooltip label. */
+  kind: number;
+  /** Short human label for tooltip and legend. */
+  label: string;
+  /** Timestamp on the global timeline. */
+  timestampUs: number;
+  /** Optional one-line tooltip extension (e.g. UoW Flush exposes its dirty changeCount). */
+  detail?: string;
 }
 
 /** Skip event for a system */
@@ -173,6 +195,11 @@ export interface TickData {
   durationUs: number;
   chunks: ChunkSpan[];
   phases: PhaseSpan[];
+  /**
+   * Single-point markers in the phase track — UoW create / UoW flush, future overload transitions. Sparse: typically 1–3 entries
+   * per tick, ordered by timestamp.
+   */
+  phaseMarkers: PhaseMarker[];
   skips: SkipEvent[];
   spans: SpanData[];
   /**
@@ -476,6 +503,7 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
 
   const chunks: ChunkSpan[] = [];
   const phases: PhaseSpan[] = [];
+  const phaseMarkers: PhaseMarker[] = [];
   const skips: SkipEvent[] = [];
   const spans: SpanData[] = [];
   const systemDurations = new Map<number, number>();
@@ -629,6 +657,66 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
             timestampUs: evt.timestampUs,
             values,
           };
+        }
+        break;
+      }
+
+      case TraceEventKind.RuntimePhaseUoWCreate:
+        // UoW create marker — fires once at the top of OnTickStart. Glyph rendered in the phase track.
+        phaseMarkers.push({
+          kind: evt.kind,
+          label: 'UoW Create',
+          timestampUs: evt.timestampUs,
+        });
+        break;
+
+      case TraceEventKind.RuntimePhaseUoWFlush: {
+        // UoW flush marker — fires inside the UoWFlush phase after the WAL becomes durable. changeCount surfaces in the tooltip
+        // detail line so an operator can correlate "huge dirty-page count" with a slow UoW.Flush span.
+        const cc = evt.changeCount;
+        phaseMarkers.push({
+          kind: evt.kind,
+          label: 'UoW Flush',
+          timestampUs: evt.timestampUs,
+          detail: cc !== undefined ? `${cc} dirty page${cc === 1 ? '' : 's'}` : undefined,
+        });
+        break;
+      }
+
+      case TraceEventKind.RuntimePhaseSpan: {
+        // Real span carrying its own duration — replaces the legacy PhaseStart+PhaseEnd instant pair (which is still handled above for old
+        // traces). Pushed to BOTH `phases[]` (for the tick-wide phase track) AND `spans[]` (for the TickDriver thread lane) — these are two
+        // different views with different purposes:
+        //   - phase track: per-tick lifecycle structure ("where in the tick lifecycle are we")
+        //   - thread lane: thread activity ("what is this thread doing right now")
+        // The phase IS work executed on the TickDriver thread, so it belongs on its lane too. PageCacheFlush and other child spans then sit
+        // beneath it at depth 1 instead of appearing as orphan roots, which is the visual hierarchy the user expects.
+        if (evt.phase !== undefined && evt.durationUs !== undefined) {
+          const phaseName = PHASE_NAMES[evt.phase] ?? `Phase ${evt.phase}`;
+          phases.push({
+            phase: evt.phase,
+            phaseName,
+            startUs: evt.timestampUs,
+            endUs: evt.timestampUs + evt.durationUs,
+            durationUs: evt.durationUs,
+            spanId: evt.spanId,
+          });
+          // Fall through to the default span-push path so the phase span also lands on the TickDriver lane. We don't replicate the entire
+          // default block here; instead we let it run by NOT breaking — but since switch fall-through is forbidden in TS without an explicit
+          // marker, we manually invoke the same span-push code path:
+          spans.push({
+            kind: evt.kind,
+            name: phaseName,
+            threadSlot: evt.threadSlot,
+            startUs: evt.timestampUs,
+            endUs: evt.timestampUs + evt.durationUs,
+            durationUs: evt.durationUs,
+            spanId: evt.spanId,
+            parentSpanId: evt.parentSpanId,
+            traceIdHi: evt.traceIdHi,
+            traceIdLo: evt.traceIdLo,
+            rawEvent: evt,
+          });
         }
         break;
       }
@@ -954,6 +1042,7 @@ export function processTickEvents(tickNumber: number, events: TraceEvent[], syst
     durationUs: endUs - startUs,
     chunks,
     phases,
+    phaseMarkers,
     skips,
     spans,
     spanEndMaxRunning,

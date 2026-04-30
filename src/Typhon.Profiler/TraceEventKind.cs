@@ -876,6 +876,36 @@ public enum TraceEventKind : byte
     /// <summary>Dirty-bitmap supplement span (when ring overflows). Payload: <c>modifiedFromRing: i32, supplementCount: i32, unionSize: i32</c>.</summary>
     RuntimeSubscriptionDeltaDirtyBitmapSupplement = 240,
 
+    // ── Scheduler:Metronome (span) — issue #289 follow-up: surface the timer thread's inter-tick wait ──
+
+    /// <summary>
+    /// Metronome wait between ticks (TickDriver thread, Sleep→Yield→Spin phases). Span covers the entire gap
+    /// from the moment <c>ExecuteCallbacks</c> returned (or timer started) until the next tick fires. Payload:
+    /// <c>scheduledTimestamp: i64, multiplier: u8, intentClass: u8, phaseFlags: u8</c> (11 B).
+    /// <para><c>intentClass</c>: 0=CatchUp (target already past), 1=Throttled (mult&gt;1), 2=Headroom (mult==1 normal idle).</para>
+    /// <para><c>phaseFlags</c> bits: 0x1=Sleep entered, 0x2=Yield entered, 0x4=Spin entered.</para>
+    /// </summary>
+    SchedulerMetronomeWait = 241,
+
+    // ── Scheduler:Overload:Detector (instant) — issue #289 follow-up: per-tick OverloadDetector state ──
+
+    /// <summary>
+    /// Per-tick OverloadDetector state snapshot (instant on TickDriver). Carries the full state used to drive
+    /// escalation/deescalation decisions so an offline trace can audit why the engine throttled. Payload:
+    /// <c>tick: i64, overrunRatio: f32, consecutiveOverrun: u16, consecutiveUnderrun: u16,
+    /// consecutiveQueueGrowth: u16, queueDepth: i32, level: u8, multiplier: u8</c> (24 B).
+    /// </summary>
+    SchedulerOverloadDetector = 242,
+
+    /// <summary>
+    /// Tick lifecycle phase span — covers the full duration of one <see cref="TickPhase"/> region inside
+    /// <c>TyphonRuntime.OnTickEndInternal</c> (SystemDispatch, WriteTickFence, UoWFlush, OutputPhase, TierIndexRebuild, DormancySweep).
+    /// Replaces the previous <see cref="PhaseStart"/>+<see cref="PhaseEnd"/> instant pair on the producer side: a real span is opened at
+    /// the top of <c>InspectorPhase</c> and disposed at the bottom, so child spans (<c>PageCacheFlush</c>, <c>BTreeInsert</c>, etc.) attach
+    /// via <c>parentSpanId</c> for proper hierarchy. Payload: <c>phase: u8</c> (TickPhase enum).
+    /// </summary>
+    RuntimePhaseSpan = 243,
+
     // ── Fallback ──
 
     /// <summary>User-defined span with inline UTF-8 null-terminated name. Used for dynamic-string call sites (tests, demo code). Payload: null-terminated UTF-8 bytes.</summary>
@@ -966,6 +996,13 @@ public static class TraceEventKindExtensions
         // Spans: 214-216 (WAL split), 219 (WalBuffer), 221 (WalBackpressure), 222-224 (Checkpoint depth),
         //        226 (Discover), 227 (Segment), 229 (FPI), 230-232 (Redo/Undo/TickFence) — fall through.
         if (v == 217 || v == 218 || v == 220 || v == 225 || v == 228 || v == 233 || v == 234)
+        {
+            return false;
+        }
+        // Phase 4 follow-up (#289):
+        //   241 (SchedulerMetronomeWait) — span (falls through to `return true`).
+        //   242 (SchedulerOverloadDetector) — instant.
+        if (v == 242)
         {
             return false;
         }

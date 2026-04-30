@@ -198,9 +198,14 @@ public struct TickIndexEntry
 }
 
 /// <summary>
-/// Per-tick rollup shipped to the client as the overview feed. Small enough that all ticks for a 500K-tick trace fit in ~12 MB, so the client
-/// fetches the entire summary on open and renders the timeline from it without any chunk loads.
+/// Per-tick rollup shipped to the client as the overview feed. Small enough that all ticks for a 500K-tick trace fit in ~16 MB (40 B × 400K),
+/// so the client fetches the entire summary on open and renders the timeline from it without any chunk loads.
 /// </summary>
+/// <remarks>
+/// <b>Wire size 40 bytes</b> (was 32 before chunker v9). Bumped in v9 (issue #289 follow-up) to surface per-tick OverloadDetector
+/// decisions + metronome wait diagnostics. Old v8 caches don't carry these fields and must be rebuilt; <see cref="TraceFileCacheConstants.CurrentChunkerVersion"/>
+/// gates the upgrade.
+/// </remarks>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct TickSummary
 {
@@ -227,6 +232,44 @@ public struct TickSummary
     /// durations.
     /// </summary>
     public double StartUs;
+
+    // ── v9 fields (issue #289 follow-up) ──────────────────────────────────────────
+
+    /// <summary>OverloadDetector level at the end of this tick (0=Normal, 1/2=Level1/2, 3=TickRateModulation, 4=PlayerShedding). From <c>TickEnd</c> payload.</summary>
+    public byte OverloadLevel;
+
+    /// <summary>Effective tick-rate multiplier for this tick (chain values: 1, 2, 3, 4, 6). multiplier &gt; 1 means engine voluntarily slowed itself.</summary>
+    public byte TickMultiplier;
+
+    /// <summary>
+    /// Duration of the metronome wait that <i>preceded</i> this tick, saturating at <see cref="ushort.MaxValue"/> µs (≈65 ms — well past any realistic gap).
+    /// Captured by observing the <c>SchedulerMetronomeWait</c> span (kind 241) that ended just before this tick's <c>TickStart</c>. Zero for tick 0.
+    /// </summary>
+    public ushort MetronomeWaitUs;
+
+    /// <summary>Intent classification of the preceding metronome wait — 0 = CatchUp (target already past, no real wait), 1 = Throttled (mult&gt;1), 2 = Headroom (normal idle).</summary>
+    public byte MetronomeIntentClass;
+
+    // ── v11 fields (issue #289 follow-up — diagnose stuck-throttle attractor) ─────
+
+    /// <summary>
+    /// OverloadDetector's <c>_consecutiveOverrunTicks</c> at end-of-tick — number of consecutive ticks above
+    /// <c>OverrunThreshold</c> (1.2× by default). Saturates at <see cref="ushort.MaxValue"/>. Captured from
+    /// the <see cref="TraceEventKind.SchedulerOverloadDetector"/> instant (kind 242). v11+, zero on older.
+    /// </summary>
+    public ushort ConsecutiveOverrun;
+
+    /// <summary>
+    /// OverloadDetector's <c>_consecutiveUnderrunTicks</c> at end-of-tick — number of consecutive ticks
+    /// below <c>DeescalationRatio</c> (0.6× by default). Climbs toward <c>DeescalationTicks</c> (20 default)
+    /// before deescalation fires; resets on any overrun tick. Saturates at <see cref="ushort.MaxValue"/>.
+    /// </summary>
+    public ushort ConsecutiveUnderrun;
+
+    // 3 bytes of reserved padding to keep the struct 8-byte-aligned (44 B total) and headroom for future v11.x additions
+    // without a chunker version bump. Zero on disk.
+    public byte _reservedByte;
+    public ushort _reservedUshort;
 }
 
 /// <summary>
@@ -382,8 +425,23 @@ public static class TraceFileCacheConstants
     ///         <see cref="FlagIsContinuation"/>. The decoder must seed its tick counter to FromTick directly for continuation chunks
     ///         (vs FromTick - 1 for normal chunks). The former <c>ChunkManifestEntry.Padding</c> u32 is now <c>Flags</c>; offset and
     ///         size are unchanged, so v7-on-disk entries read back with Flags=0 which correctly means "normal, non-continuation."
+    /// v9: <see cref="TickSummary"/> grew from 32 B to 40 B with four new fields — <c>OverloadLevel</c>, <c>TickMultiplier</c>,
+    ///     <c>MetronomeWaitUs</c>, <c>MetronomeIntentClass</c> — captured by the builder from <c>TickEnd</c> payload (overload byte +
+    ///     multiplier byte) and from observed <c>SchedulerMetronomeWait</c> (kind 241) spans. v8 caches don't carry these and must
+    ///     rebuild against a v9 builder. Issue #289 follow-up: makes per-tick throttle decisions and metronome idle visible to the viewer.
+    /// v10: same on-disk layout as v9, but v9 caches were built while <c>InspectorTickEnd</c> still hardcoded
+    ///      <c>(overloadLevel: 0, tickMultiplier: 1)</c> on the wire — meaning every v9 <see cref="TickSummary"/> on disk has zeroed
+    ///      throttle fields regardless of actual engine state. Bumping the version forces those caches to rebuild from source so
+    ///      the new TickEnd payload (with real values) is captured. No struct shape change — readers built against v10 should be
+    ///      bit-compatible with v9 wire format if the source happened to be re-traced post-fix, but the version bump removes any
+    ///      ambiguity for users who still hold v9 sidecars from earlier in the same dev cycle.
+    /// v11: <see cref="TickSummary"/> grew from 40 B to 44 B with two new fields — <c>ConsecutiveOverrun</c> + <c>ConsecutiveUnderrun</c>
+    ///      (the OverloadDetector's per-tick streak counters, saturating u16). Captured by the builder from the
+    ///      <c>SchedulerOverloadDetector</c> instant (kind 242). Drives the Workbench OverloadStrip tooltip so users can see the
+    ///      deescalation streak climb toward 20 (or reset on any overrun) — the answer to "why didn't multiplier go down?".
+    ///      v10 caches must rebuild against v11.
     /// </summary>
-    public const ushort CurrentChunkerVersion = 8;
+    public const ushort CurrentChunkerVersion = 11;
 
     /// <summary>Sidecar file extension, appended to the source path (e.g., <c>foo.typhon-trace</c> → <c>foo.typhon-trace-cache</c>).</summary>
     public const string CacheFileExtension = "-cache";

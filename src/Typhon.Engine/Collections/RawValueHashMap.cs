@@ -17,6 +17,20 @@ namespace Typhon.Engine;
 /// Bucket layout: [Header 12B] [Key₀..Key_{cap-1}] [Val₀..Val_{cap-1}].
 /// </para>
 /// </summary>
+/// <summary>
+/// Callback shape consumed by <see cref="RawValuePagedHashMap{TKey,TStore}.TryUpdateInPlace"/>. Implementations
+/// receive a pointer to the existing value bytes inside the bucket and mutate them in place. The pointer is
+/// only valid while the call is on the stack — must not be stored or returned.
+/// <para>
+/// Implementations should be small <c>ref struct</c> or <c>struct</c> types with the actual update parameters
+/// stored as fields, so the JIT can devirtualise the <see cref="Update"/> call and inline the body.
+/// </para>
+/// </summary>
+public unsafe interface IRawValueUpdater
+{
+    void Update(byte* valueBytes);
+}
+
 unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TStore : struct, IPageStore
 {
     // ═══════════════════════════════════════════════════════════════════════
@@ -446,6 +460,44 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
         return false;
     }
 
+    /// <summary>
+    /// Locate <paramref name="key"/> and invoke <see cref="IRawValueUpdater.Update"/> on the value bytes
+    /// while holding the bucket's OLC write lock and with the page registered as dirty in <paramref name="changeSet"/>.
+    /// Single chain scan, single dirty mark, single OLC critical section — used to mutate a few bytes of an
+    /// existing value in place without paying for a TryGet+Upsert pair (two scans, two OLC ops, one full-record stack copy + rewrite).
+    /// </summary>
+    /// <returns>true if the key was found and the updater ran; false if the key wasn't present (no mutation).</returns>
+    /// <remarks>
+    /// The updater is a struct constrained to <see cref="IRawValueUpdater"/> so the JIT can devirtualise the call —
+    /// the in-place pattern is hot-path-only (per-migration, per-tick), not occasional, so the devirtualisation matters.
+    /// </remarks>
+    private bool UpdateInChainCallback<TUpdater>(int startChunkId, TKey key, ref TUpdater updater, ref ChunkAccessor<TStore> accessor)
+        where TUpdater : struct, IRawValueUpdater
+    {
+        int chunkId = startChunkId;
+
+        while (chunkId != -1)
+        {
+            byte* addr = accessor.GetChunkAddress(chunkId, true);
+            ref var header = ref GetHeader(addr);
+            TKey* keys = KeysPtr(addr);
+            int count = header.EntryCount;
+
+            for (int i = 0; i < count; i++)
+            {
+                if (keys[i].Equals(key))
+                {
+                    updater.Update(ValueAt(addr, i));
+                    return true;
+                }
+            }
+
+            chunkId = header.OverflowChunkId;
+        }
+
+        return false;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Write API
     // ═══════════════════════════════════════════════════════════════════════
@@ -579,6 +631,56 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
 
             TrySplitIfNeeded(ref accessor, changeSet);
             return true;
+        }
+    }
+
+    /// <summary>
+    /// In-place value mutation primitive. Locates <paramref name="key"/>, marks the bucket page dirty,
+    /// takes the bucket's OLC write lock, calls <c>updater.Update(valueBytes)</c> on the value pointer,
+    /// and unlocks. Returns true if the key was found (and the updater ran), false otherwise.
+    /// <para>
+    /// Use when only a few bytes of an existing value need to change (e.g. updating two fields of a
+    /// 14-byte ClusterEntityRecord). Avoids the TryGet+Upsert pair's two chain scans, full-record
+    /// stack-buffer copy, and double OLC traversal — single descent, single critical section.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="TUpdater">A struct implementing <see cref="IRawValueUpdater"/>. The struct
+    /// constraint enables JIT devirtualisation of the <see cref="IRawValueUpdater.Update"/> call so the
+    /// callback inlines into this loop.</typeparam>
+    public bool TryUpdateInPlace<TUpdater>(TKey key, ref TUpdater updater,
+        ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
+        where TUpdater : struct, IRawValueUpdater
+    {
+        uint hash = ComputeHash(key);
+
+        while (true)
+        {
+            long packed = PackedMeta;
+            var (level, next, _) = UnpackMeta(packed);
+            int bucket = ResolveBucket(hash, level, next, N0);
+            int chunkId = GetBucketChunkId(bucket, ref accessor);
+
+            // GetChunkAddress(_, true) marks the page dirty + registers it with the ChangeSet up-front,
+            // matching Upsert's pattern. If the key isn't found we still return having marked the page dirty
+            // — same belt-and-braces semantics as Upsert when UpdateInChain fails (it would still walk the
+            // chain through dirty-marked pages). The cost is negligible vs the chain scan.
+            byte* addr = accessor.GetChunkAddress(chunkId, true);
+            ref var header = ref GetHeader(addr);
+            var latch = new OlcLatch(ref header.OlcVersion);
+            if (!latch.TryWriteLock())
+            {
+                continue;
+            }
+
+            if (PackedMeta != packed)
+            {
+                latch.AbortWriteLock();
+                continue;
+            }
+
+            bool updated = UpdateInChainCallback(chunkId, key, ref updater, ref accessor);
+            latch.WriteUnlock();
+            return updated;
         }
     }
 

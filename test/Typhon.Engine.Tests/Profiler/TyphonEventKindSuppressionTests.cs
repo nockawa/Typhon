@@ -42,39 +42,60 @@ public class TyphonEventKindSuppressionTests
     [TearDown]
     public void TearDown()
     {
-        // Restore the shipped defaults: 10 PageCache.* suppressed, everything else open.
+        // Restore the shipped defaults after the 2026-04-30 re-tier: only PageCacheFetch is in the page-cache deny-list; the 9 other
+        // page-cache kinds are open and gated solely by their JSON category. Diagnostic-grade page-cache events (Flush/DiskWrite/Evicted
+        // and friends) are therefore visible whenever Storage:PageCache:Enabled = true in the config.
         TyphonEvent.SuppressKind(TraceEventKind.PageCacheFetch);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheDiskRead);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheDiskWrite);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheAllocatePage);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheFlush);
-        TyphonEvent.SuppressKind(TraceEventKind.PageEvicted);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheDiskReadCompleted);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheDiskWriteCompleted);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheFlushCompleted);
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheBackpressure);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheDiskRead);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheDiskWrite);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheAllocatePage);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheFlush);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageEvicted);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheDiskReadCompleted);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheDiskWriteCompleted);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheFlushCompleted);
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheBackpressure);
         TyphonEvent.UnsuppressKind(TraceEventKind.BTreeInsert);
         TyphonEvent.UnsuppressKind(TraceEventKind.TransactionCommit);
     }
 
     [Test]
-    public void DefaultState_PageCacheKindsSuppressed_OthersOpen()
+    public void DefaultState_OnlyExtremeKindsSuppressed_OthersOpen()
     {
         Assert.Multiple(() =>
         {
-            // All 9 PageCache.* kinds ship in the deny-list — the 5 original kickoff kinds, the PageEvicted marker which rides on the same
-            // opt-in flag as the enclosing AllocatePage span, and the 3 async-completion kinds (DiskRead/DiskWrite/Flush Completed) which
-            // cost extra allocations per tracked I/O and must be opted in explicitly for device-stress investigations.
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheFetch), Is.True, "PageCacheFetch default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskRead), Is.True, "PageCacheDiskRead default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskWrite), Is.True, "PageCacheDiskWrite default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheAllocatePage), Is.True, "PageCacheAllocatePage default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheFlush), Is.True, "PageCacheFlush default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageEvicted), Is.True, "PageEvicted default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted), Is.True, "PageCacheDiskReadCompleted default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskWriteCompleted), Is.True, "PageCacheDiskWriteCompleted default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheFlushCompleted), Is.True, "PageCacheFlushCompleted default-suppressed");
-            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheBackpressure), Is.True, "PageCacheBackpressure default-suppressed");
+            // PageCacheFetch is the only page-cache kind on the deny-list — it fires on every ChunkAccessor.GetPage in hot loops (millions/sec).
+            // The other 9 page-cache kinds fire at I/O frequency (orders of magnitude less) and are gated by Storage:PageCache:Enabled in JSON.
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheFetch), Is.True, "PageCacheFetch default-suppressed (truly extreme)");
+
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskRead), Is.False, "PageCacheDiskRead reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskWrite), Is.False, "PageCacheDiskWrite reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheAllocatePage), Is.False, "PageCacheAllocatePage reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheFlush), Is.False, "PageCacheFlush reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageEvicted), Is.False, "PageEvicted reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted), Is.False, "PageCacheDiskReadCompleted reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskWriteCompleted), Is.False, "PageCacheDiskWriteCompleted reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheFlushCompleted), Is.False, "PageCacheFlushCompleted reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheBackpressure), Is.False, "PageCacheBackpressure reachable from JSON");
+
+            // Truly extreme leaves outside the page-cache family stay deny-listed.
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.DataMvccChainWalk), Is.True, "DataMvccChainWalk default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.DataIndexBTreeSearch), Is.True, "DataIndexBTreeSearch default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.DataIndexBTreeNodeCow), Is.True, "DataIndexBTreeNodeCow default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.QueryExecuteIterate), Is.True, "QueryExecuteIterate default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.QueryExecuteFilter), Is.True, "QueryExecuteFilter default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.QueryExecutePagination), Is.True, "QueryExecutePagination default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.EcsQueryMaskAnd), Is.True, "EcsQueryMaskAnd default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.EcsViewProcessEntry), Is.True, "EcsViewProcessEntry default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.EcsViewProcessEntryOr), Is.True, "EcsViewProcessEntryOr default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.DurabilityWalFrame), Is.True, "DurabilityWalFrame default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.RuntimeSubscriptionSubscriber), Is.True, "RuntimeSubscriptionSubscriber default-suppressed");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.RuntimeSubscriptionDeltaSerialize), Is.True, "RuntimeSubscriptionDeltaSerialize default-suppressed");
+
+            // UoW state/deadline came OFF the deny-list — these are exactly the events an operator wants when diagnosing slow UoW.Flush.
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.DurabilityUowState), Is.False, "DurabilityUowState reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.DurabilityUowDeadline), Is.False, "DurabilityUowDeadline reachable from JSON");
+            Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.DurabilityRecoveryRecord), Is.False, "DurabilityRecoveryRecord reachable from JSON (startup-only anyway)");
 
             // Everything else is open by default.
             Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.BTreeInsert), Is.False);

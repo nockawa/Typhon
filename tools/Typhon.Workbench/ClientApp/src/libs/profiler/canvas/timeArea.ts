@@ -882,6 +882,63 @@ function drawPhases(
       }
     }
   }
+
+  // ─── Marker glyphs (lifecycle landmarks: UoW Create / UoW Flush) ────────────────────────────────
+  // Same convention as the GC track: triangle for "begin"-shape events (UoW Create), circle for
+  // "end"-shape events (UoW Flush). Drawn near the top of the phase row so they sit above the
+  // phase bars without overlapping the duration-label text.
+  drawPhaseMarkers(ctx, visibleTicks, gutterWidth, width, pxOfUs, ty, theme);
+}
+
+function drawPhaseMarkers(
+  ctx: CanvasRenderingContext2D,
+  visibleTicks: TickData[],
+  gutterWidth: number,
+  width: number,
+  pxOfUs: (us: number) => number,
+  ty: number,
+  theme: StudioTheme,
+): void {
+  // Glyphs sit centred on the row with a small footprint so they read as decorations on top of the
+  // phase bars rather than competing with them. Use timeline palette slot 6 (green) — high contrast
+  // against the phase fill (deep purple slot 0) in both light and dark themes; white markers were
+  // invisible against the light row background between phase bars.
+  const cy = ty + PHASE_TRACK_HEIGHT / 2;
+  const r = Math.max(3, Math.floor(PHASE_TRACK_HEIGHT / 4));
+  const markerColor = theme.timelineBands[6];
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(gutterWidth, ty, width - gutterWidth, PHASE_TRACK_HEIGHT);
+  ctx.clip();
+
+  for (const tick of visibleTicks) {
+    if (tick.phaseMarkers.length === 0) continue;
+    for (const m of tick.phaseMarkers) {
+      const px = pxOfUs(m.timestampUs);
+      if (px < gutterWidth - r || px > width + r) continue;
+
+      // 161 = RuntimePhaseUoWCreate (triangle, "start"), 162 = RuntimePhaseUoWFlush (circle, "end").
+      // Stays in sync with the legend convention used by the GC track renderer.
+      ctx.fillStyle = markerColor;
+      ctx.beginPath();
+      if (m.kind === 161) {
+        // Down-pointing triangle (apex at bottom) so the glyph reads as "this is the *start* of something
+        // that opens here" — same convention as the GC track.
+        ctx.moveTo(px - r, cy - r);
+        ctx.lineTo(px + r, cy - r);
+        ctx.lineTo(px, cy + r);
+        ctx.closePath();
+      } else if (m.kind === 162) {
+        ctx.arc(px, cy, r, 0, Math.PI * 2);
+      } else {
+        // Forward-compat fallback: any other kind on phaseMarkers renders as a small square.
+        ctx.rect(px - r, cy - r, r * 2, r * 2);
+      }
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 /**

@@ -14,17 +14,24 @@ internal sealed class OverloadDetector
     private readonly int[] _allowedMultipliers;
     private readonly int _maxMultiplierIndex;
 
-    private int _consecutiveOverrunTicks;
-    private int _consecutiveUnderrunTicks;
     private int _multiplierIndex; // Index into _allowedMultipliers
     private int _previousQueueDepth;
-    private int _consecutiveQueueGrowthTicks;
 
     /// <summary>Current overload level.</summary>
     public OverloadLevel CurrentLevel { get; private set; }
 
     /// <summary>Current tick rate multiplier (1 = normal, 2+ = modulated).</summary>
     public int TickMultiplier => _allowedMultipliers[_multiplierIndex];
+
+    // ── Read-only accessors for gauge emission (issue #289 follow-up) ─────────────
+    /// <summary>Consecutive ticks above the overrun threshold. Reset on any deescalation tick.</summary>
+    public int ConsecutiveOverrunTicks { get; private set; }
+
+    /// <summary>Consecutive ticks below the deescalation ratio. Reset on any escalation tick.</summary>
+    public int ConsecutiveUnderrunTicks { get; private set; }
+
+    /// <summary>Consecutive ticks where the event-queue depth grew. Reset when growth pauses.</summary>
+    public int ConsecutiveQueueGrowthTicks { get; private set; }
 
     internal OverloadDetector(OverloadOptions options, int baseTickRate)
     {
@@ -70,15 +77,15 @@ internal sealed class OverloadDetector
         var queueGrowing = false;
         if (_options.QueueGrowthTicks > 0 && eventQueueDepth > _previousQueueDepth && _previousQueueDepth >= 0)
         {
-            _consecutiveQueueGrowthTicks++;
-            if (_consecutiveQueueGrowthTicks >= _options.QueueGrowthTicks)
+            ConsecutiveQueueGrowthTicks++;
+            if (ConsecutiveQueueGrowthTicks >= _options.QueueGrowthTicks)
             {
                 queueGrowing = true;
             }
         }
         else
         {
-            _consecutiveQueueGrowthTicks = 0;
+            ConsecutiveQueueGrowthTicks = 0;
         }
 
         _previousQueueDepth = eventQueueDepth;
@@ -86,24 +93,24 @@ internal sealed class OverloadDetector
         // Escalation: either signal triggers
         if (overrunning || queueGrowing)
         {
-            _consecutiveOverrunTicks++;
-            _consecutiveUnderrunTicks = 0;
+            ConsecutiveOverrunTicks++;
+            ConsecutiveUnderrunTicks = 0;
 
-            if (_consecutiveOverrunTicks >= _options.EscalationTicks)
+            if (ConsecutiveOverrunTicks >= _options.EscalationTicks)
             {
                 Escalate();
-                _consecutiveOverrunTicks = 0;
+                ConsecutiveOverrunTicks = 0;
             }
         }
         else if (overrunRatio < _options.DeescalationRatio)
         {
-            _consecutiveUnderrunTicks++;
-            _consecutiveOverrunTicks = 0;
+            ConsecutiveUnderrunTicks++;
+            ConsecutiveOverrunTicks = 0;
 
-            if (_consecutiveUnderrunTicks >= _options.DeescalationTicks)
+            if (ConsecutiveUnderrunTicks >= _options.DeescalationTicks)
             {
                 Deescalate();
-                _consecutiveUnderrunTicks = 0;
+                ConsecutiveUnderrunTicks = 0;
             }
         }
         // Between thresholds: no action, counters preserved (hysteresis)
@@ -170,7 +177,7 @@ internal sealed class OverloadDetector
             }
         }
 
-        _consecutiveOverrunTicks = 0;
-        _consecutiveUnderrunTicks = 0;
+        ConsecutiveOverrunTicks = 0;
+        ConsecutiveUnderrunTicks = 0;
     }
 }

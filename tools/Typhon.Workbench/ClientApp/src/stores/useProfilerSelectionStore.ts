@@ -1,20 +1,24 @@
 import { create } from 'zustand';
-import type { ChunkSpan, MarkerSelection, SpanData } from '@/libs/profiler/model/traceModel';
+import type { ChunkSpan, MarkerSelection, PhaseMarker, PhaseSpan, SpanData } from '@/libs/profiler/model/traceModel';
 
 /**
- * Discriminated union of profiler-panel selections. The profiler can select four kinds of things, each
+ * Discriminated union of profiler-panel selections. The profiler can select six kinds of things, each
  * mapped to its own kind tag so DetailPanel's render branches know exactly what they're looking at:
  *
  *  - **span**: a nested span inside a scheduler chunk (Transaction.Commit, BTree.Insert, etc.)
  *  - **chunk**: a top-level scheduler chunk (a system's execution slot inside a tick)
  *  - **tick**: a whole tick on the overview strip
- *  - **marker**: a discrete event instant (GC, phase transition, memory alloc event)
+ *  - **marker**: a discrete event instant (GC, memory alloc event)
+ *  - **phase**: a tick lifecycle phase span (RuntimePhaseSpan — WriteTickFence, UoW Flush, OutputPhase, etc.)
+ *  - **phase-marker**: a single-point lifecycle landmark (UoW Create / UoW Flush glyph in the phase track)
  */
 export type ProfilerSelection =
   | { kind: 'span'; span: SpanData }
   | { kind: 'chunk'; chunk: ChunkSpan }
   | { kind: 'tick'; tickNumber: number }
-  | { kind: 'marker'; marker: MarkerSelection };
+  | { kind: 'marker'; marker: MarkerSelection }
+  | { kind: 'phase'; phase: PhaseSpan; tickNumber: number }
+  | { kind: 'phase-marker'; marker: PhaseMarker; tickNumber: number };
 
 interface ProfilerSelectionState {
   selected: ProfilerSelection | null;

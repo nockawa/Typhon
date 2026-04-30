@@ -40,8 +40,9 @@ public class FileExporterIntegrationTests
         // Belt-and-braces in case a prior Stop() failed
         try { TyphonProfiler.Stop(); } catch { }
         TyphonProfiler.ResetForTests();
-        // Restore the default deny-list state so we don't poison sibling tests.
-        TyphonEvent.SuppressKind(TraceEventKind.PageCacheDiskWrite);
+        // Restore the default deny-list state so we don't poison sibling tests. After the 2026-04-30 re-tier, PageCacheDiskWrite is no
+        // longer in the deny-list — its shipped default is unsuppressed (gated solely by Storage:PageCache:Enabled in JSON).
+        TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheDiskWrite);
         if (_tempPath != null && File.Exists(_tempPath))
         {
             try { File.Delete(_tempPath); } catch { }
@@ -57,8 +58,8 @@ public class FileExporterIntegrationTests
         TyphonProfiler.AttachExporter(fileExporter);
 
         // ── Act: start, emit a mix of events on a FRESH thread, stop (flushes + closes file) ─────
-        // The PageCache.* kinds are default-suppressed (see TyphonEvent static ctor); opt DiskWrite
-        // back in for this test so we can assert its decoded payload round-trips.
+        // PageCacheDiskWrite is reachable from JSON post-2026-04-30 re-tier (only PageCacheFetch stays default-suppressed). Calling
+        // UnsuppressKind here is a no-op against the shipped default but keeps the test's intent self-documenting.
         TyphonEvent.UnsuppressKind(TraceEventKind.PageCacheDiskWrite);
         TyphonProfiler.Start(_registry.Profiler, metadata);
 
@@ -126,7 +127,7 @@ public class FileExporterIntegrationTests
 
             // Cluster migration.
             {
-                var e = TyphonEvent.BeginClusterMigration(archetypeId: 3, migrationCount: 128);
+                var e = TyphonEvent.BeginClusterMigration(archetypeId: 3, migrationCount: 128, componentCount: 384);
                 e.Dispose();
             }
 
