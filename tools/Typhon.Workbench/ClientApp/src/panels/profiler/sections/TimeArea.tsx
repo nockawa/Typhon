@@ -617,6 +617,25 @@ export default function TimeArea({ ticks, gaugeData, threadNames: threadNamesMap
     const contentWidth = rect.width - gutter;
     const mouseX = Math.max(0, e.clientX - rect.left - gutter);
 
+    if (e.ctrlKey) {
+      // Ctrl+Wheel — vertical scroll through the lane stack. Same UX as the gutter scrollbar drag
+      // (which itself drives vp.scrollY via the overlay scrollTop). Clamped so we never overshoot
+      // the layout bottom. Delta is taken raw from deltaY — wheel "lines" feel right at this scale;
+      // trackpads pre-scale to pixels and feel right too.
+      const containerH = rect.height;
+      const maxScroll = Math.max(0, layoutRef.current.totalHeight - containerH);
+      const proposed = vp.scrollY + e.deltaY;
+      const clamped = Math.max(0, Math.min(maxScroll, proposed));
+      vp.scrollY = clamped;
+      const overlay = scrollOverlayRef.current;
+      if (overlay && Math.abs(overlay.scrollTop - clamped) > 0.5) {
+        overlay.scrollTop = clamped;
+      }
+      // No applyViewRange — viewport time range is unchanged by vertical scroll.
+      scheduleRender();
+      return;
+    }
+
     if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       // Horizontal pan
       const delta = e.shiftKey ? e.deltaY : e.deltaX;
@@ -762,9 +781,13 @@ function routeSelection(
       setSelected({ kind: 'tick', tickNumber: hit.tickNumber });
       return;
     case 'phase':
-      // Phase selection isn't in the ProfilerSelection union (design doc keeps phase as a
-      // DetailPanel section under the tick selection). Route to the containing tick.
-      setSelected({ kind: 'tick', tickNumber: hit.tickNumber });
+      // Phase span (RuntimePhaseSpan, kind 243) — surface as its own DetailPane branch so the user can
+      // read the phase's SpanId and verify child spans (PageCacheFlush etc.) attach via parentSpanId.
+      setSelected({ kind: 'phase', phase: hit.phase, tickNumber: hit.tickNumber });
+      return;
+    case 'phase-marker':
+      // Glyph in the phase track (UoW Create / UoW Flush). Surfaces its own marker-detail branch.
+      setSelected({ kind: 'phase-marker', marker: hit.marker, tickNumber: hit.tickNumber });
       return;
     case 'mini-row-op':
       // Treat mini-row ops as spans (they ARE SpanData under the hood — stored in projection arrays).

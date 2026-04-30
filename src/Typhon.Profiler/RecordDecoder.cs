@@ -136,6 +136,8 @@ public sealed class RecordDecoder
 
             TraceEventKind.ClusterMigration => DecodeClusterMigration(record),
 
+            TraceEventKind.RuntimePhaseSpan => DecodeRuntimePhaseSpan(record),
+
             TraceEventKind.WalFlush or TraceEventKind.WalSegmentRotate
                 or TraceEventKind.WalWait => DecodeWal(record),
 
@@ -508,6 +510,25 @@ public sealed class RecordDecoder
             TraceIdLo = data.HasTraceContext ? Id(data.TraceIdLo) : null,
             ArchetypeId = data.ArchetypeId,
             MigrationCount = data.MigrationCount,
+            ComponentCount = data.ComponentCount,
+        };
+    }
+
+    private LiveTraceEvent DecodeRuntimePhaseSpan(ReadOnlySpan<byte> record)
+    {
+        var data = RuntimePhaseSpanEventCodec.Decode(record);
+        return new LiveTraceEvent
+        {
+            Kind = (int)TraceEventKind.RuntimePhaseSpan,
+            ThreadSlot = data.ThreadSlot,
+            TickNumber = _currentTick,
+            TimestampUs = data.StartTimestamp / _ticksPerUs,
+            DurationUs = data.DurationTicks / _ticksPerUs,
+            SpanId = Id(data.SpanId),
+            ParentSpanId = Id(data.ParentSpanId),
+            TraceIdHi = data.HasTraceContext ? Id(data.TraceIdHi) : null,
+            TraceIdLo = data.HasTraceContext ? Id(data.TraceIdLo) : null,
+            Phase = data.Phase,
         };
     }
 

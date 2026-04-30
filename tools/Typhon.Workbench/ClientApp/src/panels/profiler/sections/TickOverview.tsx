@@ -17,6 +17,7 @@ import {
 import { formatDuration } from '@/libs/profiler/canvas/canvasUtils';
 import { getStudioThemeTokens } from '@/libs/profiler/canvas/theme';
 import { HelpOverlay } from '@/panels/profiler/components/HelpOverlay';
+import { useProfilerSelectionStore } from '@/stores/useProfilerSelectionStore';
 import { useProfilerSessionStore } from '@/stores/useProfilerSessionStore';
 import { useProfilerViewStore } from '@/stores/useProfilerViewStore';
 import { useThemeStore } from '@/stores/useThemeStore';
@@ -41,11 +42,49 @@ const OVERVIEW_HELP_LINES: string[] = [
   '',
   'What\'s drawn:',
   '  One bar per tick, height ∝ tick duration (clamped at the',
-  '    P95 reference — dashed line at top). Bars taller than P95',
-  '    are drawn in a warning hue.',
+  '    P95 reference — dashed line at top).',
   '  Orange overlay = ticks overlapping the current viewport.',
   '  ◀ / ▶ chevrons mean the selection extends past the visible',
   '    window.',
+  '',
+  'Bar colour:',
+  '  Throttle multiplier (when > 1) wins over the P95 colouring,',
+  '  so the more severe diagnostic always shows through.',
+  '',
+  '  1× (nominal)',
+  '    Default tone if duration ≤ P95;',
+  '    P95 warning hue if duration > P95.',
+  '  2× amber          — engine slowed itself once (Level 3 entry)',
+  '  3× orange         — second escalation step within Level 3',
+  '  4× red            — third step (typical migration-storm range)',
+  '  6× dark red       — engine pinned at MinTickRateHz floor',
+  '',
+  '  Multiplier rises after 5 consecutive ticks above 1.20× target',
+  '  (OverloadDetector escalation). It steps back down only after',
+  '  20 consecutive ticks under 0.60× — asymmetric, by design.',
+  '',
+  'Hover tooltip lines (when present):',
+  '  Tick N',
+  '  Duration: actual + allocated   (allocated = baseTarget × multiplier)',
+  '  Events: total trace records emitted this tick',
+  '  Throttled: mult=N (level M)   — only when multiplier > 1',
+  '  Pre-tick wait: X ms (Class)   — only when wait > 0',
+  '    Class is the metronome\'s intent for that wait:',
+  '      CatchUp   — target was already past, no real wait',
+  '      Throttled — multiplier > 1; engine waited longer on purpose',
+  '      Headroom  — multiplier == 1; normal idle to next 60 Hz tick',
+  '  Streak overrun: N / 5         — consecutive ticks > 1.2× target',
+  '    Reaches 5 → multiplier escalates one step. Resets on any',
+  '    non-overrun tick.',
+  '  Streak underrun: N / 20       — consecutive ticks < 0.6× target',
+  '    Reaches 20 → multiplier deescalates one step. Resets on any',
+  '    overrun tick (a single spike breaks the streak).',
+  '    Watch this one — if it climbs to 18-19 and resets, your',
+  '    workload has periodic spikes preventing deescalation.',
+  '',
+  'See also: the Overload strip below auto-appears on the first',
+  'overrun and surfaces the per-tick ratio + multiplier history',
+  'plus the same streak counters in its tooltip.',
   '',
   'Key + Mouse:',
   '',
@@ -84,6 +123,10 @@ export default function TickOverview({ isLive = false }: Props) {
   const viewRange = useProfilerViewStore((s) => s.viewRange);
   const setViewRange = useProfilerViewStore((s) => s.setViewRange);
   const legendsVisible = useProfilerViewStore((s) => s.legendsVisible);
+  // Range-drag in TickOverview clears any stale span/chunk/marker click selection so the
+  // right-pane's range-stats fallback ("Selection") takes over instead of the click-detail card.
+  // Without this, an old TimeArea click sticks indefinitely and blocks the range stats from showing.
+  const clearProfilerSelection = useProfilerSelectionStore((s) => s.clear);
 
   // In live mode, any explicit user interaction (wheel pan, drag-select, overview pan, ...)
   // implicitly turns off live-follow — otherwise the next tick batch (≤100 ms later) would snap
@@ -557,12 +600,43 @@ export default function TickOverview({ isLive = false }: Props) {
     if (idx >= sr.startIdx && idx < sr.endIdx && idx < tickRows.length) {
       hoverRef.current = { tickIdx: idx, x: mx, y: my };
       const tick = tickRows[idx];
+      // Allocated tick budget for THIS tick — base-rate target × multiplier. At multiplier > 1 the
+      // engine voluntarily widens the per-tick wall-clock slot (TickRateModulation), so a 60Hz base
+      // tick at mult=4 has a 66.67ms allocated period, not 16.67ms. Default to 1× when the
+      // multiplier is unknown (old v8/zeroed-v9 caches surface 0 here).
+      const baseTickRate = Number(metadata?.header?.baseTickRate ?? 60);
+      const effectiveMult = (tick.tickMultiplier && tick.tickMultiplier > 0) ? tick.tickMultiplier : 1;
+      const allocatedUs = baseTickRate > 0 ? (1_000_000 / baseTickRate) * effectiveMult : 0;
+      const lines: string[] = [
+        `Tick ${tick.tickNumber}`,
+        `Duration: ${formatDuration(tick.durationUs)} (${formatDuration(allocatedUs)} allocated)`,
+        `Events: ${tick.eventCount.toLocaleString()}`,
+      ];
+      // v9 (#289 follow-up): expose throttle + metronome diagnostics when present.
+      const mult = tick.tickMultiplier ?? 0;
+      if (mult > 1) {
+        const lvl = tick.overloadLevel ?? 0;
+        lines.push(`Throttled: mult=${mult} (level ${lvl})`);
+      }
+      const waitUs = tick.metronomeWaitUs ?? 0;
+      if (waitUs > 0) {
+        const intent = tick.metronomeIntentClass ?? 0;
+        const intentLabel = intent === 0 ? 'CatchUp' : intent === 1 ? 'Throttled' : intent === 2 ? 'Headroom' : `?${intent}`;
+        // 65535 µs is the saturation sentinel for the u16 wire field — flag it so the user knows the actual gap was longer.
+        const waitLabel = waitUs >= 65535 ? '≥65 ms' : formatDuration(waitUs);
+        lines.push(`Pre-tick wait: ${waitLabel} (${intentLabel})`);
+      }
+      // OverloadDetector streak counters (v11) — the two are mutually exclusive (Update's branches).
+      // Show whichever is active so users can watch escalation/deescalation streaks climb and reset.
+      const consecOver = tick.consecutiveOverrun ?? 0;
+      const consecUnder = tick.consecutiveUnderrun ?? 0;
+      if (consecOver > 0) {
+        lines.push(`Streak overrun: ${consecOver} / 5  (escalate at 5)`);
+      } else if (consecUnder > 0) {
+        lines.push(`Streak underrun: ${consecUnder} / 20  (deescalate at 20)`);
+      }
       setTickTooltipState({
-        lines: [
-          `Tick ${tick.tickNumber}`,
-          `Duration: ${formatDuration(tick.durationUs)}`,
-          `Events: ${tick.eventCount.toLocaleString()}`,
-        ],
+        lines,
         clientX: e.clientX,
         clientY: rect.bottom,
       });
@@ -571,7 +645,7 @@ export default function TickOverview({ isLive = false }: Props) {
       if (tickTooltipState !== null) setTickTooltipState(null);
     }
     scheduleRender();
-  }, [tickRows, hitTest, clampStart, pauseLiveFollow, scheduleRender, legendsVisible, tickTooltipState]);
+  }, [tickRows, hitTest, clampStart, pauseLiveFollow, scheduleRender, legendsVisible, tickTooltipState, metadata?.header?.baseTickRate]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const drag = dragRef.current;
@@ -585,17 +659,20 @@ export default function TickOverview({ isLive = false }: Props) {
         const b = Math.max(drag.startTickIdx, drag.currentTickIdx);
         if (a >= 0 && b < tickRows.length) {
           applyViewRange({ startUs: tickRows[a].startUs, endUs: tickRows[b].endUs });
+          // Clear any stale element click — the user just declared "show me stats for this range".
+          clearProfilerSelection();
         }
       } else {
         const idx = hitTest(e.clientX);
         if (idx >= 0 && idx < tickRows.length) {
           const tick = tickRows[idx];
           applyViewRange({ startUs: tick.startUs, endUs: tick.endUs });
+          clearProfilerSelection();
         }
       }
     }
     scheduleRender();
-  }, [tickRows, applyViewRange, hitTest, scheduleRender]);
+  }, [tickRows, applyViewRange, hitTest, scheduleRender, clearProfilerSelection]);
 
   const onPointerLeave = useCallback(() => {
     // Only clear hover state on leave — in-flight drags are pointer-captured so pointermove still fires.

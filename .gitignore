@@ -303,3 +303,4 @@ nul
 **/*.typhon-trace
 **/*.typhon-trace-cache
 **/*.typhon-replay
+**/*.wal

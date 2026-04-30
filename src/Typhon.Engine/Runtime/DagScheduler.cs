@@ -201,6 +201,43 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         }
     }
 
+    /// <summary>
+    /// Emit a <see cref="TraceEventKind.SchedulerMetronomeWait"/> span for the inter-tick wait that just completed. Called on the TickDriver thread
+    /// by <see cref="HighResolutionTimerServiceBase"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Why this exists</b> (issue #289 follow-up). Without this hook the timer thread's three-phase wait between ticks emits no profiler events — appearing
+    /// as dead time on the trace even when the engine is intentionally throttling itself via <see cref="OverloadDetector.TickMultiplier"/>. The span carries
+    /// the multiplier and an <c>intentClass</c> byte (CatchUp / Throttled / Headroom) so a trace viewer can answer <i>why</i> the metronome was waiting.
+    /// </remarks>
+    protected override void OnWaitComplete(long scheduledTimestamp, long startTimestamp, long endTimestamp, byte phaseFlags)
+    {
+        if (!TelemetryConfig.SchedulerMetronomeWaitActive)
+        {
+            return;
+        }
+
+        // intentClass: 0=CatchUp, 1=Throttled, 2=Headroom.
+        // CatchUp wins over Throttled — if we've fallen behind, the multiplier is irrelevant for *this* wait (we're not waiting because of it; we're not
+        // waiting at all).
+        byte intentClass;
+        if (startTimestamp >= scheduledTimestamp)
+        {
+            intentClass = 0;
+        }
+        else if (_tickMultiplier > 1)
+        {
+            intentClass = 1;
+        }
+        else
+        {
+            intentClass = 2;
+        }
+
+        var multByte = (byte)Math.Min(_tickMultiplier, byte.MaxValue);
+        TyphonEvent.EmitSchedulerMetronomeWait(startTimestamp, endTimestamp, scheduledTimestamp, multByte, intentClass, phaseFlags);
+    }
+
     // ═══════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════

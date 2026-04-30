@@ -1721,8 +1721,8 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     {
         // Synchronous span brackets the setup+kickoff work. The async fsync+decrement completion in the ContinueWith is NOT captured under
         // this span because SpanScope is a ref struct — instead, we emit a separate PageCacheFlushCompleted record from inside the continuation,
-        // correlated to this span by SpanId. PageCache.Flush is suppressed by default; opting it in AND PageCacheFlushCompleted gives the full
-        // "kickoff → all writes done → fsync done" timeline. The delta between FlushCompleted.duration and max(DiskWriteCompleted.duration)
+        // correlated to this span by SpanId. PageCache.Flush is gated by Storage:PageCache:Enabled in JSON (post-2026-04-30 re-tier — only
+        // PageCacheFetch is on the hard deny-list). The delta between FlushCompleted.duration and max(DiskWriteCompleted.duration)
         // is pure fsync cost — the single most useful number on a checkpoint-heavy workload.
         using var flushScope = TyphonEvent.BeginPageCacheFlush(memPageIndices.Length);
 

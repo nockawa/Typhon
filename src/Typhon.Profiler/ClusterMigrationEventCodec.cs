@@ -21,10 +21,17 @@ public readonly struct ClusterMigrationEventData
     /// <summary>Required — number of entities migrated this call.</summary>
     public int MigrationCount { get; }
 
+    /// <summary>
+    /// Total component instances moved (= <see cref="MigrationCount"/> × the archetype's per-entity component slot count).
+    /// Reflects the actual amount of component data shuffled across clusters. Zero on records produced by older engines
+    /// that pre-date this field — the wire layout is additive and the decoder tolerates the smaller payload size.
+    /// </summary>
+    public int ComponentCount { get; }
+
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
     public ClusterMigrationEventData(byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, ushort archetypeId, int migrationCount)
+        ulong traceIdHi, ulong traceIdLo, ushort archetypeId, int migrationCount, int componentCount)
     {
         ThreadSlot = threadSlot;
         StartTimestamp = startTimestamp;
@@ -35,23 +42,28 @@ public readonly struct ClusterMigrationEventData
         TraceIdLo = traceIdLo;
         ArchetypeId = archetypeId;
         MigrationCount = migrationCount;
+        ComponentCount = componentCount;
     }
 }
 
-/// <summary>Wire codec for <see cref="TraceEventKind.ClusterMigration"/>. Payload: <c>u16 archetypeId</c>, <c>i32 migrationCount</c>.</summary>
+/// <summary>
+/// Wire codec for <see cref="TraceEventKind.ClusterMigration"/>. Payload: <c>u16 archetypeId</c>, <c>i32 migrationCount</c>, <c>i32 componentCount</c>.
+/// The trailing <c>componentCount</c> field is wire-additive — readers tolerate records that omit it (treated as zero) so traces produced by older engines
+/// remain decodable. The record's size in the common header tells the loader how many payload bytes are present.
+/// </summary>
 public static class ClusterMigrationEventCodec
 {
     private const int ArchetypeIdSize = 2;
     private const int MigrationCountSize = 4;
-    private const int PayloadSize = ArchetypeIdSize + MigrationCountSize;
+    private const int ComponentCountSize = 4;
+    private const int PayloadSize = ArchetypeIdSize + MigrationCountSize + ComponentCountSize;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int ComputeSize(bool hasTraceContext)
         => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + PayloadSize;
 
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort archetypeId, int migrationCount, out int bytesWritten)
+    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp, ulong spanId, ulong parentSpanId,
+        ulong traceIdHi, ulong traceIdLo, ushort archetypeId, int migrationCount, int componentCount, out int bytesWritten)
     {
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSize(hasTraceContext);
@@ -70,6 +82,7 @@ public static class ClusterMigrationEventCodec
         var payload = destination[headerSize..];
         BinaryPrimitives.WriteUInt16LittleEndian(payload, archetypeId);
         BinaryPrimitives.WriteInt32LittleEndian(payload[ArchetypeIdSize..], migrationCount);
+        BinaryPrimitives.WriteInt32LittleEndian(payload[(ArchetypeIdSize + MigrationCountSize)..], componentCount);
 
         bytesWritten = size;
     }
@@ -90,9 +103,13 @@ public static class ClusterMigrationEventCodec
         var payload = source[headerSize..];
         var archetypeId = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         var migrationCount = BinaryPrimitives.ReadInt32LittleEndian(payload[ArchetypeIdSize..]);
+        // Wire-additive: older traces don't carry componentCount. Decode 0 in that case.
+        var componentCount = payload.Length >= PayloadSize
+            ? BinaryPrimitives.ReadInt32LittleEndian(payload[(ArchetypeIdSize + MigrationCountSize)..])
+            : 0;
 
         return new ClusterMigrationEventData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            archetypeId, migrationCount);
+            archetypeId, migrationCount, componentCount);
     }
 }
 

@@ -411,25 +411,36 @@ public sealed partial class AttachSessionRuntime : IDisposable, IChunkProvider
     {
         using var sink = FileCacheSink.Create(outputPath);
 
-        // Pre-rent scratch buffers sized for the largest possible chunk. Intra-tick splitting (chunker v8) caps at
-        // IntraTickByteCap (= 2 × ByteCap) for genuinely pathological dense ticks; renting at that ceiling means
-        // the loop never has to grow the buffer mid-save.
-        var compressedScratch = ArrayPool<byte>.Shared.Rent(TraceFileCacheConstants.IntraTickByteCap);
-        var uncompressedScratch = ArrayPool<byte>.Shared.Rent(TraceFileCacheConstants.IntraTickByteCap);
-        try
+        using var reader = _tempFile.OpenReader();
+        lock (_builderLock)
         {
-            using var reader = _tempFile.OpenReader();
-            lock (_builderLock)
+            ct.ThrowIfCancellationRequested();
+            _builder.FinalizePendingState();
+
+            // Build the relocated manifest as we re-feed chunks. The new sink's offsets differ from the temp file's; we deliberately
+            // do NOT mutate the builder's live manifest (live chunk-fetches must keep working). We construct a fresh array here and
+            // pass it to FileCacheSink.WriteTrailer below.
+            var liveManifest = _builder.ChunkManifest;
+            var relocatedManifest = new ChunkManifestEntry[liveManifest.Count];
+
+            // Size scratch buffers to the actual largest chunk in the manifest. Pre-tick events (engine setup — ThreadInfo,
+            // ~200K EcsSpawn for AntHill, etc.) buffer up to PreTickBufferCap = 16 MB and get flushed into chunk[0] at the first
+            // TickStart, so that chunk can be substantially larger than IntraTickByteCap. Renting at IntraTickByteCap (2 MB) blew
+            // up with ArgumentOutOfRangeException on AsSpan when chunk[0] exceeded the rented array. Walking the manifest first
+            // costs ~1 µs and lets the rent always fit.
+            var maxCompLen = 1;
+            var maxUncompLen = 1;
+            for (var i = 0; i < liveManifest.Count; i++)
             {
-                ct.ThrowIfCancellationRequested();
-                _builder.FinalizePendingState();
+                var e = liveManifest[i];
+                if (e.CacheByteLength > maxCompLen) maxCompLen = (int)e.CacheByteLength;
+                if (e.UncompressedBytes > maxUncompLen) maxUncompLen = (int)e.UncompressedBytes;
+            }
 
-                // Build the relocated manifest as we re-feed chunks. The new sink's offsets differ from the temp file's; we deliberately
-                // do NOT mutate the builder's live manifest (live chunk-fetches must keep working). We construct a fresh array here and
-                // pass it to FileCacheSink.WriteTrailer below.
-                var liveManifest = _builder.ChunkManifest;
-                var relocatedManifest = new ChunkManifestEntry[liveManifest.Count];
-
+            var compressedScratch = ArrayPool<byte>.Shared.Rent(maxCompLen);
+            var uncompressedScratch = ArrayPool<byte>.Shared.Rent(maxUncompLen);
+            try
+            {
                 for (var i = 0; i < liveManifest.Count; i++)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -495,11 +506,11 @@ public sealed partial class AttachSessionRuntime : IDisposable, IChunkProvider
                     _initialMetadataBytes,
                     cacheHeader);
             }
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(compressedScratch);
-            ArrayPool<byte>.Shared.Return(uncompressedScratch);
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(compressedScratch);
+                ArrayPool<byte>.Shared.Return(uncompressedScratch);
+            }
         }
 
         return new FileInfo(outputPath).Length;
@@ -843,7 +854,13 @@ public sealed partial class AttachSessionRuntime : IDisposable, IChunkProvider
             DurationUs: summary.DurationUs,
             EventCount: summary.EventCount,
             MaxSystemDurationUs: summary.MaxSystemDurationUs,
-            ActiveSystemsBitmask: summary.ActiveSystemsBitmask.ToString());
+            ActiveSystemsBitmask: summary.ActiveSystemsBitmask.ToString(),
+            OverloadLevel: summary.OverloadLevel,
+            TickMultiplier: summary.TickMultiplier,
+            MetronomeWaitUs: summary.MetronomeWaitUs,
+            MetronomeIntentClass: summary.MetronomeIntentClass,
+            ConsecutiveOverrun: summary.ConsecutiveOverrun,
+            ConsecutiveUnderrun: summary.ConsecutiveUnderrun);
         _tickSummaries.Add(dto);
         _metadataSnapshot = null;
         TickSummaryAdded?.Invoke(dto);

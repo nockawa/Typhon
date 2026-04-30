@@ -401,7 +401,13 @@ public sealed partial class TraceSessionRuntime : IDisposable, IChunkProvider
                 DurationUs: ts.DurationUs,
                 EventCount: ts.EventCount,
                 MaxSystemDurationUs: ts.MaxSystemDurationUs,
-                ActiveSystemsBitmask: ts.ActiveSystemsBitmask.ToString());
+                ActiveSystemsBitmask: ts.ActiveSystemsBitmask.ToString(),
+                OverloadLevel: ts.OverloadLevel,
+                TickMultiplier: ts.TickMultiplier,
+                MetronomeWaitUs: ts.MetronomeWaitUs,
+                MetronomeIntentClass: ts.MetronomeIntentClass,
+                ConsecutiveOverrun: ts.ConsecutiveOverrun,
+                ConsecutiveUnderrun: ts.ConsecutiveUnderrun);
         }
 
         var manifest = new ChunkManifestEntryDto[reader.ChunkManifest.Count];

@@ -117,6 +117,7 @@ export function buildTick(opts: BuildTickOptions): TickData {
     durationUs,
     chunks: [],
     phases: [],
+    phaseMarkers: [],
     skips: [],
     spans: sortedSpans,
     spanEndMaxRunning: globalEndMax,

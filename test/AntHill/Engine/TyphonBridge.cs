@@ -134,6 +134,12 @@ public sealed class TyphonBridge : IDisposable
         var services = new ServiceCollection();
         services
             .AddLogging(cfg => cfg.AddConsole().SetMinimumLevel(LogLevel.Warning))
+            // IWalFileIO must be registered for WAL to actually start. Without it,
+            // DatabaseEngine.InitializeWalManager() bails out and WalManager stays null,
+            // which silently downgrades the engine to WAL-less Deferred mode — every per-tick
+            // UoW.Flush ends up calling ChangeSet.SaveChanges synchronously to write all dirty
+            // migration pages, blocking the TickDriver thread for ~22 ms on AntHill workloads.
+            .AddSingleton<IWalFileIO, WalFileIO>()
             .AddResourceRegistry()
             .AddMemoryAllocator()
             .AddEpochManager()

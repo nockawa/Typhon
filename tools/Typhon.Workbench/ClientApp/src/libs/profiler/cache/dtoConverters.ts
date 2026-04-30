@@ -76,6 +76,14 @@ export function convertTickSummaries(dtos: TickSummaryDto[] | null | undefined):
     eventCount: toInt(s.eventCount),
     maxSystemDurationUs: toFloat(s.maxSystemDurationUs),
     activeSystemsBitmask: s.activeSystemsBitmask ?? '0',
+    // v9+ fields — Orval emits `number | string` for OpenAPI integer types per the .NET serialiser convention. Coerce
+    // through toInt for parity with the other integer fields above. Pre-v9 traces emit 0 (server-side default).
+    overloadLevel: toInt(s.overloadLevel ?? 0),
+    tickMultiplier: toInt(s.tickMultiplier ?? 0),
+    metronomeWaitUs: toInt(s.metronomeWaitUs ?? 0),
+    metronomeIntentClass: toInt(s.metronomeIntentClass ?? 0),
+    consecutiveOverrun: toInt(s.consecutiveOverrun ?? 0),
+    consecutiveUnderrun: toInt(s.consecutiveUnderrun ?? 0),
   }));
 }
 

@@ -38,6 +38,10 @@ export class BinaryReader {
     return this.view.getInt32(offset, /*littleEndian*/ true);
   }
 
+  readF32(offset: number): number {
+    return this.view.getFloat32(offset, /*littleEndian*/ true);
+  }
+
   /**
    * Read an i64 as a Number. Only safe for values within 2^53 — use <see cref="readI64Decimal"/> for IDs/TSNs that can exceed that range.
    * OK for timestamp values that get divided by ticksPerUs immediately (the division compresses the range).

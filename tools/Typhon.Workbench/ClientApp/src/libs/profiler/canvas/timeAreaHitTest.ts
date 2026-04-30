@@ -1,4 +1,4 @@
-import type { ChunkSpan, PhaseSpan, SpanData, TickData } from '@/libs/profiler/model/traceModel';
+import type { ChunkSpan, PhaseMarker, PhaseSpan, SpanData, TickData } from '@/libs/profiler/model/traceModel';
 import type { TrackLayout, Viewport } from '@/libs/profiler/model/uiTypes';
 import {
   LABEL_ROW_HEIGHT,
@@ -28,6 +28,7 @@ export type TimeAreaHover =
   | { kind: 'chunk'; chunk: ChunkSpan; trackId: string }
   | { kind: 'span'; span: SpanData; trackId: string }
   | { kind: 'phase'; phase: PhaseSpan; tickNumber: number }
+  | { kind: 'phase-marker'; marker: PhaseMarker; tickNumber: number }
   | { kind: 'mini-row-op'; op: SpanData; trackId: string; rowLabel: string }
   | { kind: 'tick'; tickNumber: number }  // click on ruler or empty area within a slot lane
   | { kind: 'gutter-chevron'; trackId: string }  // click toggles collapse state
@@ -148,6 +149,10 @@ export function hitTestTimeArea(inputs: HitTestInputs): TimeAreaHover {
   // Phases
   if (track.id === 'phases') {
     if (my >= ty + 1 && my <= ty + PHASE_TRACK_HEIGHT - 1) {
+      // Markers win over phase bars when the cursor sits on a glyph — they're typically narrower
+      // (a few pixels) and a click on a marker should resolve to the marker, not the phase behind it.
+      const markerHit = findPhaseMarkerAtX(ticks, mx, gutterWidth, vp);
+      if (markerHit) return { kind: 'phase-marker', marker: markerHit.marker, tickNumber: markerHit.tickNumber };
       const hit = findPhaseAtX(ticks, mx, gutterWidth, vp);
       if (hit) return { kind: 'phase', phase: hit.phase, tickNumber: hit.tickNumber };
     }
@@ -297,6 +302,36 @@ function findSpanAtX(
       const mid = (span.startUs + span.endUs) / 2;
       const dist = Math.abs(us - mid);
       if (dist < bestDist) { best = span; bestDist = dist; }
+    }
+  }
+  return best;
+}
+
+/**
+ * Locate a single-point phase marker (UoW Create / UoW Flush glyph) under the cursor. Markers are
+ * narrow (a few pixels each), so we widen the hit zone with a per-pixel tolerance so a hover doesn't
+ * have to land precisely on the centre. Returns the closest marker by absolute distance to the cursor.
+ */
+function findPhaseMarkerAtX(
+  ticks: readonly TickData[],
+  mx: number,
+  gutterWidth: number,
+  vp: Viewport,
+): { marker: PhaseMarker; tickNumber: number } | null {
+  const us = vp.offsetX + (mx - gutterWidth) / vp.scaleX;
+  // ±4 px hit zone around the marker — matches the glyph radius used by drawPhaseMarkers (PHASE_TRACK_HEIGHT/4).
+  const tolUs = 4 / Math.max(vp.scaleX, 1e-9);
+  let best: { marker: PhaseMarker; tickNumber: number } | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const tick of ticks) {
+    if (tick.phaseMarkers.length === 0) continue;
+    if (us < tick.startUs - tolUs || us > tick.endUs + tolUs) continue;
+    for (const m of tick.phaseMarkers) {
+      const d = Math.abs(us - m.timestampUs);
+      if (d <= tolUs && d < bestDist) {
+        best = { marker: m, tickNumber: tick.tickNumber };
+        bestDist = d;
+      }
     }
   }
   return best;

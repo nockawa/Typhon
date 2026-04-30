@@ -17,17 +17,41 @@ export interface TickRow {
   endUs: number;
   durationUs: number;
   eventCount: number;
+  // ── v9 fields (issue #289 follow-up) — drive overview tint + tooltip diagnostics ──
+  /** Effective tick-rate multiplier (1, 2, 3, 4, 6). Bars with mult>1 are tinted to expose throttling at a glance. Defaults to 1. */
+  tickMultiplier?: number;
+  /** OverloadDetector level at end-of-tick. 0=Normal..4=PlayerShedding. */
+  overloadLevel?: number;
+  /** Metronome wait µs that PRECEDED this tick. Surfaced in the hover tooltip. */
+  metronomeWaitUs?: number;
+  /** 0=CatchUp, 1=Throttled, 2=Headroom. */
+  metronomeIntentClass?: number;
+  // ── v11 fields ──
+  /** OverloadDetector consecutive-overrun streak at end-of-tick. */
+  consecutiveOverrun?: number;
+  /** OverloadDetector consecutive-underrun streak at end-of-tick. */
+  consecutiveUnderrun?: number;
 }
 
 /**
- * Minimal shape consumed by {@link buildTickRows}: must surface the four fields below. Wider DTOs (e.g.
- * `TickSummaryDto` from the OpenAPI client) satisfy this structurally.
+ * Minimal shape consumed by {@link buildTickRows}: must surface the core four fields, and may optionally
+ * carry the v9 diagnostic fields (overload + metronome). Wider DTOs (e.g. `TickSummaryDto` from the OpenAPI
+ * client) satisfy this structurally — the v9 fields are forwarded when present.
  */
 export interface TickSummaryLike {
   tickNumber: number | string;
   startUs: number | string;
   durationUs: number | string;
   eventCount: number | string;
+  // v9+ integer fields. Orval's .NET-OpenAPI codegen emits these as `number | string` (precision-preserving
+  // dual representation, same as `tickNumber` / `eventCount` above), so the Like shape accepts both — consumers
+  // coerce with `Number(...)` where they need a numeric value.
+  tickMultiplier?: number | string;
+  overloadLevel?: number | string;
+  metronomeWaitUs?: number | string;
+  metronomeIntentClass?: number | string;
+  consecutiveOverrun?: number | string;
+  consecutiveUnderrun?: number | string;
 }
 
 /**
@@ -59,6 +83,14 @@ export function buildTickRows(summaries: readonly TickSummaryLike[] | null | und
       endUs: Math.min(computedEnd, nextStart),
       durationUs: duration,
       eventCount: Number(s.eventCount),
+      // v9/v11 optional fields are `number | string | undefined` on the source DTO. Coerce to `number | undefined`
+      // for TickRow consumers (the canvas tints + tooltips read these as numbers, not as the dual representation).
+      tickMultiplier: s.tickMultiplier !== undefined ? Number(s.tickMultiplier) : undefined,
+      overloadLevel: s.overloadLevel !== undefined ? Number(s.overloadLevel) : undefined,
+      metronomeWaitUs: s.metronomeWaitUs !== undefined ? Number(s.metronomeWaitUs) : undefined,
+      metronomeIntentClass: s.metronomeIntentClass !== undefined ? Number(s.metronomeIntentClass) : undefined,
+      consecutiveOverrun: s.consecutiveOverrun !== undefined ? Number(s.consecutiveOverrun) : undefined,
+      consecutiveUnderrun: s.consecutiveUnderrun !== undefined ? Number(s.consecutiveUnderrun) : undefined,
     };
   }
   return result;
@@ -134,6 +166,22 @@ const OVERLAY_COLOR = OVERVIEW_PALETTE.selection + '40';
 const OVERLAY_BORDER = OVERVIEW_PALETTE.selection + 'B3';
 
 /**
+ * Multiplier → bar tint. Hex strings (no theme dependency — these encode the *severity* of throttling
+ * in a stable, theme-independent ramp from amber → red). Issue #289 follow-up.
+ *
+ * Multiplier chain in `OverloadDetector`: `[1, 2, 3, 4, 6]`. We don't tint mult=1 (caller falls back to
+ * normal/P95 colour). 2/3 are amber-orange (warning), 4 is red (significant throttle), 6 is dark-red
+ * (engine has run out of headroom — running at MinTickRateHz floor). Visible at small bar widths.
+ */
+function multiplierBarTint(multiplier: number): string | null {
+  if (multiplier <= 1) return null;
+  if (multiplier === 2) return '#d97706'; // amber-600
+  if (multiplier === 3) return '#ea580c'; // orange-600
+  if (multiplier === 4) return '#dc2626'; // red-600
+  return '#991b1b';                       // red-800 (5+, including the chain's terminal value 6)
+}
+
+/**
  * Pure render entry point for the tick-overview strip. Clears + repaints the whole canvas each call —
  * rAF-driven from the React wrapper. Theme is passed in so this stays DOM-free and unit-testable.
  */
@@ -187,7 +235,14 @@ export function drawTickOverview(
     const x = BAR_LEFT_PAD + (i - sr.startIdx) * barWidth;
     const y = barAreaTop + barAreaHeight - barH;
 
-    ctx.fillStyle = tick.durationUs > p95 ? theme.overviewP95 : theme.overviewBar;
+    // Throttle tint takes priority over P95 colouring — a tick where the engine has slowed itself is
+    // almost always going to also exceed the previous P95 (the throttle was triggered by sustained
+    // overruns), so we don't want the P95 hue to mask the throttle severity. v9-only data; falls
+    // through to the existing P95/normal colour scheme for v8 traces (multiplier defaults to 0/1).
+    const throttleTint = tick.tickMultiplier && tick.tickMultiplier > 1
+      ? multiplierBarTint(tick.tickMultiplier)
+      : null;
+    ctx.fillStyle = throttleTint ?? (tick.durationUs > p95 ? theme.overviewP95 : theme.overviewBar);
     // Integer coords + width-1 leaves a 1-px gap between bars without sub-pixel anti-aliasing.
     ctx.fillRect(x, y, Math.max(barWidth - 1, 1), barH);
   }

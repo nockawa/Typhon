@@ -95,7 +95,7 @@ public class TcpExporterIntegrationTests
                 using (var e = TyphonEvent.BeginBTreeDelete()) { }
 
                 {
-                    var e = TyphonEvent.BeginClusterMigration(archetypeId: 7, migrationCount: 3);
+                    var e = TyphonEvent.BeginClusterMigration(archetypeId: 7, migrationCount: 3, componentCount: 9);
                     e.Dispose();
                 }
             })

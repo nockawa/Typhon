@@ -75,6 +75,22 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
     /// <summary>Thread name set by derived classes for diagnostics.</summary>
     protected abstract string ThreadName { get; }
 
+    /// <summary>
+    /// Hook invoked on the timer thread immediately after the three-phase wait completes, before
+    /// <see cref="ExecuteCallbacks"/>. Default implementation is a no-op so subclasses opt in.
+    /// </summary>
+    /// <param name="scheduledTimestamp">The <see cref="Stopwatch"/> timestamp the wait was targeting (return of <see cref="GetNextTick"/>).</param>
+    /// <param name="startTimestamp">When this wait window opened — i.e. the moment <see cref="GetNextTick"/> returned.</param>
+    /// <param name="endTimestamp">When the wait actually completed (same value passed to <see cref="ExecuteCallbacks"/> as <c>actualTick</c>).</param>
+    /// <param name="phaseFlags">Bit field — 0x1 = Sleep was entered at least once, 0x2 = Yield, 0x4 = Spin.</param>
+    /// <remarks>
+    /// Used by <see cref="DagScheduler"/> (issue #289 follow-up) to emit a <c>Scheduler.Metronome.Wait</c> span
+    /// covering the timer thread's idle gap. The TimerLoop's three-phase wait is otherwise invisible to the
+    /// profiler — without this hook, slow ticks look like dead time on the trace because the metronome's
+    /// kernel sleeps emit no events.
+    /// </remarks>
+    protected virtual void OnWaitComplete(long scheduledTimestamp, long startTimestamp, long endTimestamp, byte phaseFlags) { }
+
     // ═══════════════════════════════════════════════════════════════
     // Public properties
     // ═══════════════════════════════════════════════════════════════
@@ -285,6 +301,14 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
                 continue;
             }
 
+            // Capture wait-window start for the OnWaitComplete hook (issue #289 follow-up).
+            // The wait window opens here — the moment GetNextTick returned. phaseFlags accumulates
+            // which of the three phases actually ran: 0x1 = Sleep entered, 0x2 = Yield, 0x4 = Spin.
+            // A target already in the past short-circuits all three phases (phaseFlags == 0) — that
+            // case maps to the "CatchUp" intent class on the consumer side.
+            var waitStart = Stopwatch.GetTimestamp();
+            byte phaseFlags = 0;
+
             // ── Phase 1: Sleep (CPU-friendly, coarse) ────────────────
             while (true)
             {
@@ -294,6 +318,7 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
                     break;
                 }
 
+                phaseFlags |= 0x1;
                 Thread.Sleep(1);
             }
 
@@ -306,18 +331,27 @@ public abstract class HighResolutionTimerServiceBase : ResourceNode, IMetricSour
                     break;
                 }
 
+                phaseFlags |= 0x2;
                 Thread.Yield();
             }
 
             // ── Phase 3: Spin (precise, burns CPU briefly) ───────────
-            while (Stopwatch.GetTimestamp() < nextTick)
+            if (Stopwatch.GetTimestamp() < nextTick)
             {
-                Thread.SpinWait(1);
+                phaseFlags |= 0x4;
+                while (Stopwatch.GetTimestamp() < nextTick)
+                {
+                    Thread.SpinWait(1);
+                }
             }
 
             // Record timing error
             var actualTick = Stopwatch.GetTimestamp();
             tickCount++;
+
+            // Notify derived classes that the wait completed. DagScheduler uses this to emit a
+            // SchedulerMetronomeWait span so the inter-tick gap is visible in the profiler trace.
+            OnWaitComplete(nextTick, waitStart, actualTick, phaseFlags);
 
             var errorTicks = Math.Abs(actualTick - nextTick);
             var errorUs = (double)errorTicks / Stopwatch.Frequency * 1_000_000.0;

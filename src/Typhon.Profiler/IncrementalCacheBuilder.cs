@@ -71,6 +71,31 @@ public sealed class IncrementalCacheBuilder : IDisposable
     private long _currentMaxSystemDurationTicks;
     private ulong _currentActiveSystemsBitmask;
 
+    // ── v9 (issue #289 follow-up) ──
+    /// <summary>OverloadDetector level captured from the current tick's <c>TickEnd</c> payload — written into this tick's summary.</summary>
+    private byte _currentOverloadLevel;
+    /// <summary>Effective tick multiplier captured from the current tick's <c>TickEnd</c> payload.</summary>
+    private byte _currentTickMultiplier;
+    /// <summary>
+    /// Metronome wait duration (µs, saturating at <see cref="ushort.MaxValue"/>) that ended just before the current tick's <c>TickStart</c>.
+    /// Copied from <see cref="_pendingMetronomeWaitUs"/> at TickStart time.
+    /// </summary>
+    private ushort _currentMetronomeWaitUs;
+    /// <summary>Intent class of the wait above (0=CatchUp, 1=Throttled, 2=Headroom).</summary>
+    private byte _currentMetronomeIntentClass;
+    /// <summary>
+    /// Pending wait duration captured when the builder observes a <see cref="TraceEventKind.SchedulerMetronomeWait"/> span; consumed
+    /// at the NEXT <c>TickStart</c> by copying into <see cref="_currentMetronomeWaitUs"/> + clearing back to zero.
+    /// </summary>
+    private ushort _pendingMetronomeWaitUs;
+    /// <summary>Intent class of the pending wait above. Same lifecycle as <see cref="_pendingMetronomeWaitUs"/>.</summary>
+    private byte _pendingMetronomeIntentClass;
+
+    /// <summary>OverloadDetector consecutive-overrun counter from the latest kind-242 instant observed in this tick. Written into the summary at finalize.</summary>
+    private ushort _currentConsecutiveOverrun;
+    /// <summary>OverloadDetector consecutive-underrun counter from the latest kind-242 instant. Same lifecycle.</summary>
+    private ushort _currentConsecutiveUnderrun;
+
     private readonly MemoryStream _chunkBuffer = new(capacity: TraceFileCacheConstants.ByteCap);
     private uint _chunkFromTick;
     private uint _chunkEventCount;
@@ -283,6 +308,19 @@ public sealed class IncrementalCacheBuilder : IDisposable
                 _currentActiveSystemsBitmask = 0;
                 _tickActive = true;
 
+                // v9 (#289): consume pending metronome-wait values captured between the previous tick's TickEnd and this TickStart.
+                // The wait that ENDED just before this tick's TickStart conceptually belongs to *this* tick (it's the gap THIS
+                // tick was waiting through). overloadLevel + multiplier are populated separately by the TickEnd handler when this
+                // tick eventually ends — they describe *this* tick's overload state, not the previous one.
+                _currentMetronomeWaitUs = _pendingMetronomeWaitUs;
+                _currentMetronomeIntentClass = _pendingMetronomeIntentClass;
+                _pendingMetronomeWaitUs = 0;
+                _pendingMetronomeIntentClass = 0;
+                _currentOverloadLevel = 0;
+                _currentTickMultiplier = 0;
+                _currentConsecutiveOverrun = 0;
+                _currentConsecutiveUnderrun = 0;
+
                 if (!_globalStartSet)
                 {
                     _globalStartUs = startTs / _ticksPerUs;
@@ -295,6 +333,44 @@ public sealed class IncrementalCacheBuilder : IDisposable
                 if (kind == TraceEventKind.TickEnd || startTs > _currentTickLastTs)
                 {
                     _currentTickLastTs = startTs;
+                }
+
+                // v9 (#289): capture per-tick overload state from TickEnd payload (overloadLevel u8 at offset 0, tickMultiplier u8 at offset 1).
+                if (kind == TraceEventKind.TickEnd && size >= CommonHeaderSize + 2)
+                {
+                    _currentOverloadLevel = records[pos + CommonHeaderSize];
+                    _currentTickMultiplier = records[pos + CommonHeaderSize + 1];
+                }
+
+                // v9 (#289): observe the metronome wait span — capture wait duration (saturating u16) + intent class for the *next*
+                // TickStart to consume into _currentMetronomeWait*. SchedulerMetronomeWait (kind 241) has no trace context flag set
+                // by the producer, so the payload starts at SpanHeaderExtSize (no TraceContextSize offset). Layout: scheduledTs i64,
+                // multiplier u8, intentClass u8, phaseFlags u8.
+                if (kind == TraceEventKind.SchedulerMetronomeWait && size >= CommonHeaderSize + SpanHeaderExtSize + 11)
+                {
+                    var durationTicks = BinaryPrimitives.ReadInt64LittleEndian(records[(pos + 12)..]);
+                    var spanFlags = records[pos + 36];
+                    var hasTraceContext = (spanFlags & 0x01) != 0;
+                    var payloadOffset = pos + CommonHeaderSize + SpanHeaderExtSize + (hasTraceContext ? TraceContextSize : 0);
+                    if (payloadOffset + 11 <= pos + size)
+                    {
+                        var waitUs = durationTicks / _ticksPerUs;
+                        // Saturate at u16.MaxValue ≈ 65 ms — far above any realistic metronome wait (worst case ≈ 100 ms at multiplier=6 + 60Hz).
+                        _pendingMetronomeWaitUs = waitUs <= 0 ? (ushort)0 : (waitUs >= ushort.MaxValue ? ushort.MaxValue : (ushort)waitUs);
+                        // intentClass at scheduledTs(8) + multiplier(1) → offset +9.
+                        _pendingMetronomeIntentClass = records[payloadOffset + 9];
+                    }
+                }
+
+                // v11 (#289 follow-up): capture OverloadDetector consecutive counters from kind 242. Instant payload layout (after
+                // CommonHeaderSize): tick i64, overrunRatio f32, consecutiveOverrun u16, consecutiveUnderrun u16,
+                // consecutiveQueueGrowth u16, queueDepth i32, level u8, multiplier u8 (24 B). We need the two consecutive counters
+                // at offsets +12 and +14 to surface in the OverloadStrip tooltip.
+                if (kind == TraceEventKind.SchedulerOverloadDetector && size >= CommonHeaderSize + 24)
+                {
+                    var p = pos + CommonHeaderSize;
+                    _currentConsecutiveOverrun = BinaryPrimitives.ReadUInt16LittleEndian(records[(p + 12)..]);
+                    _currentConsecutiveUnderrun = BinaryPrimitives.ReadUInt16LittleEndian(records[(p + 14)..]);
                 }
 
                 if (IsCompletionKind(kind) && size >= CommonHeaderSize + SpanHeaderExtSize)
@@ -545,28 +621,18 @@ public sealed class IncrementalCacheBuilder : IDisposable
             }
 
             // Builder.Dispose() finalizes the trailing tick + flushes the last chunk + writes the trailer.
-            var summaryCount = 0;
-            var eventCount = 0L;
-            var foldedCount = 0L;
-            var systemCount = 0;
 
             // Capture stats before disposal — Dispose closes the sink and we want them for BuildResult.
             // We pre-materialize them here, then dispose.
             builder.Dispose();
-            summaryCount = builder._tickSummaries.Count;
-            eventCount = builder._globalTotalEvents;
-            foldedCount = builder._foldedCount;
-            systemCount = builder._systemAggregates.Count;
+            var summaryCount = builder._tickSummaries.Count;
+            var eventCount = builder._globalTotalEvents;
+            var foldedCount = builder._foldedCount;
+            var systemCount = builder._systemAggregates.Count;
 
             progress?.Report(new TraceFileCacheBuilder.BuildProgress(totalBytes, totalBytes, summaryCount, eventCount));
 
-            return new TraceFileCacheBuilder.BuildResult(
-                TickCount: summaryCount,
-                EventCount: eventCount,
-                FoldedCount: foldedCount,
-                SystemCount: systemCount,
-                Duration: DateTime.UtcNow - started,
-                CacheFilePath: cachePath);
+            return new TraceFileCacheBuilder.BuildResult(summaryCount, eventCount, foldedCount, systemCount, DateTime.UtcNow - started, cachePath);
         }
         catch
         {
@@ -642,6 +708,15 @@ public sealed class IncrementalCacheBuilder : IDisposable
             MaxSystemDurationUs = (float)maxSysUs,
             ActiveSystemsBitmask = _currentActiveSystemsBitmask,
             StartUs = startUs,
+            // v9 fields (#289 follow-up). Wait values describe the metronome gap immediately PRECEDING this tick;
+            // overload/multiplier come from this tick's TickEnd payload. Either set may be zero on a v8 trace replay.
+            OverloadLevel = _currentOverloadLevel,
+            TickMultiplier = _currentTickMultiplier,
+            MetronomeWaitUs = _currentMetronomeWaitUs,
+            MetronomeIntentClass = _currentMetronomeIntentClass,
+            // v11 fields — OverloadDetector consecutive streak counters from the kind-242 instant.
+            ConsecutiveOverrun = _currentConsecutiveOverrun,
+            ConsecutiveUnderrun = _currentConsecutiveUnderrun,
         };
         _tickSummaries.Add(summary);
 

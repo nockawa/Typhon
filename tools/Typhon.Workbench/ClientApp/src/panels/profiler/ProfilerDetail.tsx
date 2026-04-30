@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Activity, Blocks, Clock, Crosshair, Tag } from 'lucide-react';
-import type { ChunkSpan, MarkerSelection, SpanData, TickData } from '@/libs/profiler/model/traceModel';
+import { Activity, Blocks, Clock, Crosshair, Layers, Tag } from 'lucide-react';
+import type { ChunkSpan, MarkerSelection, PhaseMarker, PhaseSpan, SpanData, TickData } from '@/libs/profiler/model/traceModel';
+import { TraceEventKind } from '@/libs/profiler/model/types';
 import type { TickSummary } from '@/libs/profiler/model/types';
 import type { TimeRange } from '@/libs/profiler/model/uiTypes';
 import type { ProfilerSelection } from '@/stores/useProfilerSelectionStore';
@@ -42,21 +43,42 @@ export default function ProfilerDetail({ selection, ticks, tickSummaries, viewRa
     return null;
   }
   switch (selection.kind) {
-    case 'span':   return <SpanDetail span={selection.span} />;
-    case 'chunk':  return <ChunkDetail chunk={selection.chunk} />;
-    case 'tick':   return <TickDetail tickNumber={selection.tickNumber} />;
-    case 'marker': return <MarkerDetail marker={selection.marker} />;
+    case 'span':         return <SpanDetail span={selection.span} />;
+    case 'chunk':        return <ChunkDetail chunk={selection.chunk} />;
+    case 'tick':         return <TickDetail tickNumber={selection.tickNumber} />;
+    case 'marker':       return <MarkerDetail marker={selection.marker} />;
+    case 'phase':        return <PhaseDetail phase={selection.phase} tickNumber={selection.tickNumber} />;
+    case 'phase-marker': return <PhaseMarkerDetail marker={selection.marker} tickNumber={selection.tickNumber} />;
   }
 }
+
+/**
+ * Shared selector for the trace's recording-start timestamp. All detail subcomponents subtract this
+ * from absolute Start/End/Timestamp fields so the displayed numbers are "ms since recording start"
+ * rather than the raw QPC counter. Falls back to 0 when metadata isn't loaded yet (renders absolute,
+ * which is the same display pre-fix — no worse than before).
+ */
+function useGlobalStartUs(): number {
+  return useProfilerSessionStore((s) => Number(s.metadata?.globalMetrics?.globalStartUs ?? 0));
+}
+
+/**
+ * Shared className for `<dl>` containers in this panel. `select-text` opts back in to text selection
+ * (the app-wide `body { user-select: none }` from `globals.css` is intentional, so values aren't
+ * selectable by default — but the detail-pane numeric/textual fields are exactly what users want
+ * to copy-paste). One className per `<dl>` keeps the override scoped and easy to remove.
+ */
+const DL_CLASS = 'grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px] select-text';
 
 // ─── Spans ─────────────────────────────────────────────────────────────────────────────────────
 
 function SpanDetail({ span }: { span: SpanData }): React.JSX.Element {
+  const globalStartUs = useGlobalStartUs();
   return (
     <div className="flex h-full flex-col bg-background p-3">
       <div className="rounded-md border border-border bg-card p-3 text-[12px]">
         <Header icon={<Activity className="h-4 w-4 text-muted-foreground" />} title={span.name} suffix="span" />
-        <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+        <dl className={DL_CLASS}>
           <dt className="text-muted-foreground">Kind</dt>
           <dd className="font-mono text-foreground">{span.kind}</dd>
 
@@ -64,10 +86,10 @@ function SpanDetail({ span }: { span: SpanData }): React.JSX.Element {
           <dd className="font-mono tabular-nums text-foreground">Slot {span.threadSlot}</dd>
 
           <dt className="text-muted-foreground">Start</dt>
-          <dd className="font-mono tabular-nums text-foreground">{formatUs(span.startUs)}</dd>
+          <dd className="font-mono tabular-nums text-foreground">{formatUs(span.startUs - globalStartUs)}</dd>
 
           <dt className="text-muted-foreground">End</dt>
-          <dd className="font-mono tabular-nums text-foreground">{formatUs(span.endUs)}</dd>
+          <dd className="font-mono tabular-nums text-foreground">{formatUs(span.endUs - globalStartUs)}</dd>
 
           <dt className="text-muted-foreground">Duration</dt>
           <dd className="font-mono tabular-nums text-foreground">{formatDurationUs(span.durationUs)}</dd>
@@ -106,6 +128,61 @@ function SpanDetail({ span }: { span: SpanData }): React.JSX.Element {
               <dd className="truncate font-mono text-foreground">{span.traceIdHi}.{span.traceIdLo}</dd>
             </>
           )}
+
+          {/* Kind-specific payload surfaced from the rawEvent. ClusterMigration carries archetype +
+              entity count + total component instances moved (= entities × per-entity component slots). */}
+          {span.kind === TraceEventKind.ClusterMigration && span.rawEvent && (
+            <>
+              {span.rawEvent.archetypeId !== undefined && (
+                <>
+                  <dt className="text-muted-foreground">Archetype</dt>
+                  <dd className="font-mono tabular-nums text-foreground">#{span.rawEvent.archetypeId}</dd>
+                </>
+              )}
+              {span.rawEvent.migrationCount !== undefined && (
+                <>
+                  <dt className="text-muted-foreground">Entities</dt>
+                  <dd className="font-mono tabular-nums text-foreground">{span.rawEvent.migrationCount.toLocaleString()}</dd>
+                </>
+              )}
+              {span.rawEvent.componentCount !== undefined && (
+                <>
+                  <dt className="text-muted-foreground">Components</dt>
+                  <dd className="font-mono tabular-nums text-foreground">{span.rawEvent.componentCount.toLocaleString()}</dd>
+                </>
+              )}
+            </>
+          )}
+
+          {/* Page cache flush — pageCount tells us how many dirty pages this SaveChanges call wrote.
+              Small (1-3) = registry/bootstrap; medium (~10) = occupancy map grow; large = batched data flush. */}
+          {(span.kind === TraceEventKind.PageCacheFlush || span.kind === TraceEventKind.PageCacheFlushCompleted) && span.rawEvent?.pageCount !== undefined && (
+            <>
+              <dt className="text-muted-foreground">Pages</dt>
+              <dd className="font-mono tabular-nums text-foreground">{span.rawEvent.pageCount.toLocaleString()}</dd>
+            </>
+          )}
+
+          {/* Page cache disk read/write/allocate — the file page index that was being touched. */}
+          {(span.kind === TraceEventKind.PageCacheDiskRead || span.kind === TraceEventKind.PageCacheDiskWrite
+            || span.kind === TraceEventKind.PageCacheAllocatePage || span.kind === TraceEventKind.PageEvicted
+            || span.kind === TraceEventKind.PageCacheDiskReadCompleted || span.kind === TraceEventKind.PageCacheDiskWriteCompleted)
+            && span.rawEvent && (
+            <>
+              {span.rawEvent.filePageIndex !== undefined && (
+                <>
+                  <dt className="text-muted-foreground">File page</dt>
+                  <dd className="font-mono tabular-nums text-foreground">{span.rawEvent.filePageIndex.toLocaleString()}</dd>
+                </>
+              )}
+              {span.rawEvent.pageCount !== undefined && (
+                <>
+                  <dt className="text-muted-foreground">Pages</dt>
+                  <dd className="font-mono tabular-nums text-foreground">{span.rawEvent.pageCount.toLocaleString()}</dd>
+                </>
+              )}
+            </>
+          )}
         </dl>
       </div>
     </div>
@@ -115,11 +192,12 @@ function SpanDetail({ span }: { span: SpanData }): React.JSX.Element {
 // ─── Chunks ────────────────────────────────────────────────────────────────────────────────────
 
 function ChunkDetail({ chunk }: { chunk: ChunkSpan }): React.JSX.Element {
+  const globalStartUs = useGlobalStartUs();
   return (
     <div className="flex h-full flex-col bg-background p-3">
       <div className="rounded-md border border-border bg-card p-3 text-[12px]">
         <Header icon={<Blocks className="h-4 w-4 text-muted-foreground" />} title={chunk.systemName || `System ${chunk.systemIndex}`} suffix="chunk" />
-        <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+        <dl className={DL_CLASS}>
           <dt className="text-muted-foreground">System</dt>
           <dd className="font-mono text-foreground">#{chunk.systemIndex} {chunk.systemName}</dd>
 
@@ -132,10 +210,10 @@ function ChunkDetail({ chunk }: { chunk: ChunkSpan }): React.JSX.Element {
           </dd>
 
           <dt className="text-muted-foreground">Start</dt>
-          <dd className="font-mono tabular-nums text-foreground">{formatUs(chunk.startUs)}</dd>
+          <dd className="font-mono tabular-nums text-foreground">{formatUs(chunk.startUs - globalStartUs)}</dd>
 
           <dt className="text-muted-foreground">End</dt>
-          <dd className="font-mono tabular-nums text-foreground">{formatUs(chunk.endUs)}</dd>
+          <dd className="font-mono tabular-nums text-foreground">{formatUs(chunk.endUs - globalStartUs)}</dd>
 
           <dt className="text-muted-foreground">Duration</dt>
           <dd className="font-mono tabular-nums text-foreground">{formatDurationUs(chunk.durationUs)}</dd>
@@ -162,15 +240,16 @@ function TickDetail({ tickNumber }: { tickNumber: number }): React.JSX.Element {
     }
     return null;
   });
+  const globalStartUs = useGlobalStartUs();
 
   return (
     <div className="flex h-full flex-col bg-background p-3">
       <div className="rounded-md border border-border bg-card p-3 text-[12px]">
         <Header icon={<Clock className="h-4 w-4 text-muted-foreground" />} title={`Tick ${tickNumber}`} suffix="scheduler tick" />
         {tickSummary ? (
-          <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+          <dl className={DL_CLASS}>
             <dt className="text-muted-foreground">Start</dt>
-            <dd className="font-mono tabular-nums text-foreground">{formatUs(Number(tickSummary.startUs))}</dd>
+            <dd className="font-mono tabular-nums text-foreground">{formatUs(Number(tickSummary.startUs) - globalStartUs)}</dd>
 
             <dt className="text-muted-foreground">Duration</dt>
             <dd className="font-mono tabular-nums text-foreground">{formatDurationUs(Number(tickSummary.durationUs))}</dd>
@@ -192,14 +271,15 @@ function TickDetail({ tickNumber }: { tickNumber: number }): React.JSX.Element {
 // ─── Markers ──────────────────────────────────────────────────────────────────────────────────
 
 function MarkerDetail({ marker }: { marker: MarkerSelection }): React.JSX.Element {
+  const globalStartUs = useGlobalStartUs();
   return (
     <div className="flex h-full flex-col bg-background p-3">
       <div className="rounded-md border border-border bg-card p-3 text-[12px]">
         <Header icon={<Tag className="h-4 w-4 text-muted-foreground" />} title={marker.kind} suffix="marker" />
         {marker.kind === 'memory-alloc' && (
-          <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+          <dl className={DL_CLASS}>
             <dt className="text-muted-foreground">Timestamp</dt>
-            <dd className="font-mono tabular-nums text-foreground">{formatUs(marker.event.timestampUs)}</dd>
+            <dd className="font-mono tabular-nums text-foreground">{formatUs(marker.event.timestampUs - globalStartUs)}</dd>
 
             <dt className="text-muted-foreground">Direction</dt>
             <dd className="font-mono text-foreground">{marker.event.direction === 0 ? 'alloc' : 'free'}</dd>
@@ -218,12 +298,12 @@ function MarkerDetail({ marker }: { marker: MarkerSelection }): React.JSX.Elemen
           </dl>
         )}
         {marker.kind === 'gc' && (
-          <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+          <dl className={DL_CLASS}>
             <dt className="text-muted-foreground">Kind</dt>
             <dd className="font-mono text-foreground">{marker.event.kind}</dd>
 
             <dt className="text-muted-foreground">Timestamp</dt>
-            <dd className="font-mono tabular-nums text-foreground">{formatUs(marker.event.timestampUs)}</dd>
+            <dd className="font-mono tabular-nums text-foreground">{formatUs(marker.event.timestampUs - globalStartUs)}</dd>
 
             <dt className="text-muted-foreground">Generation</dt>
             <dd className="font-mono tabular-nums text-foreground">{marker.event.generation}</dd>
@@ -251,6 +331,72 @@ function MarkerDetail({ marker }: { marker: MarkerSelection }): React.JSX.Elemen
   );
 }
 
+// ─── Phase span (RuntimePhaseSpan, e.g. WriteTickFence / UoW Flush / OutputPhase) ─────────────
+
+function PhaseDetail({ phase, tickNumber }: { phase: PhaseSpan; tickNumber: number }): React.JSX.Element {
+  const globalStartUs = useGlobalStartUs();
+  return (
+    <div className="flex h-full flex-col bg-background p-3">
+      <div className="rounded-md border border-border bg-card p-3 text-[12px]">
+        <Header icon={<Layers className="h-4 w-4 text-muted-foreground" />} title={phase.phaseName} suffix="phase span" />
+        <dl className={DL_CLASS}>
+          <dt className="text-muted-foreground">Tick</dt>
+          <dd className="font-mono tabular-nums text-foreground">{tickNumber}</dd>
+
+          <dt className="text-muted-foreground">Phase id</dt>
+          <dd className="font-mono tabular-nums text-foreground">{phase.phase}</dd>
+
+          <dt className="text-muted-foreground">Start</dt>
+          <dd className="font-mono tabular-nums text-foreground">{formatUs(phase.startUs - globalStartUs)}</dd>
+
+          <dt className="text-muted-foreground">End</dt>
+          <dd className="font-mono tabular-nums text-foreground">{formatUs(phase.endUs - globalStartUs)}</dd>
+
+          <dt className="text-muted-foreground">Duration</dt>
+          <dd className="font-mono tabular-nums text-foreground">{formatDurationUs(phase.durationUs)}</dd>
+
+          {phase.spanId && (
+            <>
+              <dt className="text-muted-foreground">Span id</dt>
+              <dd className="truncate font-mono text-foreground">{phase.spanId}</dd>
+            </>
+          )}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+// ─── Phase marker (UoW Create / UoW Flush glyphs) ─────────────────────────────────────────────
+
+function PhaseMarkerDetail({ marker, tickNumber }: { marker: PhaseMarker; tickNumber: number }): React.JSX.Element {
+  const globalStartUs = useGlobalStartUs();
+  return (
+    <div className="flex h-full flex-col bg-background p-3">
+      <div className="rounded-md border border-border bg-card p-3 text-[12px]">
+        <Header icon={<Tag className="h-4 w-4 text-muted-foreground" />} title={marker.label} suffix="phase marker" />
+        <dl className={DL_CLASS}>
+          <dt className="text-muted-foreground">Tick</dt>
+          <dd className="font-mono tabular-nums text-foreground">{tickNumber}</dd>
+
+          <dt className="text-muted-foreground">Kind</dt>
+          <dd className="font-mono tabular-nums text-foreground">{marker.kind}</dd>
+
+          <dt className="text-muted-foreground">Timestamp</dt>
+          <dd className="font-mono tabular-nums text-foreground">{formatUs(marker.timestampUs - globalStartUs)}</dd>
+
+          {marker.detail && (
+            <>
+              <dt className="text-muted-foreground">Detail</dt>
+              <dd className="font-mono tabular-nums text-foreground">{marker.detail}</dd>
+            </>
+          )}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
 // ─── Range stats (fallback when no click selection) ──────────────────────────────────────────
 
 /**
@@ -273,7 +419,7 @@ function RangeStatsDetail({
   // Trace timestamps are absolute QPC-based microseconds (a 64-bit value that's effectively the
   // process's wall-clock counter, not 0). Subtract `globalStartUs` so From/To/Duration display as
   // milliseconds-since-trace-start, matching the ruler's labels.
-  const globalStartUs = useProfilerSessionStore((s) => Number(s.metadata?.globalMetrics?.globalStartUs ?? 0));
+  const globalStartUs = useGlobalStartUs();
 
   // Debounce: a wheel-zoom event burst flips viewRange dozens of times per second. Recomputing the
   // O(events) aggregation on each is wasteful — coalesce to one compute 150 ms after the user
@@ -304,7 +450,7 @@ function RangeStatsDetail({
       {/* Range header */}
       <div className="rounded-md border border-border bg-card p-3 text-[12px]">
         <Header icon={<Crosshair className="h-4 w-4 text-muted-foreground" />} title="Selection" suffix="range stats" />
-        <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+        <dl className={DL_CLASS}>
           <dt className="text-muted-foreground">From</dt>
           <dd className="font-mono tabular-nums text-foreground">{formatUs(stats.rangeStartUs - globalStartUs)}</dd>
 

@@ -47,6 +47,11 @@ public sealed class LiveTraceEvent
     // Transaction
     public string Tsn { get; init; }
     public int? ComponentTypeId { get; init; }
+    /// <summary>
+    /// Component-instance count. For Transaction events: number of components committed / rolled back. For
+    /// <see cref="TraceEventKind.ClusterMigration"/>: total component slots moved across the batch
+    /// (entities × per-entity slot count). Disambiguated by <see cref="Kind"/>.
+    /// </summary>
     public int? ComponentCount { get; init; }
     public bool? ConflictDetected { get; init; }
 

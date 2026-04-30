@@ -1748,7 +1748,11 @@ public sealed partial class TyphonRuntime : IDisposable
         // for persistent cluster content mutation.
         //
         // See debate decision Q1 in the Phase 3 design notes, and claude/design/spatial-tiers/01-spatial-clusters.md §"Migration fence WAL atomicity".
-        InspectorPhase(TickPhase.WriteTickFence, () => Engine.WriteTickFence(scheduler.CurrentTickNumber));
+        // Pass the per-tick UoW's shared ChangeSet so all dirty pages mutated during the tick fence (migrations, shadow drains, spatial maintenance) flow
+        // through one accounting bucket. UoW.Flush below handles the writeback per the configured DurabilityMode (and skips it entirely in WAL mode where
+        // WAL records carry durability). Without this, each tick-fence callee would create+commit its own private ChangeSet, doing redundant disk I/O on
+        // every tick (measured at ~22 ms / 88% of ExecuteMigrations time on a 1071-migration AntHill storm).
+        InspectorPhase(TickPhase.WriteTickFence, () => Engine.WriteTickFence(scheduler.CurrentTickNumber, _currentUow?.ChangeSet));
 
         // Flush the UoW to make all Deferred writes (including the tick fence publishes above) durable, then dispose. UoW.Flush in WAL mode calls
         // WalManager.RequestFlush + WaitForDurable(currentLsn), where currentLsn is captured at the moment of the call — so it includes every publish made
@@ -1790,9 +1794,12 @@ public sealed partial class TyphonRuntime : IDisposable
     /// </summary>
     private void InspectorPhase(TickPhase phase, Action action)
     {
-        Profiler.TyphonEvent.EmitPhaseStart(phase, Stopwatch.GetTimestamp());
+        // Real span (not paired instants) so child spans started inside the action — PageCacheFlush, BTreeInsert, ClusterMigration, etc. —
+        // attach via parentSpanId. The previous EmitPhaseStart/EmitPhaseEnd instant pair is gone: phases are now first-class spans rendered
+        // in the profiler's phase track. PhaseStart/PhaseEnd kinds are still defined in TraceEventKind.cs for old-trace decode compatibility,
+        // but no producer emits them anymore.
+        using var phaseScope = Profiler.TyphonEvent.BeginRuntimePhase(phase);
         action();
-        Profiler.TyphonEvent.EmitPhaseEnd(phase, Stopwatch.GetTimestamp());
     }
 
     /// <summary>

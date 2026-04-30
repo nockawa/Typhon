@@ -12,6 +12,7 @@ import { useProfilerLiveStream } from '@/hooks/profiler/useProfilerLiveStream';
 import { useProfilerCache } from '@/hooks/profiler/useProfilerCache';
 import TickOverview from './sections/TickOverview';
 import TimeArea from './sections/TimeArea';
+import OverloadStrip from './sections/OverloadStrip';
 
 /**
  * Empty-shell profiler panel. Handles both session kinds:
@@ -217,6 +218,8 @@ export default function ProfilerPanel() {
         ) : (
           <div className="flex h-full w-full flex-col overflow-hidden">
             <TickOverview isLive={isAttach} />
+            {/* Overload diagnostics strip — auto-hidden on healthy traces; surfaces multiplier/overrunRatio when the engine throttles. Issue #289. */}
+            <OverloadStrip />
             <div className="flex-1 min-h-0">
               <TimeArea ticks={timeAreaTicks} gaugeData={gaugeData} threadNames={gaugeData.threadNames} threadInfos={threadInfos} pendingRangesUs={pendingRangesUs} isLive={isAttach} />
             </div>

@@ -76,6 +76,19 @@ export const enum TraceEventKind {
    */
   ThreadInfo = 77,
 
+  /**
+   * Tick lifecycle phase span — covers one TickPhase region inside TyphonRuntime.OnTickEndInternal (SystemDispatch, WriteTickFence,
+   * UowFlush, OutputPhase, TierIndexRebuild, DormancySweep). Replaces the old PhaseStart+PhaseEnd instant pair on the producer side:
+   * a real span is opened so child spans (PageCacheFlush, BTreeInsert, ClusterMigration, …) attach via parentSpanId. Payload: u8 phase.
+   */
+  RuntimePhaseSpan = 243,
+
+  /** UoW created at top of OnTickStart. Instant. Payload: i64 tick. Rendered as a glyph in the phase track. */
+  RuntimePhaseUoWCreate = 161,
+
+  /** UoW flushed at end of OnTickEnd. Instant. Payload: i64 tick, i32 changeCount. Rendered as a glyph in the phase track. */
+  RuntimePhaseUoWFlush = 162,
+
   NamedSpan = 200,
 }
 
@@ -322,6 +335,9 @@ export const SpanKindNames: Record<number, string> = {
   158: 'Scheduler.Overload.TickMultiplier',
   159: 'Scheduler.Graph.Build',
   160: 'Scheduler.Graph.Rebuild',
+  // Phase 4 follow-up (#289) — answer "why is the engine waiting for nothing".
+  241: 'Scheduler.Metronome.Wait',
+  242: 'Scheduler.Overload.Detector',
 
   // Runtime subtree (161-164, 235-240).
   161: 'Runtime.Phase.UoWCreate',
@@ -520,6 +536,9 @@ export interface TraceEvent {
   // Cluster migration span
   migrationCount?: number;
 
+  // Runtime UoW flush instant
+  changeCount?: number;
+
   // Transaction persist
   walLsn?: string;
 
@@ -574,6 +593,27 @@ export interface TraceEvent {
   managedThreadId?: number;
   threadName?: string;
   threadKind?: number;
+
+  // SchedulerMetronomeWait (kind 241) — span on the TickDriver lane covering the metronome's
+  // inter-tick wait. multiplier reuses the existing tickMultiplier field. (#289 follow-up)
+  /** Stopwatch timestamp (µs) of the next-tick target the metronome was waiting for. */
+  metronomeScheduledUs?: number;
+  /** 0 = CatchUp (target already past at wait start), 1 = Throttled (mult > 1), 2 = Headroom (normal idle). */
+  metronomeIntentClass?: number;
+  /** Bit 0x1 = Sleep entered, 0x2 = Yield entered, 0x4 = Spin entered. */
+  metronomePhaseFlags?: number;
+
+  // SchedulerOverloadDetector (kind 242) — per-tick OverloadDetector state snapshot. (#289 follow-up)
+  /** Actual / target tick duration ratio used to drive escalation/deescalation. */
+  overrunRatio?: number;
+  /** Consecutive ticks above the overrun threshold (1.2× by default). */
+  consecutiveOverrun?: number;
+  /** Consecutive ticks below the deescalation ratio (0.6× by default). */
+  consecutiveUnderrun?: number;
+  /** Consecutive ticks where event-queue depth grew. */
+  consecutiveQueueGrowth?: number;
+  /** Total event-queue depth at this tick. */
+  queueDepth?: number;
 }
 
 /**
@@ -589,6 +629,20 @@ export interface TickSummary {
   maxSystemDurationUs: number;
   /** 64-bit bitmask serialized as a decimal string (exact precision preserved). Bit N set iff system index N ran in this tick (capped at 64). */
   activeSystemsBitmask: string;
+  // ── v9 fields (issue #289 follow-up) ──
+  /** OverloadDetector level at this tick's TickEnd. 0=Normal..4=PlayerShedding. Zero on v8 traces. */
+  overloadLevel?: number;
+  /** Effective tick-rate multiplier (1, 2, 3, 4, 6). >1 means engine voluntarily throttled itself. Zero on v8 traces. */
+  tickMultiplier?: number;
+  /** Duration (µs) of the metronome wait that PRECEDED this tick. Saturates at 65535 µs. Answers "how long did the engine sleep before this tick?". */
+  metronomeWaitUs?: number;
+  /** Wait intent — 0=CatchUp (target already past), 1=Throttled (mult>1), 2=Headroom (normal idle). */
+  metronomeIntentClass?: number;
+  // ── v11 fields (issue #289 follow-up) ──
+  /** OverloadDetector consecutive-overrun streak at end-of-tick. Climbs to EscalationTicks (5 default), resets on any non-overrun tick. */
+  consecutiveOverrun?: number;
+  /** OverloadDetector consecutive-underrun streak. Climbs to DeescalationTicks (20 default) for deescalation; resets on any overrun. */
+  consecutiveUnderrun?: number;
 }
 
 /** Aggregate duration per system across the whole trace. */

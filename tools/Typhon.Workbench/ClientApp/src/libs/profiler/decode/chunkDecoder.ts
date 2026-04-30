@@ -77,6 +77,10 @@ function isInstantKind(v: number): boolean {
       || v === 207 || v === 208 || v === 211 || v === 212 || v === 213) return true;
   // Durability (Phase 8, #286) — instants: 217-218, 220, 225, 228, 233-234.
   if (v === 217 || v === 218 || v === 220 || v === 225 || v === 228 || v === 233 || v === 234) return true;
+  // Phase 4 follow-up (#289):
+  //   241 (SchedulerMetronomeWait) — SPAN, falls through to false below.
+  //   242 (SchedulerOverloadDetector) — instant.
+  if (v === 242) return true;
   return false;
 }
 
@@ -212,7 +216,43 @@ function decodeInstant(
     case TraceEventKind.ThreadInfo:
       return decodeThreadInfo(reader, pos, threadSlot, tickNumber, timestampUs, recordSize);
 
+    case TraceEventKind.RuntimePhaseUoWCreate:
+      // UoW allocated at start of tick. Payload: i64 tick at payloadOffset.
+      // Surfaced as a glyph in the phase track (see drawPhases).
+      return {
+        kind, threadSlot, tickNumber, timestampUs,
+        // tick value is the UoW's owning tick number; we don't surface it as a separate field on TraceEvent
+        // (the wrapper TickData.tickNumber already carries it) — header alone is enough for the marker.
+      };
+
+    case TraceEventKind.RuntimePhaseUoWFlush:
+      // UoW flushed at end of tick. Payload: i64 tick, i32 changeCount at payloadOffset.
+      // Surfaced as a glyph in the phase track (see drawPhases). changeCount is captured for the tooltip.
+      return {
+        kind, threadSlot, tickNumber, timestampUs,
+        changeCount: reader.readI32(payloadOffset + 8),
+      };
+
     default:
+      // Phase 4 follow-up (#289) — Scheduler.Overload.Detector instant. Per-tick OverloadDetector
+      // gauge snapshot so a viewer can audit why the engine throttled itself. Payload after common
+      // header: tick i64, overrunRatio f32, consecutiveOverrun u16, consecutiveUnderrun u16,
+      // consecutiveQueueGrowth u16, queueDepth i32, level u8, multiplier u8.
+      if ((kind as number) === 242) {
+        // tickNumber on the wire (payloadOffset+0..7) is the per-emit tick — keep the surrounding
+        // chunk-tick for consistency with other instants. The fields the viewer cares about are
+        // overrunRatio + level + multiplier + the consecutive counters.
+        return {
+          kind, threadSlot, tickNumber, timestampUs,
+          overrunRatio: reader.readF32(payloadOffset + 8),
+          consecutiveOverrun: reader.readU16(payloadOffset + 12),
+          consecutiveUnderrun: reader.readU16(payloadOffset + 14),
+          consecutiveQueueGrowth: reader.readU16(payloadOffset + 16),
+          queueDepth: reader.readI32(payloadOffset + 18),
+          overloadLevel: reader.readU8(payloadOffset + 22),
+          tickMultiplier: reader.readU8(payloadOffset + 23),
+        };
+      }
       return null;
   }
 }
@@ -400,6 +440,8 @@ interface SpanHeader {
   traceIdHi: string | null;
   traceIdLo: string | null;
   payloadOffset: number;
+  /** Absolute end offset of the record in the chunk reader. Lets per-kind decoders validate trailing wire-additive fields. */
+  recordEnd: number;
 }
 
 /**
@@ -407,6 +449,8 @@ interface SpanHeader {
  * which the kind-specific payload begins. All 24 span-kind decoders call this first.
  */
 function readSpanHeader(reader: BinaryReader, recordPos: number, ticksPerUs: number): SpanHeader {
+  const recordSize = reader.readU16(recordPos);
+  const recordEnd = recordPos + recordSize;
   const extStart = recordPos + COMMON_HEADER_SIZE;
   const durationTicks = reader.readI64AsNumber(extStart);
   const spanId = reader.readU64Decimal(extStart + 8);
@@ -428,6 +472,7 @@ function readSpanHeader(reader: BinaryReader, recordPos: number, ticksPerUs: num
     durationUs: durationTicks / ticksPerUs,
     spanId,
     parentSpanId,
+    recordEnd,
     traceIdHi,
     traceIdLo,
     payloadOffset,
@@ -511,6 +556,9 @@ function decodeSpan(
     case TraceEventKind.ClusterMigration:
       return decodeClusterMigration(reader, kind, threadSlot, tickNumber, timestampUs, header);
 
+    case TraceEventKind.RuntimePhaseSpan:
+      return decodeRuntimePhaseSpan(reader, kind, threadSlot, tickNumber, timestampUs, header);
+
     case TraceEventKind.WalFlush:
     case TraceEventKind.WalSegmentRotate:
     case TraceEventKind.WalWait:
@@ -532,6 +580,19 @@ function decodeSpan(
       return baseSpanEvent(kind, threadSlot, tickNumber, timestampUs, header);
 
     default:
+      // Phase 4 follow-up (#289) — Scheduler.Metronome.Wait. Numeric literal because the kind has no
+      // named entry in the TraceEventKind enum (the const-enum stops below 200 + special slots).
+      // Payload after span-header: scheduledTimestamp i64, multiplier u8, intentClass u8, phaseFlags u8.
+      if ((kind as number) === 241) {
+        const evt = baseSpanEvent(kind, threadSlot, tickNumber, timestampUs, header);
+        // scheduledTimestamp is in stopwatch ticks on the wire; convert to µs for the viewer's domain.
+        evt.metronomeScheduledUs = reader.readI64AsNumber(header.payloadOffset) / ticksPerUs;
+        evt.tickMultiplier = reader.readU8(header.payloadOffset + 8);
+        evt.metronomeIntentClass = reader.readU8(header.payloadOffset + 9);
+        evt.metronomePhaseFlags = reader.readU8(header.payloadOffset + 10);
+        return evt;
+      }
+
       // Unknown kind ≥ 10 — emit header-only event so the viewer can still render timing. Matches RecordDecoder.DecodeGenericSpan.
       return baseSpanEvent(kind, threadSlot, tickNumber, timestampUs, header);
   }
@@ -813,17 +874,34 @@ function decodePageCacheBackpressure(
   };
 }
 
+function decodeRuntimePhaseSpan(
+  reader: BinaryReader, kind: TraceEventKind,
+  threadSlot: number, tickNumber: number, timestampUs: number, header: SpanHeader,
+): TraceEvent {
+  // Layout: [u8 phase] (TickPhase enum). Replaces the deprecated PhaseStart+PhaseEnd instant pair.
+  return {
+    ...baseSpanEvent(kind, threadSlot, tickNumber, timestampUs, header),
+    phase: reader.readU8(header.payloadOffset),
+  };
+}
+
 function decodeClusterMigration(
   reader: BinaryReader, kind: TraceEventKind,
   threadSlot: number, tickNumber: number, timestampUs: number, header: SpanHeader,
 ): TraceEvent {
-  // Layout: [u16 archetypeId] [i32 migrationCount]
+  // Layout: [u16 archetypeId] [i32 migrationCount] [i32 componentCount?]
+  // componentCount is wire-additive — older traces (pre-#289 follow-up) omit it. The decoder reads
+  // it only when the record is large enough to contain it, otherwise treats it as 0.
   const o = header.payloadOffset;
-  return {
+  const evt: TraceEvent = {
     ...baseSpanEvent(kind, threadSlot, tickNumber, timestampUs, header),
     archetypeId: reader.readU16(o),
     migrationCount: reader.readI32(o + 2),
   };
+  if (o + 10 <= header.recordEnd) {
+    evt.componentCount = reader.readI32(o + 6);
+  }
+  return evt;
 }
 
 function decodeWal(

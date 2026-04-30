@@ -383,6 +383,16 @@ public static class TelemetryConfig
     public static readonly bool SchedulerOverloadSystemShedActive;
     public static readonly bool SchedulerOverloadTickMultiplierActive;
 
+    // Scheduler:Overload:Detector leaf (kind 242 — issue #289 follow-up)
+    /// <summary>Combined flag for the per-tick OverloadDetector gauge snapshot (overrunRatio, consecutive counters, level, multiplier).</summary>
+    public static readonly bool SchedulerOverloadDetectorActive;
+
+    // Scheduler:Metronome subtree (issue #289 follow-up — surfaces inter-tick wait)
+    /// <summary>Combined gate for the Scheduler:Metronome subtree.</summary>
+    public static readonly bool SchedulerMetronomeActive;
+    /// <summary>Combined flag for the SchedulerMetronomeWait span (kind 241).</summary>
+    public static readonly bool SchedulerMetronomeWaitActive;
+
     // Scheduler:Graph leaves (kinds 159-160)
     public static readonly bool SchedulerGraphBuildActive;
     public static readonly bool SchedulerGraphRebuildActive;
@@ -917,6 +927,11 @@ public static class TelemetryConfig
                 new Node("LevelChange"),
                 new Node("SystemShed"),
                 new Node("TickMultiplier"),
+                new Node("Detector"),
+            ]),
+            new Node("Metronome",
+            [
+                new Node("Wait"),
             ]),
             new Node("Graph",
             [
@@ -956,6 +971,11 @@ public static class TelemetryConfig
         SchedulerOverloadLevelChangeActive    = schedulerDepthMap["Scheduler:Overload:LevelChange"];
         SchedulerOverloadSystemShedActive     = schedulerDepthMap["Scheduler:Overload:SystemShed"];
         SchedulerOverloadTickMultiplierActive = schedulerDepthMap["Scheduler:Overload:TickMultiplier"];
+        SchedulerOverloadDetectorActive       = schedulerDepthMap["Scheduler:Overload:Detector"];
+
+        // Metronome subtree (issue #289 follow-up)
+        SchedulerMetronomeActive     = schedulerDepthMap["Scheduler:Metronome"];
+        SchedulerMetronomeWaitActive = schedulerDepthMap["Scheduler:Metronome:Wait"];
 
         // Graph leaves
         SchedulerGraphBuildActive   = schedulerDepthMap["Scheduler:Graph:Build"];
@@ -1081,9 +1101,10 @@ public static class TelemetryConfig
         MemoryAlignmentWasteActive = memoryMap["Memory:AlignmentWaste"];
 
         // ─── Data plane subtree (Phase 6 final shape) ──────────────────────────
-        // Greenfield. High-frequency leaves (Prepare, ChainWalk, Search, Revalidate, NodeCow) get added
-        // to the per-kind suppression list at TyphonEvent class load — flipping the parent ON still keeps
-        // those leaves OFF unless the operator also calls UnsuppressKind explicitly.
+        // High-frequency leaves (ChainWalk, Search, NodeCow) are also on the per-kind suppression deny-list at TyphonEvent class load —
+        // flipping the parent ON keeps those specific leaves OFF until UnsuppressKind is called explicitly. The deny-list is reserved for
+        // truly extreme-frequency kinds (≥10⁵/sec); diagnostic-grade leaves are gated solely by JSON. See TyphonEvent's static ctor for
+        // the current deny-list and the rationale per kind.
         var dataTree = new Node("Data",
         [
             new Node("Transaction",
