@@ -2330,7 +2330,13 @@
           "durationUs",
           "eventCount",
           "maxSystemDurationUs",
-          "activeSystemsBitmask"
+          "activeSystemsBitmask",
+          "overloadLevel",
+          "tickMultiplier",
+          "metronomeWaitUs",
+          "metronomeIntentClass",
+          "consecutiveOverrun",
+          "consecutiveUnderrun"
         ],
         "type": "object",
         "properties": {
@@ -2379,6 +2385,54 @@
               "null",
               "string"
             ]
+          },
+          "overloadLevel": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          },
+          "tickMultiplier": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          },
+          "metronomeWaitUs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "metronomeIntentClass": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint8"
+          },
+          "consecutiveOverrun": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
+          },
+          "consecutiveUnderrun": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "uint16"
           }
         }
       }

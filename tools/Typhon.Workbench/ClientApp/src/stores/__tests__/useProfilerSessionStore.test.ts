@@ -238,6 +238,14 @@ describe('useProfilerSessionStore — applyLiveBatch (rAF-coalesced SSE)', () =>
       maxSystemDurationUs: 0,
       activeSystemsBitmask: '0',
       startUs: n * 1000,
+      // v9 + v11 fields — required on the DTO (Orval emits them as `number | string`); 0 mirrors the
+      // server-side default for traces that pre-date the additions.
+      overloadLevel: 0,
+      tickMultiplier: 0,
+      metronomeWaitUs: 0,
+      metronomeIntentClass: 0,
+      consecutiveOverrun: 0,
+      consecutiveUnderrun: 0,
     };
   }
 

@@ -137,13 +137,14 @@ export default function OverloadStrip() {
       out[i] = {
         tickNumber: Number(s.tickNumber),
         ratio,
-        multiplier: s.tickMultiplier ?? 0,
-        level: s.overloadLevel ?? 0,
-        waitUs: s.metronomeWaitUs ?? 0,
-        intent: s.metronomeIntentClass ?? 0,
+        // Orval types these as `number | string` per the .NET OpenAPI integer convention; coerce explicitly.
+        multiplier: Number(s.tickMultiplier ?? 0),
+        level: Number(s.overloadLevel ?? 0),
+        waitUs: Number(s.metronomeWaitUs ?? 0),
+        intent: Number(s.metronomeIntentClass ?? 0),
         durationUs,
-        consecOver: s.consecutiveOverrun ?? 0,
-        consecUnder: s.consecutiveUnderrun ?? 0,
+        consecOver: Number(s.consecutiveOverrun ?? 0),
+        consecUnder: Number(s.consecutiveUnderrun ?? 0),
       };
     }
     return out;

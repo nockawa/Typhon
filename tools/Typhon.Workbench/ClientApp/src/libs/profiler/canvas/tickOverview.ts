@@ -43,12 +43,15 @@ export interface TickSummaryLike {
   startUs: number | string;
   durationUs: number | string;
   eventCount: number | string;
-  tickMultiplier?: number;
-  overloadLevel?: number;
-  metronomeWaitUs?: number;
-  metronomeIntentClass?: number;
-  consecutiveOverrun?: number;
-  consecutiveUnderrun?: number;
+  // v9+ integer fields. Orval's .NET-OpenAPI codegen emits these as `number | string` (precision-preserving
+  // dual representation, same as `tickNumber` / `eventCount` above), so the Like shape accepts both — consumers
+  // coerce with `Number(...)` where they need a numeric value.
+  tickMultiplier?: number | string;
+  overloadLevel?: number | string;
+  metronomeWaitUs?: number | string;
+  metronomeIntentClass?: number | string;
+  consecutiveOverrun?: number | string;
+  consecutiveUnderrun?: number | string;
 }
 
 /**
@@ -80,12 +83,14 @@ export function buildTickRows(summaries: readonly TickSummaryLike[] | null | und
       endUs: Math.min(computedEnd, nextStart),
       durationUs: duration,
       eventCount: Number(s.eventCount),
-      tickMultiplier: s.tickMultiplier,
-      overloadLevel: s.overloadLevel,
-      metronomeWaitUs: s.metronomeWaitUs,
-      metronomeIntentClass: s.metronomeIntentClass,
-      consecutiveOverrun: s.consecutiveOverrun,
-      consecutiveUnderrun: s.consecutiveUnderrun,
+      // v9/v11 optional fields are `number | string | undefined` on the source DTO. Coerce to `number | undefined`
+      // for TickRow consumers (the canvas tints + tooltips read these as numbers, not as the dual representation).
+      tickMultiplier: s.tickMultiplier !== undefined ? Number(s.tickMultiplier) : undefined,
+      overloadLevel: s.overloadLevel !== undefined ? Number(s.overloadLevel) : undefined,
+      metronomeWaitUs: s.metronomeWaitUs !== undefined ? Number(s.metronomeWaitUs) : undefined,
+      metronomeIntentClass: s.metronomeIntentClass !== undefined ? Number(s.metronomeIntentClass) : undefined,
+      consecutiveOverrun: s.consecutiveOverrun !== undefined ? Number(s.consecutiveOverrun) : undefined,
+      consecutiveUnderrun: s.consecutiveUnderrun !== undefined ? Number(s.consecutiveUnderrun) : undefined,
     };
   }
   return result;
