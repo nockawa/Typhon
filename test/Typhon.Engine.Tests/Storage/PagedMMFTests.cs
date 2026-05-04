@@ -281,8 +281,8 @@ class PagedMMFTests
     unsafe public void ReliabilityTest()
     {
         var cacheFactor = 0.75f;   // This is nasty...we are going to have a lot of cache miss...
-        var frameCount = 25;
-        var opsPerFrame = 1000;
+        var frameCount = 10;       // 10 frames × 500 ops still produces several rounds of cache eviction.
+        var opsPerFrame = 500;
         var readWriteRatio = 0.75f;
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
 

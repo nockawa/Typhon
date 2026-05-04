@@ -6,6 +6,7 @@ using System.Threading;
 namespace Typhon.Engine.Tests;
 
 [TestFixture]
+[NonParallelizable] // Mutates static TimeoutOptions.Current — would race with any parallel DatabaseEngine ctor.
 class TransactionUnitOfWorkContextTests : TestBase<TransactionUnitOfWorkContextTests>
 {
     [OneTimeSetUp]

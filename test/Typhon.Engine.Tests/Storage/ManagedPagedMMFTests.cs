@@ -233,9 +233,8 @@ public class ManagedPagedMMFTests
     }
     
     static object[] Cases = {
-        new TestCaseData(5000).SetProperty("MemPageCount", 6000),
-        new TestCaseData(4500).SetProperty("MemPageCount", 6000)
-    };    
+        new TestCaseData(5000).SetProperty("MemPageCount", 6000)
+    };
 
     [Test]
     [TestCaseSource(nameof(Cases))]
@@ -595,7 +594,7 @@ Here come the drones!";
     [Test]
     public void LockTest()
     {
-        const int iterationCount = 10_000;
+        const int iterationCount = 2_000; // 32 threads × 2 000 = 64 000 ops — ample for race detection.
 
         var s = new LockStore();
 

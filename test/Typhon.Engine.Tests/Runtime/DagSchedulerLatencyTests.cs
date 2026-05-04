@@ -32,6 +32,7 @@ public class DagSchedulerLatencyTests
     /// POC target: 0.1-0.4µs. This should be even faster since no SimulateWork.
     /// </summary>
     [Test]
+    [Explicit("Benchmark — measures wall-clock latency histograms. Run on demand.")]
     public void Report_InlineCallbackTransitionLatency()
     {
         // Linear chain: A → B → C → D → E (all CallbackSystems)
@@ -173,6 +174,7 @@ public class DagSchedulerLatencyTests
     /// Measures realistic game DAG transition latencies with mixed system types.
     /// </summary>
     [Test]
+    [Explicit("Benchmark — measures wall-clock latency histograms. Run on demand.")]
     public void Report_RealisticGameDAGLatencies()
     {
         // Input(CB) → Movement(Pipeline,200) → Physics(Pipeline,200) → Combat(CB) → Output(CB)
@@ -249,6 +251,7 @@ public class DagSchedulerLatencyTests
     /// Measures tick timing accuracy at 60Hz — validates ±1ms jitter acceptance criterion.
     /// </summary>
     [Test]
+    [Explicit("Benchmark — runs ~5s of 60Hz ticks to measure jitter histogram. Run on demand.")]
     public void Report_TickTimingJitter_60Hz()
     {
         // Minimal DAG — just measure tick timing accuracy

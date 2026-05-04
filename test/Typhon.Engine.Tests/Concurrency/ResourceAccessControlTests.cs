@@ -465,7 +465,7 @@ public class ResourceAccessControlTests
         Assert.That(control.AccessingCount, Is.EqualTo(2));
 
         // Try to promote with short timeout - should fail because other holder exists
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
         var result = control.TryPromoteToModify(ref ctx);
 
         Assert.That(result, Is.False, "Promotion should timeout when other ACCESSING holders exist");
@@ -681,7 +681,7 @@ public class ResourceAccessControlTests
         accessHeld.Wait();
 
         // Try to destroy with timeout
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
         var result = control.EnterDestroy(ref ctx);
 
         Assert.That(result, Is.False, "Destroy should timeout");
@@ -732,7 +732,7 @@ public class ResourceAccessControlTests
         SpinWait.SpinUntil(() => control.IsModifyPending, TimeSpan.FromSeconds(1));
 
         // Now try ACCESSING with timeout - should fail due to MODIFY_PENDING
-        var ctx2 = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx2 = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
         var result = control.EnterAccessing(ref ctx2);
 
         Assert.That(result, Is.False, "Should timeout when MODIFY_PENDING is set");
@@ -759,7 +759,7 @@ public class ResourceAccessControlTests
 
         accessingHeld.Wait();
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
         var result = control.EnterModify(ref ctx);
 
         Assert.That(result, Is.False, "Should timeout when ACCESSING is held");
@@ -1302,7 +1302,7 @@ public class ResourceAccessControlTests
         // Thread 3 tries ACCESSING - blocked by MODIFY_PENDING
         var secondAccessTask = Task.Run(() =>
         {
-            var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+            var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
             control.EnterAccessing(ref ctx);
         });
 

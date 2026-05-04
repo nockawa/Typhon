@@ -485,8 +485,9 @@ public class ChunkBasedSegmentBitmapL3Tests
         _logger.LogInformation("Allocated {Count} chunks, AllocatedCount={Allocated}",
             allChunks.Count, allocatedBefore);
 
-        // Free every other chunk
-        var freedChunks = new List<int>();
+        // Free every other chunk. Use HashSet for the membership check below — Does.Contain on a List is O(n)
+        // and was the dominant cost of this test (O(n²) overall on hundreds of chunks).
+        var freedChunks = new HashSet<int>();
         for (int i = 0; i < allChunks.Count; i += 2)
         {
             segment.FreeChunk(allChunks[i]);

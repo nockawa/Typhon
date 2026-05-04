@@ -81,14 +81,14 @@ public class DeadlineWatchdogTests
     [Category("Timing")]
     public void Register_ShortDeadline_TokenCancelledAfterExpiry()
     {
-        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(200));
+        var deadline = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
 
         var token = _watchdog.Register(deadline);
 
         Assert.That(token.IsCancellationRequested, Is.False, "Should not be cancelled immediately");
 
-        // Wait up to 1s — the 200ms deadline should fire well within this
-        var cancelled = token.WaitHandle.WaitOne(1000);
+        // Wait up to 500ms — the 50ms deadline should fire well within this
+        var cancelled = token.WaitHandle.WaitOne(500);
 
         Assert.That(cancelled, Is.True, "Token should have been cancelled after deadline expired");
         Assert.That(token.IsCancellationRequested, Is.True);
@@ -98,9 +98,9 @@ public class DeadlineWatchdogTests
     [Category("Timing")]
     public void Register_MultipleDeadlines_AllFire()
     {
-        var d1 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(50));
-        var d2 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(100));
-        var d3 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(150));
+        var d1 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(30));
+        var d2 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(60));
+        var d3 = Deadline.FromTimeout(TimeSpan.FromMilliseconds(90));
 
         var t1 = _watchdog.Register(d1);
         var t2 = _watchdog.Register(d2);
@@ -199,8 +199,8 @@ public class DeadlineWatchdogTests
             var idx = i;
             threads[i] = new Thread(() =>
             {
-                // Stagger deadlines: 50ms to 250ms
-                var ms = 50 + (idx % 5) * 50;
+                // Stagger deadlines: 30ms to 130ms
+                var ms = 30 + (idx % 5) * 25;
                 tokens[idx] = _watchdog.Register(Deadline.FromTimeout(TimeSpan.FromMilliseconds(ms)));
             });
         }
@@ -215,8 +215,8 @@ public class DeadlineWatchdogTests
             t.Join();
         }
 
-        // Wait for all to fire (max deadline is 250ms, 500ms gives 2x margin)
-        Thread.Sleep(500);
+        // Wait for all to fire (max deadline is 130ms, 250ms gives ~2× margin)
+        Thread.Sleep(250);
 
         int cancelledCount = 0;
         foreach (var token in tokens)

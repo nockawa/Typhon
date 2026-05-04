@@ -32,6 +32,7 @@ public class DagSchedulerCpuTests
     /// With N workers, N-4 workers spin idle during the Pipeline phase.
     /// </summary>
     [Test]
+    [Explicit("Benchmark — measures wall-clock CPU over multi-second windows. Run on demand.")]
     public void Report_CpuWaste_NarrowDag_WithinTick()
     {
         const int workerCount = 8;
@@ -104,6 +105,7 @@ public class DagSchedulerCpuTests
     /// Uses a noop DAG at 60Hz — workers should mostly Sleep, burning near-zero CPU.
     /// </summary>
     [Test]
+    [Explicit("Benchmark — measures wall-clock CPU over multi-second windows. Run on demand.")]
     public void Report_CpuConsumption_BetweenTicks_60Hz()
     {
         const int workerCount = 8;
@@ -158,6 +160,7 @@ public class DagSchedulerCpuTests
     /// are actually busy. Used to compare against narrow DAG waste.
     /// </summary>
     [Test]
+    [Explicit("Benchmark — measures wall-clock CPU over multi-second windows. Run on demand.")]
     public void Report_CpuBaseline_WideDag()
     {
         const int workerCount = 8;

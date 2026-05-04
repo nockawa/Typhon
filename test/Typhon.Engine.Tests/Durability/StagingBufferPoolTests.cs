@@ -152,7 +152,7 @@ public class StagingBufferPoolTests : AllocatorTestBase
         thread.Start();
 
         // Verify it's blocked
-        Assert.That(rentCompleted.Wait(200), Is.False, "Rent should be blocked when pool is exhausted");
+        Assert.That(rentCompleted.Wait(50), Is.False, "Rent should be blocked when pool is exhausted");
 
         // Return one buffer to unblock
         pool.Return(slotIndices[0]);
@@ -185,7 +185,7 @@ public class StagingBufferPoolTests : AllocatorTestBase
             slotIndices[i] = buf.SlotIndex;
         }
 
-        using var cts = new CancellationTokenSource(100);
+        using var cts = new CancellationTokenSource(30);
 
         Assert.Throws<OperationCanceledException>(() => pool.Rent(cts.Token));
 

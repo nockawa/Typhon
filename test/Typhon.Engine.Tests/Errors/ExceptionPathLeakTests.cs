@@ -11,6 +11,7 @@ namespace Typhon.Engine.Tests;
 /// resources before throwing, preventing page-cache pin leaks under contention.
 /// </summary>
 [TestFixture]
+[NonParallelizable] // Mutates static TimeoutOptions.Current — would race with any parallel DatabaseEngine ctor.
 class ExceptionPathLeakTests : TestBase<ExceptionPathLeakTests>
 {
     [OneTimeSetUp]

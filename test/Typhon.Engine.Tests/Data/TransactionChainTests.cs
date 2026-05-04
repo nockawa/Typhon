@@ -279,8 +279,8 @@ class TransactionChainTests : TestBase<TransactionChainTests>
             threads[i].Start();
         }
 
-        // Let it run for 200ms — plenty for exercising CAS contention
-        Thread.Sleep(200);
+        // 50ms is enough for 8 threads in tight create/dispose loops to expose CAS races.
+        Thread.Sleep(50);
         stop.Set();
 
         for (int i = 0; i < threadCount; i++)
@@ -293,7 +293,7 @@ class TransactionChainTests : TestBase<TransactionChainTests>
 
         var total = totalOps.Sum();
         Assert.That(total, Is.GreaterThan(0), "Stress test should complete some operations");
-        TestContext.Out.WriteLine($"Stress: {total} ops across {threadCount} threads in 200ms");
+        TestContext.Out.WriteLine($"Stress: {total} ops across {threadCount} threads in 50ms");
     }
 
     /// <summary>

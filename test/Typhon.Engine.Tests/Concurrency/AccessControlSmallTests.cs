@@ -441,7 +441,7 @@ public class AccessControlSmallTests
         var control = new AccessControlSmall();
         control.EnterExclusiveAccess(ref WaitContext.Null);
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
         var result = control.EnterSharedAccess(ref ctx);
 
         Assert.That(result, Is.False, "Should timeout when exclusive is held");
@@ -492,7 +492,7 @@ public class AccessControlSmallTests
 
         lockAcquired.SignalAndWait();
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(200));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(60));
         var result = control.EnterExclusiveAccess(ref ctx);
 
         Assert.That(result, Is.False, "Should timeout when shared is held");
@@ -519,7 +519,7 @@ public class AccessControlSmallTests
 
         lockAcquired.SignalAndWait();
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
         var result = control.EnterExclusiveAccess(ref ctx);
 
         Assert.That(result, Is.False, "Should timeout when exclusive is held");
@@ -547,7 +547,7 @@ public class AccessControlSmallTests
         otherAcquired.Wait();
         control.EnterSharedAccess(ref TestWaitContext.Default);
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100));
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30));
         var result = control.TryPromoteToExclusiveAccess(ref ctx);
 
         Assert.That(result, Is.False, "Should return false (not timeout) when multiple holders");
@@ -726,7 +726,7 @@ public class AccessControlSmallTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10)); // Long timeout
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100), cts.Token);
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30), cts.Token);
         var result = control.EnterSharedAccess(ref ctx);
 
         Assert.That(result, Is.False, "Should timeout before cancellation");
@@ -742,7 +742,7 @@ public class AccessControlSmallTests
         var control = new AccessControlSmall();
         control.EnterExclusiveAccess(ref WaitContext.Null);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(30));
 
         var ctx = WaitContext.FromTimeout(TimeSpan.FromSeconds(10), cts.Token); // Long timeout
         var result = control.EnterSharedAccess(ref ctx);
@@ -913,7 +913,7 @@ public class AccessControlSmallTests
 
         using var cts = new CancellationTokenSource();
 
-        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(100), cts.Token);
+        var ctx = WaitContext.FromTimeout(TimeSpan.FromMilliseconds(30), cts.Token);
         var result = control.Enter(exclusive: false, ref ctx);
 
         Assert.That(result, Is.False);
