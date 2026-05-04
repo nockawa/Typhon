@@ -122,20 +122,6 @@ public static class EcsQueryDepthEventCodec
     }
 
     // ── Construct (span) ──
-    public static void EncodeConstruct(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort targetArchId, byte polymorphic, byte maskSize, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeConstruct(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.EcsQueryConstruct, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, targetArchId);
-        p[2] = polymorphic;
-        p[3] = maskSize;
-        bytesWritten = size;
-    }
-
     public static EcsQueryConstructData DecodeConstruct(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -165,19 +151,6 @@ public static class EcsQueryDepthEventCodec
     }
 
     // ── SubtreeExpand (span) ──
-    public static void EncodeSubtreeExpand(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort subtreeCount, ushort rootId, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeSubtreeExpand(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.EcsQuerySubtreeExpand, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, subtreeCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[2..], rootId);
-        bytesWritten = size;
-    }
-
     public static EcsQuerySubtreeExpandData DecodeSubtreeExpand(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);

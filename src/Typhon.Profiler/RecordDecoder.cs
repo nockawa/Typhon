@@ -308,7 +308,7 @@ public sealed class RecordDecoder
     {
         var data = PerTickSnapshotEventCodec.DecodePerTickSnapshot(record);
 
-        var gauges = new System.Collections.Generic.Dictionary<int, double>(data.Values.Length);
+        var gauges = new Dictionary<int, double>(data.Values.Length);
         for (var i = 0; i < data.Values.Length; i++)
         {
             var v = data.Values[i];

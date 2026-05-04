@@ -220,9 +220,12 @@ public class TraceRecordRingTests
 
         var evt = new EcsQueryExecuteEvent
         {
-            ThreadSlot = 5,
-            StartTimestamp = 1000,
-            SpanId = 0x0500000000000001UL,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 5,
+                StartTimestamp = 1000,
+                SpanId = 0x0500000000000001UL,
+            },
             ArchetypeTypeId = 77,
         };
         evt.ResultCount = 42;
@@ -252,14 +255,14 @@ public class TraceRecordRingTests
         var ring = new TraceRecordRing(2048);
 
         // Write one of each: BTreeInsert, TransactionCommit, PageCacheFetch
-        var btInsert = new BTreeInsertEvent { ThreadSlot = 1, StartTimestamp = 100, SpanId = 1 };
+        var btInsert = new BTreeInsertEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 100, SpanId = 1 } };
         {
             Assert.That(ring.TryReserve(btInsert.ComputeSize(), out var slot), Is.True);
             btInsert.EncodeTo(slot, endTimestamp: 200, out _);
             ring.Publish();
         }
 
-        var txCommit = new TransactionCommitEvent { ThreadSlot = 2, StartTimestamp = 300, SpanId = 2, Tsn = 9999 };
+        var txCommit = new TransactionCommitEvent { Header = new TraceSpanHeader { ThreadSlot = 2, StartTimestamp = 300, SpanId = 2 }, Tsn = 9999 };
         txCommit.ComponentCount = 3;
         {
             Assert.That(ring.TryReserve(txCommit.ComputeSize(), out var slot), Is.True);
@@ -267,7 +270,7 @@ public class TraceRecordRingTests
             ring.Publish();
         }
 
-        var pcFetch = new PageCacheFetchEvent { ThreadSlot = 3, StartTimestamp = 600, SpanId = 3, FilePageIndex = 42 };
+        var pcFetch = new PageCacheFetchEvent { Header = new TraceSpanHeader { ThreadSlot = 3, StartTimestamp = 600, SpanId = 3 }, FilePageIndex = 42 };
         {
             Assert.That(ring.TryReserve(pcFetch.ComputeSize(), out var slot), Is.True);
             pcFetch.EncodeTo(slot, endTimestamp: 700, out _);

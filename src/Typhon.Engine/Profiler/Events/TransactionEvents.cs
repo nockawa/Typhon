@@ -1,3 +1,6 @@
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using System;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
@@ -8,121 +11,64 @@ namespace Typhon.Engine.Profiler;
 /// <summary>
 /// Producer-side ref struct for <see cref="TraceEventKind.TransactionCommit"/>. Required: TSN. Optional: component count, conflict-detected flag.
 /// </summary>
-public ref struct TransactionCommitEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.TransactionCommit, Codec = typeof(TransactionEventCodec))]
+public ref partial struct TransactionCommitEvent
 {
-    public static byte Kind => (byte)TraceEventKind.TransactionCommit;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long Tsn;
 
+    [Optional]
     private int _componentCount;
+    [Optional]
     private bool _conflictDetected;
-    private byte _optMask;
-
-    public int ComponentCount
-    {
-        readonly get => _componentCount;
-        set { _componentCount = value; _optMask |= TransactionEventCodec.OptComponentCount; }
-    }
-
-    public bool ConflictDetected
-    {
-        readonly get => _conflictDetected;
-        set { _conflictDetected = value; _optMask |= TransactionEventCodec.OptConflictDetected; }
-    }
-
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommit, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommit, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionCommit, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 0, _optMask, _componentCount, _conflictDetected, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionCommit, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, Tsn, 0, _optMask, _componentCount, _conflictDetected, out bytesWritten);
 }
 
-public ref struct TransactionRollbackEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.TransactionRollback, Codec = typeof(TransactionEventCodec))]
+public ref partial struct TransactionRollbackEvent
 {
-    public static byte Kind => (byte)TraceEventKind.TransactionRollback;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long Tsn;
 
+    [Optional]
     private int _componentCount;
-    private TransactionRollbackReason _reason;
-    private byte _optMask;
-
-    public int ComponentCount
-    {
-        readonly get => _componentCount;
-        set { _componentCount = value; _optMask |= TransactionEventCodec.OptComponentCount; }
-    }
 
     /// <summary>Phase 6 (D3): rollback reason byte. Setting any value flips the OptReason mask bit so the producer always emits the trailing byte.</summary>
-    public TransactionRollbackReason Reason
-    {
-        readonly get => _reason;
-        set { _reason = value; _optMask |= TransactionEventCodec.OptReason; }
-    }
+    [Optional]
+    private TransactionRollbackReason _reason;
 
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionRollback, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionRollback, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionRollback, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 0, _optMask, _componentCount, false, out bytesWritten, _reason);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionRollback, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, Tsn, 0, _optMask, _componentCount, false, out bytesWritten, _reason);
 }
 
-public ref struct TransactionCommitComponentEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.TransactionCommitComponent, Codec = typeof(TransactionEventCodec))]
+public ref partial struct TransactionCommitComponentEvent
 {
-    public static byte Kind => (byte)TraceEventKind.TransactionCommitComponent;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long Tsn;
+    [BeginParam]
     public int ComponentTypeId;
 
-    private int _rowCount;
-    private byte _optMask;
-
     /// <summary>Phase 6: number of rows mutated within this component-type's commit. Setting any value flips the OptRowCount mask bit.</summary>
-    public int RowCount
-    {
-        readonly get => _rowCount;
-        set { _rowCount = value; _optMask |= TransactionEventCodec.OptRowCount; }
-    }
+    [Optional]
+    private int _rowCount;
 
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommitComponent, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommitComponent, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionCommitComponent, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, ComponentTypeId, _optMask, componentCount: 0, conflictDetected: false, 
+        => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionCommitComponent, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, Tsn, ComponentTypeId, _optMask, componentCount: 0, conflictDetected: false, 
             out bytesWritten, rowCount: _rowCount);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>
@@ -130,36 +76,19 @@ public ref struct TransactionCommitComponentEvent : ITraceEventEncoder
 /// Wire payload for Persist: <c>[i64 tsn][i64 walLsn][u8 optMask]</c> — walLsn is in the componentTypeId slot (reused as i64)
 /// but to keep things clean we use a separate encode path.
 /// </summary>
-public ref struct TransactionPersistEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.TransactionRollback, Codec = typeof(TransactionEventCodec), FactoryName = "BeginTransactionPersist")]
+public ref partial struct TransactionPersistEvent
 {
-    public static byte Kind => (byte)TraceEventKind.TransactionRollback;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long Tsn;
 
+    [Optional]
     private long _walLsn;
-    private byte _optMask;
-
-    public long WalLsn
-    {
-        readonly get => _walLsn;
-        set { _walLsn = value; _optMask |= TransactionEventCodec.OptWalLsn; }
-    }
-
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputePersistSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        => TransactionEventCodec.ComputePersistSize(Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => TransactionEventCodec.EncodePersist(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, _optMask, _walLsn, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => TransactionEventCodec.EncodePersist(destination, endTimestamp, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, Tsn, _optMask, _walLsn, out bytesWritten);
 }
 

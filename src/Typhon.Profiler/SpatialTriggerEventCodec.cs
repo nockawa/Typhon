@@ -96,28 +96,6 @@ public static class SpatialTriggerEventCodec
             BinaryPrimitives.ReadUInt32LittleEndian(p[3..]));
     }
 
-    public static void EncodeEval(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort regionId, ushort occupantCount, ushort enterCount, ushort leaveCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeEval(hasTC);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialTriggerEval, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTC)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, regionId);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[2..], occupantCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[4..], enterCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[6..], leaveCount);
-        bytesWritten = size;
-    }
-
     public static SpatialTriggerEvalData DecodeEval(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

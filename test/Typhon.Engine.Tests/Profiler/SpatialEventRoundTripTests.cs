@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using Typhon.Profiler;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 
@@ -27,9 +28,25 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialQueryAabb_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialQueryEventCodec.ComputeSizeAabb(false)];
-        SpatialQueryEventCodec.EncodeAabb(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            nodesVisited: 12, leavesEntered: 3, resultCount: 17, restartCount: 1, categoryMask: 0x000000FFu, out _);
+        var ev = new SpatialQueryAabbEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            NodesVisited = 12,
+            LeavesEntered = 3,
+            ResultCount = 17,
+            RestartCount = 1,
+            CategoryMask = 0x000000FFu,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialQueryEventCodec.DecodeAabb(buf);
         Assert.Multiple(() =>
         {
@@ -49,9 +66,24 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialQueryRadius_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialQueryEventCodec.ComputeSizeRadius(false)];
-        SpatialQueryEventCodec.EncodeRadius(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            nodesVisited: 5, resultCount: 2, radius: 12.5f, restartCount: 0, out _);
+        var ev = new SpatialQueryRadiusEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            NodesVisited = 5,
+            ResultCount = 2,
+            Radius = 12.5f,
+            RestartCount = 0,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialQueryEventCodec.DecodeRadius(buf);
         Assert.That(d.NodesVisited, Is.EqualTo(5));
         Assert.That(d.ResultCount, Is.EqualTo(2));
@@ -62,9 +94,24 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialQueryRay_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialQueryEventCodec.ComputeSizeRay(false)];
-        SpatialQueryEventCodec.EncodeRay(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            nodesVisited: 8, resultCount: 1, maxDist: 100f, restartCount: 2, out _);
+        var ev = new SpatialQueryRayEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            NodesVisited = 8,
+            ResultCount = 1,
+            MaxDist = 100f,
+            RestartCount = 2,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialQueryEventCodec.DecodeRay(buf);
         Assert.That(d.NodesVisited, Is.EqualTo(8));
         Assert.That(d.ResultCount, Is.EqualTo(1));
@@ -75,9 +122,24 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialQueryFrustum_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialQueryEventCodec.ComputeSizeFrustum(false)];
-        SpatialQueryEventCodec.EncodeFrustum(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            nodesVisited: 20, resultCount: 7, planeCount: 6, restartCount: 0, out _);
+        var ev = new SpatialQueryFrustumEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            NodesVisited = 20,
+            ResultCount = 7,
+            PlaneCount = 6,
+            RestartCount = 0,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialQueryEventCodec.DecodeFrustum(buf);
         Assert.That(d.NodesVisited, Is.EqualTo(20));
         Assert.That(d.ResultCount, Is.EqualTo(7));
@@ -88,9 +150,24 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialQueryKnn_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialQueryEventCodec.ComputeSizeKnn(false)];
-        SpatialQueryEventCodec.EncodeKnn(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            k: 10, iterCount: 3, finalRadius: 5.5f, resultCount: 8, out _);
+        var ev = new SpatialQueryKnnEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            K = 10,
+            IterCount = 3,
+            FinalRadius = 5.5f,
+            ResultCount = 8,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialQueryEventCodec.DecodeKnn(buf);
         Assert.That(d.K, Is.EqualTo(10));
         Assert.That(d.IterCount, Is.EqualTo(3));
@@ -102,9 +179,23 @@ public class SpatialEventRoundTripTests
     [TestCase((byte)1, (ushort)4, 1024)]
     public void SpatialQueryCount_RoundTrip(byte variant, ushort nodesVisited, int resultCount)
     {
-        Span<byte> buf = stackalloc byte[SpatialQueryEventCodec.ComputeSizeCount(false)];
-        SpatialQueryEventCodec.EncodeCount(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            variant, nodesVisited, resultCount, out _);
+        var ev = new SpatialQueryCountEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Variant = variant,
+            NodesVisited = nodesVisited,
+            ResultCount = resultCount,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialQueryEventCodec.DecodeCount(buf);
         Assert.That(d.Variant, Is.EqualTo(variant));
         Assert.That(d.NodesVisited, Is.EqualTo(nodesVisited));
@@ -119,9 +210,24 @@ public class SpatialEventRoundTripTests
     [TestCase(-1L, (byte)0, (byte)0, (byte)10)]
     public void SpatialRTreeInsert_RoundTrip(long entityId, byte depth, byte didSplit, byte restartCount)
     {
-        Span<byte> buf = stackalloc byte[SpatialRTreeEventCodec.ComputeSizeInsert(false)];
-        SpatialRTreeEventCodec.EncodeInsert(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            entityId, depth, didSplit, restartCount, out _);
+        var ev = new SpatialRTreeInsertEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            EntityId = entityId,
+            Depth = depth,
+            DidSplit = didSplit,
+            RestartCount = restartCount,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialRTreeEventCodec.DecodeInsert(buf);
         Assert.That(d.EntityId, Is.EqualTo(entityId));
         Assert.That(d.Depth, Is.EqualTo(depth));
@@ -132,9 +238,22 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialRTreeRemove_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialRTreeEventCodec.ComputeSizeRemove(false)];
-        SpatialRTreeEventCodec.EncodeRemove(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            entityId: 0xDEADBEEFL, leafCollapse: 1, out _);
+        var ev = new SpatialRTreeRemoveEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            EntityId = 0xDEADBEEFL,
+            LeafCollapse = 1,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialRTreeEventCodec.DecodeRemove(buf);
         Assert.That(d.EntityId, Is.EqualTo(0xDEADBEEFL));
         Assert.That(d.LeafCollapse, Is.EqualTo(1));
@@ -143,9 +262,24 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialRTreeNodeSplit_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialRTreeEventCodec.ComputeSizeNodeSplit(false)];
-        SpatialRTreeEventCodec.EncodeNodeSplit(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            depth: 4, splitAxis: 1, leftCount: 30, rightCount: 35, out _);
+        var ev = new SpatialRTreeNodeSplitEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Depth = 4,
+            SplitAxis = 1,
+            LeftCount = 30,
+            RightCount = 35,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialRTreeEventCodec.DecodeNodeSplit(buf);
         Assert.That(d.Depth, Is.EqualTo(4));
         Assert.That(d.SplitAxis, Is.EqualTo(1));
@@ -156,9 +290,22 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialRTreeBulkLoad_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialRTreeEventCodec.ComputeSizeBulkLoad(false)];
-        SpatialRTreeEventCodec.EncodeBulkLoad(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            entityCount: 10000, leafCount: 156, out _);
+        var ev = new SpatialRTreeBulkLoadEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            EntityCount = 10000,
+            LeafCount = 156,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialRTreeEventCodec.DecodeBulkLoad(buf);
         Assert.That(d.EntityCount, Is.EqualTo(10000));
         Assert.That(d.LeafCount, Is.EqualTo(156));
@@ -285,9 +432,24 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialTierIndexRebuild_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialTierIndexEventCodec.ComputeSizeRebuild(false)];
-        SpatialTierIndexEventCodec.EncodeRebuild(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            archetypeId: 12, clusterCount: 200, oldVersion: 5, newVersion: 7, out _);
+        var ev = new SpatialTierIndexRebuildEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ArchetypeId = 12,
+            ClusterCount = 200,
+            OldVersion = 5,
+            NewVersion = 7,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialTierIndexEventCodec.DecodeRebuild(buf);
         Assert.That(d.ArchetypeId, Is.EqualTo(12));
         Assert.That(d.ClusterCount, Is.EqualTo(200));
@@ -313,9 +475,23 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialMaintainInsert_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialMaintainEventCodec.ComputeSizeInsert(false)];
-        SpatialMaintainEventCodec.EncodeInsert(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            entityPK: 0xCAFEL, componentTypeId: 5, didDegenerate: 0, out _);
+        var ev = new SpatialMaintainInsertEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            EntityPK = 0xCAFEL,
+            ComponentTypeId = 5,
+            DidDegenerate = 0,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialMaintainEventCodec.DecodeInsert(buf);
         Assert.That(d.EntityPK, Is.EqualTo(0xCAFEL));
         Assert.That(d.ComponentTypeId, Is.EqualTo(5));
@@ -325,9 +501,23 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialMaintainUpdateSlowPath_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialMaintainEventCodec.ComputeSizeUpdateSlowPath(false)];
-        SpatialMaintainEventCodec.EncodeUpdateSlowPath(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            entityPK: 0xBEEFL, componentTypeId: 3, escapeDistSq: 1.5f, out _);
+        var ev = new SpatialMaintainUpdateSlowPathEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            EntityPK = 0xBEEFL,
+            ComponentTypeId = 3,
+            EscapeDistSq = 1.5f,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialMaintainEventCodec.DecodeUpdateSlowPath(buf);
         Assert.That(d.EntityPK, Is.EqualTo(0xBEEFL));
         Assert.That(d.ComponentTypeId, Is.EqualTo(3));
@@ -377,9 +567,24 @@ public class SpatialEventRoundTripTests
     [Test]
     public void SpatialTriggerEval_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SpatialTriggerEventCodec.ComputeSizeEval(false)];
-        SpatialTriggerEventCodec.EncodeEval(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            regionId: 5, occupantCount: 50, enterCount: 3, leaveCount: 2, out _);
+        var ev = new SpatialTriggerEvalEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            RegionId = 5,
+            OccupantCount = 50,
+            EnterCount = 3,
+            LeaveCount = 2,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SpatialTriggerEventCodec.DecodeEval(buf);
         Assert.That(d.RegionId, Is.EqualTo(5));
         Assert.That(d.OccupantCount, Is.EqualTo(50));

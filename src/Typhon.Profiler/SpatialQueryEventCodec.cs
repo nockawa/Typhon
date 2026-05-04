@@ -187,29 +187,6 @@ public static class SpatialQueryEventCodec
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int ComputeSizeCount(bool hasTraceContext) => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + CountPayloadSize;
 
-    public static void EncodeAabb(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort nodesVisited, ushort leavesEntered, ushort resultCount, byte restartCount, uint categoryMask, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeAabb(hasTraceContext);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialQueryAabb, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTraceContext)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, nodesVisited);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[2..], leavesEntered);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[4..], resultCount);
-        payload[6] = restartCount;
-        BinaryPrimitives.WriteUInt32LittleEndian(payload[7..], categoryMask);
-        bytesWritten = size;
-    }
-
     public static SpatialQueryAabbData DecodeAabb(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -223,28 +200,6 @@ public static class SpatialQueryEventCodec
             BinaryPrimitives.ReadUInt16LittleEndian(payload[4..]),
             payload[6],
             BinaryPrimitives.ReadUInt32LittleEndian(payload[7..]));
-    }
-
-    public static void EncodeRadius(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort nodesVisited, ushort resultCount, float radius, byte restartCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeRadius(hasTraceContext);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialQueryRadius, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTraceContext)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, nodesVisited);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[2..], resultCount);
-        BinaryPrimitives.WriteSingleLittleEndian(payload[4..], radius);
-        payload[8] = restartCount;
-        bytesWritten = size;
     }
 
     public static SpatialQueryRadiusData DecodeRadius(ReadOnlySpan<byte> source)
@@ -261,28 +216,6 @@ public static class SpatialQueryEventCodec
             payload[8]);
     }
 
-    public static void EncodeRay(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort nodesVisited, ushort resultCount, float maxDist, byte restartCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeRay(hasTraceContext);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialQueryRay, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTraceContext)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, nodesVisited);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[2..], resultCount);
-        BinaryPrimitives.WriteSingleLittleEndian(payload[4..], maxDist);
-        payload[8] = restartCount;
-        bytesWritten = size;
-    }
-
     public static SpatialQueryRayData DecodeRay(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -295,28 +228,6 @@ public static class SpatialQueryEventCodec
             BinaryPrimitives.ReadUInt16LittleEndian(payload[2..]),
             BinaryPrimitives.ReadSingleLittleEndian(payload[4..]),
             payload[8]);
-    }
-
-    public static void EncodeFrustum(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort nodesVisited, ushort resultCount, byte planeCount, byte restartCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeFrustum(hasTraceContext);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialQueryFrustum, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTraceContext)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, nodesVisited);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[2..], resultCount);
-        payload[4] = planeCount;
-        payload[5] = restartCount;
-        bytesWritten = size;
     }
 
     public static SpatialQueryFrustumData DecodeFrustum(ReadOnlySpan<byte> source)
@@ -332,28 +243,6 @@ public static class SpatialQueryEventCodec
             payload[4], payload[5]);
     }
 
-    public static void EncodeKnn(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort k, byte iterCount, float finalRadius, ushort resultCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeKnn(hasTraceContext);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialQueryKnn, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTraceContext)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, k);
-        payload[2] = iterCount;
-        BinaryPrimitives.WriteSingleLittleEndian(payload[3..], finalRadius);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[7..], resultCount);
-        bytesWritten = size;
-    }
-
     public static SpatialQueryKnnData DecodeKnn(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -366,27 +255,6 @@ public static class SpatialQueryEventCodec
             payload[2],
             BinaryPrimitives.ReadSingleLittleEndian(payload[3..]),
             BinaryPrimitives.ReadUInt16LittleEndian(payload[7..]));
-    }
-
-    public static void EncodeCount(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        byte variant, ushort nodesVisited, int resultCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeCount(hasTraceContext);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialQueryCount, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTraceContext)..];
-        payload[0] = variant;
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[1..], nodesVisited);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[3..], resultCount);
-        bytesWritten = size;
     }
 
     public static SpatialQueryCountData DecodeCount(ReadOnlySpan<byte> source)

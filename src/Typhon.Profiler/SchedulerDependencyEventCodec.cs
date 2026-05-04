@@ -63,27 +63,6 @@ public static class SchedulerDependencyEventCodec
             BinaryPrimitives.ReadUInt16LittleEndian(p[6..]));
     }
 
-    public static void EncodeFanOut(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort completingSysIdx, ushort succCount, ushort skippedCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeFanOut(hasTC);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SchedulerDependencyFanOut, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTC)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, completingSysIdx);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[2..], succCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[4..], skippedCount);
-        bytesWritten = size;
-    }
-
     public static SchedulerDependencyFanOutData DecodeFanOut(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

@@ -46,28 +46,6 @@ public static class RuntimePhaseSpanEventCodec
     public static int ComputeSize(bool hasTraceContext)
         => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + PayloadSize;
 
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, byte phase, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(hasTraceContext);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.RuntimePhaseSpan, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        destination[headerSize] = phase;
-
-        bytesWritten = size;
-    }
-
     public static RuntimePhaseSpanEventData Decode(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

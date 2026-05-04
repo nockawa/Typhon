@@ -1,6 +1,6 @@
-using System;
-using System.Buffers.Binary;
-using System.Runtime.CompilerServices;
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
@@ -9,183 +9,63 @@ namespace Typhon.Engine.Profiler;
 /// Producer-side ref struct for <see cref="TraceEventKind.CheckpointCycle"/>. Required: targetLsn, reason. Optional: dirtyPageCount (set after
 /// dirty-page collection completes).
 /// </summary>
-public ref struct CheckpointCycleEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.CheckpointCycle, Codec = typeof(CheckpointEventCodec), EmitEncoder = true)]
+public ref partial struct CheckpointCycleEvent
 {
-    public static byte Kind => (byte)TraceEventKind.CheckpointCycle;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long TargetLsn;
+    [BeginParam(ParamType = "CheckpointReason")]
     public byte Reason;
 
+    [Optional]
     private int _dirtyPageCount;
-    private byte _optMask;
 
-    public int DirtyPageCount
-    {
-        readonly get => _dirtyPageCount;
-        set { _dirtyPageCount = value; _optMask |= CheckpointEventCodec.OptDirtyPageCount; }
-    }
-
-    public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeCycleSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => CheckpointEventCodec.EncodeCycle(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, TargetLsn, Reason, _optMask, _dirtyPageCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>Checkpoint collect-dirty-pages phase — no typed payload (span header only).</summary>
-public ref struct CheckpointCollectEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.CheckpointCollect, EmitEncoder = true)]
+public ref partial struct CheckpointCollectEvent
 {
-    public static byte Kind => (byte)TraceEventKind.CheckpointCollect;
 
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => CheckpointEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.CheckpointCollect, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>
 /// Checkpoint write-dirty-pages phase. Optional: writtenCount (set after pages are written).
 /// </summary>
-public ref struct CheckpointWriteEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.CheckpointWrite, Codec = typeof(CheckpointEventCodec), EmitEncoder = true)]
+public ref partial struct CheckpointWriteEvent
 {
-    public static byte Kind => (byte)TraceEventKind.CheckpointWrite;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [Optional]
     private int _writtenCount;
-    private byte _optMask;
 
-    public int WrittenCount
-    {
-        readonly get => _writtenCount;
-        set { _writtenCount = value; _optMask |= CheckpointEventCodec.OptWrittenCount; }
-    }
-
-    public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => CheckpointEventCodec.EncodeOptionalCount(destination, endTimestamp, TraceEventKind.CheckpointWrite, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _writtenCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>Checkpoint fsync phase — no typed payload (span header only).</summary>
-public ref struct CheckpointFsyncEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.CheckpointFsync, EmitEncoder = true)]
+public ref partial struct CheckpointFsyncEvent
 {
-    public static byte Kind => (byte)TraceEventKind.CheckpointFsync;
 
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => CheckpointEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.CheckpointFsync, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>
 /// Checkpoint transition-UoW-entries phase. Optional: transitionedCount (set after transition completes).
 /// </summary>
-public ref struct CheckpointTransitionEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.CheckpointTransition, Codec = typeof(CheckpointEventCodec), EmitEncoder = true)]
+public ref partial struct CheckpointTransitionEvent
 {
-    public static byte Kind => (byte)TraceEventKind.CheckpointTransition;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [Optional]
     private int _transitionedCount;
-    private byte _optMask;
 
-    public int TransitionedCount
-    {
-        readonly get => _transitionedCount;
-        set { _transitionedCount = value; _optMask |= CheckpointEventCodec.OptTransitionedCount; }
-    }
-
-    public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => CheckpointEventCodec.EncodeOptionalCount(destination, endTimestamp, TraceEventKind.CheckpointTransition, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _transitionedCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>
 /// Checkpoint recycle-WAL-segments phase. Optional: recycledCount (set after recycling completes).
 /// </summary>
-public ref struct CheckpointRecycleEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.CheckpointRecycle, Codec = typeof(CheckpointEventCodec), EmitEncoder = true)]
+public ref partial struct CheckpointRecycleEvent
 {
-    public static byte Kind => (byte)TraceEventKind.CheckpointRecycle;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [Optional]
     private int _recycledCount;
-    private byte _optMask;
 
-    public int RecycledCount
-    {
-        readonly get => _recycledCount;
-        set { _recycledCount = value; _optMask |= CheckpointEventCodec.OptRecycledCount; }
-    }
-
-    public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => CheckpointEventCodec.EncodeOptionalCount(destination, endTimestamp, TraceEventKind.CheckpointRecycle, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _recycledCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 

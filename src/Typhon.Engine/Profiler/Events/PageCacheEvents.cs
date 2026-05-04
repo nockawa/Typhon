@@ -1,6 +1,7 @@
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using System;
-using System.Buffers.Binary;
-using System.Runtime.CompilerServices;
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
@@ -9,169 +10,115 @@ namespace Typhon.Engine.Profiler;
 /// Producer-side <c>ref struct</c> for <see cref="TraceEventKind.PageCacheFetch"/>. Required: <c>FilePageIndex</c>. No optionals.
 /// </summary>
 /// <remarks>
-/// Used via <c>using var</c> on the begin thread only — PagedMMF no longer captures fetch scopes in <c>ContinueWith</c> lambdas, so there's
-/// no need for the plain-struct shape that the old async-completion path required. Same-thread dispose means <see cref="TyphonEvent.PublishEvent"/>
-/// can publish directly to the captured slot with a proper TLS unwind.
+/// <para>Escape-hatch from the Phase 3 generator-emitted encoder: the page-cache codec family always writes an optMask byte (size += OptMaskSize)
+/// even when the kind has no [Optional] fields. The generator's standard layout omits the optMask when no optionals are declared, so these kinds
+/// keep the hand-written codec call to preserve wire-format compatibility.</para>
 /// </remarks>
-public ref struct PageCacheFetchEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.PageCacheFetch)]
+public ref partial struct PageCacheFetchEvent
 {
-    public static byte Kind => (byte)TraceEventKind.PageCacheFetch;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFetch, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFetch, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFetch, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFetch, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, FilePageIndex, pageCount: 0, optMask: 0, out bytesWritten);
 }
 
 /// <summary>
 /// Producer-side <c>ref struct</c> for <see cref="TraceEventKind.PageCacheDiskRead"/>. Required: <c>FilePageIndex</c>. No optionals.
-/// Same-thread dispose via <see cref="TyphonEvent.PublishEvent"/>.
+/// Same-thread dispose via <see cref="TyphonEvent.PublishEvent"/>. See <see cref="PageCacheFetchEvent"/> for why this is an escape-hatch from the generator.
 /// </summary>
-public ref struct PageCacheDiskReadEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.PageCacheDiskRead)]
+public ref partial struct PageCacheDiskReadEvent
 {
-    public static byte Kind => (byte)TraceEventKind.PageCacheDiskRead;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskRead, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskRead, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheDiskRead, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheDiskRead, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, FilePageIndex, pageCount: 0, optMask: 0, out bytesWritten);
 }
 
-public ref struct PageCacheDiskWriteEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.PageCacheDiskWrite, Codec = typeof(PageCacheEventCodec))]
+public ref partial struct PageCacheDiskWriteEvent
 {
-    public static byte Kind => (byte)TraceEventKind.PageCacheDiskWrite;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int FilePageIndex;
 
+    [Optional]
     private int _pageCount;
-    private byte _optMask;
-
-    public int PageCount
-    {
-        readonly get => _pageCount;
-        set { _pageCount = value; _optMask |= PageCacheEventCodec.OptPageCount; }
-    }
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskWrite, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskWrite, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheDiskWrite, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, _pageCount, _optMask, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheDiskWrite, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, FilePageIndex, _pageCount, _optMask, out bytesWritten);
 }
 
-public ref struct PageCacheAllocatePageEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.PageCacheAllocatePage)]
+public ref partial struct PageCacheAllocatePageEvent
 {
-    public static byte Kind => (byte)TraceEventKind.PageCacheAllocatePage;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheAllocatePage, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheAllocatePage, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheAllocatePage, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheAllocatePage, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, FilePageIndex, pageCount: 0, optMask: 0, out bytesWritten);
 }
 
-public ref struct PageCacheFlushEvent : ITraceEventEncoder
+/// <summary>
+/// Flush span — required: <see cref="PageCount"/> (number of pages flushed in this batch).
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Wire-format slot reuse.</b> <c>PageCacheEventCodec</c> declares its required payload as a single i32 slot
+/// named <c>filePageIndex</c>. For Flush, that slot carries <see cref="PageCount"/> instead — the codec is shared
+/// with Fetch / DiskRead / DiskWrite / AllocatePage and there is only one i32 slot in the wire layout. The
+/// hand-written <see cref="EncodeTo"/> below passes <c>filePageIndex: PageCount</c> deliberately; the parameter
+/// name reflects the codec contract, not the semantics of this kind. The <c>PageCacheEventData.FilePageIndex</c>
+/// field on the consumer side carries the same overload — readers must check the kind to know what the int means.
+/// </para>
+/// <para>
+/// <b>Why escape-hatch.</b> The shared codec also writes an <c>optMask</c> byte unconditionally, which the Phase-3
+/// generator's standard layout omits when no <c>[Optional]</c> fields are declared. Both quirks together force
+/// this kind to keep the hand-written codec call. Do NOT add <c>EmitEncoder = true</c> here without re-deriving the
+/// generator template to model both behaviors.
+/// </para>
+/// </remarks>
+[TraceEvent(TraceEventKind.PageCacheFlush)]
+public ref partial struct PageCacheFlushEvent
 {
-    public static byte Kind => (byte)TraceEventKind.PageCacheFlush;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int PageCount;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFlush, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFlush, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFlush, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, PageCount, 0, 0, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        // PageCount intentionally goes into the codec's `filePageIndex` slot — see the <remarks> on this struct.
+        => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFlush, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, filePageIndex: PageCount, pageCount: 0, optMask: 0, out bytesWritten);
 }
 
 /// <summary>
 /// Page cache backpressure wait — clock-sweep retry loop couldn't find a free page. Payload: 3 × i32 diagnostic counters.
 /// </summary>
-public ref struct PageCacheBackpressureEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.PageCacheBackpressure, EmitEncoder = true)]
+public ref partial struct PageCacheBackpressureEvent
 {
-    public static byte Kind => (byte)TraceEventKind.PageCacheBackpressure;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
     public int RetryCount;
     public int DirtyCount;
     public int EpochCount;
 
-    public readonly int ComputeSize()
-        => PageCacheBackpressureCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => PageCacheBackpressureCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, RetryCount, DirtyCount, EpochCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
-

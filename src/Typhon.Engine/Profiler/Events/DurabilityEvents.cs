@@ -1,4 +1,6 @@
-using System;
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
@@ -9,193 +11,131 @@ namespace Typhon.Engine.Profiler;
 
 // ── WAL spans ──
 
-public ref struct DurabilityWalQueueDrainEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityWalQueueDrain, EmitEncoder = true)]
+public ref partial struct DurabilityWalQueueDrainEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityWalQueueDrain;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int BytesAligned;
+    [BeginParam]
     public int FrameCount;
-    public readonly int ComputeSize() => DurabilityWalEventCodec.ComputeSizeQueueDrain(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityWalEventCodec.EncodeQueueDrain(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BytesAligned, FrameCount, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityWalOsWriteEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityWalOsWrite, EmitEncoder = true)]
+public ref partial struct DurabilityWalOsWriteEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityWalOsWrite;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int BytesAligned;
+    [BeginParam]
     public int FrameCount;
+    [BeginParam]
     public long HighLsn;
-    public readonly int ComputeSize() => DurabilityWalEventCodec.ComputeSizeOsWrite(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityWalEventCodec.EncodeOsWrite(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BytesAligned, FrameCount, HighLsn, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityWalSignalEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityWalSignal, EmitEncoder = true)]
+public ref partial struct DurabilityWalSignalEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityWalSignal;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public long HighLsn;
-    public readonly int ComputeSize() => DurabilityWalEventCodec.ComputeSizeSignal(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityWalEventCodec.EncodeSignal(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, HighLsn, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityWalBufferEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityWalBuffer, EmitEncoder = true)]
+public ref partial struct DurabilityWalBufferEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityWalBuffer;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int BytesAligned;
+    [BeginParam]
     public int Pad;
-    public readonly int ComputeSize() => DurabilityWalEventCodec.ComputeSizeBuffer(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityWalEventCodec.EncodeBuffer(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BytesAligned, Pad, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityWalBackpressureEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityWalBackpressure, EmitEncoder = true)]
+public ref partial struct DurabilityWalBackpressureEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityWalBackpressure;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public uint WaitUs;
+    [BeginParam]
     public int ProducerThread;
-    public readonly int ComputeSize() => DurabilityWalEventCodec.ComputeSizeBackpressure(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityWalEventCodec.EncodeBackpressure(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, WaitUs, ProducerThread, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 // ── Checkpoint depth spans ──
 
-public ref struct DurabilityCheckpointWriteBatchEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityCheckpointWriteBatch, EmitEncoder = true)]
+public ref partial struct DurabilityCheckpointWriteBatchEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityCheckpointWriteBatch;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int WriteBatchSize;
+    [BeginParam]
     public int StagingAllocated;
-    public readonly int ComputeSize() => DurabilityCheckpointEventCodec.ComputeSizeWriteBatch(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityCheckpointEventCodec.EncodeWriteBatch(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, WriteBatchSize, StagingAllocated, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityCheckpointBackpressureEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityCheckpointBackpressure, EmitEncoder = true)]
+public ref partial struct DurabilityCheckpointBackpressureEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityCheckpointBackpressure;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public uint WaitMs;
+    [BeginParam]
     public byte Exhausted;
-    public readonly int ComputeSize() => DurabilityCheckpointEventCodec.ComputeSizeBackpressure(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityCheckpointEventCodec.EncodeBackpressure(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, WaitMs, Exhausted, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityCheckpointSleepEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityCheckpointSleep, EmitEncoder = true)]
+public ref partial struct DurabilityCheckpointSleepEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityCheckpointSleep;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public uint SleepMs;
+    [BeginParam]
     public byte WakeReason;
-    public readonly int ComputeSize() => DurabilityCheckpointEventCodec.ComputeSizeSleep(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityCheckpointEventCodec.EncodeSleep(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, SleepMs, WakeReason, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 // ── Recovery spans ──
 
-public ref struct DurabilityRecoveryDiscoverEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityRecoveryDiscover, EmitEncoder = true)]
+public ref partial struct DurabilityRecoveryDiscoverEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryDiscover;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int SegCount;
+    [BeginParam]
     public long TotalBytes;
+    [BeginParam]
     public int FirstSegId;
-    public readonly int ComputeSize() => DurabilityRecoveryEventCodec.ComputeSizeDiscover(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityRecoveryEventCodec.EncodeDiscover(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, SegCount, TotalBytes, FirstSegId, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityRecoverySegmentEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityRecoverySegment, EmitEncoder = true)]
+public ref partial struct DurabilityRecoverySegmentEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityRecoverySegment;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int SegId;
     public int RecCount;
     public long Bytes;
     public byte Truncated;
-    public readonly int ComputeSize() => DurabilityRecoveryEventCodec.ComputeSizeSegment(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityRecoveryEventCodec.EncodeSegment(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, SegId, RecCount, Bytes, Truncated, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityRecoveryFpiEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityRecoveryFpi, EmitEncoder = true)]
+public ref partial struct DurabilityRecoveryFpiEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryFpi;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int FpiCount;
     public int RepairedCount;
     public int Mismatches;
-    public readonly int ComputeSize() => DurabilityRecoveryEventCodec.ComputeSizeFpi(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityRecoveryEventCodec.EncodeFpi(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FpiCount, RepairedCount, Mismatches, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityRecoveryRedoEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityRecoveryRedo, EmitEncoder = true)]
+public ref partial struct DurabilityRecoveryRedoEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryRedo;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int RecordsReplayed;
     public int UowsReplayed;
     public uint DurUs;
-    public readonly int ComputeSize() => DurabilityRecoveryEventCodec.ComputeSizeRedo(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityRecoveryEventCodec.EncodeRedo(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, RecordsReplayed, UowsReplayed, DurUs, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityRecoveryUndoEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityRecoveryUndo, EmitEncoder = true)]
+public ref partial struct DurabilityRecoveryUndoEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryUndo;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int VoidedUowCount;
-    public readonly int ComputeSize() => DurabilityRecoveryEventCodec.ComputeSizeUndo(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityRecoveryEventCodec.EncodeUndo(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, VoidedUowCount, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct DurabilityRecoveryTickFenceEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.DurabilityRecoveryTickFence, EmitEncoder = true)]
+public ref partial struct DurabilityRecoveryTickFenceEvent
 {
-    public static byte Kind => (byte)TraceEventKind.DurabilityRecoveryTickFence;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int TickFenceCount;
     public int Entries;
     public long TickNumber;
-    public readonly int ComputeSize() => DurabilityRecoveryEventCodec.ComputeSizeTickFence(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => DurabilityRecoveryEventCodec.EncodeTickFence(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, TickFenceCount, Entries, TickNumber, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

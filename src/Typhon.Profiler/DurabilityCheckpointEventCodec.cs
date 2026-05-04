@@ -100,19 +100,6 @@ public static class DurabilityCheckpointEventCodec
         return source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
     }
 
-    public static void EncodeWriteBatch(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int writeBatchSize, int stagingAllocated, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeWriteBatch(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityCheckpointWriteBatch, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, writeBatchSize);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], stagingAllocated);
-        bytesWritten = size;
-    }
-
     public static DurabilityCheckpointWriteBatchData DecodeWriteBatch(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -121,37 +108,11 @@ public static class DurabilityCheckpointEventCodec
             BinaryPrimitives.ReadInt32LittleEndian(p[4..]));
     }
 
-    public static void EncodeBackpressure(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, uint waitMs, byte exhausted, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeBackpressure(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityCheckpointBackpressure, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, waitMs);
-        p[4] = exhausted;
-        bytesWritten = size;
-    }
-
     public static DurabilityCheckpointBackpressureData DecodeBackpressure(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
         return new DurabilityCheckpointBackpressureData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadUInt32LittleEndian(p), p[4]);
-    }
-
-    public static void EncodeSleep(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, uint sleepMs, byte wakeReason, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeSleep(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityCheckpointSleep, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, sleepMs);
-        p[4] = wakeReason;
-        bytesWritten = size;
     }
 
     public static DurabilityCheckpointSleepData DecodeSleep(ReadOnlySpan<byte> source)

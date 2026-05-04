@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using Typhon.Profiler;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 
@@ -71,11 +72,24 @@ public class StorageMemoryEventRoundTripTests
     [Test]
     public void StoragePageCacheDirtyWalk_RoundTrip()
     {
-        var size = StorageMiscEventCodec.ComputeSizeDirtyWalk(hasTraceContext: false);
+        var ev = new StoragePageCacheDirtyWalkEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            RangeStart = 100,
+            RangeLen = 256,
+            DirtyMs = 12,
+        };
+        var size = ev.ComputeSize();
         Span<byte> buf = stackalloc byte[size];
-        StorageMiscEventCodec.EncodeDirtyWalk(buf, EndTs, ThreadSlot, StartTs,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            rangeStart: 100, rangeLen: 256, dirtyMs: 12, out var bytesWritten);
+        ev.EncodeTo(buf, EndTs, out var bytesWritten);
 
         Assert.That(bytesWritten, Is.EqualTo(size));
 

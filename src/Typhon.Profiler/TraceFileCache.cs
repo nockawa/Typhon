@@ -94,9 +94,9 @@ public struct CacheHeader
     {
         if (identifier.Length < 32)
         {
-            throw new System.ArgumentException("Identifier must be at least 32 bytes.", nameof(identifier));
+            throw new ArgumentException("Identifier must be at least 32 bytes.", nameof(identifier));
         }
-        var headerSpan = System.Runtime.InteropServices.MemoryMarshal.AsBytes(System.Runtime.InteropServices.MemoryMarshal.CreateSpan(ref header, 1));
+        var headerSpan = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref header, 1));
         identifier[..32].CopyTo(headerSpan.Slice(SourceFingerprintOffset, 32));
     }
 }

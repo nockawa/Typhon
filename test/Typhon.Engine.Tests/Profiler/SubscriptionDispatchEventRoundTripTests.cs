@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using Typhon.Profiler;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 
@@ -22,10 +23,23 @@ public class SubscriptionDispatchEventRoundTripTests
     [Test]
     public void RuntimeSubscriptionSubscriber_RoundTrip()
     {
-        var size = RuntimeSubscriptionEventCodec.ComputeSizeSubscriber(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        RuntimeSubscriptionEventCodec.EncodeSubscriber(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            subscriberId: 12345u, viewId: 7, deltaCount: 50, out _);
+        var ev = new RuntimeSubscriptionSubscriberEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            SubscriberId = 12345u,
+            ViewId = 7,
+            DeltaCount = 50,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = RuntimeSubscriptionEventCodec.DecodeSubscriber(buf);
         Assert.That(d.SubscriberId, Is.EqualTo(12345u));
         Assert.That(d.ViewId, Is.EqualTo(7));
@@ -36,10 +50,24 @@ public class SubscriptionDispatchEventRoundTripTests
     [Test]
     public void RuntimeSubscriptionDeltaBuild_RoundTrip()
     {
-        var size = RuntimeSubscriptionEventCodec.ComputeSizeDeltaBuild(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        RuntimeSubscriptionEventCodec.EncodeDeltaBuild(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            viewId: 9, added: 10, removed: 3, modified: 25, out _);
+        var ev = new RuntimeSubscriptionDeltaBuildEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ViewId = 9,
+            Added = 10,
+            Removed = 3,
+            Modified = 25,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = RuntimeSubscriptionEventCodec.DecodeDeltaBuild(buf);
         Assert.That(d.ViewId, Is.EqualTo(9));
         Assert.That(d.Added, Is.EqualTo(10));
@@ -52,10 +80,24 @@ public class SubscriptionDispatchEventRoundTripTests
     [TestCase((byte)2)]   // JSON
     public void RuntimeSubscriptionDeltaSerialize_RoundTrip(byte format)
     {
-        var size = RuntimeSubscriptionEventCodec.ComputeSizeDeltaSerialize(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        RuntimeSubscriptionEventCodec.EncodeDeltaSerialize(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            clientId: 99u, viewId: 5, bytes: 4096, format, out _);
+        var ev = new RuntimeSubscriptionDeltaSerializeEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ClientId = 99u,
+            ViewId = 5,
+            Bytes = 4096,
+            Format = format,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = RuntimeSubscriptionEventCodec.DecodeDeltaSerialize(buf);
         Assert.That(d.ClientId, Is.EqualTo(99u));
         Assert.That(d.ViewId, Is.EqualTo(5));
@@ -66,10 +108,23 @@ public class SubscriptionDispatchEventRoundTripTests
     [Test]
     public void RuntimeSubscriptionTransitionBeginSync_RoundTrip()
     {
-        var size = RuntimeSubscriptionEventCodec.ComputeSizeTransitionBeginSync(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        RuntimeSubscriptionEventCodec.EncodeTransitionBeginSync(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            clientId: 42u, viewId: 11, entitySnapshot: 1500, out _);
+        var ev = new RuntimeSubscriptionTransitionBeginSyncEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ClientId = 42u,
+            ViewId = 11,
+            EntitySnapshot = 1500,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = RuntimeSubscriptionEventCodec.DecodeTransitionBeginSync(buf);
         Assert.That(d.ClientId, Is.EqualTo(42u));
         Assert.That(d.ViewId, Is.EqualTo(11));
@@ -79,10 +134,22 @@ public class SubscriptionDispatchEventRoundTripTests
     [Test]
     public void RuntimeSubscriptionOutputCleanup_RoundTrip()
     {
-        var size = RuntimeSubscriptionEventCodec.ComputeSizeOutputCleanup(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        RuntimeSubscriptionEventCodec.EncodeOutputCleanup(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            deadCount: 4, deregCount: 12, out _);
+        var ev = new RuntimeSubscriptionOutputCleanupEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            DeadCount = 4,
+            DeregCount = 12,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = RuntimeSubscriptionEventCodec.DecodeOutputCleanup(buf);
         Assert.That(d.DeadCount, Is.EqualTo(4));
         Assert.That(d.DeregCount, Is.EqualTo(12));
@@ -91,10 +158,23 @@ public class SubscriptionDispatchEventRoundTripTests
     [Test]
     public void RuntimeSubscriptionDeltaDirtyBitmapSupplement_RoundTrip()
     {
-        var size = RuntimeSubscriptionEventCodec.ComputeSizeDirtyBitmapSupplement(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        RuntimeSubscriptionEventCodec.EncodeDirtyBitmapSupplement(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            modifiedFromRing: 100, supplementCount: 250, unionSize: 350, out _);
+        var ev = new RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ModifiedFromRing = 100,
+            SupplementCount = 250,
+            UnionSize = 350,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = RuntimeSubscriptionEventCodec.DecodeDirtyBitmapSupplement(buf);
         Assert.That(d.ModifiedFromRing, Is.EqualTo(100));
         Assert.That(d.SupplementCount, Is.EqualTo(250));

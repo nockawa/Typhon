@@ -216,20 +216,6 @@ public static class DataIndexBTreeEventCodec
         }
     }
 
-    public static void EncodeRangeScan(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int resultCount, byte restartCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeRangeScan(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DataIndexBTreeRangeScan, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, resultCount);
-        p[4] = restartCount;
-        bytesWritten = size;
-    }
-
     public static DataIndexBTreeRangeScanData DecodeRangeScan(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -244,20 +230,6 @@ public static class DataIndexBTreeEventCodec
         var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
         return new DataIndexBTreeRangeScanData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
             BinaryPrimitives.ReadInt32LittleEndian(p), p[4]);
-    }
-
-    public static void EncodeBulkInsert(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int bufferId, int entryCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeBulkInsert(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DataIndexBTreeBulkInsert, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, bufferId);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], entryCount);
-        bytesWritten = size;
     }
 
     public static DataIndexBTreeBulkInsertData DecodeBulkInsert(ReadOnlySpan<byte> source)

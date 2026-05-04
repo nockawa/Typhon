@@ -67,43 +67,6 @@ public static class EcsSpawnEventCodec
         return size;
     }
 
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort archetypeId, byte optMask, ulong entityId, long tsn, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(hasTraceContext, optMask);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.EcsSpawn, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, archetypeId);
-        payload[ArchetypeIdSize] = optMask;
-        var cursor = ArchetypeIdSize + OptMaskSize;
-
-        if ((optMask & OptEntityId) != 0)
-        {
-            BinaryPrimitives.WriteUInt64LittleEndian(payload[cursor..], entityId);
-            cursor += EntityIdSize;
-        }
-        if ((optMask & OptTsn) != 0)
-        {
-            BinaryPrimitives.WriteInt64LittleEndian(payload[cursor..], tsn);
-            cursor += TsnSize;
-        }
-
-        bytesWritten = size;
-    }
-
     public static EcsSpawnEventData Decode(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -201,43 +164,6 @@ public static class EcsDestroyEventCodec
         if ((optMask & OptCascadeCount) != 0) size += CascadeCountSize;
         if ((optMask & OptTsn) != 0) size += TsnSize;
         return size;
-    }
-
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ulong entityId, byte optMask, int cascadeCount, long tsn, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(hasTraceContext, optMask);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.EcsDestroy, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        BinaryPrimitives.WriteUInt64LittleEndian(payload, entityId);
-        payload[EntityIdSize] = optMask;
-        var cursor = EntityIdSize + OptMaskSize;
-
-        if ((optMask & OptCascadeCount) != 0)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(payload[cursor..], cascadeCount);
-            cursor += CascadeCountSize;
-        }
-        if ((optMask & OptTsn) != 0)
-        {
-            BinaryPrimitives.WriteInt64LittleEndian(payload[cursor..], tsn);
-            cursor += TsnSize;
-        }
-
-        bytesWritten = size;
     }
 
     public static EcsDestroyEventData Decode(ReadOnlySpan<byte> source)
@@ -346,48 +272,6 @@ public static class EcsViewRefreshEventCodec
         if ((optMask & OptResultCount) != 0) size += ResultCountSize;
         if ((optMask & OptDeltaCount) != 0) size += DeltaCountSize;
         return size;
-    }
-
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort archetypeTypeId, byte optMask, EcsViewRefreshMode mode, int resultCount, int deltaCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(hasTraceContext, optMask);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.EcsViewRefresh, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, archetypeTypeId);
-        payload[ArchetypeTypeIdSize] = optMask;
-        var cursor = ArchetypeTypeIdSize + OptMaskSize;
-
-        if ((optMask & OptMode) != 0)
-        {
-            payload[cursor] = (byte)mode;
-            cursor += ModeSize;
-        }
-        if ((optMask & OptResultCount) != 0)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(payload[cursor..], resultCount);
-            cursor += ResultCountSize;
-        }
-        if ((optMask & OptDeltaCount) != 0)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(payload[cursor..], deltaCount);
-            cursor += DeltaCountSize;
-        }
-
-        bytesWritten = size;
     }
 
     public static EcsViewRefreshEventData Decode(ReadOnlySpan<byte> source)

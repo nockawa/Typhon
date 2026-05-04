@@ -1,4 +1,3 @@
-using Typhon.Profiler;
 namespace Typhon.Engine.Profiler;
 
 /// <summary>

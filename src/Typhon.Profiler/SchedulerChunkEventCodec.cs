@@ -58,33 +58,6 @@ public static class SchedulerChunkEventCodec
     public static int ComputeSize(bool hasTraceContext)
         => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + PayloadSize;
 
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort systemIndex, ushort chunkIndex, ushort totalChunks, int entitiesProcessed, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(hasTraceContext);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SchedulerChunk, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, systemIndex);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[2..], chunkIndex);
-        BinaryPrimitives.WriteUInt16LittleEndian(payload[4..], totalChunks);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[6..], entitiesProcessed);
-
-        bytesWritten = size;
-    }
-
     public static SchedulerChunkEventData Decode(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

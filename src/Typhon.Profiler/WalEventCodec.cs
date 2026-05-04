@@ -118,58 +118,6 @@ public static class WalEventCodec
     /// <summary>
     /// Encode a WAL event record. The <paramref name="kind"/> determines which payload fields are written — unused fields are ignored.
     /// </summary>
-    internal static void Encode(
-        Span<byte> destination,
-        long endTimestamp,
-        TraceEventKind kind,
-        byte threadSlot,
-        long startTimestamp,
-        ulong spanId,
-        ulong parentSpanId,
-        ulong traceIdHi,
-        ulong traceIdLo,
-        int batchByteCount,
-        int frameCount,
-        long highLsn,
-        int newSegmentIndex,
-        long targetLsn,
-        out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(kind, hasTraceContext);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        switch (kind)
-        {
-            case TraceEventKind.WalFlush:
-                BinaryPrimitives.WriteInt32LittleEndian(payload, batchByteCount);
-                BinaryPrimitives.WriteInt32LittleEndian(payload[BatchByteCountSize..], frameCount);
-                BinaryPrimitives.WriteInt64LittleEndian(payload[(BatchByteCountSize + FrameCountSize)..], highLsn);
-                break;
-
-            case TraceEventKind.WalSegmentRotate:
-                BinaryPrimitives.WriteInt32LittleEndian(payload, newSegmentIndex);
-                break;
-
-            case TraceEventKind.WalWait:
-                BinaryPrimitives.WriteInt64LittleEndian(payload, targetLsn);
-                break;
-        }
-
-        bytesWritten = size;
-    }
-
     /// <summary>
     /// Decode a WAL event record. Works for any of the three WAL kinds — the caller can use <see cref="WalEventData.Kind"/> to disambiguate.
     /// </summary>

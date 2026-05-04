@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using Typhon.Profiler;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 
@@ -119,10 +120,22 @@ public class DataPlaneEventRoundTripTests
     [Test]
     public void DataTransactionInit_RoundTrip()
     {
-        var size = DataTransactionEventCodec.ComputeSizeInit(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DataTransactionEventCodec.EncodeInit(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            tsn: 9999, uowId: 12, out _);
+        var ev = new DataTransactionInitEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Tsn = 9999,
+            UowId = 12,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DataTransactionEventCodec.DecodeInit(buf);
         Assert.That(d.Tsn, Is.EqualTo(9999));
         Assert.That(d.UowId, Is.EqualTo(12));
@@ -132,10 +145,21 @@ public class DataPlaneEventRoundTripTests
     [Test]
     public void DataTransactionPrepare_RoundTrip()
     {
-        var size = DataTransactionEventCodec.ComputeSizePrepare(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DataTransactionEventCodec.EncodePrepare(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            tsn: 100, out _);
+        var ev = new DataTransactionPrepareEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Tsn = 100,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DataTransactionEventCodec.DecodePrepare(buf);
         Assert.That(d.Tsn, Is.EqualTo(100));
     }
@@ -143,10 +167,22 @@ public class DataPlaneEventRoundTripTests
     [Test]
     public void DataTransactionValidate_RoundTrip()
     {
-        var size = DataTransactionEventCodec.ComputeSizeValidate(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DataTransactionEventCodec.EncodeValidate(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            tsn: 200, entryCount: 32, out _);
+        var ev = new DataTransactionValidateEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Tsn = 200,
+            EntryCount = 32,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DataTransactionEventCodec.DecodeValidate(buf);
         Assert.That(d.Tsn, Is.EqualTo(200));
         Assert.That(d.EntryCount, Is.EqualTo(32));
@@ -168,10 +204,22 @@ public class DataPlaneEventRoundTripTests
     [Test]
     public void DataTransactionCleanup_RoundTrip()
     {
-        var size = DataTransactionEventCodec.ComputeSizeCleanup(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DataTransactionEventCodec.EncodeCleanup(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            tsn: 400, entityCount: 16, out _);
+        var ev = new DataTransactionCleanupEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Tsn = 400,
+            EntityCount = 16,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DataTransactionEventCodec.DecodeCleanup(buf);
         Assert.That(d.Tsn, Is.EqualTo(400));
         Assert.That(d.EntityCount, Is.EqualTo(16));
@@ -197,10 +245,22 @@ public class DataPlaneEventRoundTripTests
     [Test]
     public void DataMvccVersionCleanup_RoundTrip()
     {
-        var size = DataMvccEventCodec.ComputeSizeVersionCleanup(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DataMvccEventCodec.EncodeVersionCleanup(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            pk: 0xDEADBEEF, entriesFreed: 17, out _);
+        var ev = new DataMvccVersionCleanupEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Pk = 0xDEADBEEF,
+            EntriesFreed = 17,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DataMvccEventCodec.DecodeVersionCleanup(buf);
         Assert.That(d.Pk, Is.EqualTo(0xDEADBEEF));
         Assert.That(d.EntriesFreed, Is.EqualTo(17));
@@ -223,10 +283,22 @@ public class DataPlaneEventRoundTripTests
     [Test]
     public void DataIndexBTreeRangeScan_RoundTrip()
     {
-        var size = DataIndexBTreeEventCodec.ComputeSizeRangeScan(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DataIndexBTreeEventCodec.EncodeRangeScan(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            resultCount: 1500, restartCount: 3, out _);
+        var ev = new DataIndexBTreeRangeScanEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ResultCount = 1500,
+            RestartCount = 3,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DataIndexBTreeEventCodec.DecodeRangeScan(buf);
         Assert.That(d.ResultCount, Is.EqualTo(1500));
         Assert.That(d.RestartCount, Is.EqualTo(3));
@@ -254,10 +326,22 @@ public class DataPlaneEventRoundTripTests
     [Test]
     public void DataIndexBTreeBulkInsert_RoundTrip()
     {
-        var size = DataIndexBTreeEventCodec.ComputeSizeBulkInsert(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DataIndexBTreeEventCodec.EncodeBulkInsert(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            bufferId: 99, entryCount: 256, out _);
+        var ev = new DataIndexBTreeBulkInsertEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            BufferId = 99,
+            EntryCount = 256,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DataIndexBTreeEventCodec.DecodeBulkInsert(buf);
         Assert.That(d.BufferId, Is.EqualTo(99));
         Assert.That(d.EntryCount, Is.EqualTo(256));

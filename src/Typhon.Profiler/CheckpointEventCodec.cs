@@ -130,54 +130,6 @@ public static class CheckpointEventCodec
         return size;
     }
 
-    internal static void EncodeCycle(
-        Span<byte> destination,
-        long endTimestamp,
-        byte threadSlot,
-        long startTimestamp,
-        ulong spanId,
-        ulong parentSpanId,
-        ulong traceIdHi,
-        ulong traceIdLo,
-        long targetLsn,
-        byte reason,
-        byte optMask,
-        int dirtyPageCount,
-        out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeCycleSize(hasTraceContext, optMask);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.CheckpointCycle, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        BinaryPrimitives.WriteInt64LittleEndian(payload, targetLsn);
-        var cursor = TargetLsnSize;
-
-        payload[cursor] = reason;
-        cursor += ReasonSize;
-
-        payload[cursor] = optMask;
-        cursor += OptMaskSize;
-
-        if ((optMask & OptDirtyPageCount) != 0)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(payload[cursor..], dirtyPageCount);
-            cursor += CountSize;
-        }
-
-        bytesWritten = size;
-    }
-
     // ── Write / Transition / Recycle (optional count only) ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -191,81 +143,9 @@ public static class CheckpointEventCodec
         return size;
     }
 
-    internal static void EncodeOptionalCount(
-        Span<byte> destination,
-        long endTimestamp,
-        TraceEventKind kind,
-        byte threadSlot,
-        long startTimestamp,
-        ulong spanId,
-        ulong parentSpanId,
-        ulong traceIdHi,
-        ulong traceIdLo,
-        byte optMask,
-        int count,
-        out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeOptionalCountSize(hasTraceContext, optMask);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        payload[0] = optMask;
-        var cursor = OptMaskSize;
-
-        if ((optMask & 0x01) != 0)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(payload[cursor..], count);
-            cursor += CountSize;
-        }
-
-        bytesWritten = size;
-    }
-
     // ── Collect / Fsync (no payload — span header only) ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void EncodeNoPayload(
-        Span<byte> destination,
-        long endTimestamp,
-        TraceEventKind kind,
-        byte threadSlot,
-        long startTimestamp,
-        ulong spanId,
-        ulong parentSpanId,
-        ulong traceIdHi,
-        ulong traceIdLo,
-        out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            durationTicks: endTimestamp - startTimestamp,
-            spanId: spanId,
-            parentSpanId: parentSpanId,
-            spanFlags: spanFlags);
-
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        bytesWritten = size;
-    }
-
     // ── Decode ──
 
     /// <summary>

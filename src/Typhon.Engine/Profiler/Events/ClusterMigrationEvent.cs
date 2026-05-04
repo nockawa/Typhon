@@ -1,6 +1,6 @@
-using System;
-using System.Buffers.Binary;
-using System.Runtime.CompilerServices;
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
@@ -8,33 +8,19 @@ namespace Typhon.Engine.Profiler;
 /// <summary>
 /// Producer-side ref struct for <see cref="TraceEventKind.ClusterMigration"/>. Two required fields, no optionals.
 /// </summary>
-public ref struct ClusterMigrationEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.ClusterMigration, EmitEncoder = true)]
+public ref partial struct ClusterMigrationEvent
 {
-    public static byte Kind => (byte)TraceEventKind.ClusterMigration;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public ushort ArchetypeId;
+    [BeginParam]
     public int MigrationCount;
     /// <summary>
     /// Total component instances moved across this batch — set by the producer to <c>MigrationCount × archetype.componentCount</c>.
     /// Lets the viewer report data-movement cost (vs. just entity count). Optional at producer site; left at 0 when unset.
     /// </summary>
+    [BeginParam]
     public int ComponentCount;
 
-    public readonly int ComputeSize()
-        => ClusterMigrationEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => ClusterMigrationEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeId, MigrationCount, ComponentCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 

@@ -28,12 +28,15 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new BTreeInsertEvent
         {
-            ThreadSlot = 12,
-            StartTimestamp = 1_000_000,
-            SpanId = 0xAABBCCDD_00000001UL,
-            ParentSpanId = 0,
-            TraceIdHi = 0,
-            TraceIdLo = 0,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 12,
+                StartTimestamp = 1_000_000,
+                SpanId = 0xAABBCCDD_00000001UL,
+                ParentSpanId = 0,
+                TraceIdHi = 0,
+                TraceIdLo = 0,
+            },
         };
         var endTs = 1_000_500L;
 
@@ -61,12 +64,15 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new BTreeInsertEvent
         {
-            ThreadSlot = 3,
-            StartTimestamp = 42,
-            SpanId = 1,
-            ParentSpanId = 2,
-            TraceIdHi = 0x1122334455667788UL,
-            TraceIdLo = 0x99AABBCCDDEEFF00UL,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 3,
+                StartTimestamp = 42,
+                SpanId = 1,
+                ParentSpanId = 2,
+                TraceIdHi = 0x1122334455667788UL,
+                TraceIdLo = 0x99AABBCCDDEEFF00UL,
+            },
         };
 
         evt.EncodeTo(buffer, endTimestamp: 100, out var written);
@@ -87,7 +93,7 @@ public class EventRoundTripTests
     public void BTreeDelete_KindIsCorrect()
     {
         Span<byte> buffer = stackalloc byte[128];
-        var evt = new BTreeDeleteEvent { ThreadSlot = 1, StartTimestamp = 10, SpanId = 5 };
+        var evt = new BTreeDeleteEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 10, SpanId = 5 } };
         evt.EncodeTo(buffer, endTimestamp: 20, out var written);
         var decoded = BTreeEventCodec.Decode(buffer[..written]);
         Assert.That(decoded.Kind, Is.EqualTo(TraceEventKind.BTreeDelete));
@@ -97,7 +103,7 @@ public class EventRoundTripTests
     public void BTreeNodeSplit_KindIsCorrect()
     {
         Span<byte> buffer = stackalloc byte[128];
-        var evt = new BTreeNodeSplitEvent { ThreadSlot = 1, StartTimestamp = 10, SpanId = 5 };
+        var evt = new BTreeNodeSplitEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 10, SpanId = 5 } };
         evt.EncodeTo(buffer, endTimestamp: 20, out var written);
         var decoded = BTreeEventCodec.Decode(buffer[..written]);
         Assert.That(decoded.Kind, Is.EqualTo(TraceEventKind.BTreeNodeSplit));
@@ -107,7 +113,7 @@ public class EventRoundTripTests
     public void BTreeNodeMerge_KindIsCorrect()
     {
         Span<byte> buffer = stackalloc byte[128];
-        var evt = new BTreeNodeMergeEvent { ThreadSlot = 1, StartTimestamp = 10, SpanId = 5 };
+        var evt = new BTreeNodeMergeEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 10, SpanId = 5 } };
         evt.EncodeTo(buffer, endTimestamp: 20, out var written);
         var decoded = BTreeEventCodec.Decode(buffer[..written]);
         Assert.That(decoded.Kind, Is.EqualTo(TraceEventKind.BTreeNodeMerge));
@@ -123,10 +129,13 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsQueryExecuteEvent
         {
-            ThreadSlot = 8,
-            StartTimestamp = 500_000,
-            SpanId = 0x0100000000000007UL,
-            ParentSpanId = 0x0100000000000003UL,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 8,
+                StartTimestamp = 500_000,
+                SpanId = 0x0100000000000007UL,
+                ParentSpanId = 0x0100000000000003UL,
+            },
             ArchetypeTypeId = 42,
         };
         evt.ResultCount = 1234;
@@ -156,9 +165,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsQueryExecuteEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             ArchetypeTypeId = 7,
         };
 
@@ -179,9 +191,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsQueryExecuteEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             ArchetypeTypeId = 9,
         };
         evt.ResultCount = 99;
@@ -203,9 +218,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsQueryCountEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             ArchetypeTypeId = 3,
         };
         evt.ResultCount = 500;
@@ -225,9 +243,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsQueryAnyEvent
         {
-            ThreadSlot = 2,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 2,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             ArchetypeTypeId = 11,
         };
         evt.Found = true;
@@ -252,9 +273,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsQueryAnyEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             ArchetypeTypeId = 5,
         };
         evt.Found = false;
@@ -276,10 +300,13 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new TransactionCommitEvent
         {
-            ThreadSlot = 4,
-            StartTimestamp = 10_000,
-            SpanId = 0x0100000000000002UL,
-            ParentSpanId = 0,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 4,
+                StartTimestamp = 10_000,
+                SpanId = 0x0100000000000002UL,
+                ParentSpanId = 0,
+            },
             Tsn = 12345,
         };
         evt.ComponentCount = 7;
@@ -303,9 +330,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new TransactionRollbackEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 9,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 9,
+            },
             Tsn = 99,
         };
 
@@ -324,10 +354,13 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new TransactionCommitComponentEvent
         {
-            ThreadSlot = 2,
-            StartTimestamp = 0,
-            SpanId = 5,
-            ParentSpanId = 2,  // child of an outer commit
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 2,
+                StartTimestamp = 0,
+                SpanId = 5,
+                ParentSpanId = 2,  // child of an outer commit
+            },
             Tsn = 500,
             ComponentTypeId = 42,
         };
@@ -351,9 +384,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsSpawnEvent
         {
-            ThreadSlot = 3,
-            StartTimestamp = 100,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 3,
+                StartTimestamp = 100,
+                SpanId = 1,
+            },
             ArchetypeId = 7,
         };
         evt.EntityId = 0xDEADBEEFUL;
@@ -375,9 +411,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsDestroyEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 5,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 5,
+            },
             EntityId = 99,
         };
         evt.CascadeCount = 4;
@@ -397,9 +436,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsViewRefreshEvent
         {
-            ThreadSlot = 5,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 5,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             ArchetypeTypeId = 11,
         };
         evt.Mode = EcsViewRefreshMode.Incremental;
@@ -421,9 +463,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new EcsViewRefreshEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             ArchetypeTypeId = 3,
         };
         evt.Mode = EcsViewRefreshMode.Overflow;
@@ -447,9 +492,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new PageCacheFetchEvent
         {
-            ThreadSlot = 2,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 2,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             FilePageIndex = 777,
         };
 
@@ -467,9 +515,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new PageCacheDiskWriteEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             FilePageIndex = 100,
         };
         evt.PageCount = 8;
@@ -490,9 +541,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new PageCacheFlushEvent
         {
-            ThreadSlot = 1,
-            StartTimestamp = 0,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 1,
+                StartTimestamp = 0,
+                SpanId = 1,
+            },
             PageCount = 16,
         };
 
@@ -508,7 +562,7 @@ public class EventRoundTripTests
     public void PageCacheDiskRead_KindIsCorrect()
     {
         Span<byte> buffer = stackalloc byte[128];
-        var evt = new PageCacheDiskReadEvent { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1, FilePageIndex = 5 };
+        var evt = new PageCacheDiskReadEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1 }, FilePageIndex = 5 };
         evt.EncodeTo(buffer, endTimestamp: 100, out var written);
         var decoded = PageCacheEventCodec.Decode(buffer[..written]);
         Assert.That(decoded.Kind, Is.EqualTo(TraceEventKind.PageCacheDiskRead));
@@ -518,7 +572,7 @@ public class EventRoundTripTests
     public void PageCacheAllocatePage_KindIsCorrect()
     {
         Span<byte> buffer = stackalloc byte[128];
-        var evt = new PageCacheAllocatePageEvent { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1, FilePageIndex = 5 };
+        var evt = new PageCacheAllocatePageEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1 }, FilePageIndex = 5 };
         evt.EncodeTo(buffer, endTimestamp: 100, out var written);
         var decoded = PageCacheEventCodec.Decode(buffer[..written]);
         Assert.That(decoded.Kind, Is.EqualTo(TraceEventKind.PageCacheAllocatePage));
@@ -534,9 +588,12 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new ClusterMigrationEvent
         {
-            ThreadSlot = 0,
-            StartTimestamp = 1000,
-            SpanId = 1,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 0,
+                StartTimestamp = 1000,
+                SpanId = 1,
+            },
             ArchetypeId = 42,
             MigrationCount = 128,
         };
@@ -555,10 +612,13 @@ public class EventRoundTripTests
         Span<byte> buffer = stackalloc byte[128];
         var evt = new SchedulerChunkEvent
         {
-            ThreadSlot = 6,
-            StartTimestamp = 0,
-            SpanId = 1,
-            ParentSpanId = 0,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = 6,
+                StartTimestamp = 0,
+                SpanId = 1,
+                ParentSpanId = 0,
+            },
             SystemIndex = 9,
             ChunkIndex = 2,
             TotalChunks = 8,
@@ -654,18 +714,18 @@ public class EventRoundTripTests
         // to advance its read cursor through a variable-size record stream.
         Span<byte> buffer = stackalloc byte[256];
 
-        var btInsert = new BTreeInsertEvent { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1 };
+        var btInsert = new BTreeInsertEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1 } };
         btInsert.EncodeTo(buffer, 100, out var written);
         Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(buffer), Is.EqualTo((ushort)written),
             "BTreeInsert: header size must match bytes written");
 
-        var txCommit = new TransactionCommitEvent { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1, Tsn = 5 };
+        var txCommit = new TransactionCommitEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1 }, Tsn = 5 };
         txCommit.ComponentCount = 3;
         txCommit.EncodeTo(buffer, 100, out written);
         Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(buffer), Is.EqualTo((ushort)written),
             "TransactionCommit: header size must match bytes written");
 
-        var pcDiskWrite = new PageCacheDiskWriteEvent { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1, FilePageIndex = 9 };
+        var pcDiskWrite = new PageCacheDiskWriteEvent { Header = new TraceSpanHeader { ThreadSlot = 1, StartTimestamp = 0, SpanId = 1 }, FilePageIndex = 9 };
         pcDiskWrite.PageCount = 4;
         pcDiskWrite.EncodeTo(buffer, 100, out written);
         Assert.That(System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(buffer), Is.EqualTo((ushort)written),

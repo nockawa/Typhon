@@ -43,28 +43,6 @@ public static class SpatialTierIndexEventCodec
 
     public static int ComputeSizeRebuild(bool hasTraceContext) => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + RebuildPayload;
 
-    public static void EncodeRebuild(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort archetypeId, int clusterCount, int oldVersion, int newVersion, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeRebuild(hasTC);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialTierIndexRebuild, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTC)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, archetypeId);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[2..], clusterCount);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[6..], oldVersion);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[10..], newVersion);
-        bytesWritten = size;
-    }
-
     public static SpatialTierIndexRebuildData DecodeRebuild(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

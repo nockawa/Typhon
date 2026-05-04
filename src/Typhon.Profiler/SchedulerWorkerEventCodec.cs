@@ -69,21 +69,6 @@ public static class SchedulerWorkerEventCodec
         }
     }
 
-    public static void EncodeIdle(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        byte workerId, ushort spinCount, uint idleUs, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeIdle(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SchedulerWorkerIdle, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        p[0] = workerId;
-        BinaryPrimitives.WriteUInt16LittleEndian(p[1..], spinCount);
-        BinaryPrimitives.WriteUInt32LittleEndian(p[3..], idleUs);
-        bytesWritten = size;
-    }
-
     public static SchedulerWorkerIdleData DecodeIdle(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -109,21 +94,6 @@ public static class SchedulerWorkerEventCodec
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var timestamp);
         var p = source[TraceRecordHeader.CommonHeaderSize..];
         return new SchedulerWorkerWakeData(threadSlot, timestamp, p[0], BinaryPrimitives.ReadUInt32LittleEndian(p[1..]));
-    }
-
-    public static void EncodeBetweenTick(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        byte workerId, uint waitUs, byte wakeReason, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeBetweenTick(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SchedulerWorkerBetweenTick, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        p[0] = workerId;
-        BinaryPrimitives.WriteUInt32LittleEndian(p[1..], waitUs);
-        p[5] = wakeReason;
-        bytesWritten = size;
     }
 
     public static SchedulerWorkerBetweenTickData DecodeBetweenTick(ReadOnlySpan<byte> source)

@@ -113,7 +113,7 @@ public class TyphonEventKindSuppressionTests
         // Default state: PageCacheFetch is suppressed. The Begin* factory must short-circuit before Stopwatch / slot acquisition and
         // return default(T), which has SpanId == 0.
         using var scope = TyphonEvent.BeginPageCacheFetch(filePageIndex: 42);
-        Assert.That(scope.SpanId, Is.EqualTo(0UL), "Suppressed kind must return default with SpanId=0 — Dispose then no-ops");
+        Assert.That(scope.Header.SpanId, Is.EqualTo(0UL), "Suppressed kind must return default with SpanId=0 — Dispose then no-ops");
     }
 
     [Test]
@@ -125,7 +125,7 @@ public class TyphonEventKindSuppressionTests
             // ProfilerActive is true in the test project's typhon.telemetry.json, and the slot registry has room for one more thread, so
             // the Begin factory should produce a real span with a non-zero SpanId.
             using var scope = TyphonEvent.BeginPageCacheFetch(filePageIndex: 42);
-            Assert.That(scope.SpanId, Is.Not.EqualTo(0UL), "Unsuppressed kind must produce a real span");
+            Assert.That(scope.Header.SpanId, Is.Not.EqualTo(0UL), "Unsuppressed kind must produce a real span");
             Assert.That(scope.FilePageIndex, Is.EqualTo(42));
         }
         finally
@@ -144,7 +144,7 @@ public class TyphonEventKindSuppressionTests
             Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.BTreeInsert), Is.True);
 
             using var scope = TyphonEvent.BeginBTreeInsert();
-            Assert.That(scope.SpanId, Is.EqualTo(0UL), "Runtime-suppressed kind must skip emission");
+            Assert.That(scope.Header.SpanId, Is.EqualTo(0UL), "Runtime-suppressed kind must skip emission");
         }
         finally
         {
@@ -154,7 +154,7 @@ public class TyphonEventKindSuppressionTests
         // Unsuppressing restores the default emission path.
         Assert.That(TyphonEvent.IsKindSuppressed(TraceEventKind.BTreeInsert), Is.False);
         using var openScope = TyphonEvent.BeginBTreeInsert();
-        Assert.That(openScope.SpanId, Is.Not.EqualTo(0UL), "Kind open again after UnsuppressKind");
+        Assert.That(openScope.Header.SpanId, Is.Not.EqualTo(0UL), "Kind open again after UnsuppressKind");
     }
 
     [Test]

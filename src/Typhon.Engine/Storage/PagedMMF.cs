@@ -775,9 +775,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
             // Async-completion tracking: opt-in via UnsuppressKind(PageCacheDiskReadCompleted). When the DiskRead kickoff span was itself
             // suppressed (SpanId == 0), there's nothing to correlate with, so skip the wrap. When the completion kind is suppressed,
             // skip the wrap — producer hot path stays allocation-free by default.
-            if (diskReadScope.SpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted))
+            if (diskReadScope.Header.SpanId != 0 && !TyphonEvent.IsKindSuppressed(TraceEventKind.PageCacheDiskReadCompleted))
             {
-                var state = new PageCacheReadCompletionState(diskReadScope.SpanId, diskReadScope.StartTimestamp, filePageIndex);
+                var state = new PageCacheReadCompletionState(diskReadScope.Header.SpanId, diskReadScope.Header.StartTimestamp, filePageIndex);
                 var wrapped = readTask.AsTask().ContinueWith(SReadCompletionHandler, state, CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                 pi.SetIOReadTask(new ValueTask<int>(wrapped));
@@ -1728,8 +1728,8 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         // Capture begin-side correlator values before the ref-struct scope goes out of method scope. The existing ContinueWith already captures
         // memPageIndices into a display class, so adding these three fields to the capture costs zero extra allocations.
-        var flushSpanId = flushScope.SpanId;
-        var flushBeginTs = flushScope.StartTimestamp;
+        var flushSpanId = flushScope.Header.SpanId;
+        var flushBeginTs = flushScope.Header.StartTimestamp;
         var flushPageCount = memPageIndices.Length;
 
         // We want to generate as few IO operations as possible, so we sort the pages to identify the ones that are contiguous in the file
@@ -1846,8 +1846,8 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
         // correlate with this kickoff record through PageCacheDiskWriteCompleted.
         var writeScope = TyphonEvent.BeginPageCacheDiskWrite(filePageIndex);
         writeScope.PageCount = length;
-        var writeSpanId = writeScope.SpanId;
-        var writeBeginTs = writeScope.StartTimestamp;
+        var writeSpanId = writeScope.Header.SpanId;
+        var writeBeginTs = writeScope.Header.StartTimestamp;
         writeScope.Dispose();
 
         var writeTask = RandomAccess.WriteAsync(_fileHandle, pageData, pageOffset);

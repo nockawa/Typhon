@@ -174,21 +174,6 @@ public static class RuntimeSubscriptionEventCodec
     }
 
     // ── Subscriber ──
-    public static void EncodeSubscriber(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        uint subscriberId, ushort viewId, int deltaCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeSubscriber(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.RuntimeSubscriptionSubscriber, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, subscriberId);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[4..], viewId);
-        BinaryPrimitives.WriteInt32LittleEndian(p[6..], deltaCount);
-        bytesWritten = size;
-    }
-
     public static RuntimeSubscriptionSubscriberData DecodeSubscriber(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -199,22 +184,6 @@ public static class RuntimeSubscriptionEventCodec
     }
 
     // ── DeltaBuild ──
-    public static void EncodeDeltaBuild(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort viewId, int added, int removed, int modified, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeDeltaBuild(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.RuntimeSubscriptionDeltaBuild, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, viewId);
-        BinaryPrimitives.WriteInt32LittleEndian(p[2..], added);
-        BinaryPrimitives.WriteInt32LittleEndian(p[6..], removed);
-        BinaryPrimitives.WriteInt32LittleEndian(p[10..], modified);
-        bytesWritten = size;
-    }
-
     public static RuntimeSubscriptionDeltaBuildData DecodeDeltaBuild(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -226,22 +195,6 @@ public static class RuntimeSubscriptionEventCodec
     }
 
     // ── DeltaSerialize ──
-    public static void EncodeDeltaSerialize(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        uint clientId, ushort viewId, int bytes, byte format, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeDeltaSerialize(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.RuntimeSubscriptionDeltaSerialize, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, clientId);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[4..], viewId);
-        BinaryPrimitives.WriteInt32LittleEndian(p[6..], bytes);
-        p[10] = format;
-        bytesWritten = size;
-    }
-
     public static RuntimeSubscriptionDeltaSerializeData DecodeDeltaSerialize(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -253,21 +206,6 @@ public static class RuntimeSubscriptionEventCodec
     }
 
     // ── TransitionBeginSync ──
-    public static void EncodeTransitionBeginSync(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        uint clientId, ushort viewId, int entitySnapshot, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeTransitionBeginSync(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.RuntimeSubscriptionTransitionBeginSync, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, clientId);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[4..], viewId);
-        BinaryPrimitives.WriteInt32LittleEndian(p[6..], entitySnapshot);
-        bytesWritten = size;
-    }
-
     public static RuntimeSubscriptionTransitionBeginSyncData DecodeTransitionBeginSync(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -278,20 +216,6 @@ public static class RuntimeSubscriptionEventCodec
     }
 
     // ── OutputCleanup ──
-    public static void EncodeOutputCleanup(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int deadCount, int deregCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeOutputCleanup(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.RuntimeSubscriptionOutputCleanup, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, deadCount);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], deregCount);
-        bytesWritten = size;
-    }
-
     public static RuntimeSubscriptionOutputCleanupData DecodeOutputCleanup(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -301,21 +225,6 @@ public static class RuntimeSubscriptionEventCodec
     }
 
     // ── DirtyBitmapSupplement ──
-    public static void EncodeDirtyBitmapSupplement(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int modifiedFromRing, int supplementCount, int unionSize, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeDirtyBitmapSupplement(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.RuntimeSubscriptionDeltaDirtyBitmapSupplement, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, modifiedFromRing);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], supplementCount);
-        BinaryPrimitives.WriteInt32LittleEndian(p[8..], unionSize);
-        bytesWritten = size;
-    }
-
     public static RuntimeSubscriptionDeltaDirtyBitmapSupplementData DecodeDirtyBitmapSupplement(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);

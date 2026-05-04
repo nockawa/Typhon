@@ -1,6 +1,6 @@
-using System;
-using System.Buffers.Binary;
-using System.Runtime.CompilerServices;
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
@@ -8,29 +8,15 @@ namespace Typhon.Engine.Profiler;
 /// <summary>
 /// Producer-side ref struct for <see cref="TraceEventKind.StatisticsRebuild"/>. Three required fields, no optionals.
 /// </summary>
-public ref struct StatisticsRebuildEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.StatisticsRebuild, EmitEncoder = true)]
+public ref partial struct StatisticsRebuildEvent
 {
-    public static byte Kind => (byte)TraceEventKind.StatisticsRebuild;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int EntityCount;
+    [BeginParam]
     public int MutationCount;
+    [BeginParam]
     public int SamplingInterval;
 
-    public readonly int ComputeSize()
-        => StatisticsRebuildEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => StatisticsRebuildEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, EntityCount, MutationCount, SamplingInterval, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
