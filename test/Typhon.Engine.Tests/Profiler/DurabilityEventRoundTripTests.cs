@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using Typhon.Profiler;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 
@@ -26,10 +27,22 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityWalQueueDrain_RoundTrip()
     {
-        var size = DurabilityWalEventCodec.ComputeSizeQueueDrain(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityWalEventCodec.EncodeQueueDrain(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            bytesAligned: 4096, frameCount: 8, out _);
+        var ev = new DurabilityWalQueueDrainEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            BytesAligned = 4096,
+            FrameCount = 8,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityWalEventCodec.DecodeQueueDrain(buf);
         Assert.That(d.BytesAligned, Is.EqualTo(4096));
         Assert.That(d.FrameCount, Is.EqualTo(8));
@@ -39,10 +52,23 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityWalOsWrite_RoundTrip()
     {
-        var size = DurabilityWalEventCodec.ComputeSizeOsWrite(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityWalEventCodec.EncodeOsWrite(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            bytesAligned: 8192, frameCount: 16, highLsn: 0x123456789ABCDEFL, out _);
+        var ev = new DurabilityWalOsWriteEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            BytesAligned = 8192,
+            FrameCount = 16,
+            HighLsn = 0x123456789ABCDEFL,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityWalEventCodec.DecodeOsWrite(buf);
         Assert.That(d.BytesAligned, Is.EqualTo(8192));
         Assert.That(d.FrameCount, Is.EqualTo(16));
@@ -52,10 +78,21 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityWalSignal_RoundTrip()
     {
-        var size = DurabilityWalEventCodec.ComputeSizeSignal(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityWalEventCodec.EncodeSignal(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            highLsn: 999_888_777L, out _);
+        var ev = new DurabilityWalSignalEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            HighLsn = 999_888_777L,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityWalEventCodec.DecodeSignal(buf);
         Assert.That(d.HighLsn, Is.EqualTo(999_888_777L));
     }
@@ -84,10 +121,22 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityWalBuffer_RoundTrip()
     {
-        var size = DurabilityWalEventCodec.ComputeSizeBuffer(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityWalEventCodec.EncodeBuffer(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            bytesAligned: 1024, pad: 32, out _);
+        var ev = new DurabilityWalBufferEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            BytesAligned = 1024,
+            Pad = 32,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityWalEventCodec.DecodeBuffer(buf);
         Assert.That(d.BytesAligned, Is.EqualTo(1024));
         Assert.That(d.Pad, Is.EqualTo(32));
@@ -106,10 +155,22 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityWalBackpressure_RoundTrip()
     {
-        var size = DurabilityWalEventCodec.ComputeSizeBackpressure(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityWalEventCodec.EncodeBackpressure(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            waitUs: 250_000u, producerThread: 5678, out _);
+        var ev = new DurabilityWalBackpressureEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            WaitUs = 250_000u,
+            ProducerThread = 5678,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityWalEventCodec.DecodeBackpressure(buf);
         Assert.That(d.WaitUs, Is.EqualTo(250_000u));
         Assert.That(d.ProducerThread, Is.EqualTo(5678));
@@ -122,10 +183,22 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityCheckpointWriteBatch_RoundTrip()
     {
-        var size = DurabilityCheckpointEventCodec.ComputeSizeWriteBatch(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityCheckpointEventCodec.EncodeWriteBatch(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            writeBatchSize: 256, stagingAllocated: 1_048_576, out _);
+        var ev = new DurabilityCheckpointWriteBatchEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            WriteBatchSize = 256,
+            StagingAllocated = 1_048_576,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityCheckpointEventCodec.DecodeWriteBatch(buf);
         Assert.That(d.WriteBatchSize, Is.EqualTo(256));
         Assert.That(d.StagingAllocated, Is.EqualTo(1_048_576));
@@ -135,10 +208,22 @@ public class DurabilityEventRoundTripTests
     [TestCase((byte)1)]
     public void DurabilityCheckpointBackpressure_RoundTrip(byte exhausted)
     {
-        var size = DurabilityCheckpointEventCodec.ComputeSizeBackpressure(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityCheckpointEventCodec.EncodeBackpressure(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            waitMs: 500u, exhausted, out _);
+        var ev = new DurabilityCheckpointBackpressureEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            WaitMs = 500u,
+            Exhausted = exhausted,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityCheckpointEventCodec.DecodeBackpressure(buf);
         Assert.That(d.WaitMs, Is.EqualTo(500u));
         Assert.That(d.Exhausted, Is.EqualTo(exhausted));
@@ -147,10 +232,22 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityCheckpointSleep_RoundTrip()
     {
-        var size = DurabilityCheckpointEventCodec.ComputeSizeSleep(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityCheckpointEventCodec.EncodeSleep(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            sleepMs: 1000u, wakeReason: 3, out _);
+        var ev = new DurabilityCheckpointSleepEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            SleepMs = 1000u,
+            WakeReason = 3,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityCheckpointEventCodec.DecodeSleep(buf);
         Assert.That(d.SleepMs, Is.EqualTo(1000u));
         Assert.That(d.WakeReason, Is.EqualTo(3));
@@ -174,10 +271,23 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityRecoveryDiscover_RoundTrip()
     {
-        var size = DurabilityRecoveryEventCodec.ComputeSizeDiscover(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityRecoveryEventCodec.EncodeDiscover(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            segCount: 42, totalBytes: 100_000_000L, firstSegId: 7, out _);
+        var ev = new DurabilityRecoveryDiscoverEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            SegCount = 42,
+            TotalBytes = 100_000_000L,
+            FirstSegId = 7,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityRecoveryEventCodec.DecodeDiscover(buf);
         Assert.That(d.SegCount, Is.EqualTo(42));
         Assert.That(d.TotalBytes, Is.EqualTo(100_000_000L));
@@ -188,10 +298,24 @@ public class DurabilityEventRoundTripTests
     [TestCase((byte)1)]
     public void DurabilityRecoverySegment_RoundTrip(byte truncated)
     {
-        var size = DurabilityRecoveryEventCodec.ComputeSizeSegment(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityRecoveryEventCodec.EncodeSegment(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            segId: 9, recCount: 5000, bytes: 1_048_576L, truncated, out _);
+        var ev = new DurabilityRecoverySegmentEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            SegId = 9,
+            RecCount = 5000,
+            Bytes = 1_048_576L,
+            Truncated = truncated,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityRecoveryEventCodec.DecodeSegment(buf);
         Assert.That(d.SegId, Is.EqualTo(9));
         Assert.That(d.RecCount, Is.EqualTo(5000));
@@ -213,10 +337,23 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityRecoveryFpi_RoundTrip()
     {
-        var size = DurabilityRecoveryEventCodec.ComputeSizeFpi(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityRecoveryEventCodec.EncodeFpi(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            fpiCount: 100, repairedCount: 7, mismatches: 2, out _);
+        var ev = new DurabilityRecoveryFpiEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            FpiCount = 100,
+            RepairedCount = 7,
+            Mismatches = 2,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityRecoveryEventCodec.DecodeFpi(buf);
         Assert.That(d.FpiCount, Is.EqualTo(100));
         Assert.That(d.RepairedCount, Is.EqualTo(7));
@@ -226,10 +363,23 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityRecoveryRedo_RoundTrip()
     {
-        var size = DurabilityRecoveryEventCodec.ComputeSizeRedo(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityRecoveryEventCodec.EncodeRedo(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            recordsReplayed: 12345, uowsReplayed: 678, durUs: 50_000u, out _);
+        var ev = new DurabilityRecoveryRedoEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            RecordsReplayed = 12345,
+            UowsReplayed = 678,
+            DurUs = 50_000u,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityRecoveryEventCodec.DecodeRedo(buf);
         Assert.That(d.RecordsReplayed, Is.EqualTo(12345));
         Assert.That(d.UowsReplayed, Is.EqualTo(678));
@@ -239,10 +389,21 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityRecoveryUndo_RoundTrip()
     {
-        var size = DurabilityRecoveryEventCodec.ComputeSizeUndo(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityRecoveryEventCodec.EncodeUndo(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            voidedUowCount: 4, out _);
+        var ev = new DurabilityRecoveryUndoEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            VoidedUowCount = 4,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityRecoveryEventCodec.DecodeUndo(buf);
         Assert.That(d.VoidedUowCount, Is.EqualTo(4));
     }
@@ -250,10 +411,23 @@ public class DurabilityEventRoundTripTests
     [Test]
     public void DurabilityRecoveryTickFence_RoundTrip()
     {
-        var size = DurabilityRecoveryEventCodec.ComputeSizeTickFence(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        DurabilityRecoveryEventCodec.EncodeTickFence(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            tickFenceCount: 3, entries: 50, tickNumber: 1_000_000L, out _);
+        var ev = new DurabilityRecoveryTickFenceEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            TickFenceCount = 3,
+            Entries = 50,
+            TickNumber = 1_000_000L,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = DurabilityRecoveryEventCodec.DecodeTickFence(buf);
         Assert.That(d.TickFenceCount, Is.EqualTo(3));
         Assert.That(d.Entries, Is.EqualTo(50));

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
-using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
 

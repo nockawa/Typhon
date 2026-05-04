@@ -62,32 +62,6 @@ public static class ClusterMigrationEventCodec
     public static int ComputeSize(bool hasTraceContext)
         => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + PayloadSize;
 
-    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, ushort archetypeId, int migrationCount, int componentCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(hasTraceContext);
-
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.ClusterMigration, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-
-        var payload = destination[headerSize..];
-        BinaryPrimitives.WriteUInt16LittleEndian(payload, archetypeId);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[ArchetypeIdSize..], migrationCount);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[(ArchetypeIdSize + MigrationCountSize)..], componentCount);
-
-        bytesWritten = size;
-    }
-
     public static ClusterMigrationEventData Decode(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

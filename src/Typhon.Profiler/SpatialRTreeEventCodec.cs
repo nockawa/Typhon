@@ -94,22 +94,6 @@ public static class SpatialRTreeEventCodec
         }
     }
 
-    public static void EncodeInsert(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityId, byte depth, byte didSplit, byte restartCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeInsert(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeInsert, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(payload, entityId);
-        payload[8] = depth;
-        payload[9] = didSplit;
-        payload[10] = restartCount;
-        bytesWritten = size;
-    }
-
     public static SpatialRTreeInsertData DecodeInsert(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -120,20 +104,6 @@ public static class SpatialRTreeEventCodec
         return new SpatialRTreeInsertData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadInt64LittleEndian(payload),
             payload[8], payload[9], payload[10]);
-    }
-
-    public static void EncodeRemove(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityId, byte leafCollapse, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeRemove(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeRemove, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(payload, entityId);
-        payload[8] = leafCollapse;
-        bytesWritten = size;
     }
 
     public static SpatialRTreeRemoveData DecodeRemove(ReadOnlySpan<byte> source)
@@ -147,22 +117,6 @@ public static class SpatialRTreeEventCodec
             BinaryPrimitives.ReadInt64LittleEndian(payload), payload[8]);
     }
 
-    public static void EncodeNodeSplit(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        byte depth, byte splitAxis, byte leftCount, byte rightCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeNodeSplit(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeNodeSplit, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        payload[0] = depth;
-        payload[1] = splitAxis;
-        payload[2] = leftCount;
-        payload[3] = rightCount;
-        bytesWritten = size;
-    }
-
     public static SpatialRTreeNodeSplitData DecodeNodeSplit(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -171,20 +125,6 @@ public static class SpatialRTreeEventCodec
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
         var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
         return new SpatialRTreeNodeSplitData(threadSlot, startTimestamp, durationTicks, payload[0], payload[1], payload[2], payload[3]);
-    }
-
-    public static void EncodeBulkLoad(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int entityCount, int leafCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeBulkLoad(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeBulkLoad, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(payload, entityCount);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[4..], leafCount);
-        bytesWritten = size;
     }
 
     public static SpatialRTreeBulkLoadData DecodeBulkLoad(ReadOnlySpan<byte> source)

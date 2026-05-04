@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
 

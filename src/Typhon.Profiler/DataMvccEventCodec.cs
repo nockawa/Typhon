@@ -64,26 +64,6 @@ public static class DataMvccEventCodec
             BinaryPrimitives.ReadInt64LittleEndian(p), p[8], p[9]);
     }
 
-    public static void EncodeVersionCleanup(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long pk, ushort entriesFreed, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeVersionCleanup(hasTC);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.DataMvccVersionCleanup, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTC)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, pk);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[8..], entriesFreed);
-        bytesWritten = size;
-    }
-
     public static DataMvccVersionCleanupData DecodeVersionCleanup(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

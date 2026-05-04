@@ -1,3 +1,6 @@
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using System;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
@@ -34,10 +37,10 @@ public ref partial struct TransactionRollbackEvent
 
     [Optional]
     private int _componentCount;
+
+    /// <summary>Phase 6 (D3): rollback reason byte. Setting any value flips the OptReason mask bit so the producer always emits the trailing byte.</summary>
     [Optional]
     private TransactionRollbackReason _reason;
-    /// <summary>Phase 6 (D3): rollback reason byte. Setting any value flips the OptReason mask bit so the producer always emits the trailing byte.</summary>
-    
 
     public readonly int ComputeSize()
         => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionRollback, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
@@ -55,10 +58,9 @@ public ref partial struct TransactionCommitComponentEvent
     [BeginParam]
     public int ComponentTypeId;
 
+    /// <summary>Phase 6: number of rows mutated within this component-type's commit. Setting any value flips the OptRowCount mask bit.</summary>
     [Optional]
     private int _rowCount;
-    /// <summary>Phase 6: number of rows mutated within this component-type's commit. Setting any value flips the OptRowCount mask bit.</summary>
-    
 
     public readonly int ComputeSize()
         => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommitComponent, Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
@@ -74,7 +76,8 @@ public ref partial struct TransactionCommitComponentEvent
 /// Wire payload for Persist: <c>[i64 tsn][i64 walLsn][u8 optMask]</c> — walLsn is in the componentTypeId slot (reused as i64)
 /// but to keep things clean we use a separate encode path.
 /// </summary>
-[TraceEvent(TraceEventKind.TransactionRollback, Codec = typeof(TransactionEventCodec), FactoryName = "BeginTransactionPersist")] public ref partial struct TransactionPersistEvent
+[TraceEvent(TraceEventKind.TransactionRollback, Codec = typeof(TransactionEventCodec), FactoryName = "BeginTransactionPersist")]
+public ref partial struct TransactionPersistEvent
 {
     [BeginParam]
     public long Tsn;

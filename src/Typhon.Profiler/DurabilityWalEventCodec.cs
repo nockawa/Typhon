@@ -181,19 +181,6 @@ public static class DurabilityWalEventCodec
     }
 
     // ── QueueDrain ──
-    public static void EncodeQueueDrain(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int frameCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeQueueDrain(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityWalQueueDrain, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, bytesAligned);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], frameCount);
-        bytesWritten = size;
-    }
-
     public static DurabilityWalQueueDrainData DecodeQueueDrain(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -203,20 +190,6 @@ public static class DurabilityWalEventCodec
     }
 
     // ── OsWrite ──
-    public static void EncodeOsWrite(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int frameCount, long highLsn, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeOsWrite(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityWalOsWrite, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, bytesAligned);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], frameCount);
-        BinaryPrimitives.WriteInt64LittleEndian(p[8..], highLsn);
-        bytesWritten = size;
-    }
-
     public static DurabilityWalOsWriteData DecodeOsWrite(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -227,18 +200,6 @@ public static class DurabilityWalEventCodec
     }
 
     // ── Signal ──
-    public static void EncodeSignal(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, long highLsn, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeSignal(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityWalSignal, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, highLsn);
-        bytesWritten = size;
-    }
-
     public static DurabilityWalSignalData DecodeSignal(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -285,19 +246,6 @@ public static class DurabilityWalEventCodec
     }
 
     // ── Buffer ──
-    public static void EncodeBuffer(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int pad, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeBuffer(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityWalBuffer, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, bytesAligned);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], pad);
-        bytesWritten = size;
-    }
-
     public static DurabilityWalBufferData DecodeBuffer(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -326,19 +274,6 @@ public static class DurabilityWalEventCodec
     }
 
     // ── Backpressure ──
-    public static void EncodeBackpressure(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, uint waitUs, int producerThread, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeBackpressure(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityWalBackpressure, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt32LittleEndian(p, waitUs);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], producerThread);
-        bytesWritten = size;
-    }
-
     public static DurabilityWalBackpressureData DecodeBackpressure(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);

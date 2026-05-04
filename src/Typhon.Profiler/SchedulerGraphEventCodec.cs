@@ -56,21 +56,6 @@ public static class SchedulerGraphEventCodec
         }
     }
 
-    public static void EncodeBuild(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort sysCount, ushort edgeCount, ushort topoLen, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeBuild(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SchedulerGraphBuild, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, sysCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[2..], edgeCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[4..], topoLen);
-        bytesWritten = size;
-    }
-
     public static SchedulerGraphBuildData DecodeBuild(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -82,21 +67,6 @@ public static class SchedulerGraphEventCodec
             BinaryPrimitives.ReadUInt16LittleEndian(p),
             BinaryPrimitives.ReadUInt16LittleEndian(p[2..]),
             BinaryPrimitives.ReadUInt16LittleEndian(p[4..]));
-    }
-
-    public static void EncodeRebuild(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort oldSysCount, ushort newSysCount, byte reason, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeRebuild(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SchedulerGraphRebuild, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, oldSysCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[2..], newSysCount);
-        p[4] = reason;
-        bytesWritten = size;
     }
 
     public static SchedulerGraphRebuildData DecodeRebuild(ReadOnlySpan<byte> source)

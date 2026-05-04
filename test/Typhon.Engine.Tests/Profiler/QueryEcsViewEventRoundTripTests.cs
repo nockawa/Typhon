@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using Typhon.Profiler;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 
@@ -69,10 +70,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryParse_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizeParse(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodeParse(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            predicateCount: 7, branchCount: 3, out _);
+        var ev = new QueryParseEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            PredicateCount = 7,
+            BranchCount = 3,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodeParse(buf);
         Assert.That(d.PredicateCount, Is.EqualTo(7));
         Assert.That(d.BranchCount, Is.EqualTo(3));
@@ -81,10 +94,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryParseDnf_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizeParseDnf(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodeParseDnf(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            inBranches: 5, outBranches: 12, out _);
+        var ev = new QueryParseDnfEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            InBranches = 5,
+            OutBranches = 12,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodeParseDnf(buf);
         Assert.That(d.InBranches, Is.EqualTo(5));
         Assert.That(d.OutBranches, Is.EqualTo(12));
@@ -93,10 +118,24 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryPlan_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizePlan(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodePlan(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            evaluatorCount: 4, indexFieldIdx: 9, rangeMin: -100, rangeMax: 1_000_000, out _);
+        var ev = new QueryPlanEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            EvaluatorCount = 4,
+            IndexFieldIdx = 9,
+            RangeMin = -100,
+            RangeMax = 1_000_000,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodePlan(buf);
         Assert.That(d.EvaluatorCount, Is.EqualTo(4));
         Assert.That(d.IndexFieldIdx, Is.EqualTo(9));
@@ -107,10 +146,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryEstimate_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizeEstimate(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodeEstimate(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            fieldIdx: 3, cardinality: 50_000_000L, out _);
+        var ev = new QueryEstimateEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            FieldIdx = 3,
+            Cardinality = 50_000_000L,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodeEstimate(buf);
         Assert.That(d.FieldIdx, Is.EqualTo(3));
         Assert.That(d.Cardinality, Is.EqualTo(50_000_000L));
@@ -130,10 +181,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryPlanSort_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizePlanSort(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodePlanSort(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            evaluatorCount: 8, sortNs: 12345u, out _);
+        var ev = new QueryPlanSortEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            EvaluatorCount = 8,
+            SortNs = 12345u,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodePlanSort(buf);
         Assert.That(d.EvaluatorCount, Is.EqualTo(8));
         Assert.That(d.SortNs, Is.EqualTo(12345u));
@@ -143,10 +206,22 @@ public class QueryEcsViewEventRoundTripTests
     [TestCase((byte)1)]
     public void QueryExecuteIndexScan_RoundTrip(byte mode)
     {
-        var size = QueryEventCodec.ComputeSizeIndexScan(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodeIndexScan(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            primaryFieldIdx: 11, mode, out _);
+        var ev = new QueryExecuteIndexScanEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            PrimaryFieldIdx = 11,
+            Mode = mode,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodeIndexScan(buf);
         Assert.That(d.PrimaryFieldIdx, Is.EqualTo(11));
         Assert.That(d.Mode, Is.EqualTo(mode));
@@ -155,10 +230,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryExecuteIterate_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizeIterate(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodeIterate(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            chunkCount: 50, entryCount: 50000, out _);
+        var ev = new QueryExecuteIterateEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ChunkCount = 50,
+            EntryCount = 50000,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodeIterate(buf);
         Assert.That(d.ChunkCount, Is.EqualTo(50));
         Assert.That(d.EntryCount, Is.EqualTo(50000));
@@ -167,10 +254,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryExecuteFilter_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizeFilter(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodeFilter(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            filterCount: 3, rejectedCount: 12345, out _);
+        var ev = new QueryExecuteFilterEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            FilterCount = 3,
+            RejectedCount = 12345,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodeFilter(buf);
         Assert.That(d.FilterCount, Is.EqualTo(3));
         Assert.That(d.RejectedCount, Is.EqualTo(12345));
@@ -179,10 +278,23 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryExecutePagination_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizePagination(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodePagination(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            skip: 100, take: 50, earlyTerm: 1, out _);
+        var ev = new QueryExecutePaginationEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Skip = 100,
+            Take = 50,
+            EarlyTerm = 1,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodePagination(buf);
         Assert.That(d.Skip, Is.EqualTo(100));
         Assert.That(d.Take, Is.EqualTo(50));
@@ -203,10 +315,21 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void QueryCount_RoundTrip()
     {
-        var size = QueryEventCodec.ComputeSizeCount(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        QueryEventCodec.EncodeCount(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            resultCount: 9876, out _);
+        var ev = new QueryCountEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            ResultCount = 9876,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = QueryEventCodec.DecodeCount(buf);
         Assert.That(d.ResultCount, Is.EqualTo(9876));
     }
@@ -218,10 +341,23 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void EcsQueryConstruct_RoundTrip()
     {
-        var size = EcsQueryDepthEventCodec.ComputeSizeConstruct(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        EcsQueryDepthEventCodec.EncodeConstruct(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            targetArchId: 25, polymorphic: 1, maskSize: 4, out _);
+        var ev = new EcsQueryConstructEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            TargetArchId = 25,
+            Polymorphic = 1,
+            MaskSize = 4,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = EcsQueryDepthEventCodec.DecodeConstruct(buf);
         Assert.That(d.TargetArchId, Is.EqualTo(25));
         Assert.That(d.Polymorphic, Is.EqualTo(1));
@@ -242,10 +378,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void EcsQuerySubtreeExpand_RoundTrip()
     {
-        var size = EcsQueryDepthEventCodec.ComputeSizeSubtreeExpand(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        EcsQueryDepthEventCodec.EncodeSubtreeExpand(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            subtreeCount: 8, rootId: 12, out _);
+        var ev = new EcsQuerySubtreeExpandEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            SubtreeCount = 8,
+            RootId = 12,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = EcsQueryDepthEventCodec.DecodeSubtreeExpand(buf);
         Assert.That(d.SubtreeCount, Is.EqualTo(8));
         Assert.That(d.RootId, Is.EqualTo(12));
@@ -282,10 +430,22 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void EcsViewRefreshPull_RoundTrip()
     {
-        var size = EcsViewEventCodec.ComputeSizeRefreshPull(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        EcsViewEventCodec.EncodeRefreshPull(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            queryNs: 5_000u, archetypeMaskBits: 7, out _);
+        var ev = new EcsViewRefreshPullEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            QueryNs = 5_000u,
+            ArchetypeMaskBits = 7,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = EcsViewEventCodec.DecodeRefreshPull(buf);
         Assert.That(d.QueryNs, Is.EqualTo(5_000u));
         Assert.That(d.ArchetypeMaskBits, Is.EqualTo(7));
@@ -295,10 +455,22 @@ public class QueryEcsViewEventRoundTripTests
     [TestCase((byte)1)]
     public void EcsViewIncrementalDrain_RoundTrip(byte overflow)
     {
-        var size = EcsViewEventCodec.ComputeSizeIncrementalDrain(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        EcsViewEventCodec.EncodeIncrementalDrain(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            deltaCount: 250, overflow, out _);
+        var ev = new EcsViewIncrementalDrainEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            DeltaCount = 250,
+            Overflow = overflow,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = EcsViewEventCodec.DecodeIncrementalDrain(buf);
         Assert.That(d.DeltaCount, Is.EqualTo(250));
         Assert.That(d.Overflow, Is.EqualTo(overflow));
@@ -341,10 +513,23 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void EcsViewRefreshFull_RoundTrip()
     {
-        var size = EcsViewEventCodec.ComputeSizeRefreshFull(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        EcsViewEventCodec.EncodeRefreshFull(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            oldCount: 100, newCount: 200, requeryNs: 500_000u, out _);
+        var ev = new EcsViewRefreshFullEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            OldCount = 100,
+            NewCount = 200,
+            RequeryNs = 500_000u,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = EcsViewEventCodec.DecodeRefreshFull(buf);
         Assert.That(d.OldCount, Is.EqualTo(100));
         Assert.That(d.NewCount, Is.EqualTo(200));
@@ -354,10 +539,23 @@ public class QueryEcsViewEventRoundTripTests
     [Test]
     public void EcsViewRefreshFullOr_RoundTrip()
     {
-        var size = EcsViewEventCodec.ComputeSizeRefreshFullOr(hasTC: false);
-        Span<byte> buf = stackalloc byte[size];
-        EcsViewEventCodec.EncodeRefreshFullOr(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            oldCount: 50, newCount: 75, branchCount: 3, out _);
+        var ev = new EcsViewRefreshFullOrEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            OldCount = 50,
+            NewCount = 75,
+            BranchCount = 3,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = EcsViewEventCodec.DecodeRefreshFullOr(buf);
         Assert.That(d.OldCount, Is.EqualTo(50));
         Assert.That(d.NewCount, Is.EqualTo(75));

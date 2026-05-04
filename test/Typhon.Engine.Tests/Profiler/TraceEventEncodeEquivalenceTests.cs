@@ -36,7 +36,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void BTreeInsertEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new BTreeInsertEvent
         {
             Header = new TraceSpanHeader
@@ -60,7 +59,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void BTreeDeleteEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new BTreeDeleteEvent
         {
             Header = new TraceSpanHeader
@@ -84,7 +82,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void BTreeNodeSplitEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new BTreeNodeSplitEvent
         {
             Header = new TraceSpanHeader
@@ -108,7 +105,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void BTreeNodeMergeEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new BTreeNodeMergeEvent
         {
             Header = new TraceSpanHeader
@@ -132,7 +128,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void CheckpointCycleEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)CheckpointEventCodec.OptDirtyPageCount;
         var ev = new CheckpointCycleEvent
         {
             Header = new TraceSpanHeader
@@ -145,7 +140,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             TargetLsn = 1001L,
-            Reason = (byte)0x12,
+            Reason = 0x12,
             DirtyPageCount = 303,
         };
 
@@ -159,7 +154,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void CheckpointCollectEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new CheckpointCollectEvent
         {
             Header = new TraceSpanHeader
@@ -183,7 +177,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void CheckpointWriteEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)CheckpointEventCodec.OptWrittenCount;
         var ev = new CheckpointWriteEvent
         {
             Header = new TraceSpanHeader
@@ -208,7 +201,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void CheckpointFsyncEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new CheckpointFsyncEvent
         {
             Header = new TraceSpanHeader
@@ -232,7 +224,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void CheckpointTransitionEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)CheckpointEventCodec.OptTransitionedCount;
         var ev = new CheckpointTransitionEvent
         {
             Header = new TraceSpanHeader
@@ -257,7 +248,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void CheckpointRecycleEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)CheckpointEventCodec.OptRecycledCount;
         var ev = new CheckpointRecycleEvent
         {
             Header = new TraceSpanHeader
@@ -282,7 +272,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void ClusterMigrationEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new ClusterMigrationEvent
         {
             Header = new TraceSpanHeader
@@ -294,7 +283,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ArchetypeId = (ushort)0x1200,
+            ArchetypeId = 0x1200,
             MigrationCount = 202,
             ComponentCount = 303,
         };
@@ -309,7 +298,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DataTransactionInitEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DataTransactionInitEvent
         {
             Header = new TraceSpanHeader
@@ -322,7 +310,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             Tsn = 1001L,
-            UowId = (ushort)0x1300,
+            UowId = 0x1300,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -335,7 +323,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DataTransactionPrepareEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DataTransactionPrepareEvent
         {
             Header = new TraceSpanHeader
@@ -360,7 +347,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DataTransactionValidateEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DataTransactionValidateEvent
         {
             Header = new TraceSpanHeader
@@ -386,7 +372,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DataTransactionCleanupEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DataTransactionCleanupEvent
         {
             Header = new TraceSpanHeader
@@ -412,7 +397,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DataMvccVersionCleanupEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DataMvccVersionCleanupEvent
         {
             Header = new TraceSpanHeader
@@ -425,7 +409,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             Pk = 1001L,
-            EntriesFreed = (ushort)0x1300,
+            EntriesFreed = 0x1300,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -438,7 +422,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DataIndexBTreeRangeScanEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DataIndexBTreeRangeScanEvent
         {
             Header = new TraceSpanHeader
@@ -451,7 +434,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             ResultCount = 101,
-            RestartCount = (byte)0x12,
+            RestartCount = 0x12,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -464,7 +447,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DataIndexBTreeBulkInsertEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DataIndexBTreeBulkInsertEvent
         {
             Header = new TraceSpanHeader
@@ -490,7 +472,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityWalQueueDrainEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityWalQueueDrainEvent
         {
             Header = new TraceSpanHeader
@@ -516,7 +497,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityWalOsWriteEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityWalOsWriteEvent
         {
             Header = new TraceSpanHeader
@@ -543,7 +523,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityWalSignalEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityWalSignalEvent
         {
             Header = new TraceSpanHeader
@@ -568,7 +547,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityWalBufferEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityWalBufferEvent
         {
             Header = new TraceSpanHeader
@@ -594,7 +572,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityWalBackpressureEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityWalBackpressureEvent
         {
             Header = new TraceSpanHeader
@@ -620,7 +597,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityCheckpointWriteBatchEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityCheckpointWriteBatchEvent
         {
             Header = new TraceSpanHeader
@@ -646,7 +622,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityCheckpointBackpressureEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityCheckpointBackpressureEvent
         {
             Header = new TraceSpanHeader
@@ -659,7 +634,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             WaitMs = 1001u,
-            Exhausted = (byte)0x12,
+            Exhausted = 0x12,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -672,7 +647,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityCheckpointSleepEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityCheckpointSleepEvent
         {
             Header = new TraceSpanHeader
@@ -685,7 +659,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             SleepMs = 1001u,
-            WakeReason = (byte)0x12,
+            WakeReason = 0x12,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -698,7 +672,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityRecoveryDiscoverEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityRecoveryDiscoverEvent
         {
             Header = new TraceSpanHeader
@@ -725,7 +698,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityRecoverySegmentEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityRecoverySegmentEvent
         {
             Header = new TraceSpanHeader
@@ -740,7 +712,7 @@ public class TraceEventEncodeEquivalenceTests
             SegId = 101,
             RecCount = 202,
             Bytes = 3003L,
-            Truncated = (byte)0x14,
+            Truncated = 0x14,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -753,7 +725,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityRecoveryFpiEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityRecoveryFpiEvent
         {
             Header = new TraceSpanHeader
@@ -780,7 +751,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityRecoveryRedoEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityRecoveryRedoEvent
         {
             Header = new TraceSpanHeader
@@ -807,7 +777,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityRecoveryUndoEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityRecoveryUndoEvent
         {
             Header = new TraceSpanHeader
@@ -832,7 +801,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void DurabilityRecoveryTickFenceEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new DurabilityRecoveryTickFenceEvent
         {
             Header = new TraceSpanHeader
@@ -859,7 +827,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsSpawnEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)EcsSpawnEventCodec.OptEntityId | (byte)EcsSpawnEventCodec.OptTsn);
         var ev = new EcsSpawnEvent
         {
             Header = new TraceSpanHeader
@@ -871,7 +838,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ArchetypeId = (ushort)0x1200,
+            ArchetypeId = 0x1200,
             EntityId = 0xAA020202UL,
             Tsn = 3003L,
         };
@@ -886,7 +853,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsDestroyEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)EcsDestroyEventCodec.OptCascadeCount | (byte)EcsDestroyEventCodec.OptTsn);
         var ev = new EcsDestroyEvent
         {
             Header = new TraceSpanHeader
@@ -913,7 +879,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsViewRefreshEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)EcsViewRefreshEventCodec.OptMode | (byte)EcsViewRefreshEventCodec.OptResultCount | (byte)EcsViewRefreshEventCodec.OptDeltaCount);
         var ev = new EcsViewRefreshEvent
         {
             Header = new TraceSpanHeader
@@ -925,7 +890,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ArchetypeTypeId = (ushort)0x1200,
+            ArchetypeTypeId = 0x1200,
             Mode = (EcsViewRefreshMode)2,
             ResultCount = 303,
             DeltaCount = 404,
@@ -941,7 +906,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsQueryExecuteEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)EcsQueryEventCodec.OptResultCount | (byte)EcsQueryEventCodec.OptScanMode);
         var ev = new EcsQueryExecuteEvent
         {
             Header = new TraceSpanHeader
@@ -953,7 +917,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ArchetypeTypeId = (ushort)0x1200,
+            ArchetypeTypeId = 0x1200,
             ResultCount = 202,
             ScanMode = (EcsQueryScanMode)3,
         };
@@ -968,7 +932,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsQueryCountEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)EcsQueryEventCodec.OptResultCount | (byte)EcsQueryEventCodec.OptScanMode);
         var ev = new EcsQueryCountEvent
         {
             Header = new TraceSpanHeader
@@ -980,7 +943,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ArchetypeTypeId = (ushort)0x1200,
+            ArchetypeTypeId = 0x1200,
             ResultCount = 202,
             ScanMode = (EcsQueryScanMode)3,
         };
@@ -995,7 +958,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsQueryAnyEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)EcsQueryEventCodec.OptFound | (byte)EcsQueryEventCodec.OptScanMode);
         var ev = new EcsQueryAnyEvent
         {
             Header = new TraceSpanHeader
@@ -1007,7 +969,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ArchetypeTypeId = (ushort)0x1200,
+            ArchetypeTypeId = 0x1200,
             Found = true,
             ScanMode = (EcsQueryScanMode)3,
         };
@@ -1022,7 +984,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void PageCacheFetchEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new PageCacheFetchEvent
         {
             Header = new TraceSpanHeader
@@ -1047,7 +1008,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void PageCacheDiskReadEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new PageCacheDiskReadEvent
         {
             Header = new TraceSpanHeader
@@ -1072,7 +1032,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void PageCacheDiskWriteEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)PageCacheEventCodec.OptPageCount;
         var ev = new PageCacheDiskWriteEvent
         {
             Header = new TraceSpanHeader
@@ -1098,7 +1057,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void PageCacheAllocatePageEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new PageCacheAllocatePageEvent
         {
             Header = new TraceSpanHeader
@@ -1123,7 +1081,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void PageCacheFlushEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new PageCacheFlushEvent
         {
             Header = new TraceSpanHeader
@@ -1148,7 +1105,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void PageCacheBackpressureEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new PageCacheBackpressureEvent
         {
             Header = new TraceSpanHeader
@@ -1175,7 +1131,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryParseEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryParseEvent
         {
             Header = new TraceSpanHeader
@@ -1187,8 +1142,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            PredicateCount = (ushort)0x1200,
-            BranchCount = (byte)0x12,
+            PredicateCount = 0x1200,
+            BranchCount = 0x12,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1201,7 +1156,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryParseDnfEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryParseDnfEvent
         {
             Header = new TraceSpanHeader
@@ -1213,8 +1167,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            InBranches = (ushort)0x1200,
-            OutBranches = (ushort)0x1300,
+            InBranches = 0x1200,
+            OutBranches = 0x1300,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1227,7 +1181,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryPlanEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryPlanEvent
         {
             Header = new TraceSpanHeader
@@ -1239,8 +1192,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            EvaluatorCount = (byte)0x11,
-            IndexFieldIdx = (ushort)0x1300,
+            EvaluatorCount = 0x11,
+            IndexFieldIdx = 0x1300,
             RangeMin = 3003L,
             RangeMax = 4004L,
         };
@@ -1255,7 +1208,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryEstimateEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryEstimateEvent
         {
             Header = new TraceSpanHeader
@@ -1267,7 +1219,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            FieldIdx = (ushort)0x1200,
+            FieldIdx = 0x1200,
             Cardinality = 2002L,
         };
 
@@ -1281,7 +1233,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryPlanSortEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryPlanSortEvent
         {
             Header = new TraceSpanHeader
@@ -1293,7 +1244,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            EvaluatorCount = (byte)0x11,
+            EvaluatorCount = 0x11,
             SortNs = 2002u,
         };
 
@@ -1307,7 +1258,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryExecuteIndexScanEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryExecuteIndexScanEvent
         {
             Header = new TraceSpanHeader
@@ -1319,8 +1269,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            PrimaryFieldIdx = (ushort)0x1200,
-            Mode = (byte)0x12,
+            PrimaryFieldIdx = 0x1200,
+            Mode = 0x12,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1333,7 +1283,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryExecuteIterateEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryExecuteIterateEvent
         {
             Header = new TraceSpanHeader
@@ -1359,7 +1308,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryExecuteFilterEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryExecuteFilterEvent
         {
             Header = new TraceSpanHeader
@@ -1371,7 +1319,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            FilterCount = (byte)0x11,
+            FilterCount = 0x11,
             RejectedCount = 202,
         };
 
@@ -1385,7 +1333,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryExecutePaginationEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryExecutePaginationEvent
         {
             Header = new TraceSpanHeader
@@ -1399,7 +1346,7 @@ public class TraceEventEncodeEquivalenceTests
             },
             Skip = 101,
             Take = 202,
-            EarlyTerm = (byte)0x13,
+            EarlyTerm = 0x13,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1412,7 +1359,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void QueryCountEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new QueryCountEvent
         {
             Header = new TraceSpanHeader
@@ -1437,7 +1383,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsQueryConstructEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new EcsQueryConstructEvent
         {
             Header = new TraceSpanHeader
@@ -1449,9 +1394,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            TargetArchId = (ushort)0x1200,
-            Polymorphic = (byte)0x12,
-            MaskSize = (byte)0x13,
+            TargetArchId = 0x1200,
+            Polymorphic = 0x12,
+            MaskSize = 0x13,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1464,7 +1409,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsQuerySubtreeExpandEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new EcsQuerySubtreeExpandEvent
         {
             Header = new TraceSpanHeader
@@ -1476,8 +1420,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            SubtreeCount = (ushort)0x1200,
-            RootId = (ushort)0x1300,
+            SubtreeCount = 0x1200,
+            RootId = 0x1300,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1490,7 +1434,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsViewRefreshPullEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new EcsViewRefreshPullEvent
         {
             Header = new TraceSpanHeader
@@ -1503,7 +1446,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             QueryNs = 1001u,
-            ArchetypeMaskBits = (ushort)0x1300,
+            ArchetypeMaskBits = 0x1300,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1516,7 +1459,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsViewIncrementalDrainEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new EcsViewIncrementalDrainEvent
         {
             Header = new TraceSpanHeader
@@ -1529,7 +1471,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             DeltaCount = 101,
-            Overflow = (byte)0x12,
+            Overflow = 0x12,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1542,7 +1484,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsViewRefreshFullEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new EcsViewRefreshFullEvent
         {
             Header = new TraceSpanHeader
@@ -1569,7 +1510,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void EcsViewRefreshFullOrEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new EcsViewRefreshFullOrEvent
         {
             Header = new TraceSpanHeader
@@ -1583,7 +1523,7 @@ public class TraceEventEncodeEquivalenceTests
             },
             OldCount = 101,
             NewCount = 202,
-            BranchCount = (byte)0x13,
+            BranchCount = 0x13,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1596,7 +1536,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimePhaseSpanEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimePhaseSpanEvent
         {
             Header = new TraceSpanHeader
@@ -1608,7 +1547,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            Phase = (byte)0x11,
+            Phase = 0x11,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1621,7 +1560,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeTransactionLifecycleEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeTransactionLifecycleEvent
         {
             Header = new TraceSpanHeader
@@ -1633,9 +1571,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            SysIdx = (ushort)0x1200,
+            SysIdx = 0x1200,
             TxDurUs = 2002u,
-            Success = (byte)0x13,
+            Success = 0x13,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1648,7 +1586,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeSubscriptionOutputExecuteEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeSubscriptionOutputExecuteEvent
         {
             Header = new TraceSpanHeader
@@ -1661,11 +1598,11 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             Tick = 1001L,
-            Level = (byte)0x12,
-            ClientCount = (ushort)0x1400,
-            ViewsRefreshed = (ushort)0x1500,
+            Level = 0x12,
+            ClientCount = 0x1400,
+            ViewsRefreshed = 0x1500,
             DeltasPushed = 5005u,
-            OverflowCount = (ushort)0x1700,
+            OverflowCount = 0x1700,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1678,7 +1615,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SchedulerChunkEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SchedulerChunkEvent
         {
             Header = new TraceSpanHeader
@@ -1690,9 +1626,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            SystemIndex = (ushort)0x1200,
-            ChunkIndex = (ushort)0x1300,
-            TotalChunks = (ushort)0x1400,
+            SystemIndex = 0x1200,
+            ChunkIndex = 0x1300,
+            TotalChunks = 0x1400,
             EntitiesProcessed = 404,
         };
 
@@ -1706,7 +1642,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SchedulerSystemSingleThreadedEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SchedulerSystemSingleThreadedEvent
         {
             Header = new TraceSpanHeader
@@ -1718,9 +1653,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            SysIdx = (ushort)0x1200,
-            IsParallelQuery = (byte)0x12,
-            ChunkCount = (ushort)0x1400,
+            SysIdx = 0x1200,
+            IsParallelQuery = 0x12,
+            ChunkCount = 0x1400,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1733,7 +1668,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SchedulerWorkerIdleEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SchedulerWorkerIdleEvent
         {
             Header = new TraceSpanHeader
@@ -1745,8 +1679,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            WorkerId = (byte)0x11,
-            SpinCount = (ushort)0x1300,
+            WorkerId = 0x11,
+            SpinCount = 0x1300,
             IdleUs = 3003u,
         };
 
@@ -1760,7 +1694,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SchedulerWorkerBetweenTickEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SchedulerWorkerBetweenTickEvent
         {
             Header = new TraceSpanHeader
@@ -1772,9 +1705,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            WorkerId = (byte)0x11,
+            WorkerId = 0x11,
             WaitUs = 2002u,
-            WakeReason = (byte)0x13,
+            WakeReason = 0x13,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1787,7 +1720,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SchedulerDependencyFanOutEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SchedulerDependencyFanOutEvent
         {
             Header = new TraceSpanHeader
@@ -1799,9 +1731,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            CompletingSysIdx = (ushort)0x1200,
-            SuccCount = (ushort)0x1300,
-            SkippedCount = (ushort)0x1400,
+            CompletingSysIdx = 0x1200,
+            SuccCount = 0x1300,
+            SkippedCount = 0x1400,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1814,7 +1746,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SchedulerGraphBuildEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SchedulerGraphBuildEvent
         {
             Header = new TraceSpanHeader
@@ -1826,9 +1757,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            SysCount = (ushort)0x1200,
-            EdgeCount = (ushort)0x1300,
-            TopoLen = (ushort)0x1400,
+            SysCount = 0x1200,
+            EdgeCount = 0x1300,
+            TopoLen = 0x1400,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1841,7 +1772,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SchedulerGraphRebuildEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SchedulerGraphRebuildEvent
         {
             Header = new TraceSpanHeader
@@ -1853,9 +1783,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            OldSysCount = (ushort)0x1200,
-            NewSysCount = (ushort)0x1300,
-            Reason = (byte)0x13,
+            OldSysCount = 0x1200,
+            NewSysCount = 0x1300,
+            Reason = 0x13,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1868,7 +1798,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialMaintainInsertEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialMaintainInsertEvent
         {
             Header = new TraceSpanHeader
@@ -1881,8 +1810,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             EntityPK = 1001L,
-            ComponentTypeId = (ushort)0x1300,
-            DidDegenerate = (byte)0x13,
+            ComponentTypeId = 0x1300,
+            DidDegenerate = 0x13,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1895,7 +1824,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialMaintainUpdateSlowPathEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialMaintainUpdateSlowPathEvent
         {
             Header = new TraceSpanHeader
@@ -1908,7 +1836,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             EntityPK = 1001L,
-            ComponentTypeId = (ushort)0x1300,
+            ComponentTypeId = 0x1300,
             EscapeDistSq = 3.5f,
         };
 
@@ -1922,7 +1850,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialTierIndexRebuildEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialTierIndexRebuildEvent
         {
             Header = new TraceSpanHeader
@@ -1934,7 +1861,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ArchetypeId = (ushort)0x1200,
+            ArchetypeId = 0x1200,
             ClusterCount = 202,
             OldVersion = 303,
             NewVersion = 404,
@@ -1950,7 +1877,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialTriggerEvalEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialTriggerEvalEvent
         {
             Header = new TraceSpanHeader
@@ -1962,10 +1888,10 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            RegionId = (ushort)0x1200,
-            OccupantCount = (ushort)0x1300,
-            EnterCount = (ushort)0x1400,
-            LeaveCount = (ushort)0x1500,
+            RegionId = 0x1200,
+            OccupantCount = 0x1300,
+            EnterCount = 0x1400,
+            LeaveCount = 0x1500,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -1978,7 +1904,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialQueryAabbEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialQueryAabbEvent
         {
             Header = new TraceSpanHeader
@@ -1990,10 +1915,10 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            NodesVisited = (ushort)0x1200,
-            LeavesEntered = (ushort)0x1300,
-            ResultCount = (ushort)0x1400,
-            RestartCount = (byte)0x14,
+            NodesVisited = 0x1200,
+            LeavesEntered = 0x1300,
+            ResultCount = 0x1400,
+            RestartCount = 0x14,
             CategoryMask = 5005u,
         };
 
@@ -2007,7 +1932,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialQueryRadiusEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialQueryRadiusEvent
         {
             Header = new TraceSpanHeader
@@ -2019,10 +1943,10 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            NodesVisited = (ushort)0x1200,
-            ResultCount = (ushort)0x1300,
+            NodesVisited = 0x1200,
+            ResultCount = 0x1300,
             Radius = 3.5f,
-            RestartCount = (byte)0x14,
+            RestartCount = 0x14,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2035,7 +1959,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialQueryRayEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialQueryRayEvent
         {
             Header = new TraceSpanHeader
@@ -2047,10 +1970,10 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            NodesVisited = (ushort)0x1200,
-            ResultCount = (ushort)0x1300,
+            NodesVisited = 0x1200,
+            ResultCount = 0x1300,
             MaxDist = 3.5f,
-            RestartCount = (byte)0x14,
+            RestartCount = 0x14,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2063,7 +1986,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialQueryFrustumEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialQueryFrustumEvent
         {
             Header = new TraceSpanHeader
@@ -2075,10 +1997,10 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            NodesVisited = (ushort)0x1200,
-            ResultCount = (ushort)0x1300,
-            PlaneCount = (byte)0x13,
-            RestartCount = (byte)0x14,
+            NodesVisited = 0x1200,
+            ResultCount = 0x1300,
+            PlaneCount = 0x13,
+            RestartCount = 0x14,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2091,7 +2013,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialQueryKnnEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialQueryKnnEvent
         {
             Header = new TraceSpanHeader
@@ -2103,10 +2024,10 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            K = (ushort)0x1200,
-            IterCount = (byte)0x12,
+            K = 0x1200,
+            IterCount = 0x12,
             FinalRadius = 3.5f,
-            ResultCount = (ushort)0x1500,
+            ResultCount = 0x1500,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2119,7 +2040,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialQueryCountEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialQueryCountEvent
         {
             Header = new TraceSpanHeader
@@ -2131,8 +2051,8 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            Variant = (byte)0x11,
-            NodesVisited = (ushort)0x1300,
+            Variant = 0x11,
+            NodesVisited = 0x1300,
             ResultCount = 303,
         };
 
@@ -2146,7 +2066,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialRTreeInsertEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialRTreeInsertEvent
         {
             Header = new TraceSpanHeader
@@ -2159,9 +2078,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             EntityId = 1001L,
-            Depth = (byte)0x12,
-            DidSplit = (byte)0x13,
-            RestartCount = (byte)0x14,
+            Depth = 0x12,
+            DidSplit = 0x13,
+            RestartCount = 0x14,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2174,7 +2093,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialRTreeRemoveEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialRTreeRemoveEvent
         {
             Header = new TraceSpanHeader
@@ -2187,7 +2105,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             EntityId = 1001L,
-            LeafCollapse = (byte)0x12,
+            LeafCollapse = 0x12,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2200,7 +2118,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialRTreeNodeSplitEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialRTreeNodeSplitEvent
         {
             Header = new TraceSpanHeader
@@ -2212,10 +2129,10 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            Depth = (byte)0x11,
-            SplitAxis = (byte)0x12,
-            LeftCount = (byte)0x13,
-            RightCount = (byte)0x14,
+            Depth = 0x11,
+            SplitAxis = 0x12,
+            LeftCount = 0x13,
+            RightCount = 0x14,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2228,7 +2145,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void SpatialRTreeBulkLoadEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new SpatialRTreeBulkLoadEvent
         {
             Header = new TraceSpanHeader
@@ -2254,7 +2170,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void StatisticsRebuildEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new StatisticsRebuildEvent
         {
             Header = new TraceSpanHeader
@@ -2281,7 +2196,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void StoragePageCacheDirtyWalkEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new StoragePageCacheDirtyWalkEvent
         {
             Header = new TraceSpanHeader
@@ -2308,7 +2222,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeSubscriptionSubscriberEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeSubscriptionSubscriberEvent
         {
             Header = new TraceSpanHeader
@@ -2321,7 +2234,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             SubscriberId = 1001u,
-            ViewId = (ushort)0x1300,
+            ViewId = 0x1300,
             DeltaCount = 303,
         };
 
@@ -2335,7 +2248,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeSubscriptionDeltaBuildEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeSubscriptionDeltaBuildEvent
         {
             Header = new TraceSpanHeader
@@ -2347,7 +2259,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdHi = TraceIdHi,
                 TraceIdLo = TraceIdLo,
             },
-            ViewId = (ushort)0x1200,
+            ViewId = 0x1200,
             Added = 202,
             Removed = 303,
             Modified = 404,
@@ -2363,7 +2275,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeSubscriptionDeltaSerializeEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeSubscriptionDeltaSerializeEvent
         {
             Header = new TraceSpanHeader
@@ -2376,9 +2287,9 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             ClientId = 1001u,
-            ViewId = (ushort)0x1300,
+            ViewId = 0x1300,
             Bytes = 303,
-            Format = (byte)0x14,
+            Format = 0x14,
         };
 
         Span<byte> bufStruct = stackalloc byte[256];
@@ -2391,7 +2302,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeSubscriptionTransitionBeginSyncEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeSubscriptionTransitionBeginSyncEvent
         {
             Header = new TraceSpanHeader
@@ -2404,7 +2314,7 @@ public class TraceEventEncodeEquivalenceTests
                 TraceIdLo = TraceIdLo,
             },
             ClientId = 1001u,
-            ViewId = (ushort)0x1300,
+            ViewId = 0x1300,
             EntitySnapshot = 303,
         };
 
@@ -2418,7 +2328,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeSubscriptionOutputCleanupEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeSubscriptionOutputCleanupEvent
         {
             Header = new TraceSpanHeader
@@ -2444,7 +2353,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent
         {
             Header = new TraceSpanHeader
@@ -2471,7 +2379,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void TransactionCommitEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)TransactionEventCodec.OptComponentCount | (byte)TransactionEventCodec.OptConflictDetected);
         var ev = new TransactionCommitEvent
         {
             Header = new TraceSpanHeader
@@ -2498,7 +2405,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void TransactionRollbackEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)((byte)TransactionEventCodec.OptComponentCount | (byte)TransactionEventCodec.OptReason);
         var ev = new TransactionRollbackEvent
         {
             Header = new TraceSpanHeader
@@ -2525,7 +2431,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void TransactionCommitComponentEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)TransactionEventCodec.OptRowCount;
         var ev = new TransactionCommitComponentEvent
         {
             Header = new TraceSpanHeader
@@ -2552,7 +2457,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void TransactionPersistEvent_StructEncode_MatchesCodec()
     {
-        var expectedMask = (byte)TransactionEventCodec.OptWalLsn;
         var ev = new TransactionPersistEvent
         {
             Header = new TraceSpanHeader
@@ -2578,7 +2482,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void WalFlushEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new WalFlushEvent
         {
             Header = new TraceSpanHeader
@@ -2605,7 +2508,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void WalSegmentRotateEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new WalSegmentRotateEvent
         {
             Header = new TraceSpanHeader
@@ -2630,7 +2532,6 @@ public class TraceEventEncodeEquivalenceTests
     [Test]
     public void WalWaitEvent_StructEncode_MatchesCodec()
     {
-        const byte expectedMask = 0;
         var ev = new WalWaitEvent
         {
             Header = new TraceSpanHeader

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using Typhon.Engine.Profiler.Exporters;
-using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
 

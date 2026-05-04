@@ -187,14 +187,9 @@ def gen_test(info: StructInfo) -> str:
         sentinels[pname] = sentinel(typ, j, pname)
         backing_to_value[backing] = sentinels[pname]
 
-    # Compute expected optMask = OR of all optional masks (or 0 if none).
-    if info.optional_props:
-        mask_expr = " | ".join(f"(byte){m}" for (_, _, _, m) in info.optional_props)
-        if len(info.optional_props) > 1:
-            mask_expr = f"(byte)({mask_expr})"
-        lines.append(f"        var expectedMask = {mask_expr};")
-    else:
-        lines.append("        const byte expectedMask = 0;")
+    # NOTE: previous versions emitted `var expectedMask = ...` here. After
+    # Phase 1 the test asserts against frozen golden hex (not against a recomputed
+    # codec call), so the variable was dead and tripped CS0219. Removed.
 
     # Object initializer. Post-Phase-1, the seven prologue fields are embedded
     # as a TraceSpanHeader sub-struct rather than top-level fields.

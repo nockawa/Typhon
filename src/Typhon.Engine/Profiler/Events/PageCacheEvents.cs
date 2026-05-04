@@ -1,3 +1,6 @@
+// CS0282: split-partial-struct field ordering — benign for TraceEvent ref structs (codec encodes per-field, never as a blob). See #294.
+#pragma warning disable CS0282
+
 using System;
 using Typhon.Profiler;
 

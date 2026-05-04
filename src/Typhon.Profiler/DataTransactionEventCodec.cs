@@ -127,19 +127,6 @@ public static class DataTransactionEventCodec
         }
     }
 
-    public static void EncodeInit(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, long tsn, ushort uowId, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeInit(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DataTransactionInit, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, tsn);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[8..], uowId);
-        bytesWritten = size;
-    }
-
     public static DataTransactionInitData DecodeInit(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -157,18 +144,6 @@ public static class DataTransactionEventCodec
             BinaryPrimitives.ReadUInt16LittleEndian(p[8..]));
     }
 
-    public static void EncodePrepare(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, long tsn, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizePrepare(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DataTransactionPrepare, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, tsn);
-        bytesWritten = size;
-    }
-
     public static DataTransactionPrepareData DecodePrepare(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -183,19 +158,6 @@ public static class DataTransactionEventCodec
         var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
         return new DataTransactionPrepareData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
             BinaryPrimitives.ReadInt64LittleEndian(p));
-    }
-
-    public static void EncodeValidate(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, long tsn, int entryCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeValidate(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DataTransactionValidate, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, tsn);
-        BinaryPrimitives.WriteInt32LittleEndian(p[8..], entryCount);
-        bytesWritten = size;
     }
 
     public static DataTransactionValidateData DecodeValidate(ReadOnlySpan<byte> source)
@@ -235,19 +197,6 @@ public static class DataTransactionEventCodec
             BinaryPrimitives.ReadInt64LittleEndian(p[8..]),
             BinaryPrimitives.ReadInt32LittleEndian(p[16..]),
             p[20]);
-    }
-
-    public static void EncodeCleanup(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, long tsn, int entityCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeCleanup(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DataTransactionCleanup, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, tsn);
-        BinaryPrimitives.WriteInt32LittleEndian(p[8..], entityCount);
-        bytesWritten = size;
     }
 
     public static DataTransactionCleanupData DecodeCleanup(ReadOnlySpan<byte> source)

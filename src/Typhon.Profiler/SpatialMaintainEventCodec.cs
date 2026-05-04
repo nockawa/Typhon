@@ -90,21 +90,6 @@ public static class SpatialMaintainEventCodec
         }
     }
 
-    public static void EncodeInsert(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityPK, ushort componentTypeId, byte didDegenerate, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeInsert(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SpatialMaintainInsert, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, entityPK);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[8..], componentTypeId);
-        p[10] = didDegenerate;
-        bytesWritten = size;
-    }
-
     public static SpatialMaintainInsertData DecodeInsert(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
@@ -116,21 +101,6 @@ public static class SpatialMaintainEventCodec
             BinaryPrimitives.ReadInt64LittleEndian(p),
             BinaryPrimitives.ReadUInt16LittleEndian(p[8..]),
             p[10]);
-    }
-
-    public static void EncodeUpdateSlowPath(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityPK, ushort componentTypeId, float escapeDistSq, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeUpdateSlowPath(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.SpatialMaintainUpdateSlowPath, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, entityPK);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[8..], componentTypeId);
-        BinaryPrimitives.WriteSingleLittleEndian(p[10..], escapeDistSq);
-        bytesWritten = size;
     }
 
     public static SpatialMaintainUpdateSlowPathData DecodeUpdateSlowPath(ReadOnlySpan<byte> source)

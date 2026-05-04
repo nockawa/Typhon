@@ -79,27 +79,6 @@ public static class StorageMiscEventCodec
     public static int ComputeSizeDirtyWalk(bool hasTraceContext) => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + DirtyWalkPayload;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void EncodeDirtyWalk(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int rangeStart, int rangeLen, int dirtyMs, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeDirtyWalk(hasTC);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.StoragePageCacheDirtyWalk, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTC)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, rangeStart);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], rangeLen);
-        BinaryPrimitives.WriteInt32LittleEndian(p[8..], dirtyMs);
-        bytesWritten = size;
-    }
-
     public static StoragePageCacheDirtyWalkData DecodeDirtyWalk(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

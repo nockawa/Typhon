@@ -210,20 +210,6 @@ public static class DurabilityRecoveryEventCodec
     }
 
     // ── Discover (span) ──
-    public static void EncodeDiscover(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int segCount, long totalBytes, int firstSegId, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeDiscover(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityRecoveryDiscover, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, segCount);
-        BinaryPrimitives.WriteInt64LittleEndian(p[4..], totalBytes);
-        BinaryPrimitives.WriteInt32LittleEndian(p[12..], firstSegId);
-        bytesWritten = size;
-    }
-
     public static DurabilityRecoveryDiscoverData DecodeDiscover(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -234,21 +220,6 @@ public static class DurabilityRecoveryEventCodec
     }
 
     // ── Segment (span) ──
-    public static void EncodeSegment(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int segId, int recCount, long bytes, byte truncated, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeSegment(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityRecoverySegment, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, segId);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], recCount);
-        BinaryPrimitives.WriteInt64LittleEndian(p[8..], bytes);
-        p[16] = truncated;
-        bytesWritten = size;
-    }
-
     public static DurabilityRecoverySegmentData DecodeSegment(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -280,20 +251,6 @@ public static class DurabilityRecoveryEventCodec
     }
 
     // ── FPI (span) ──
-    public static void EncodeFpi(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int fpiCount, int repairedCount, int mismatches, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeFpi(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityRecoveryFpi, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, fpiCount);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], repairedCount);
-        BinaryPrimitives.WriteInt32LittleEndian(p[8..], mismatches);
-        bytesWritten = size;
-    }
-
     public static DurabilityRecoveryFpiData DecodeFpi(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -304,20 +261,6 @@ public static class DurabilityRecoveryEventCodec
     }
 
     // ── Redo (span) ──
-    public static void EncodeRedo(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int recordsReplayed, int uowsReplayed, uint durUs, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeRedo(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityRecoveryRedo, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, recordsReplayed);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], uowsReplayed);
-        BinaryPrimitives.WriteUInt32LittleEndian(p[8..], durUs);
-        bytesWritten = size;
-    }
-
     public static DurabilityRecoveryRedoData DecodeRedo(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -328,18 +271,6 @@ public static class DurabilityRecoveryEventCodec
     }
 
     // ── Undo (span) ──
-    public static void EncodeUndo(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int voidedUowCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeUndo(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityRecoveryUndo, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, voidedUowCount);
-        bytesWritten = size;
-    }
-
     public static DurabilityRecoveryUndoData DecodeUndo(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
@@ -348,20 +279,6 @@ public static class DurabilityRecoveryEventCodec
     }
 
     // ── TickFence (span) ──
-    public static void EncodeTickFence(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int tickFenceCount, int entries, long tickNumber, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeTickFence(hasTC);
-        WriteSpanPreamble(destination, TraceEventKind.DurabilityRecoveryTickFence, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt32LittleEndian(p, tickFenceCount);
-        BinaryPrimitives.WriteInt32LittleEndian(p[4..], entries);
-        BinaryPrimitives.WriteInt64LittleEndian(p[8..], tickNumber);
-        bytesWritten = size;
-    }
-
     public static DurabilityRecoveryTickFenceData DecodeTickFence(ReadOnlySpan<byte> source)
     {
         var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);

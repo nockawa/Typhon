@@ -114,27 +114,6 @@ public static class SchedulerSystemEventCodec
             BinaryPrimitives.ReadUInt16LittleEndian(p), BinaryPrimitives.ReadUInt32LittleEndian(p[2..]));
     }
 
-    public static void EncodeSingleThreaded(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort sysIdx, byte isParallelQuery, ushort chunkCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeSingleThreaded(hasTC);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SchedulerSystemSingleThreaded, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTC)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteUInt16LittleEndian(p, sysIdx);
-        p[2] = isParallelQuery;
-        BinaryPrimitives.WriteUInt16LittleEndian(p[3..], chunkCount);
-        bytesWritten = size;
-    }
-
     public static SchedulerSystemSingleThreadedData DecodeSingleThreaded(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

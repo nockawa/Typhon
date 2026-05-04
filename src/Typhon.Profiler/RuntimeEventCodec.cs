@@ -138,30 +138,6 @@ public static class RuntimeEventCodec
             p[6]);
     }
 
-    public static void EncodeOutputExecute(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long tick, byte level, ushort clientCount, ushort viewsRefreshed, uint deltasPushed, ushort overflowCount, out int bytesWritten)
-    {
-        var hasTC = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSizeOutputExecute(hasTC);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.RuntimeSubscriptionOutputExecute, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        if (hasTC)
-        {
-            TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        BinaryPrimitives.WriteInt64LittleEndian(p, tick);
-        p[8] = level;
-        BinaryPrimitives.WriteUInt16LittleEndian(p[9..], clientCount);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[11..], viewsRefreshed);
-        BinaryPrimitives.WriteUInt32LittleEndian(p[13..], deltasPushed);
-        BinaryPrimitives.WriteUInt16LittleEndian(p[17..], overflowCount);
-        bytesWritten = size;
-    }
-
     public static RuntimeSubscriptionOutputExecuteData DecodeOutputExecute(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

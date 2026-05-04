@@ -87,26 +87,6 @@ public static class PageCacheBackpressureCodec
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int ComputeSize(bool hasTraceContext) => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + PayloadSize;
 
-    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
-    internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int retryCount, int dirtyCount, int epochCount, out int bytesWritten)
-    {
-        var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = ComputeSize(hasTraceContext);
-        TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.PageCacheBackpressure, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
-        TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
-            endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-        if (hasTraceContext) TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
-        var payload = destination[headerSize..];
-        BinaryPrimitives.WriteInt32LittleEndian(payload, retryCount);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[4..], dirtyCount);
-        BinaryPrimitives.WriteInt32LittleEndian(payload[8..], epochCount);
-        bytesWritten = size;
-    }
-
     public static PageCacheBackpressureEventData Decode(ReadOnlySpan<byte> source)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);

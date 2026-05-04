@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using Typhon.Profiler;
+using Typhon.Engine.Profiler;
 
 namespace Typhon.Engine.Tests.Profiler;
 
@@ -79,9 +80,23 @@ public class SchedulerRuntimeEventRoundTripTests
     [Test]
     public void SchedulerSystemSingleThreaded_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SchedulerSystemEventCodec.ComputeSizeSingleThreaded(false)];
-        SchedulerSystemEventCodec.EncodeSingleThreaded(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            sysIdx: 12, isParallelQuery: 1, chunkCount: 4, out _);
+        var ev = new SchedulerSystemSingleThreadedEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            SysIdx = 12,
+            IsParallelQuery = 1,
+            ChunkCount = 4,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SchedulerSystemEventCodec.DecodeSingleThreaded(buf);
         Assert.That(d.SysIdx, Is.EqualTo(12));
         Assert.That(d.IsParallelQuery, Is.EqualTo(1));
@@ -96,9 +111,23 @@ public class SchedulerRuntimeEventRoundTripTests
     [Test]
     public void SchedulerWorkerIdle_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SchedulerWorkerEventCodec.ComputeSizeIdle(false)];
-        SchedulerWorkerEventCodec.EncodeIdle(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            workerId: 3, spinCount: 150, idleUs: 1500, out _);
+        var ev = new SchedulerWorkerIdleEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            WorkerId = 3,
+            SpinCount = 150,
+            IdleUs = 1500,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SchedulerWorkerEventCodec.DecodeIdle(buf);
         Assert.That(d.WorkerId, Is.EqualTo(3));
         Assert.That(d.SpinCount, Is.EqualTo(150));
@@ -119,9 +148,23 @@ public class SchedulerRuntimeEventRoundTripTests
     [TestCase((byte)1)]  // shutdown
     public void SchedulerWorkerBetweenTick_RoundTrip(byte wakeReason)
     {
-        Span<byte> buf = stackalloc byte[SchedulerWorkerEventCodec.ComputeSizeBetweenTick(false)];
-        SchedulerWorkerEventCodec.EncodeBetweenTick(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            workerId: 1, waitUs: 16000, wakeReason, out _);
+        var ev = new SchedulerWorkerBetweenTickEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            WorkerId = 1,
+            WaitUs = 16000,
+            WakeReason = wakeReason,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SchedulerWorkerEventCodec.DecodeBetweenTick(buf);
         Assert.That(d.WorkerId, Is.EqualTo(1));
         Assert.That(d.WaitUs, Is.EqualTo(16000));
@@ -162,9 +205,23 @@ public class SchedulerRuntimeEventRoundTripTests
     [Test]
     public void SchedulerDependencyFanOut_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SchedulerDependencyEventCodec.ComputeSizeFanOut(false)];
-        SchedulerDependencyEventCodec.EncodeFanOut(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            completingSysIdx: 5, succCount: 8, skippedCount: 2, out _);
+        var ev = new SchedulerDependencyFanOutEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            CompletingSysIdx = 5,
+            SuccCount = 8,
+            SkippedCount = 2,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SchedulerDependencyEventCodec.DecodeFanOut(buf);
         Assert.That(d.CompletingSysIdx, Is.EqualTo(5));
         Assert.That(d.SuccCount, Is.EqualTo(8));
@@ -222,9 +279,23 @@ public class SchedulerRuntimeEventRoundTripTests
     [Test]
     public void SchedulerGraphBuild_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SchedulerGraphEventCodec.ComputeSizeBuild(false)];
-        SchedulerGraphEventCodec.EncodeBuild(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            sysCount: 10, edgeCount: 20, topoLen: 10, out _);
+        var ev = new SchedulerGraphBuildEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            SysCount = 10,
+            EdgeCount = 20,
+            TopoLen = 10,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SchedulerGraphEventCodec.DecodeBuild(buf);
         Assert.That(d.SysCount, Is.EqualTo(10));
         Assert.That(d.EdgeCount, Is.EqualTo(20));
@@ -234,9 +305,23 @@ public class SchedulerRuntimeEventRoundTripTests
     [Test]
     public void SchedulerGraphRebuild_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[SchedulerGraphEventCodec.ComputeSizeRebuild(false)];
-        SchedulerGraphEventCodec.EncodeRebuild(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            oldSysCount: 10, newSysCount: 12, reason: 1, out _);
+        var ev = new SchedulerGraphRebuildEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            OldSysCount = 10,
+            NewSysCount = 12,
+            Reason = 1,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = SchedulerGraphEventCodec.DecodeRebuild(buf);
         Assert.That(d.OldSysCount, Is.EqualTo(10));
         Assert.That(d.NewSysCount, Is.EqualTo(12));
@@ -281,9 +366,26 @@ public class SchedulerRuntimeEventRoundTripTests
     [Test]
     public void RuntimeSubscriptionOutputExecute_RoundTrip()
     {
-        Span<byte> buf = stackalloc byte[RuntimeEventCodec.ComputeSizeOutputExecute(false)];
-        RuntimeEventCodec.EncodeOutputExecute(buf, EndTs, ThreadSlot, StartTs, SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            tick: 5000, level: 1, clientCount: 50, viewsRefreshed: 10, deltasPushed: 1234, overflowCount: 3, out _);
+        var ev = new RuntimeSubscriptionOutputExecuteEvent
+        {
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = ThreadSlot,
+                StartTimestamp = StartTs,
+                SpanId = SpanId,
+                ParentSpanId = ParentSpanId,
+                TraceIdHi = TraceIdHi,
+                TraceIdLo = TraceIdLo,
+            },
+            Tick = 5000,
+            Level = 1,
+            ClientCount = 50,
+            ViewsRefreshed = 10,
+            DeltasPushed = 1234,
+            OverflowCount = 3,
+        };
+        Span<byte> buf = stackalloc byte[ev.ComputeSize()];
+        ev.EncodeTo(buf, EndTs, out _);
         var d = RuntimeEventCodec.DecodeOutputExecute(buf);
         Assert.That(d.Tick, Is.EqualTo(5000));
         Assert.That(d.Level, Is.EqualTo(1));
