@@ -288,6 +288,13 @@ coverage/reports/charts/
 coverage/reports/latest.md
 coverage/coverage-report.xml
 
+# Per-fixture coverage caches (~1 GB cobertura XMLs + parsed-JSON sidecars,
+# rebuilt by scripts/build-test-affected-map.py — incremental, regenerable).
+coverage/per_fixture/
+coverage/leave_one_out/
+coverage/*.log
+coverage/fixtures.txt
+
 # Windows reserved device names (git sees these as phantom untracked files)
 nul
 

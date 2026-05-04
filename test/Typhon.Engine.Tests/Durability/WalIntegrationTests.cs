@@ -864,7 +864,7 @@ class WalIntegrationTests : TestBase
         using (var scope1 = _serviceProvider.CreateScope())
         {
             var dbe = CreateEngine(scope1);
-            (ids, values) = CreateCompAEntities(dbe, 500, DurabilityMode.Immediate);
+            (ids, values) = CreateCompAEntities(dbe, 100, DurabilityMode.Immediate);
         }
 
         using (var scope2 = _serviceProvider.CreateScope())

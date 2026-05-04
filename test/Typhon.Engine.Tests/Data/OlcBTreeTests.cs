@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -289,7 +290,7 @@ public class OlcBTreeTests
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
-            int errors = 0;
+            var exceptions = new ConcurrentBag<Exception>();
 
             var tasks = new Task[threadCount];
             for (int t = 0; t < threadCount; t++)
@@ -312,9 +313,9 @@ public class OlcBTreeTests
                         wa.CommitChanges();
                         wa.Dispose();
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Interlocked.Increment(ref errors);
+                        exceptions.Add(ex);
                     }
                     finally
                     {
@@ -324,7 +325,8 @@ public class OlcBTreeTests
             }
 
             Task.WaitAll(tasks);
-            Assert.That(errors, Is.EqualTo(0), $"No exceptions during concurrent inserts (EntryCount={tree.EntryCount})");
+            Assert.That(exceptions, Is.Empty, () =>
+                $"Workers threw {exceptions.Count} exception(s) during concurrent inserts (EntryCount={tree.EntryCount}); first:\n{exceptions.First()}");
             Assert.That(tree.EntryCount, Is.EqualTo(threadCount * keysPerThread));
 
             // Verify all values are correct
@@ -390,7 +392,7 @@ public class OlcBTreeTests
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
-            int errors = 0;
+            var exceptions = new ConcurrentBag<Exception>();
 
             var tasks = new Task[threadCount];
             for (int t = 0; t < threadCount; t++)
@@ -413,9 +415,9 @@ public class OlcBTreeTests
                         wa.CommitChanges();
                         wa.Dispose();
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Interlocked.Increment(ref errors);
+                        exceptions.Add(ex);
                     }
                     finally
                     {
@@ -425,7 +427,8 @@ public class OlcBTreeTests
             }
 
             Task.WaitAll(tasks);
-            Assert.That(errors, Is.EqualTo(0), "No exceptions during concurrent inserts");
+            Assert.That(exceptions, Is.Empty, () =>
+                $"Workers threw {exceptions.Count} exception(s) during concurrent inserts; first:\n{exceptions.First()}");
             Assert.That(tree.EntryCount, Is.EqualTo(threadCount * keysPerThread));
             Assert.That(tree.Height, Is.GreaterThan(1), "Tree should have multiple levels after many inserts");
 
@@ -465,7 +468,7 @@ public class OlcBTreeTests
             accessor.Dispose();
 
             using var barrier = new Barrier(threadCount);
-            int errors = 0;
+            var exceptions = new ConcurrentBag<Exception>();
 
             // Each thread inserts its own ascending sequence (non-overlapping ranges)
             var tasks = new Task[threadCount];
@@ -488,9 +491,9 @@ public class OlcBTreeTests
                         wa.CommitChanges();
                         wa.Dispose();
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Interlocked.Increment(ref errors);
+                        exceptions.Add(ex);
                     }
                     finally
                     {
@@ -500,7 +503,8 @@ public class OlcBTreeTests
             }
 
             Task.WaitAll(tasks);
-            Assert.That(errors, Is.EqualTo(0), "No exceptions during concurrent sequential inserts");
+            Assert.That(exceptions, Is.Empty, () =>
+                $"Workers threw {exceptions.Count} exception(s) during concurrent sequential inserts; first:\n{exceptions.First()}");
             Assert.That(tree.EntryCount, Is.EqualTo(threadCount * keysPerThread));
         }
         finally
@@ -715,7 +719,7 @@ public class OlcBTreeTests
 
             // Each thread removes interleaved keys (forces merges at various leaves)
             using var barrier = new Barrier(threadCount);
-            int errors = 0;
+            var exceptions = new ConcurrentBag<Exception>();
 
             var tasks = new Task[threadCount];
             for (int t = 0; t < threadCount; t++)
@@ -741,9 +745,9 @@ public class OlcBTreeTests
                         wa.CommitChanges();
                         wa.Dispose();
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Interlocked.Increment(ref errors);
+                        exceptions.Add(ex);
                     }
                     finally
                     {
@@ -753,7 +757,8 @@ public class OlcBTreeTests
             }
 
             Task.WaitAll(tasks);
-            Assert.That(errors, Is.EqualTo(0), "No exceptions during concurrent removes");
+            Assert.That(exceptions, Is.Empty, () =>
+                $"Workers threw {exceptions.Count} exception(s) during concurrent removes; first:\n{exceptions.First()}");
             Assert.That(tree.EntryCount, Is.EqualTo(totalKeys - threadCount * keysToRemovePerThread));
 
             // Verify tree structural integrity
@@ -795,7 +800,7 @@ public class OlcBTreeTests
             accessor.Dispose();
 
             using var startSignal = new ManualResetEventSlim(false);
-            int errors = 0;
+            var exceptions = new ConcurrentBag<Exception>();
 
             // Insert threads: add keys in high range (no overlap with removes)
             var insertTasks = new Task[writerCount];
@@ -818,9 +823,9 @@ public class OlcBTreeTests
                         wa.CommitChanges();
                         wa.Dispose();
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Interlocked.Increment(ref errors);
+                        exceptions.Add(ex);
                     }
                     finally
                     {
@@ -851,9 +856,9 @@ public class OlcBTreeTests
                         wa.CommitChanges();
                         wa.Dispose();
                     }
-                    catch
+                    catch (Exception ex)
                     {
-                        Interlocked.Increment(ref errors);
+                        exceptions.Add(ex);
                     }
                     finally
                     {
@@ -865,7 +870,8 @@ public class OlcBTreeTests
             startSignal.Set();
             Task.WaitAll(insertTasks.Concat(removeTasks).ToArray());
 
-            Assert.That(errors, Is.EqualTo(0), "No exceptions during mixed insert+remove");
+            Assert.That(exceptions, Is.Empty, () =>
+                $"Workers threw {exceptions.Count} exception(s) during mixed insert+remove; first:\n{exceptions.First()}");
 
             int expectedCount = initialEntries + writerCount * insertsPerWriter - removerCount * removesPerRemover;
             Assert.That(tree.EntryCount, Is.EqualTo(expectedCount));

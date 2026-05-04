@@ -184,14 +184,14 @@ public class TcpExporterIntegrationTests
             port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
             probe.Stop();
         }
-        var exporter = new TcpExporter(port, _registry.Profiler, liveConnectTimeoutMs: 250);
+        var exporter = new TcpExporter(port, _registry.Profiler, liveConnectTimeoutMs: 100);
         TyphonProfiler.AttachExporter(exporter);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         TyphonProfiler.Start(_registry.Profiler, BuildMetadata());
         sw.Stop();
-        // Should block ~250 ms (allow some slack for thread scheduling) and ultimately time out without a client.
-        Assert.That(sw.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(200).And.LessThan(2000),
-            $"Initialize should block ~250ms; actual: {sw.ElapsedMilliseconds}ms");
+        // Should block ~100 ms (allow some slack for thread scheduling) and ultimately time out without a client.
+        Assert.That(sw.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(80).And.LessThan(2000),
+            $"Initialize should block ~100ms; actual: {sw.ElapsedMilliseconds}ms");
         Assert.That(exporter.HasClientEverConnected, Is.False, "no client connected → flag must stay false");
     }
 
@@ -205,13 +205,13 @@ public class TcpExporterIntegrationTests
             port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
             probe.Stop();
         }
-        var exporter = new TcpExporter(port, _registry.Profiler, liveConnectTimeoutMs: 5000);
+        var exporter = new TcpExporter(port, _registry.Profiler, liveConnectTimeoutMs: 2000);
         TyphonProfiler.AttachExporter(exporter);
 
         // Schedule a client to connect after a short delay; verify Initialize unblocks shortly after.
         var connectTask = System.Threading.Tasks.Task.Run(() =>
         {
-            Thread.Sleep(150);
+            Thread.Sleep(50);
             var client = new TcpClient();
             ConnectWithRetry(client, "127.0.0.1", port, timeoutMs: 2000);
             return client;
@@ -221,8 +221,8 @@ public class TcpExporterIntegrationTests
         TyphonProfiler.Start(_registry.Profiler, BuildMetadata());
         sw.Stop();
 
-        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(3000),
-            $"Initialize should unblock within ~150-300ms after client connects; actual: {sw.ElapsedMilliseconds}ms");
+        Assert.That(sw.ElapsedMilliseconds, Is.LessThan(1500),
+            $"Initialize should unblock within ~50-200ms after client connects; actual: {sw.ElapsedMilliseconds}ms");
         Assert.That(exporter.HasClientEverConnected, Is.True, "first-client signal must be set");
 
         // Cleanup the client we spawned for the test.

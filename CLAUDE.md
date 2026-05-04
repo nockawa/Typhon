@@ -99,6 +99,35 @@ dotnet test --filter "FullyQualifiedName~TransactionTests.CreateComp_SingleTrans
 
 **IMPORTANT — Test timeout safety:** Typhon unit tests should complete in under 5 seconds. If tests run longer, it almost certainly means an infinite loop or deadlock. When running tests, ALWAYS use a 15-second timeout and kill the process if it hasn't completed. Use `timeout 15` (on Windows) or equivalent to enforce this.
 
+### Test selection during iteration — use `scripts/test-affected.py`
+
+After editing a file, **default to running only the fixtures that exercise it** instead of the full suite. The full suite takes ~30 s; a fixture-scoped run is typically 1–3 s.
+
+```bash
+python3 scripts/test-affected.py src/Typhon.Engine/Concurrency/AccessControlSmall.cs
+# → resolves to: dotnet test --filter "FullyQualifiedName~AccessControlSmallTests." --no-build -c Debug
+```
+
+The script:
+- Reads `coverage/test-affected-map.json` (built by `scripts/build-test-affected-map.py` — periodic refresh) to map src files to the fixtures that empirically cover them.
+- Falls back to a naming-convention guess (`Foo.cs` → `FooTests`) when the map is stale or missing.
+- Falls back to the **full suite** automatically if the affected set is >50 % of all fixtures (e.g., a cross-cutting type like `WaitContext`), or if no fixture can be inferred.
+- Accepts multiple files; unions the affected fixtures.
+- For test-side edits, the file IS the fixture — no inversion needed.
+
+**Default workflow when iterating:**
+1. Edit a file.
+2. `python3 scripts/test-affected.py <file>` — fast feedback (1–3 s typical).
+3. Once green, run the **full suite** once before declaring the change done: `dotnet test test/Typhon.Engine.Tests/Typhon.Engine.Tests.csproj -c Debug --no-build`.
+4. For perf-claim work (measuring wall-clock impact), run Release × 3 with `--logger trx`.
+
+**Rebuilding the map:** the builder is **incremental**.
+- `python3 scripts/build-test-affected-map.py` — re-collects only fixtures whose test source has changed since the cached XML. ~0.3 s when nothing changed; ~5 s per touched fixture.
+- `python3 scripts/build-test-affected-map.py --force` — re-collects everything (~25 min). Run this only after a refactor that moves classes between files (where mtime won't catch the change).
+- `python3 scripts/build-test-affected-map.py --only Fix1 Fix2` — re-collect specific fixtures (recover from failed runs).
+
+The initial build (no cache) is ~25 min. Steady-state during normal work is seconds.
+
 **Run benchmarks:**
 ```bash
 cd test/Typhon.Benchmark

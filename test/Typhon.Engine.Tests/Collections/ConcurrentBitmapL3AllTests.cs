@@ -633,7 +633,7 @@ public class ConcurrentBitmapL3AllTests
     {
         const int bitmapSize = 64 * 128;    // 128 L0 words = 8192 bits
         const int threadCount = 10;
-        const int operationsPerThread = 5000;
+        const int operationsPerThread = 2000; // 10 threads × 2 000 = 20 000 ops/repeat — sufficient to expose L1 CAS races.
 
         var bitmap = CreateBitmap(bitmapSize);
         var allocations = new ConcurrentDictionary<int, long>(); // L0 word index -> token

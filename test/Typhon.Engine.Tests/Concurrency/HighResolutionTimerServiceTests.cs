@@ -34,14 +34,14 @@ public class HighResolutionTimerServiceTests
 
         using var timer = new HighResolutionTimerService(
             "RateTest",
-            Stopwatch.Frequency / 100, // 10ms interval
+            Stopwatch.Frequency / 200, // 5ms interval
             (_, _) => Interlocked.Increment(ref count),
             _registry.TimerDedicated);
 
         timer.Start();
 
-        // Run for 200ms — expect ~20 invocations (±50% margin for CI)
-        Thread.Sleep(200);
+        // Run for 100ms — expect ~20 invocations (±50% margin for CI)
+        Thread.Sleep(100);
 
         // Stop the timer before reading counters to avoid a race where the
         // timer fires between reading `count` and `InvocationCount`.

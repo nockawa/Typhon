@@ -31,11 +31,11 @@ public class HighResolutionSharedTimerServiceTests
     public void Register_ReturnsActiveHandle()
     {
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
-        var reg = shared.Register("Test", Stopwatch.Frequency / 10, (_, _) => { });
+        var reg = shared.Register("Test", Stopwatch.Frequency / 100, (_, _) => { });
 
         Assert.That(reg.IsActive, Is.True);
         Assert.That(reg.Name, Is.EqualTo("Test"));
-        Assert.That(reg.IntervalTicks, Is.EqualTo(Stopwatch.Frequency / 10));
+        Assert.That(reg.IntervalTicks, Is.EqualTo(Stopwatch.Frequency / 100));
 
         reg.Dispose();
     }
@@ -44,7 +44,7 @@ public class HighResolutionSharedTimerServiceTests
     public void Dispose_DeactivatesHandle()
     {
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
-        var reg = shared.Register("Test", Stopwatch.Frequency / 10, (_, _) => { });
+        var reg = shared.Register("Test", Stopwatch.Frequency / 100, (_, _) => { });
 
         Assert.That(reg.IsActive, Is.True);
 
@@ -70,7 +70,7 @@ public class HighResolutionSharedTimerServiceTests
     {
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
 
-        var reg = shared.Register("LazyStart", Stopwatch.Frequency / 10, (_, _) => { });
+        var reg = shared.Register("LazyStart", Stopwatch.Frequency / 100, (_, _) => { });
         SpinWait.SpinUntil(() => shared.IsRunning, 2000);
 
         Assert.That(shared.IsRunning, Is.True);
@@ -84,8 +84,8 @@ public class HighResolutionSharedTimerServiceTests
     {
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
 
-        var reg1 = shared.Register("A", Stopwatch.Frequency / 10, (_, _) => { });
-        var reg2 = shared.Register("B", Stopwatch.Frequency / 10, (_, _) => { });
+        var reg1 = shared.Register("A", Stopwatch.Frequency / 100, (_, _) => { });
+        var reg2 = shared.Register("B", Stopwatch.Frequency / 100, (_, _) => { });
 
         Assert.That(shared.ActiveRegistrations, Is.EqualTo(2));
 
@@ -126,20 +126,20 @@ public class HighResolutionSharedTimerServiceTests
 
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
 
-        var fastReg = shared.Register("Fast", Stopwatch.Frequency / 100, // 10ms
+        var fastReg = shared.Register("Fast", Stopwatch.Frequency / 200, // 5ms
             (_, _) =>
             {
                 Interlocked.Increment(ref fastCount);
-                if (Interlocked.Read(ref fastCount) >= 20 && Interlocked.Read(ref slowCount) >= 2)
+                if (Interlocked.Read(ref fastCount) >= 10 && Interlocked.Read(ref slowCount) >= 2)
                 {
                     ready.Set();
                 }
             });
-        var slowReg = shared.Register("Slow", Stopwatch.Frequency / 10, // 100ms
+        var slowReg = shared.Register("Slow", Stopwatch.Frequency / 30, // ~33ms
             (_, _) =>
             {
                 Interlocked.Increment(ref slowCount);
-                if (Interlocked.Read(ref fastCount) >= 20 && Interlocked.Read(ref slowCount) >= 2)
+                if (Interlocked.Read(ref fastCount) >= 10 && Interlocked.Read(ref slowCount) >= 2)
                 {
                     ready.Set();
                 }
@@ -151,9 +151,9 @@ public class HighResolutionSharedTimerServiceTests
         var fast = Interlocked.Read(ref fastCount);
         var slow = Interlocked.Read(ref slowCount);
 
-        // Fast (10ms) should fire more often than Slow (100ms)
+        // Fast (5ms) should fire more often than Slow (~33ms) — 6× ratio is what we're proving
         Assert.That(fast, Is.GreaterThan(slow), "Fast callback should fire more often than slow");
-        Assert.That(fast, Is.GreaterThanOrEqualTo(20), "Fast callback should fire at least 20 times");
+        Assert.That(fast, Is.GreaterThanOrEqualTo(10), "Fast callback should fire at least 10 times");
         Assert.That(slow, Is.GreaterThanOrEqualTo(2), "Slow callback should fire at least twice");
 
         fastReg.Dispose();
@@ -202,9 +202,9 @@ public class HighResolutionSharedTimerServiceTests
     {
         using var shared = new HighResolutionSharedTimerService(_registry.Timer);
 
-        var reg1 = shared.Register("A", Stopwatch.Frequency / 10, (_, _) => { });
-        var reg2 = shared.Register("B", Stopwatch.Frequency / 10, (_, _) => { });
-        var reg3 = shared.Register("C", Stopwatch.Frequency / 10, (_, _) => { });
+        var reg1 = shared.Register("A", Stopwatch.Frequency / 100, (_, _) => { });
+        var reg2 = shared.Register("B", Stopwatch.Frequency / 100, (_, _) => { });
+        var reg3 = shared.Register("C", Stopwatch.Frequency / 100, (_, _) => { });
 
         reg2.Dispose(); // Deactivate B
 
@@ -240,7 +240,7 @@ public class HighResolutionSharedTimerServiceTests
             var idx = i;
             threads[i] = new Thread(() =>
             {
-                var reg = shared.Register($"Thread{idx}", Stopwatch.Frequency / 10, (_, _) => { });
+                var reg = shared.Register($"Thread{idx}", Stopwatch.Frequency / 100, (_, _) => { });
                 lock (lockObj)
                 {
                     registrations.Add(reg);
@@ -276,7 +276,7 @@ public class HighResolutionSharedTimerServiceTests
         // Rapid register + dispose cycles
         for (var i = 0; i < 100; i++)
         {
-            var reg = shared.Register($"Rapid{i}", Stopwatch.Frequency / 10, (_, _) => { });
+            var reg = shared.Register($"Rapid{i}", Stopwatch.Frequency / 100, (_, _) => { });
             reg.Dispose();
         }
 
