@@ -113,7 +113,8 @@ public static class PerTickSnapshotEventCodec
     /// realistic snapshot).
     /// </summary>
     public static void WritePerTickSnapshot(Span<byte> destination, byte threadSlot, long timestamp, uint tickNumber, uint flags, 
-        ReadOnlySpan<GaugeValue> values, out int bytesWritten)
+        ReadOnlySpan<GaugeValue> values, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         var total = ComputeSize(values);
         if (total > ushort.MaxValue)

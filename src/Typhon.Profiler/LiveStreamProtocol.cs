@@ -50,4 +50,21 @@ public enum LiveFrameType : byte
 
     /// <summary>Session end.</summary>
     Shutdown = 3,
+
+    /// <summary>
+    /// File-table frame (Phase 3 of profiler-source-attribution): interned source-file paths.
+    /// Sent once during the init handshake before any Block frames; payload is identical to the
+    /// FileTable section of <c>.typhon-trace</c> files (u32 entryCount, then per-entry: u16 fileId,
+    /// u16 pathLen, UTF-8 path bytes). Absent when the engine has no source attribution to report.
+    /// See claude/design/observability/09-profiler-source-attribution.md §4.7.1.
+    /// </summary>
+    FileTable = 4,
+
+    /// <summary>
+    /// SourceLocationManifest frame (Phase 3 of profiler-source-attribution): id → (fileId, line, kind, method) entries.
+    /// Sent once during the init handshake immediately after the FileTable. Payload is identical to the
+    /// SourceLocationManifest section of <c>.typhon-trace</c> files. No delta frames during the session —
+    /// the table is fixed at compile time (per design Q3 / §4.4).
+    /// </summary>
+    SourceLocationManifest = 5,
 }

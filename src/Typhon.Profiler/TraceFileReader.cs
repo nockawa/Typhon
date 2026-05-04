@@ -207,6 +207,14 @@ public sealed class TraceFileReader : IDisposable
             ReadSpanNames();
             return ReadNextBlock(out records, out recordCount);
         }
+        if (firstWord == TraceFileWriter.FileTableMagic ||
+            firstWord == TraceFileWriter.SourceLocationManifestMagic)
+        {
+            // Trailing source-location manifest sections (issue #293, Phase 2) — not a block. Rewind so a
+            // separate caller can read the trailer via TryReadSourceLocationManifest, and signal end-of-blocks.
+            _stream.Position -= bytesRead;
+            return false;
+        }
 
         if (bytesRead < TraceBlockEncoder.BlockHeaderSize)
         {
@@ -290,5 +298,83 @@ public sealed class TraceFileReader : IDisposable
         var len = _binaryReader.ReadByte();
         var bytes = _binaryReader.ReadBytes(len);
         return Encoding.UTF8.GetString(bytes);
+    }
+
+    private string ReadVarString()
+    {
+        var len = _binaryReader.ReadUInt16();
+        var bytes = _binaryReader.ReadBytes(len);
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    /// <summary>
+    /// Read the trailing source-location manifest (Phase 2 of the profiler-source-attribution feature).
+    /// Returns <c>false</c> if the trace file doesn't carry one (offsets in the header are zero).
+    /// Uses absolute seeks; requires a seekable stream.
+    /// See claude/design/observability/09-profiler-source-attribution.md §4.7.2.
+    /// </summary>
+    public bool TryReadSourceLocationManifest(out string[] files, out SourceLocationManifestEntry[] entries)
+    {
+        files = Array.Empty<string>();
+        entries = Array.Empty<SourceLocationManifestEntry>();
+
+        if (Header.FileTableOffset == 0 || Header.SourceLocationManifestOffset == 0)
+        {
+            return false;
+        }
+        if (!_stream.CanSeek)
+        {
+            throw new InvalidOperationException("TryReadSourceLocationManifest requires a seekable stream.");
+        }
+
+        var savedPos = _stream.Position;
+        try
+        {
+            // FileTable
+            _stream.Position = Header.FileTableOffset;
+            var fileMagic = _binaryReader.ReadUInt32();
+            if (fileMagic != TraceFileWriter.FileTableMagic)
+            {
+                throw new InvalidDataException(
+                    $"Bad FileTable magic at offset {Header.FileTableOffset}: 0x{fileMagic:X8} (expected 0x{TraceFileWriter.FileTableMagic:X8})");
+            }
+            var fileCount = _binaryReader.ReadUInt32();
+            files = new string[fileCount];
+            for (uint i = 0; i < fileCount; i++)
+            {
+                var fileId = _binaryReader.ReadUInt16();
+                var path = ReadVarString();
+                if (fileId < files.Length)
+                {
+                    files[fileId] = path;
+                }
+            }
+
+            // SourceLocationManifest
+            _stream.Position = Header.SourceLocationManifestOffset;
+            var manifestMagic = _binaryReader.ReadUInt32();
+            if (manifestMagic != TraceFileWriter.SourceLocationManifestMagic)
+            {
+                throw new InvalidDataException(
+                    $"Bad SourceLocationManifest magic at offset {Header.SourceLocationManifestOffset}: 0x{manifestMagic:X8} "
+                    + $"(expected 0x{TraceFileWriter.SourceLocationManifestMagic:X8})");
+            }
+            var entryCount = _binaryReader.ReadUInt32();
+            entries = new SourceLocationManifestEntry[entryCount];
+            for (uint i = 0; i < entryCount; i++)
+            {
+                var id = _binaryReader.ReadUInt16();
+                var fileId = _binaryReader.ReadUInt16();
+                var line = _binaryReader.ReadUInt32();
+                var kind = _binaryReader.ReadByte();
+                var method = ReadShortString();
+                entries[i] = new SourceLocationManifestEntry(id, fileId, line, kind, method);
+            }
+            return true;
+        }
+        finally
+        {
+            _stream.Position = savedPos;
+        }
     }
 }

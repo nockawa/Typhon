@@ -25,14 +25,20 @@ public ref struct PageCacheFetchEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFetch, TraceIdHi != 0 || TraceIdLo != 0, 0);
+    {
+        var s = PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFetch, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFetch, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -53,14 +59,20 @@ public ref struct PageCacheDiskReadEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskRead, TraceIdHi != 0 || TraceIdLo != 0, 0);
+    {
+        var s = PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskRead, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheDiskRead, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -76,6 +88,8 @@ public ref struct PageCacheDiskWriteEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public int FilePageIndex;
 
@@ -89,11 +103,15 @@ public ref struct PageCacheDiskWriteEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskWrite, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheDiskWrite, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheDiskWrite, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, _pageCount, _optMask, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, _pageCount, _optMask, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -110,14 +128,20 @@ public ref struct PageCacheAllocatePageEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int FilePageIndex;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheAllocatePage, TraceIdHi != 0 || TraceIdLo != 0, 0);
+    {
+        var s = PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheAllocatePage, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheAllocatePage, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilePageIndex, 0, 0, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -134,14 +158,20 @@ public ref struct PageCacheFlushEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int PageCount;
 
     public readonly int ComputeSize()
-        => PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFlush, TraceIdHi != 0 || TraceIdLo != 0, 0);
+    {
+        var s = PageCacheEventCodec.ComputeSize(TraceEventKind.PageCacheFlush, TraceIdHi != 0 || TraceIdLo != 0, 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheEventCodec.Encode(destination, endTimestamp, TraceEventKind.PageCacheFlush, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, PageCount, 0, 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, PageCount, 0, 0, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -161,6 +191,8 @@ public ref struct PageCacheBackpressureEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int RetryCount;
     public int DirtyCount;
     public int EpochCount;
@@ -170,7 +202,7 @@ public ref struct PageCacheBackpressureEvent : ITraceEventEncoder
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => PageCacheBackpressureCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, RetryCount, DirtyCount, EpochCount, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, RetryCount, DirtyCount, EpochCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

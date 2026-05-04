@@ -20,16 +20,22 @@ public ref struct StatisticsRebuildEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int EntityCount;
     public int MutationCount;
     public int SamplingInterval;
 
     public readonly int ComputeSize()
-        => StatisticsRebuildEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
+    {
+        var s = StatisticsRebuildEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => StatisticsRebuildEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, EntityCount, MutationCount, SamplingInterval, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, EntityCount, MutationCount, SamplingInterval, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

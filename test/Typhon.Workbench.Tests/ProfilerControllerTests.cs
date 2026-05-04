@@ -64,6 +64,26 @@ public sealed class ProfilerControllerTests
     }
 
     [Test]
+    public async Task SourceLocations_TraceMode_ReturnsEmptyManifest()
+    {
+        // Trace-mode sessions return an empty manifest (the trace file's trailer is the source of truth
+        // elsewhere; live wiring is the priority for issue #293 Phase 3). The empty result is a normal
+        // response — clients gracefully render no Source row.
+        var session = await CreateTraceSessionAsync(tickCount: 2, instantsPerTick: 1);
+        await WaitForBuildAsync(session.SessionId, TimeSpan.FromSeconds(5));
+
+        var req = new HttpRequestMessage(HttpMethod.Get, $"/api/sessions/{session.SessionId}/profiler/source-locations");
+        req.Headers.Add("X-Session-Token", session.SessionId.ToString());
+        var resp = await _client.SendAsync(req);
+        Assert.That(resp.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var root = doc.RootElement;
+        Assert.That(root.GetProperty("files").GetArrayLength(), Is.EqualTo(0));
+        Assert.That(root.GetProperty("entries").GetArrayLength(), Is.EqualTo(0));
+    }
+
+    [Test]
     public async Task Metadata_ReturnsProjectedHeader_AfterBuildCompletes()
     {
         var session = await CreateTraceSessionAsync(tickCount: 4, instantsPerTick: 2);

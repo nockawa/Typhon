@@ -38,8 +38,10 @@ public readonly struct RuntimeTransactionLifecycleData
     public ushort SysIdx { get; }
     public uint TxDurUs { get; }
     public byte Success { get; }
-    public RuntimeTransactionLifecycleData(byte threadSlot, long startTimestamp, long durationTicks, ushort sysIdx, uint txDurUs, byte success)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SysIdx = sysIdx; TxDurUs = txDurUs; Success = success; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public RuntimeTransactionLifecycleData(byte threadSlot, long startTimestamp, long durationTicks, ushort sysIdx, uint txDurUs, byte success, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SysIdx = sysIdx; TxDurUs = txDurUs; Success = success; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded Runtime Subscription Output Execute span. Payload: <c>tick i64, level u8, clientCount u16, viewsRefreshed u16, deltasPushed u32, overflowCount u16</c> (17 B).</summary>
@@ -55,10 +57,12 @@ public readonly struct RuntimeSubscriptionOutputExecuteData
     public ushort ViewsRefreshed { get; }
     public uint DeltasPushed { get; }
     public ushort OverflowCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public RuntimeSubscriptionOutputExecuteData(byte threadSlot, long startTimestamp, long durationTicks, long tick, byte level,
-        ushort clientCount, ushort viewsRefreshed, uint deltasPushed, ushort overflowCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; Tick = tick; Level = level;
-      ClientCount = clientCount; ViewsRefreshed = viewsRefreshed; DeltasPushed = deltasPushed; OverflowCount = overflowCount; }
+        ushort clientCount, ushort viewsRefreshed, uint deltasPushed, ushort overflowCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; Tick = tick; Level = level;
+      ClientCount = clientCount; ViewsRefreshed = viewsRefreshed; DeltasPushed = deltasPushed; OverflowCount = overflowCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Wire codec for Runtime events (kinds 161-164).</summary>
@@ -106,19 +110,27 @@ public static class RuntimeEventCodec
 
     public static void EncodeLifecycle(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort sysIdx, uint txDurUs, byte success, out int bytesWritten)
+        ushort sysIdx, uint txDurUs, byte success, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeLifecycle(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.RuntimeTransactionLifecycle, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, sysIdx);
         BinaryPrimitives.WriteUInt32LittleEndian(p[2..], txDurUs);
         p[6] = success;
@@ -131,28 +143,42 @@ public static class RuntimeEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new RuntimeTransactionLifecycleData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadUInt16LittleEndian(p),
             BinaryPrimitives.ReadUInt32LittleEndian(p[2..]),
-            p[6]);
+            p[6], sourceLocationId);
     }
 
     public static void EncodeOutputExecute(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long tick, byte level, ushort clientCount, ushort viewsRefreshed, uint deltasPushed, ushort overflowCount, out int bytesWritten)
+        long tick, byte level, ushort clientCount, ushort viewsRefreshed, uint deltasPushed, ushort overflowCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeOutputExecute(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.RuntimeSubscriptionOutputExecute, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt64LittleEndian(p, tick);
         p[8] = level;
         BinaryPrimitives.WriteUInt16LittleEndian(p[9..], clientCount);
@@ -168,13 +194,19 @@ public static class RuntimeEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new RuntimeSubscriptionOutputExecuteData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadInt64LittleEndian(p),
             p[8],
             BinaryPrimitives.ReadUInt16LittleEndian(p[9..]),
             BinaryPrimitives.ReadUInt16LittleEndian(p[11..]),
             BinaryPrimitives.ReadUInt32LittleEndian(p[13..]),
-            BinaryPrimitives.ReadUInt16LittleEndian(p[17..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p[17..]), sourceLocationId);
     }
 }

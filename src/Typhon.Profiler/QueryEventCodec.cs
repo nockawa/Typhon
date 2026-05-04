@@ -19,10 +19,12 @@ public readonly struct QueryParseData
     public ulong TraceIdLo { get; }
     public ushort PredicateCount { get; }
     public byte BranchCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryParseData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort pc, byte bc)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; PredicateCount = pc; BranchCount = bc; }
+    public QueryParseData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort pc, byte bc, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; PredicateCount = pc; BranchCount = bc; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -37,10 +39,12 @@ public readonly struct QueryParseDnfData
     public ulong TraceIdLo { get; }
     public ushort InBranches { get; }
     public ushort OutBranches { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryParseDnfData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort ib, ushort ob)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; InBranches = ib; OutBranches = ob; }
+    public QueryParseDnfData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort ib, ushort ob, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; InBranches = ib; OutBranches = ob; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -57,10 +61,12 @@ public readonly struct QueryPlanData
     public ushort IndexFieldIdx { get; }
     public long RangeMin { get; }
     public long RangeMax { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryPlanData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, byte ec, ushort ifi, long rmin, long rmax)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; EvaluatorCount = ec; IndexFieldIdx = ifi; RangeMin = rmin; RangeMax = rmax; }
+    public QueryPlanData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, byte ec, ushort ifi, long rmin, long rmax, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; EvaluatorCount = ec; IndexFieldIdx = ifi; RangeMin = rmin; RangeMax = rmax; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -75,10 +81,12 @@ public readonly struct QueryEstimateData
     public ulong TraceIdLo { get; }
     public ushort FieldIdx { get; }
     public long Cardinality { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryEstimateData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort fi, long card)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; FieldIdx = fi; Cardinality = card; }
+    public QueryEstimateData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort fi, long card, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; FieldIdx = fi; Cardinality = card; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -105,10 +113,12 @@ public readonly struct QueryPlanSortData
     public ulong TraceIdLo { get; }
     public byte EvaluatorCount { get; }
     public uint SortNs { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryPlanSortData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, byte ec, uint ns)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; EvaluatorCount = ec; SortNs = ns; }
+    public QueryPlanSortData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, byte ec, uint ns, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; EvaluatorCount = ec; SortNs = ns; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -123,10 +133,12 @@ public readonly struct QueryExecuteIndexScanData
     public ulong TraceIdLo { get; }
     public ushort PrimaryFieldIdx { get; }
     public byte Mode { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryExecuteIndexScanData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort pfi, byte m)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; PrimaryFieldIdx = pfi; Mode = m; }
+    public QueryExecuteIndexScanData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort pfi, byte m, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; PrimaryFieldIdx = pfi; Mode = m; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -141,10 +153,12 @@ public readonly struct QueryExecuteIterateData
     public ulong TraceIdLo { get; }
     public int ChunkCount { get; }
     public int EntryCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryExecuteIterateData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int cc, int ec)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; ChunkCount = cc; EntryCount = ec; }
+    public QueryExecuteIterateData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int cc, int ec, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; ChunkCount = cc; EntryCount = ec; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -159,10 +173,12 @@ public readonly struct QueryExecuteFilterData
     public ulong TraceIdLo { get; }
     public byte FilterCount { get; }
     public int RejectedCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryExecuteFilterData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, byte fc, int rc)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; FilterCount = fc; RejectedCount = rc; }
+    public QueryExecuteFilterData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, byte fc, int rc, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; FilterCount = fc; RejectedCount = rc; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -178,10 +194,12 @@ public readonly struct QueryExecutePaginationData
     public int Skip { get; }
     public int Take { get; }
     public byte EarlyTerm { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryExecutePaginationData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int sk, int tk, byte et)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; Skip = sk; Take = tk; EarlyTerm = et; }
+    public QueryExecutePaginationData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int sk, int tk, byte et, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; Skip = sk; Take = tk; EarlyTerm = et; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -205,10 +223,12 @@ public readonly struct QueryCountData
     public ulong TraceIdHi { get; }
     public ulong TraceIdLo { get; }
     public int ResultCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public QueryCountData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int rc)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; ResultCount = rc; }
+    public QueryCountData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int rc, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; ResultCount = rc; SourceLocationId = srcLoc; }
 }
 
 // ── Codec ───────────────────────────────────────────────────────────────────
@@ -242,44 +262,59 @@ public static class QueryEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC, ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ReadOnlySpan<byte> ReadSpanPreamble(ReadOnlySpan<byte> source,
         out byte threadSlot, out long startTs, out long dur, out ulong spanId, out ulong parentSpanId,
-        out ulong traceIdHi, out ulong traceIdLo)
+        out ulong traceIdHi, out ulong traceIdLo, out ushort sourceLocationId)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out threadSlot, out startTs);
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out dur, out spanId, out parentSpanId, out var spanFlags);
         traceIdHi = 0; traceIdLo = 0;
+        sourceLocationId = 0;
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
         if (hasTC)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
-        return source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        return source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
     }
 
     // ── Parse ──
     public static void EncodeParse(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort predicateCount, byte branchCount, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort predicateCount, byte branchCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeParse(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryParse, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, predicateCount);
         p[2] = branchCount;
         bytesWritten = size;
@@ -287,20 +322,23 @@ public static class QueryEventCodec
 
     public static QueryParseData DecodeParse(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryParseData(ts, sts, dur, sid, psid, thi, tlo,
-            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2]);
+            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2], srcLoc);
     }
 
     // ── Parse:DNF ──
     public static void EncodeParseDnf(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort inBranches, ushort outBranches, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort inBranches, ushort outBranches, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeParseDnf(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryParseDnf, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, inBranches);
         BinaryPrimitives.WriteUInt16LittleEndian(p[2..], outBranches);
         bytesWritten = size;
@@ -308,21 +346,24 @@ public static class QueryEventCodec
 
     public static QueryParseDnfData DecodeParseDnf(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryParseDnfData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadUInt16LittleEndian(p),
-            BinaryPrimitives.ReadUInt16LittleEndian(p[2..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p[2..]), srcLoc);
     }
 
     // ── Plan ──
     public static void EncodePlan(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, byte evaluatorCount, ushort indexFieldIdx, long rangeMin, long rangeMax, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, byte evaluatorCount, ushort indexFieldIdx, long rangeMin, long rangeMax, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizePlan(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryPlan, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         p[0] = evaluatorCount;
         BinaryPrimitives.WriteUInt16LittleEndian(p[1..], indexFieldIdx);
         BinaryPrimitives.WriteInt64LittleEndian(p[3..], rangeMin);
@@ -332,23 +373,26 @@ public static class QueryEventCodec
 
     public static QueryPlanData DecodePlan(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryPlanData(ts, sts, dur, sid, psid, thi, tlo,
             p[0],
             BinaryPrimitives.ReadUInt16LittleEndian(p[1..]),
             BinaryPrimitives.ReadInt64LittleEndian(p[3..]),
-            BinaryPrimitives.ReadInt64LittleEndian(p[11..]));
+            BinaryPrimitives.ReadInt64LittleEndian(p[11..]), srcLoc);
     }
 
     // ── Estimate ──
     public static void EncodeEstimate(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort fieldIdx, long cardinality, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort fieldIdx, long cardinality, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeEstimate(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryEstimate, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, fieldIdx);
         BinaryPrimitives.WriteInt64LittleEndian(p[2..], cardinality);
         bytesWritten = size;
@@ -356,10 +400,10 @@ public static class QueryEventCodec
 
     public static QueryEstimateData DecodeEstimate(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryEstimateData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadUInt16LittleEndian(p),
-            BinaryPrimitives.ReadInt64LittleEndian(p[2..]));
+            BinaryPrimitives.ReadInt64LittleEndian(p[2..]), srcLoc);
     }
 
     // ── PrimarySelect (instant) ──
@@ -382,13 +426,16 @@ public static class QueryEventCodec
 
     // ── PlanSort ──
     public static void EncodePlanSort(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, byte evaluatorCount, uint sortNs, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, byte evaluatorCount, uint sortNs, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizePlanSort(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryPlanSort, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         p[0] = evaluatorCount;
         BinaryPrimitives.WriteUInt32LittleEndian(p[1..], sortNs);
         bytesWritten = size;
@@ -396,20 +443,23 @@ public static class QueryEventCodec
 
     public static QueryPlanSortData DecodePlanSort(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryPlanSortData(ts, sts, dur, sid, psid, thi, tlo,
-            p[0], BinaryPrimitives.ReadUInt32LittleEndian(p[1..]));
+            p[0], BinaryPrimitives.ReadUInt32LittleEndian(p[1..]), srcLoc);
     }
 
     // ── IndexScan ──
     public static void EncodeIndexScan(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort primaryFieldIdx, byte mode, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort primaryFieldIdx, byte mode, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeIndexScan(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryExecuteIndexScan, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, primaryFieldIdx);
         p[2] = mode;
         bytesWritten = size;
@@ -417,20 +467,23 @@ public static class QueryEventCodec
 
     public static QueryExecuteIndexScanData DecodeIndexScan(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryExecuteIndexScanData(ts, sts, dur, sid, psid, thi, tlo,
-            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2]);
+            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2], srcLoc);
     }
 
     // ── Iterate ──
     public static void EncodeIterate(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int chunkCount, int entryCount, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int chunkCount, int entryCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeIterate(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryExecuteIterate, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, chunkCount);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], entryCount);
         bytesWritten = size;
@@ -438,21 +491,24 @@ public static class QueryEventCodec
 
     public static QueryExecuteIterateData DecodeIterate(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryExecuteIterateData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
-            BinaryPrimitives.ReadInt32LittleEndian(p[4..]));
+            BinaryPrimitives.ReadInt32LittleEndian(p[4..]), srcLoc);
     }
 
     // ── Filter ──
     public static void EncodeFilter(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, byte filterCount, int rejectedCount, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, byte filterCount, int rejectedCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeFilter(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryExecuteFilter, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         p[0] = filterCount;
         BinaryPrimitives.WriteInt32LittleEndian(p[1..], rejectedCount);
         bytesWritten = size;
@@ -460,20 +516,23 @@ public static class QueryEventCodec
 
     public static QueryExecuteFilterData DecodeFilter(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryExecuteFilterData(ts, sts, dur, sid, psid, thi, tlo,
-            p[0], BinaryPrimitives.ReadInt32LittleEndian(p[1..]));
+            p[0], BinaryPrimitives.ReadInt32LittleEndian(p[1..]), srcLoc);
     }
 
     // ── Pagination ──
     public static void EncodePagination(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int skip, int take, byte earlyTerm, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int skip, int take, byte earlyTerm, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizePagination(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryExecutePagination, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, skip);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], take);
         p[8] = earlyTerm;
@@ -482,11 +541,11 @@ public static class QueryEventCodec
 
     public static QueryExecutePaginationData DecodePagination(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryExecutePaginationData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
             BinaryPrimitives.ReadInt32LittleEndian(p[4..]),
-            p[8]);
+            p[8], srcLoc);
     }
 
     // ── StorageMode (instant) ──
@@ -505,21 +564,24 @@ public static class QueryEventCodec
 
     // ── Count ──
     public static void EncodeCount(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int resultCount, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int resultCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeCount(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.QueryCount, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, resultCount);
         bytesWritten = size;
     }
 
     public static QueryCountData DecodeCount(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new QueryCountData(ts, sts, dur, sid, psid, thi, tlo,
-            BinaryPrimitives.ReadInt32LittleEndian(p));
+            BinaryPrimitives.ReadInt32LittleEndian(p), srcLoc);
     }
 }

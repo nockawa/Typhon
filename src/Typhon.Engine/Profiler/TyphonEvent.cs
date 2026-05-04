@@ -302,7 +302,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.EcsQueryExecute"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryExecuteEvent BeginEcsQueryExecute(ushort archetypeTypeId)
+    public static EcsQueryExecuteEvent BeginEcsQueryExecute(ushort archetypeTypeId) => BeginEcsQueryExecuteWithSiteId(0, archetypeTypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsQueryExecuteEvent BeginEcsQueryExecuteWithSiteId(ushort siteId, ushort archetypeTypeId)
     {
         if (!BeginPrologue(TraceEventKind.EcsQueryExecute, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -319,12 +322,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             ArchetypeTypeId = archetypeTypeId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.EcsQueryCount"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryCountEvent BeginEcsQueryCount(ushort archetypeTypeId)
+    public static EcsQueryCountEvent BeginEcsQueryCount(ushort archetypeTypeId) => BeginEcsQueryCountWithSiteId(0, archetypeTypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsQueryCountEvent BeginEcsQueryCountWithSiteId(ushort siteId, ushort archetypeTypeId)
     {
         if (!BeginPrologue(TraceEventKind.EcsQueryCount, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -341,12 +348,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             ArchetypeTypeId = archetypeTypeId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.EcsQueryAny"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryAnyEvent BeginEcsQueryAny(ushort archetypeTypeId)
+    public static EcsQueryAnyEvent BeginEcsQueryAny(ushort archetypeTypeId) => BeginEcsQueryAnyWithSiteId(0, archetypeTypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsQueryAnyEvent BeginEcsQueryAnyWithSiteId(ushort siteId, ushort archetypeTypeId)
     {
         if (!BeginPrologue(TraceEventKind.EcsQueryAny, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -363,12 +374,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             ArchetypeTypeId = archetypeTypeId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.EcsViewRefresh"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshEvent BeginEcsViewRefresh(ushort archetypeTypeId)
+    public static EcsViewRefreshEvent BeginEcsViewRefresh(ushort archetypeTypeId) => BeginEcsViewRefreshWithSiteId(0, archetypeTypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsViewRefreshEvent BeginEcsViewRefreshWithSiteId(ushort siteId, ushort archetypeTypeId)
     {
         if (!BeginPrologue(TraceEventKind.EcsViewRefresh, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -385,12 +400,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             ArchetypeTypeId = archetypeTypeId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.EcsSpawn"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsSpawnEvent BeginEcsSpawn(ushort archetypeId)
+    public static EcsSpawnEvent BeginEcsSpawn(ushort archetypeId) => BeginEcsSpawnWithSiteId(0, archetypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsSpawnEvent BeginEcsSpawnWithSiteId(ushort siteId, ushort archetypeId)
     {
         if (!BeginPrologue(TraceEventKind.EcsSpawn, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -407,12 +426,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             ArchetypeId = archetypeId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.EcsDestroy"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsDestroyEvent BeginEcsDestroy(ulong entityId)
+    public static EcsDestroyEvent BeginEcsDestroy(ulong entityId) => BeginEcsDestroyWithSiteId(0, entityId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsDestroyEvent BeginEcsDestroyWithSiteId(ushort siteId, ulong entityId)
     {
         if (!BeginPrologue(TraceEventKind.EcsDestroy, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -429,12 +452,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             EntityId = entityId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.TransactionCommit"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionCommitEvent BeginTransactionCommit(long tsn)
+    public static TransactionCommitEvent BeginTransactionCommit(long tsn) => BeginTransactionCommitWithSiteId(0, tsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static TransactionCommitEvent BeginTransactionCommitWithSiteId(ushort siteId, long tsn)
     {
         if (!BeginPrologue(TraceEventKind.TransactionCommit, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -451,12 +478,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             Tsn = tsn,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.TransactionRollback"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionRollbackEvent BeginTransactionRollback(long tsn)
+    public static TransactionRollbackEvent BeginTransactionRollback(long tsn) => BeginTransactionRollbackWithSiteId(0, tsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static TransactionRollbackEvent BeginTransactionRollbackWithSiteId(ushort siteId, long tsn)
     {
         if (!BeginPrologue(TraceEventKind.TransactionRollback, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -473,12 +504,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             Tsn = tsn,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.TransactionCommitComponent"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionCommitComponentEvent BeginTransactionCommitComponent(long tsn, int componentTypeId)
+    public static TransactionCommitComponentEvent BeginTransactionCommitComponent(long tsn, int componentTypeId) => BeginTransactionCommitComponentWithSiteId(0, tsn, componentTypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static TransactionCommitComponentEvent BeginTransactionCommitComponentWithSiteId(ushort siteId, long tsn, int componentTypeId)
     {
         if (!BeginPrologue(TraceEventKind.TransactionCommitComponent, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -496,12 +531,20 @@ public static class TyphonEvent
             TraceIdLo = traceIdLo,
             Tsn = tsn,
             ComponentTypeId = componentTypeId,
+            SourceLocationId = siteId,
         };
     }
 
-    /// <summary>Begin a <see cref="TraceEventKind.BTreeInsert"/> span.</summary>
+    /// <summary>Begin a <see cref="TraceEventKind.BTreeInsert"/> span. Pass-through for callers without a generated interceptor (siteId=0).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeInsertEvent BeginBTreeInsert()
+    public static BTreeInsertEvent BeginBTreeInsert() => BeginBTreeInsertWithSiteId(0);
+
+    /// <summary>
+    /// Begin a <see cref="TraceEventKind.BTreeInsert"/> span carrying a compile-time source-location id.
+    /// Called by interceptors emitted by <c>SourceLocationGenerator</c>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static BTreeInsertEvent BeginBTreeInsertWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.BTreeInsert, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -517,12 +560,16 @@ public static class TyphonEvent
             PreviousSpanId = previousSpanId,
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.BTreeDelete"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeDeleteEvent BeginBTreeDelete()
+    public static BTreeDeleteEvent BeginBTreeDelete() => BeginBTreeDeleteWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static BTreeDeleteEvent BeginBTreeDeleteWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.BTreeDelete, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -538,12 +585,16 @@ public static class TyphonEvent
             PreviousSpanId = previousSpanId,
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.BTreeNodeSplit"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeNodeSplitEvent BeginBTreeNodeSplit()
+    public static BTreeNodeSplitEvent BeginBTreeNodeSplit() => BeginBTreeNodeSplitWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static BTreeNodeSplitEvent BeginBTreeNodeSplitWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.BTreeNodeSplit, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -559,12 +610,16 @@ public static class TyphonEvent
             PreviousSpanId = previousSpanId,
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.BTreeNodeMerge"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeNodeMergeEvent BeginBTreeNodeMerge()
+    public static BTreeNodeMergeEvent BeginBTreeNodeMerge() => BeginBTreeNodeMergeWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static BTreeNodeMergeEvent BeginBTreeNodeMergeWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.BTreeNodeMerge, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -580,12 +635,16 @@ public static class TyphonEvent
             PreviousSpanId = previousSpanId,
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.PageCacheFetch"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheFetchEvent BeginPageCacheFetch(int filePageIndex)
+    public static PageCacheFetchEvent BeginPageCacheFetch(int filePageIndex) => BeginPageCacheFetchWithSiteId(0, filePageIndex);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PageCacheFetchEvent BeginPageCacheFetchWithSiteId(ushort siteId, int filePageIndex)
     {
         if (!BeginPrologue(TraceEventKind.PageCacheFetch, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -602,12 +661,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             FilePageIndex = filePageIndex,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.PageCacheDiskRead"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheDiskReadEvent BeginPageCacheDiskRead(int filePageIndex)
+    public static PageCacheDiskReadEvent BeginPageCacheDiskRead(int filePageIndex) => BeginPageCacheDiskReadWithSiteId(0, filePageIndex);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PageCacheDiskReadEvent BeginPageCacheDiskReadWithSiteId(ushort siteId, int filePageIndex)
     {
         if (!BeginPrologue(TraceEventKind.PageCacheDiskRead, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -624,12 +687,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             FilePageIndex = filePageIndex,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.PageCacheDiskWrite"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheDiskWriteEvent BeginPageCacheDiskWrite(int filePageIndex)
+    public static PageCacheDiskWriteEvent BeginPageCacheDiskWrite(int filePageIndex) => BeginPageCacheDiskWriteWithSiteId(0, filePageIndex);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PageCacheDiskWriteEvent BeginPageCacheDiskWriteWithSiteId(ushort siteId, int filePageIndex)
     {
         if (!BeginPrologue(TraceEventKind.PageCacheDiskWrite, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -646,12 +713,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             FilePageIndex = filePageIndex,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.PageCacheAllocatePage"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheAllocatePageEvent BeginPageCacheAllocatePage(int filePageIndex)
+    public static PageCacheAllocatePageEvent BeginPageCacheAllocatePage(int filePageIndex) => BeginPageCacheAllocatePageWithSiteId(0, filePageIndex);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PageCacheAllocatePageEvent BeginPageCacheAllocatePageWithSiteId(ushort siteId, int filePageIndex)
     {
         if (!BeginPrologue(TraceEventKind.PageCacheAllocatePage, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -668,12 +739,16 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             FilePageIndex = filePageIndex,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.PageCacheFlush"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheFlushEvent BeginPageCacheFlush(int pageCount)
+    public static PageCacheFlushEvent BeginPageCacheFlush(int pageCount) => BeginPageCacheFlushWithSiteId(0, pageCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PageCacheFlushEvent BeginPageCacheFlushWithSiteId(ushort siteId, int pageCount)
     {
         if (!BeginPrologue(TraceEventKind.PageCacheFlush, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -690,13 +765,17 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             PageCount = pageCount,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.ClusterMigration"/> span.</summary>
     /// <param name="componentCount">Total component instances moved this batch (entities × per-entity slot count). Surfaces in the viewer's tooltip alongside entity count.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ClusterMigrationEvent BeginClusterMigration(ushort archetypeId, int migrationCount, int componentCount)
+    public static ClusterMigrationEvent BeginClusterMigration(ushort archetypeId, int migrationCount, int componentCount) => BeginClusterMigrationWithSiteId(0, archetypeId, migrationCount, componentCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ClusterMigrationEvent BeginClusterMigrationWithSiteId(ushort siteId, ushort archetypeId, int migrationCount, int componentCount)
     {
         if (!BeginPrologue(TraceEventKind.ClusterMigration, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -715,6 +794,7 @@ public static class TyphonEvent
             ArchetypeId = archetypeId,
             MigrationCount = migrationCount,
             ComponentCount = componentCount,
+            SourceLocationId = siteId,
         };
     }
 
@@ -728,7 +808,10 @@ public static class TyphonEvent
     /// <c>EmitPhaseStart</c>+<c>EmitPhaseEnd</c> instant pair on the producer side.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimePhaseSpanEvent BeginRuntimePhase(TickPhase phase)
+    public static RuntimePhaseSpanEvent BeginRuntimePhase(TickPhase phase) => BeginRuntimePhaseWithSiteId(0, phase);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimePhaseSpanEvent BeginRuntimePhaseWithSiteId(ushort siteId, TickPhase phase)
     {
         if (!BeginPrologue(TraceEventKind.RuntimePhaseSpan, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -745,6 +828,7 @@ public static class TyphonEvent
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
             Phase = (byte)phase,
+            SourceLocationId = siteId,
         };
     }
 
@@ -754,7 +838,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.TransactionPersist"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionPersistEvent BeginTransactionPersist(long tsn)
+    public static TransactionPersistEvent BeginTransactionPersist(long tsn) => BeginTransactionPersistWithSiteId(0, tsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static TransactionPersistEvent BeginTransactionPersistWithSiteId(ushort siteId, long tsn)
     {
         if (!BeginPrologue(TraceEventKind.TransactionPersist, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -765,6 +852,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn,
+            SourceLocationId = siteId,
         };
     }
 
@@ -774,7 +862,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.PageCacheBackpressure"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheBackpressureEvent BeginPageCacheBackpressure()
+    public static PageCacheBackpressureEvent BeginPageCacheBackpressure() => BeginPageCacheBackpressureWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PageCacheBackpressureEvent BeginPageCacheBackpressureWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.PageCacheBackpressure, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -785,6 +876,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
@@ -794,7 +886,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.WalFlush"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static WalFlushEvent BeginWalFlush(int batchByteCount, int frameCount, long highLsn)
+    public static WalFlushEvent BeginWalFlush(int batchByteCount, int frameCount, long highLsn) => BeginWalFlushWithSiteId(0, batchByteCount, frameCount, highLsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static WalFlushEvent BeginWalFlushWithSiteId(ushort siteId, int batchByteCount, int frameCount, long highLsn)
     {
         if (!BeginPrologue(TraceEventKind.WalFlush, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -806,12 +901,16 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             BatchByteCount = batchByteCount, FrameCount = frameCount, HighLsn = highLsn,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.WalSegmentRotate"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static WalSegmentRotateEvent BeginWalSegmentRotate(int newSegmentIndex)
+    public static WalSegmentRotateEvent BeginWalSegmentRotate(int newSegmentIndex) => BeginWalSegmentRotateWithSiteId(0, newSegmentIndex);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static WalSegmentRotateEvent BeginWalSegmentRotateWithSiteId(ushort siteId, int newSegmentIndex)
     {
         if (!BeginPrologue(TraceEventKind.WalSegmentRotate, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -823,12 +922,16 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             NewSegmentIndex = newSegmentIndex,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.WalWait"/> span. Only emitted when the fast path (already durable) misses.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static WalWaitEvent BeginWalWait(long targetLsn)
+    public static WalWaitEvent BeginWalWait(long targetLsn) => BeginWalWaitWithSiteId(0, targetLsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static WalWaitEvent BeginWalWaitWithSiteId(ushort siteId, long targetLsn)
     {
         if (!BeginPrologue(TraceEventKind.WalWait, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -840,6 +943,7 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             TargetLsn = targetLsn,
+            SourceLocationId = siteId,
         };
     }
 
@@ -849,7 +953,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.CheckpointCycle"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointCycleEvent BeginCheckpointCycle(long targetLsn, CheckpointReason reason)
+    public static CheckpointCycleEvent BeginCheckpointCycle(long targetLsn, CheckpointReason reason) => BeginCheckpointCycleWithSiteId(0, targetLsn, reason);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static CheckpointCycleEvent BeginCheckpointCycleWithSiteId(ushort siteId, long targetLsn, CheckpointReason reason)
     {
         if (!BeginPrologue(TraceEventKind.CheckpointCycle, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -861,12 +968,16 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             TargetLsn = targetLsn, Reason = (byte)reason,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.CheckpointCollect"/> span (no payload).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointCollectEvent BeginCheckpointCollect()
+    public static CheckpointCollectEvent BeginCheckpointCollect() => BeginCheckpointCollectWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static CheckpointCollectEvent BeginCheckpointCollectWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.CheckpointCollect, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -877,12 +988,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.CheckpointWrite"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointWriteEvent BeginCheckpointWrite()
+    public static CheckpointWriteEvent BeginCheckpointWrite() => BeginCheckpointWriteWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static CheckpointWriteEvent BeginCheckpointWriteWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.CheckpointWrite, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -893,12 +1008,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.CheckpointFsync"/> span (no payload).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointFsyncEvent BeginCheckpointFsync()
+    public static CheckpointFsyncEvent BeginCheckpointFsync() => BeginCheckpointFsyncWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static CheckpointFsyncEvent BeginCheckpointFsyncWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.CheckpointFsync, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -909,12 +1028,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.CheckpointTransition"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointTransitionEvent BeginCheckpointTransition()
+    public static CheckpointTransitionEvent BeginCheckpointTransition() => BeginCheckpointTransitionWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static CheckpointTransitionEvent BeginCheckpointTransitionWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.CheckpointTransition, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -925,12 +1048,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.CheckpointRecycle"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointRecycleEvent BeginCheckpointRecycle()
+    public static CheckpointRecycleEvent BeginCheckpointRecycle() => BeginCheckpointRecycleWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static CheckpointRecycleEvent BeginCheckpointRecycleWithSiteId(ushort siteId)
     {
         if (!BeginPrologue(TraceEventKind.CheckpointRecycle, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -941,6 +1068,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
@@ -950,7 +1078,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.StatisticsRebuild"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StatisticsRebuildEvent BeginStatisticsRebuild(int entityCount, int mutationCount, int samplingInterval)
+    public static StatisticsRebuildEvent BeginStatisticsRebuild(int entityCount, int mutationCount, int samplingInterval) => BeginStatisticsRebuildWithSiteId(0, entityCount, mutationCount, samplingInterval);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StatisticsRebuildEvent BeginStatisticsRebuildWithSiteId(ushort siteId, int entityCount, int mutationCount, int samplingInterval)
     {
         if (!BeginPrologue(TraceEventKind.StatisticsRebuild, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
                            out var previousSpanId, out var traceIdHi, out var traceIdLo))
@@ -962,6 +1093,7 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             EntityCount = entityCount, MutationCount = mutationCount, SamplingInterval = samplingInterval,
+            SourceLocationId = siteId,
         };
     }
 
@@ -2308,7 +2440,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryAabb"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryAabbEvent BeginSpatialQueryAabb(uint categoryMask)
+    public static SpatialQueryAabbEvent BeginSpatialQueryAabb(uint categoryMask) => BeginSpatialQueryAabbWithSiteId(0, categoryMask);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialQueryAabbEvent BeginSpatialQueryAabbWithSiteId(ushort siteId, uint categoryMask)
     {
         if (!TelemetryConfig.SpatialQueryAabbActive)
         {
@@ -2323,12 +2458,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, CategoryMask = categoryMask,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryRadius"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryRadiusEvent BeginSpatialQueryRadius(float radius)
+    public static SpatialQueryRadiusEvent BeginSpatialQueryRadius(float radius) => BeginSpatialQueryRadiusWithSiteId(0, radius);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialQueryRadiusEvent BeginSpatialQueryRadiusWithSiteId(ushort siteId, float radius)
     {
         if (!TelemetryConfig.SpatialQueryRadiusActive)
         {
@@ -2343,12 +2482,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Radius = radius,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryRay"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryRayEvent BeginSpatialQueryRay(float maxDist)
+    public static SpatialQueryRayEvent BeginSpatialQueryRay(float maxDist) => BeginSpatialQueryRayWithSiteId(0, maxDist);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialQueryRayEvent BeginSpatialQueryRayWithSiteId(ushort siteId, float maxDist)
     {
         if (!TelemetryConfig.SpatialQueryRayActive)
         {
@@ -2363,12 +2506,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, MaxDist = maxDist,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryFrustum"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryFrustumEvent BeginSpatialQueryFrustum(byte planeCount)
+    public static SpatialQueryFrustumEvent BeginSpatialQueryFrustum(byte planeCount) => BeginSpatialQueryFrustumWithSiteId(0, planeCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialQueryFrustumEvent BeginSpatialQueryFrustumWithSiteId(ushort siteId, byte planeCount)
     {
         if (!TelemetryConfig.SpatialQueryFrustumActive)
         {
@@ -2383,12 +2530,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, PlaneCount = planeCount,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryKnn"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryKnnEvent BeginSpatialQueryKnn(ushort k)
+    public static SpatialQueryKnnEvent BeginSpatialQueryKnn(ushort k) => BeginSpatialQueryKnnWithSiteId(0, k);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialQueryKnnEvent BeginSpatialQueryKnnWithSiteId(ushort siteId, ushort k)
     {
         if (!TelemetryConfig.SpatialQueryKnnActive)
         {
@@ -2403,12 +2554,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, K = k,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryCount"/> span. <paramref name="variant"/>: 0=AABB, 1=Radius.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryCountEvent BeginSpatialQueryCount(byte variant)
+    public static SpatialQueryCountEvent BeginSpatialQueryCount(byte variant) => BeginSpatialQueryCountWithSiteId(0, variant);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialQueryCountEvent BeginSpatialQueryCountWithSiteId(ushort siteId, byte variant)
     {
         if (!TelemetryConfig.SpatialQueryCountActive)
         {
@@ -2423,6 +2578,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Variant = variant,
+            SourceLocationId = siteId,
         };
     }
 
@@ -2430,7 +2586,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeInsert"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeInsertEvent BeginSpatialRTreeInsert(long entityId)
+    public static SpatialRTreeInsertEvent BeginSpatialRTreeInsert(long entityId) => BeginSpatialRTreeInsertWithSiteId(0, entityId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialRTreeInsertEvent BeginSpatialRTreeInsertWithSiteId(ushort siteId, long entityId)
     {
         if (!TelemetryConfig.SpatialRTreeInsertActive)
         {
@@ -2445,12 +2604,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, EntityId = entityId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeRemove"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeRemoveEvent BeginSpatialRTreeRemove(long entityId)
+    public static SpatialRTreeRemoveEvent BeginSpatialRTreeRemove(long entityId) => BeginSpatialRTreeRemoveWithSiteId(0, entityId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialRTreeRemoveEvent BeginSpatialRTreeRemoveWithSiteId(ushort siteId, long entityId)
     {
         if (!TelemetryConfig.SpatialRTreeRemoveActive)
         {
@@ -2465,12 +2628,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, EntityId = entityId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeNodeSplit"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeNodeSplitEvent BeginSpatialRTreeNodeSplit(byte depth)
+    public static SpatialRTreeNodeSplitEvent BeginSpatialRTreeNodeSplit(byte depth) => BeginSpatialRTreeNodeSplitWithSiteId(0, depth);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialRTreeNodeSplitEvent BeginSpatialRTreeNodeSplitWithSiteId(ushort siteId, byte depth)
     {
         if (!TelemetryConfig.SpatialRTreeNodeSplitActive)
         {
@@ -2485,12 +2652,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Depth = depth,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeBulkLoad"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeBulkLoadEvent BeginSpatialRTreeBulkLoad(int entityCount)
+    public static SpatialRTreeBulkLoadEvent BeginSpatialRTreeBulkLoad(int entityCount) => BeginSpatialRTreeBulkLoadWithSiteId(0, entityCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialRTreeBulkLoadEvent BeginSpatialRTreeBulkLoadWithSiteId(ushort siteId, int entityCount)
     {
         if (!TelemetryConfig.SpatialRTreeBulkLoadActive)
         {
@@ -2505,6 +2676,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, EntityCount = entityCount,
+            SourceLocationId = siteId,
         };
     }
 
@@ -2743,7 +2915,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialTierIndexRebuild"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialTierIndexRebuildEvent BeginSpatialTierIndexRebuild(ushort archetypeId)
+    public static SpatialTierIndexRebuildEvent BeginSpatialTierIndexRebuild(ushort archetypeId) => BeginSpatialTierIndexRebuildWithSiteId(0, archetypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialTierIndexRebuildEvent BeginSpatialTierIndexRebuildWithSiteId(ushort siteId, ushort archetypeId)
     {
         if (!TelemetryConfig.SpatialTierIndexRebuildActive)
         {
@@ -2758,6 +2933,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, ArchetypeId = archetypeId,
+            SourceLocationId = siteId,
         };
     }
 
@@ -2790,7 +2966,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialMaintainInsert"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialMaintainInsertEvent BeginSpatialMaintainInsert(long entityPK, ushort componentTypeId)
+    public static SpatialMaintainInsertEvent BeginSpatialMaintainInsert(long entityPK, ushort componentTypeId) => BeginSpatialMaintainInsertWithSiteId(0, entityPK, componentTypeId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialMaintainInsertEvent BeginSpatialMaintainInsertWithSiteId(ushort siteId, long entityPK, ushort componentTypeId)
     {
         if (!TelemetryConfig.SpatialMaintainInsertActive)
         {
@@ -2806,12 +2985,16 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             EntityPK = entityPK, ComponentTypeId = componentTypeId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialMaintainUpdateSlowPath"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialMaintainUpdateSlowPathEvent BeginSpatialMaintainUpdateSlowPath(long entityPK, ushort componentTypeId, float escapeDistSq)
+    public static SpatialMaintainUpdateSlowPathEvent BeginSpatialMaintainUpdateSlowPath(long entityPK, ushort componentTypeId, float escapeDistSq) => BeginSpatialMaintainUpdateSlowPathWithSiteId(0, entityPK, componentTypeId, escapeDistSq);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialMaintainUpdateSlowPathEvent BeginSpatialMaintainUpdateSlowPathWithSiteId(ushort siteId, long entityPK, ushort componentTypeId, float escapeDistSq)
     {
         if (!TelemetryConfig.SpatialMaintainUpdateSlowPathActive)
         {
@@ -2827,6 +3010,7 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             EntityPK = entityPK, ComponentTypeId = componentTypeId, EscapeDistSq = escapeDistSq,
+            SourceLocationId = siteId,
         };
     }
 
@@ -2909,7 +3093,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SpatialTriggerEval"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialTriggerEvalEvent BeginSpatialTriggerEval(ushort regionId)
+    public static SpatialTriggerEvalEvent BeginSpatialTriggerEval(ushort regionId) => BeginSpatialTriggerEvalWithSiteId(0, regionId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SpatialTriggerEvalEvent BeginSpatialTriggerEvalWithSiteId(ushort siteId, ushort regionId)
     {
         if (!TelemetryConfig.SpatialTriggerEvalActive)
         {
@@ -2924,6 +3111,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, RegionId = regionId,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3064,7 +3252,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SchedulerSystemSingleThreaded"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerSystemSingleThreadedEvent BeginSchedulerSystemSingleThreaded(ushort sysIdx, byte isParallelQuery, ushort chunkCount)
+    public static SchedulerSystemSingleThreadedEvent BeginSchedulerSystemSingleThreaded(ushort sysIdx, byte isParallelQuery, ushort chunkCount) => BeginSchedulerSystemSingleThreadedWithSiteId(0, sysIdx, isParallelQuery, chunkCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SchedulerSystemSingleThreadedEvent BeginSchedulerSystemSingleThreadedWithSiteId(ushort siteId, ushort sysIdx, byte isParallelQuery, ushort chunkCount)
     {
         if (!TelemetryConfig.SchedulerSystemSingleThreadedActive)
         {
@@ -3080,6 +3271,7 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             SysIdx = sysIdx, IsParallelQuery = isParallelQuery, ChunkCount = chunkCount,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3087,7 +3279,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SchedulerWorkerIdle"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerWorkerIdleEvent BeginSchedulerWorkerIdle(byte workerId)
+    public static SchedulerWorkerIdleEvent BeginSchedulerWorkerIdle(byte workerId) => BeginSchedulerWorkerIdleWithSiteId(0, workerId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SchedulerWorkerIdleEvent BeginSchedulerWorkerIdleWithSiteId(ushort siteId, byte workerId)
     {
         if (!TelemetryConfig.SchedulerWorkerIdleActive)
         {
@@ -3102,6 +3297,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, WorkerId = workerId,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3132,7 +3328,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SchedulerWorkerBetweenTick"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerWorkerBetweenTickEvent BeginSchedulerWorkerBetweenTick(byte workerId)
+    public static SchedulerWorkerBetweenTickEvent BeginSchedulerWorkerBetweenTick(byte workerId) => BeginSchedulerWorkerBetweenTickWithSiteId(0, workerId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SchedulerWorkerBetweenTickEvent BeginSchedulerWorkerBetweenTickWithSiteId(ushort siteId, byte workerId)
     {
         if (!TelemetryConfig.SchedulerWorkerBetweenTickActive)
         {
@@ -3147,6 +3346,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, WorkerId = workerId,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3206,7 +3406,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SchedulerDependencyFanOut"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerDependencyFanOutEvent BeginSchedulerDependencyFanOut(ushort completingSysIdx)
+    public static SchedulerDependencyFanOutEvent BeginSchedulerDependencyFanOut(ushort completingSysIdx) => BeginSchedulerDependencyFanOutWithSiteId(0, completingSysIdx);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SchedulerDependencyFanOutEvent BeginSchedulerDependencyFanOutWithSiteId(ushort siteId, ushort completingSysIdx)
     {
         if (!TelemetryConfig.SchedulerDependencyFanOutActive)
         {
@@ -3221,6 +3424,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, CompletingSysIdx = completingSysIdx,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3384,7 +3588,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.SchedulerGraphBuild"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerGraphBuildEvent BeginSchedulerGraphBuild()
+    public static SchedulerGraphBuildEvent BeginSchedulerGraphBuild() => BeginSchedulerGraphBuildWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SchedulerGraphBuildEvent BeginSchedulerGraphBuildWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.SchedulerGraphBuildActive)
         {
@@ -3399,12 +3606,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.SchedulerGraphRebuild"/> span. Design stub — no Phase 4 producer.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerGraphRebuildEvent BeginSchedulerGraphRebuild(ushort oldSysCount, ushort newSysCount, byte reason)
+    public static SchedulerGraphRebuildEvent BeginSchedulerGraphRebuild(ushort oldSysCount, ushort newSysCount, byte reason) => BeginSchedulerGraphRebuildWithSiteId(0, oldSysCount, newSysCount, reason);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static SchedulerGraphRebuildEvent BeginSchedulerGraphRebuildWithSiteId(ushort siteId, ushort oldSysCount, ushort newSysCount, byte reason)
     {
         if (!TelemetryConfig.SchedulerGraphRebuildActive)
         {
@@ -3420,6 +3631,7 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             OldSysCount = oldSysCount, NewSysCount = newSysCount, Reason = reason,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3477,7 +3689,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.RuntimeTransactionLifecycle"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeTransactionLifecycleEvent BeginRuntimeTransactionLifecycle(ushort sysIdx)
+    public static RuntimeTransactionLifecycleEvent BeginRuntimeTransactionLifecycle(ushort sysIdx) => BeginRuntimeTransactionLifecycleWithSiteId(0, sysIdx);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeTransactionLifecycleEvent BeginRuntimeTransactionLifecycleWithSiteId(ushort siteId, ushort sysIdx)
     {
         if (!TelemetryConfig.RuntimeTransactionLifecycleActive)
         {
@@ -3492,6 +3707,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, SysIdx = sysIdx,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3566,7 +3782,10 @@ public static class TyphonEvent
     /// <summary>Begin a <see cref="TraceEventKind.RuntimeSubscriptionOutputExecute"/> span.</summary>
     /// <remarks>Stats fields (clientCount, viewsRefreshed, deltasPushed, overflowCount) default to 0; Phase 9 wires them through.</remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionOutputExecuteEvent BeginRuntimeSubscriptionOutputExecute(long tick, byte level)
+    public static RuntimeSubscriptionOutputExecuteEvent BeginRuntimeSubscriptionOutputExecute(long tick, byte level) => BeginRuntimeSubscriptionOutputExecuteWithSiteId(0, tick, level);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeSubscriptionOutputExecuteEvent BeginRuntimeSubscriptionOutputExecuteWithSiteId(ushort siteId, long tick, byte level)
     {
         if (!TelemetryConfig.RuntimeSubscriptionOutputExecuteActive)
         {
@@ -3581,6 +3800,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tick = tick, Level = level,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3606,7 +3826,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.StoragePageCacheDirtyWalk"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StoragePageCacheDirtyWalkEvent BeginStoragePageCacheDirtyWalk(int rangeStart, int rangeLen)
+    public static StoragePageCacheDirtyWalkEvent BeginStoragePageCacheDirtyWalk(int rangeStart, int rangeLen) => BeginStoragePageCacheDirtyWalkWithSiteId(0, rangeStart, rangeLen);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StoragePageCacheDirtyWalkEvent BeginStoragePageCacheDirtyWalkWithSiteId(ushort siteId, int rangeStart, int rangeLen)
     {
         if (!TelemetryConfig.StoragePageCacheDirtyWalkActive)
         {
@@ -3622,6 +3845,7 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             RangeStart = rangeStart, RangeLen = rangeLen, DirtyMs = 0,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3809,7 +4033,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.DataTransactionInit"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionInitEvent BeginDataTransactionInit(long tsn, ushort uowId)
+    public static DataTransactionInitEvent BeginDataTransactionInit(long tsn, ushort uowId) => BeginDataTransactionInitWithSiteId(0, tsn, uowId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DataTransactionInitEvent BeginDataTransactionInitWithSiteId(ushort siteId, long tsn, ushort uowId)
     {
         if (!TelemetryConfig.DataTransactionInitActive)
         {
@@ -3826,12 +4053,16 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             Tsn = tsn, UowId = uowId,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.DataTransactionPrepare"/> span (high-freq, default-suppressed at the leaf gate).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionPrepareEvent BeginDataTransactionPrepare(long tsn)
+    public static DataTransactionPrepareEvent BeginDataTransactionPrepare(long tsn) => BeginDataTransactionPrepareWithSiteId(0, tsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DataTransactionPrepareEvent BeginDataTransactionPrepareWithSiteId(ushort siteId, long tsn)
     {
         if (!TelemetryConfig.DataTransactionPrepareActive)
         {
@@ -3847,12 +4078,16 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn,
+            SourceLocationId = siteId,
         };
     }
 
     /// <summary>Begin a <see cref="TraceEventKind.DataTransactionValidate"/> span (wraps the commit-loop validation pass).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionValidateEvent BeginDataTransactionValidate(long tsn, int entryCount)
+    public static DataTransactionValidateEvent BeginDataTransactionValidate(long tsn, int entryCount) => BeginDataTransactionValidateWithSiteId(0, tsn, entryCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DataTransactionValidateEvent BeginDataTransactionValidateWithSiteId(ushort siteId, long tsn, int entryCount)
     {
         if (!TelemetryConfig.DataTransactionValidateActive)
         {
@@ -3868,6 +4103,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn, EntryCount = entryCount,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3898,7 +4134,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.DataTransactionCleanup"/> span (wraps deferred-cleanup batch enqueue).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionCleanupEvent BeginDataTransactionCleanup(long tsn, int entityCount)
+    public static DataTransactionCleanupEvent BeginDataTransactionCleanup(long tsn, int entityCount) => BeginDataTransactionCleanupWithSiteId(0, tsn, entityCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DataTransactionCleanupEvent BeginDataTransactionCleanupWithSiteId(ushort siteId, long tsn, int entityCount)
     {
         if (!TelemetryConfig.DataTransactionCleanupActive)
         {
@@ -3914,6 +4153,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn, EntityCount = entityCount,
+            SourceLocationId = siteId,
         };
     }
 
@@ -3949,7 +4189,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.DataMvccVersionCleanup"/> span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataMvccVersionCleanupEvent BeginDataMvccVersionCleanup(long pk)
+    public static DataMvccVersionCleanupEvent BeginDataMvccVersionCleanup(long pk) => BeginDataMvccVersionCleanupWithSiteId(0, pk);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DataMvccVersionCleanupEvent BeginDataMvccVersionCleanupWithSiteId(ushort siteId, long pk)
     {
         if (!TelemetryConfig.DataMvccVersionCleanupActive)
         {
@@ -3965,6 +4208,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Pk = pk, EntriesFreed = 0,
+            SourceLocationId = siteId,
         };
     }
 
@@ -4000,7 +4244,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.DataIndexBTreeRangeScan"/> span (covers the whole enumeration).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataIndexBTreeRangeScanEvent BeginDataIndexBTreeRangeScan()
+    public static DataIndexBTreeRangeScanEvent BeginDataIndexBTreeRangeScan() => BeginDataIndexBTreeRangeScanWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DataIndexBTreeRangeScanEvent BeginDataIndexBTreeRangeScanWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.DataIndexBTreeRangeScanActive)
         {
@@ -4017,6 +4264,7 @@ public static class TyphonEvent
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
             ResultCount = 0, RestartCount = 0,
+            SourceLocationId = siteId,
         };
     }
 
@@ -4072,7 +4320,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a <see cref="TraceEventKind.DataIndexBTreeBulkInsert"/> span (multi-value index insert).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataIndexBTreeBulkInsertEvent BeginDataIndexBTreeBulkInsert(int bufferId, int entryCount)
+    public static DataIndexBTreeBulkInsertEvent BeginDataIndexBTreeBulkInsert(int bufferId, int entryCount) => BeginDataIndexBTreeBulkInsertWithSiteId(0, bufferId, entryCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DataIndexBTreeBulkInsertEvent BeginDataIndexBTreeBulkInsertWithSiteId(ushort siteId, int bufferId, int entryCount)
     {
         if (!TelemetryConfig.DataIndexBTreeBulkInsertActive)
         {
@@ -4088,6 +4339,7 @@ public static class TyphonEvent
         {
             ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
             PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, BufferId = bufferId, EntryCount = entryCount,
+            SourceLocationId = siteId,
         };
     }
 
@@ -4151,7 +4403,10 @@ public static class TyphonEvent
     // ═══════════════════════════════════════════════════════════════════════
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryParseEvent BeginQueryParse(ushort predicateCount, byte branchCount)
+    public static QueryParseEvent BeginQueryParse(ushort predicateCount, byte branchCount) => BeginQueryParseWithSiteId(0, predicateCount, branchCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryParseEvent BeginQueryParseWithSiteId(ushort siteId, ushort predicateCount, byte branchCount)
     {
         if (!TelemetryConfig.QueryParseActive)
         {
@@ -4167,7 +4422,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryParseDnfEvent BeginQueryParseDnf(ushort inBranches, ushort outBranches)
+    public static QueryParseDnfEvent BeginQueryParseDnf(ushort inBranches, ushort outBranches) => BeginQueryParseDnfWithSiteId(0, inBranches, outBranches);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryParseDnfEvent BeginQueryParseDnfWithSiteId(ushort siteId, ushort inBranches, ushort outBranches)
     {
         if (!TelemetryConfig.QueryParseDnfActive)
         {
@@ -4183,7 +4441,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryPlanEvent BeginQueryPlan(byte evaluatorCount, ushort indexFieldIdx, long rangeMin, long rangeMax)
+    public static QueryPlanEvent BeginQueryPlan(byte evaluatorCount, ushort indexFieldIdx, long rangeMin, long rangeMax) => BeginQueryPlanWithSiteId(0, evaluatorCount, indexFieldIdx, rangeMin, rangeMax);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryPlanEvent BeginQueryPlanWithSiteId(ushort siteId, byte evaluatorCount, ushort indexFieldIdx, long rangeMin, long rangeMax)
     {
         if (!TelemetryConfig.QueryPlanEnabledActive)
         {
@@ -4199,7 +4460,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryEstimateEvent BeginQueryEstimate(ushort fieldIdx, long cardinality)
+    public static QueryEstimateEvent BeginQueryEstimate(ushort fieldIdx, long cardinality) => BeginQueryEstimateWithSiteId(0, fieldIdx, cardinality);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryEstimateEvent BeginQueryEstimateWithSiteId(ushort siteId, ushort fieldIdx, long cardinality)
     {
         if (!TelemetryConfig.QueryEstimateActive)
         {
@@ -4239,7 +4503,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryPlanSortEvent BeginQueryPlanSort(byte evaluatorCount, uint sortNs)
+    public static QueryPlanSortEvent BeginQueryPlanSort(byte evaluatorCount, uint sortNs) => BeginQueryPlanSortWithSiteId(0, evaluatorCount, sortNs);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryPlanSortEvent BeginQueryPlanSortWithSiteId(ushort siteId, byte evaluatorCount, uint sortNs)
     {
         if (!TelemetryConfig.QueryPlanSortActive)
         {
@@ -4255,7 +4522,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecuteIndexScanEvent BeginQueryExecuteIndexScan(ushort primaryFieldIdx, byte mode)
+    public static QueryExecuteIndexScanEvent BeginQueryExecuteIndexScan(ushort primaryFieldIdx, byte mode) => BeginQueryExecuteIndexScanWithSiteId(0, primaryFieldIdx, mode);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryExecuteIndexScanEvent BeginQueryExecuteIndexScanWithSiteId(ushort siteId, ushort primaryFieldIdx, byte mode)
     {
         if (!TelemetryConfig.QueryExecuteIndexScanActive)
         {
@@ -4271,7 +4541,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecuteIterateEvent BeginQueryExecuteIterate()
+    public static QueryExecuteIterateEvent BeginQueryExecuteIterate() => BeginQueryExecuteIterateWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryExecuteIterateEvent BeginQueryExecuteIterateWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.QueryExecuteIterateActive)
         {
@@ -4287,7 +4560,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecuteFilterEvent BeginQueryExecuteFilter(byte filterCount)
+    public static QueryExecuteFilterEvent BeginQueryExecuteFilter(byte filterCount) => BeginQueryExecuteFilterWithSiteId(0, filterCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryExecuteFilterEvent BeginQueryExecuteFilterWithSiteId(ushort siteId, byte filterCount)
     {
         if (!TelemetryConfig.QueryExecuteFilterActive)
         {
@@ -4303,7 +4579,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecutePaginationEvent BeginQueryExecutePagination(int skip, int take)
+    public static QueryExecutePaginationEvent BeginQueryExecutePagination(int skip, int take) => BeginQueryExecutePaginationWithSiteId(0, skip, take);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryExecutePaginationEvent BeginQueryExecutePaginationWithSiteId(ushort siteId, int skip, int take)
     {
         if (!TelemetryConfig.QueryExecutePaginationActive)
         {
@@ -4343,7 +4622,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryCountEvent BeginQueryCount()
+    public static QueryCountEvent BeginQueryCount() => BeginQueryCountWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static QueryCountEvent BeginQueryCountWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.QueryCountActive)
         {
@@ -4361,7 +4643,10 @@ public static class TyphonEvent
     // ── ECS:Query depth ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryConstructEvent BeginEcsQueryConstruct(ushort targetArchId, byte polymorphic, byte maskSize)
+    public static EcsQueryConstructEvent BeginEcsQueryConstruct(ushort targetArchId, byte polymorphic, byte maskSize) => BeginEcsQueryConstructWithSiteId(0, targetArchId, polymorphic, maskSize);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsQueryConstructEvent BeginEcsQueryConstructWithSiteId(ushort siteId, ushort targetArchId, byte polymorphic, byte maskSize)
     {
         if (!TelemetryConfig.EcsQueryConstructActive)
         {
@@ -4401,7 +4686,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQuerySubtreeExpandEvent BeginEcsQuerySubtreeExpand(ushort subtreeCount, ushort rootId)
+    public static EcsQuerySubtreeExpandEvent BeginEcsQuerySubtreeExpand(ushort subtreeCount, ushort rootId) => BeginEcsQuerySubtreeExpandWithSiteId(0, subtreeCount, rootId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsQuerySubtreeExpandEvent BeginEcsQuerySubtreeExpandWithSiteId(ushort siteId, ushort subtreeCount, ushort rootId)
     {
         if (!TelemetryConfig.EcsQuerySubtreeExpandActive)
         {
@@ -4467,7 +4755,10 @@ public static class TyphonEvent
     // ── ECS:View depth ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshPullEvent BeginEcsViewRefreshPull(uint queryNs, ushort archetypeMaskBits)
+    public static EcsViewRefreshPullEvent BeginEcsViewRefreshPull(uint queryNs, ushort archetypeMaskBits) => BeginEcsViewRefreshPullWithSiteId(0, queryNs, archetypeMaskBits);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsViewRefreshPullEvent BeginEcsViewRefreshPullWithSiteId(ushort siteId, uint queryNs, ushort archetypeMaskBits)
     {
         if (!TelemetryConfig.EcsViewRefreshPullActive)
         {
@@ -4483,7 +4774,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewIncrementalDrainEvent BeginEcsViewIncrementalDrain()
+    public static EcsViewIncrementalDrainEvent BeginEcsViewIncrementalDrain() => BeginEcsViewIncrementalDrainWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsViewIncrementalDrainEvent BeginEcsViewIncrementalDrainWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.EcsViewIncrementalDrainActive)
         {
@@ -4575,7 +4869,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshFullEvent BeginEcsViewRefreshFull(int oldCount, int newCount, uint requeryNs)
+    public static EcsViewRefreshFullEvent BeginEcsViewRefreshFull(int oldCount, int newCount, uint requeryNs) => BeginEcsViewRefreshFullWithSiteId(0, oldCount, newCount, requeryNs);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsViewRefreshFullEvent BeginEcsViewRefreshFullWithSiteId(ushort siteId, int oldCount, int newCount, uint requeryNs)
     {
         if (!TelemetryConfig.EcsViewRefreshFullActive)
         {
@@ -4591,7 +4888,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshFullOrEvent BeginEcsViewRefreshFullOr(int oldCount, int newCount, byte branchCount)
+    public static EcsViewRefreshFullOrEvent BeginEcsViewRefreshFullOr(int oldCount, int newCount, byte branchCount) => BeginEcsViewRefreshFullOrWithSiteId(0, oldCount, newCount, branchCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static EcsViewRefreshFullOrEvent BeginEcsViewRefreshFullOrWithSiteId(ushort siteId, int oldCount, int newCount, byte branchCount)
     {
         if (!TelemetryConfig.EcsViewRefreshFullOrActive)
         {
@@ -4685,7 +4985,10 @@ public static class TyphonEvent
     // ── WAL ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalQueueDrainEvent BeginDurabilityWalQueueDrain(int bytesAligned, int frameCount)
+    public static DurabilityWalQueueDrainEvent BeginDurabilityWalQueueDrain(int bytesAligned, int frameCount) => BeginDurabilityWalQueueDrainWithSiteId(0, bytesAligned, frameCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityWalQueueDrainEvent BeginDurabilityWalQueueDrainWithSiteId(ushort siteId, int bytesAligned, int frameCount)
     {
         if (!TelemetryConfig.DurabilityWalQueueDrainActive)
         {
@@ -4701,7 +5004,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalOsWriteEvent BeginDurabilityWalOsWrite(int bytesAligned, int frameCount, long highLsn)
+    public static DurabilityWalOsWriteEvent BeginDurabilityWalOsWrite(int bytesAligned, int frameCount, long highLsn) => BeginDurabilityWalOsWriteWithSiteId(0, bytesAligned, frameCount, highLsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityWalOsWriteEvent BeginDurabilityWalOsWriteWithSiteId(ushort siteId, int bytesAligned, int frameCount, long highLsn)
     {
         if (!TelemetryConfig.DurabilityWalOsWriteActive)
         {
@@ -4717,7 +5023,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalSignalEvent BeginDurabilityWalSignal(long highLsn)
+    public static DurabilityWalSignalEvent BeginDurabilityWalSignal(long highLsn) => BeginDurabilityWalSignalWithSiteId(0, highLsn);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityWalSignalEvent BeginDurabilityWalSignalWithSiteId(ushort siteId, long highLsn)
     {
         if (!TelemetryConfig.DurabilityWalSignalActive)
         {
@@ -4781,7 +5090,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalBufferEvent BeginDurabilityWalBuffer(int bytesAligned, int pad)
+    public static DurabilityWalBufferEvent BeginDurabilityWalBuffer(int bytesAligned, int pad) => BeginDurabilityWalBufferWithSiteId(0, bytesAligned, pad);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityWalBufferEvent BeginDurabilityWalBufferWithSiteId(ushort siteId, int bytesAligned, int pad)
     {
         if (!TelemetryConfig.DurabilityWalBufferActive)
         {
@@ -4827,7 +5139,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalBackpressureEvent BeginDurabilityWalBackpressure(uint waitUs, int producerThread)
+    public static DurabilityWalBackpressureEvent BeginDurabilityWalBackpressure(uint waitUs, int producerThread) => BeginDurabilityWalBackpressureWithSiteId(0, waitUs, producerThread);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityWalBackpressureEvent BeginDurabilityWalBackpressureWithSiteId(ushort siteId, uint waitUs, int producerThread)
     {
         if (!TelemetryConfig.DurabilityWalBackpressureActive)
         {
@@ -4845,7 +5160,10 @@ public static class TyphonEvent
     // ── Checkpoint depth ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityCheckpointWriteBatchEvent BeginDurabilityCheckpointWriteBatch(int writeBatchSize, int stagingAllocated)
+    public static DurabilityCheckpointWriteBatchEvent BeginDurabilityCheckpointWriteBatch(int writeBatchSize, int stagingAllocated) => BeginDurabilityCheckpointWriteBatchWithSiteId(0, writeBatchSize, stagingAllocated);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityCheckpointWriteBatchEvent BeginDurabilityCheckpointWriteBatchWithSiteId(ushort siteId, int writeBatchSize, int stagingAllocated)
     {
         if (!TelemetryConfig.DurabilityCheckpointWriteBatchActive)
         {
@@ -4861,7 +5179,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityCheckpointBackpressureEvent BeginDurabilityCheckpointBackpressure(uint waitMs, byte exhausted)
+    public static DurabilityCheckpointBackpressureEvent BeginDurabilityCheckpointBackpressure(uint waitMs, byte exhausted) => BeginDurabilityCheckpointBackpressureWithSiteId(0, waitMs, exhausted);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityCheckpointBackpressureEvent BeginDurabilityCheckpointBackpressureWithSiteId(ushort siteId, uint waitMs, byte exhausted)
     {
         if (!TelemetryConfig.DurabilityCheckpointBackpressureActive)
         {
@@ -4877,7 +5198,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityCheckpointSleepEvent BeginDurabilityCheckpointSleep(uint sleepMs, byte wakeReason)
+    public static DurabilityCheckpointSleepEvent BeginDurabilityCheckpointSleep(uint sleepMs, byte wakeReason) => BeginDurabilityCheckpointSleepWithSiteId(0, sleepMs, wakeReason);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityCheckpointSleepEvent BeginDurabilityCheckpointSleepWithSiteId(ushort siteId, uint sleepMs, byte wakeReason)
     {
         if (!TelemetryConfig.DurabilityCheckpointSleepActive)
         {
@@ -4919,7 +5243,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryDiscoverEvent BeginDurabilityRecoveryDiscover(int segCount, long totalBytes, int firstSegId)
+    public static DurabilityRecoveryDiscoverEvent BeginDurabilityRecoveryDiscover(int segCount, long totalBytes, int firstSegId) => BeginDurabilityRecoveryDiscoverWithSiteId(0, segCount, totalBytes, firstSegId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityRecoveryDiscoverEvent BeginDurabilityRecoveryDiscoverWithSiteId(ushort siteId, int segCount, long totalBytes, int firstSegId)
     {
         if (!TelemetryConfig.DurabilityRecoveryDiscoverActive)
         {
@@ -4935,7 +5262,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoverySegmentEvent BeginDurabilityRecoverySegment(int segId)
+    public static DurabilityRecoverySegmentEvent BeginDurabilityRecoverySegment(int segId) => BeginDurabilityRecoverySegmentWithSiteId(0, segId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityRecoverySegmentEvent BeginDurabilityRecoverySegmentWithSiteId(ushort siteId, int segId)
     {
         if (!TelemetryConfig.DurabilityRecoverySegmentActive)
         {
@@ -4981,7 +5311,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryFpiEvent BeginDurabilityRecoveryFpi(int fpiCount)
+    public static DurabilityRecoveryFpiEvent BeginDurabilityRecoveryFpi(int fpiCount) => BeginDurabilityRecoveryFpiWithSiteId(0, fpiCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityRecoveryFpiEvent BeginDurabilityRecoveryFpiWithSiteId(ushort siteId, int fpiCount)
     {
         if (!TelemetryConfig.DurabilityRecoveryFpiActive)
         {
@@ -4997,7 +5330,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryRedoEvent BeginDurabilityRecoveryRedo()
+    public static DurabilityRecoveryRedoEvent BeginDurabilityRecoveryRedo() => BeginDurabilityRecoveryRedoWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityRecoveryRedoEvent BeginDurabilityRecoveryRedoWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.DurabilityRecoveryRedoActive)
         {
@@ -5013,7 +5349,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryUndoEvent BeginDurabilityRecoveryUndo(int voidedUowCount)
+    public static DurabilityRecoveryUndoEvent BeginDurabilityRecoveryUndo(int voidedUowCount) => BeginDurabilityRecoveryUndoWithSiteId(0, voidedUowCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityRecoveryUndoEvent BeginDurabilityRecoveryUndoWithSiteId(ushort siteId, int voidedUowCount)
     {
         if (!TelemetryConfig.DurabilityRecoveryUndoActive)
         {
@@ -5029,7 +5368,10 @@ public static class TyphonEvent
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryTickFenceEvent BeginDurabilityRecoveryTickFence()
+    public static DurabilityRecoveryTickFenceEvent BeginDurabilityRecoveryTickFence() => BeginDurabilityRecoveryTickFenceWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static DurabilityRecoveryTickFenceEvent BeginDurabilityRecoveryTickFenceWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.DurabilityRecoveryTickFenceActive)
         {
@@ -5112,7 +5454,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a per-subscriber invocation span. High-freq, deny-listed by default.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionSubscriberEvent BeginRuntimeSubscriptionSubscriber(uint subscriberId, ushort viewId, int deltaCount)
+    public static RuntimeSubscriptionSubscriberEvent BeginRuntimeSubscriptionSubscriber(uint subscriberId, ushort viewId, int deltaCount) => BeginRuntimeSubscriptionSubscriberWithSiteId(0, subscriberId, viewId, deltaCount);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeSubscriptionSubscriberEvent BeginRuntimeSubscriptionSubscriberWithSiteId(ushort siteId, uint subscriberId, ushort viewId, int deltaCount)
     {
         if (!TelemetryConfig.RuntimeSubscriptionSubscriberActive)
         {
@@ -5129,7 +5474,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a delta-builder span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionDeltaBuildEvent BeginRuntimeSubscriptionDeltaBuild(ushort viewId)
+    public static RuntimeSubscriptionDeltaBuildEvent BeginRuntimeSubscriptionDeltaBuild(ushort viewId) => BeginRuntimeSubscriptionDeltaBuildWithSiteId(0, viewId);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeSubscriptionDeltaBuildEvent BeginRuntimeSubscriptionDeltaBuildWithSiteId(ushort siteId, ushort viewId)
     {
         if (!TelemetryConfig.RuntimeSubscriptionDeltaBuildActive)
         {
@@ -5146,7 +5494,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a per-client delta-serialize span. High-freq, deny-listed by default.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionDeltaSerializeEvent BeginRuntimeSubscriptionDeltaSerialize(uint clientId, ushort viewId, byte format)
+    public static RuntimeSubscriptionDeltaSerializeEvent BeginRuntimeSubscriptionDeltaSerialize(uint clientId, ushort viewId, byte format) => BeginRuntimeSubscriptionDeltaSerializeWithSiteId(0, clientId, viewId, format);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeSubscriptionDeltaSerializeEvent BeginRuntimeSubscriptionDeltaSerializeWithSiteId(ushort siteId, uint clientId, ushort viewId, byte format)
     {
         if (!TelemetryConfig.RuntimeSubscriptionDeltaSerializeActive)
         {
@@ -5163,7 +5514,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a Subscription:Transition:BeginSync span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionTransitionBeginSyncEvent BeginRuntimeSubscriptionTransitionBeginSync(uint clientId, ushort viewId, int entitySnapshot)
+    public static RuntimeSubscriptionTransitionBeginSyncEvent BeginRuntimeSubscriptionTransitionBeginSync(uint clientId, ushort viewId, int entitySnapshot) => BeginRuntimeSubscriptionTransitionBeginSyncWithSiteId(0, clientId, viewId, entitySnapshot);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeSubscriptionTransitionBeginSyncEvent BeginRuntimeSubscriptionTransitionBeginSyncWithSiteId(ushort siteId, uint clientId, ushort viewId, int entitySnapshot)
     {
         if (!TelemetryConfig.RuntimeSubscriptionTransitionBeginSyncActive)
         {
@@ -5180,7 +5534,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a dead-client cleanup span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionOutputCleanupEvent BeginRuntimeSubscriptionOutputCleanup()
+    public static RuntimeSubscriptionOutputCleanupEvent BeginRuntimeSubscriptionOutputCleanup() => BeginRuntimeSubscriptionOutputCleanupWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeSubscriptionOutputCleanupEvent BeginRuntimeSubscriptionOutputCleanupWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.RuntimeSubscriptionOutputCleanupActive)
         {
@@ -5197,7 +5554,10 @@ public static class TyphonEvent
 
     /// <summary>Begin a dirty-bitmap-supplement span (when ring overflows).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent BeginRuntimeSubscriptionDeltaDirtyBitmapSupplement()
+    public static RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent BeginRuntimeSubscriptionDeltaDirtyBitmapSupplement() => BeginRuntimeSubscriptionDeltaDirtyBitmapSupplementWithSiteId(0);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent BeginRuntimeSubscriptionDeltaDirtyBitmapSupplementWithSiteId(ushort siteId)
     {
         if (!TelemetryConfig.RuntimeSubscriptionDeltaDirtyBitmapSupplementActive)
         {

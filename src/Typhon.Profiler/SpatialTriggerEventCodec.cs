@@ -31,8 +31,10 @@ public readonly struct SpatialTriggerEvalData
     public ushort EnterCount { get; }
     public ushort LeaveCount { get; }
 
-    public SpatialTriggerEvalData(byte threadSlot, long startTimestamp, long durationTicks, ushort regionId, ushort occupantCount, ushort enterCount, ushort leaveCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; RegionId = regionId; OccupantCount = occupantCount; EnterCount = enterCount; LeaveCount = leaveCount; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialTriggerEvalData(byte threadSlot, long startTimestamp, long durationTicks, ushort regionId, ushort occupantCount, ushort enterCount, ushort leaveCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; RegionId = regionId; OccupantCount = occupantCount; EnterCount = enterCount; LeaveCount = leaveCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded Trigger Occupant Diff instant (stats only — no bitmap). Payload: <c>regionId u16, prevCount u16, currCount u16, enterCount u16, leaveCount u16</c> (10 B).</summary>
@@ -98,19 +100,27 @@ public static class SpatialTriggerEventCodec
 
     public static void EncodeEval(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort regionId, ushort occupantCount, ushort enterCount, ushort leaveCount, out int bytesWritten)
+        ushort regionId, ushort occupantCount, ushort enterCount, ushort leaveCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeEval(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialTriggerEval, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, regionId);
         BinaryPrimitives.WriteUInt16LittleEndian(p[2..], occupantCount);
         BinaryPrimitives.WriteUInt16LittleEndian(p[4..], enterCount);
@@ -124,12 +134,18 @@ public static class SpatialTriggerEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SpatialTriggerEvalData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadUInt16LittleEndian(p),
             BinaryPrimitives.ReadUInt16LittleEndian(p[2..]),
             BinaryPrimitives.ReadUInt16LittleEndian(p[4..]),
-            BinaryPrimitives.ReadUInt16LittleEndian(p[6..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p[6..]), sourceLocationId);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

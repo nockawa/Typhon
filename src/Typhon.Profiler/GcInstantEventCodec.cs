@@ -81,7 +81,8 @@ public static class GcInstantEventCodec
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteGcStart(Span<byte> destination, byte threadSlot, long timestamp, byte generation, GcReason reason, GcType type, uint count, 
-        out int bytesWritten)
+        out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         TraceRecordHeader.WriteCommonHeader(destination, GcStartSize, TraceEventKind.GcStart, threadSlot, timestamp);
         var p = destination[TraceRecordHeader.CommonHeaderSize..];
@@ -98,7 +99,8 @@ public static class GcInstantEventCodec
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteGcEnd(Span<byte> destination, byte threadSlot, long timestamp, byte generation, uint count, long pauseDurationTicks, 
         ulong promotedBytes, ulong gen0SizeAfter, ulong gen1SizeAfter, ulong gen2SizeAfter, ulong lohSizeAfter, ulong pohSizeAfter, ulong totalCommittedBytes,
-        out int bytesWritten)
+        out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         TraceRecordHeader.WriteCommonHeader(destination, GcEndSize, TraceEventKind.GcEnd, threadSlot, timestamp);
         var p = destination[TraceRecordHeader.CommonHeaderSize..];

@@ -10,6 +10,7 @@ import { useProfilerMetadata } from '@/hooks/profiler/useProfilerMetadata';
 import { useProfilerBuildProgress } from '@/hooks/profiler/useProfilerBuildProgress';
 import { useProfilerLiveStream } from '@/hooks/profiler/useProfilerLiveStream';
 import { useProfilerCache } from '@/hooks/profiler/useProfilerCache';
+import { useProfilerSourceLocations } from '@/hooks/profiler/useProfilerSourceLocations';
 import TickOverview from './sections/TickOverview';
 import TimeArea from './sections/TimeArea';
 import OverloadStrip from './sections/OverloadStrip';
@@ -102,6 +103,9 @@ export default function ProfilerPanel() {
   // Build-progress SSE only meaningful for Trace mode; live-stream SSE only for Attach mode.
   useProfilerBuildProgress(isTrace ? sessionId : null);
   useProfilerLiveStream(isAttach ? sessionId : null);
+  // Source-location manifest fetch (issue #293, Phase 3): hydrates `useSourceLocationStore` so
+  // the Source row in `ProfilerDetail` can resolve span siteIds. Empty for Trace mode today.
+  useProfilerSourceLocations(isTrace || isAttach ? sessionId : null);
 
   // Tell the store which mode we're in; panels and future renderers can branch off `isLive`.
   // The cleanup wipes every profiler-scoped store so switching sessions (or closing the panel)

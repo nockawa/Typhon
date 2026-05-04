@@ -51,8 +51,10 @@ public readonly struct SchedulerSystemSingleThreadedData
     public ushort SysIdx { get; }
     public byte IsParallelQuery { get; }
     public ushort ChunkCount { get; }
-    public SchedulerSystemSingleThreadedData(byte threadSlot, long startTimestamp, long durationTicks, ushort sysIdx, byte isParallelQuery, ushort chunkCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SysIdx = sysIdx; IsParallelQuery = isParallelQuery; ChunkCount = chunkCount; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SchedulerSystemSingleThreadedData(byte threadSlot, long startTimestamp, long durationTicks, ushort sysIdx, byte isParallelQuery, ushort chunkCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SysIdx = sysIdx; IsParallelQuery = isParallelQuery; ChunkCount = chunkCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Wire codec for Scheduler:System events (kinds 146-149).</summary>
@@ -116,19 +118,27 @@ public static class SchedulerSystemEventCodec
 
     public static void EncodeSingleThreaded(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort sysIdx, byte isParallelQuery, ushort chunkCount, out int bytesWritten)
+        ushort sysIdx, byte isParallelQuery, ushort chunkCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeSingleThreaded(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SchedulerSystemSingleThreaded, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, sysIdx);
         p[2] = isParallelQuery;
         BinaryPrimitives.WriteUInt16LittleEndian(p[3..], chunkCount);
@@ -141,8 +151,14 @@ public static class SchedulerSystemEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SchedulerSystemSingleThreadedData(threadSlot, startTimestamp, durationTicks,
-            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2], BinaryPrimitives.ReadUInt16LittleEndian(p[3..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2], BinaryPrimitives.ReadUInt16LittleEndian(p[3..]), sourceLocationId);
     }
 }

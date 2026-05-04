@@ -65,6 +65,15 @@ public static class TraceRecordHeader
     /// <summary><c>SpanFlags</c> bit 0 — set when the record includes a 16-byte trace context after the span header extension.</summary>
     public const byte SpanFlagsHasTraceContext = 0x01;
 
+    /// <summary>
+    /// <c>SpanFlags</c> bit 1 — set when the record carries a 2-byte source-location id (the compile-time `SourceLocationGenerator`
+    /// site index) immediately after the optional trace context. See `claude/design/observability/09-profiler-source-attribution.md`.
+    /// </summary>
+    public const byte SpanFlagsHasSourceLocation = 0x02;
+
+    /// <summary>Optional source-location-id size — 2 bytes (u16 LE), appended after the (optional) trace context when the flag is set.</summary>
+    public const int SourceLocationIdSize = 2;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Encoding
     // ═══════════════════════════════════════════════════════════════════════
@@ -106,6 +115,17 @@ public static class TraceRecordHeader
     {
         BinaryPrimitives.WriteUInt64LittleEndian(destination, traceIdHi);
         BinaryPrimitives.WriteUInt64LittleEndian(destination[8..], traceIdLo);
+    }
+
+    /// <summary>
+    /// Write the optional 2-byte source-location id at <paramref name="destination"/>. Caller passes the span starting at the offset
+    /// just after the optional trace context (37 if no trace context, 53 if present). Set the corresponding flag in <c>SpanFlags</c>
+    /// (<see cref="SpanFlagsHasSourceLocation"/>) when calling this.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void WriteSourceLocationId(Span<byte> destination, ushort sourceLocationId)
+    {
+        BinaryPrimitives.WriteUInt16LittleEndian(destination, sourceLocationId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -151,13 +171,39 @@ public static class TraceRecordHeader
         traceIdLo = BinaryPrimitives.ReadUInt64LittleEndian(source[8..]);
     }
 
+    /// <summary>
+    /// Parse the optional 2-byte source-location id at <paramref name="source"/>. Caller has already read <see cref="SpanFlagsHasSourceLocation"/>
+    /// from <c>SpanFlags</c> and is positioning <paramref name="source"/> just past the optional trace context.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static ushort ReadSourceLocationId(ReadOnlySpan<byte> source)
+    {
+        return BinaryPrimitives.ReadUInt16LittleEndian(source);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Sizing
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Total header size for a span record: 37 B if <paramref name="hasTraceContext"/> is <c>false</c>, 53 B if <c>true</c>.
+    /// Does NOT include the optional source-location-id; callers that want the source-loc-aware size use
+    /// <see cref="SpanHeaderSize(bool, bool)"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int SpanHeaderSize(bool hasTraceContext) => hasTraceContext ? MaxSpanHeaderSize : MinSpanHeaderSize;
+
+    /// <summary>
+    /// Total header size for a span record including the optional source-location-id (2 bytes when <paramref name="hasSourceLocation"/> is set).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int SpanHeaderSize(bool hasTraceContext, bool hasSourceLocation)
+        => SpanHeaderSize(hasTraceContext) + (hasSourceLocation ? SourceLocationIdSize : 0);
+
+    /// <summary>
+    /// Byte offset of the optional source-location-id field, relative to the start of the record. Caller MUST verify
+    /// <see cref="SpanFlagsHasSourceLocation"/> is set before reading at this offset; otherwise the 2 bytes belong to the kind-specific payload.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int SourceLocationIdOffset(bool hasTraceContext) => SpanHeaderSize(hasTraceContext);
 }

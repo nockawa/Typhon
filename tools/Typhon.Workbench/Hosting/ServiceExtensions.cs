@@ -15,6 +15,8 @@ public static class ServiceExtensions
         services.AddSingleton<DemoDataProvider>();
         services.AddSingleton<FileBrowserService>();
         services.AddSingleton<SchemaService>();
+        services.AddSingleton<OptionsStore>();
+        services.AddSingleton<EditorLauncher>();
         return services;
     }
 

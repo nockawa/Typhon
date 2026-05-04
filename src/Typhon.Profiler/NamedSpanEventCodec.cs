@@ -25,10 +25,15 @@ public readonly struct NamedSpanEventData
     /// <summary>UTF-8-encoded name bytes, sliced from the original record. Caller converts to string on demand.</summary>
     public ReadOnlyMemory<byte> NameUtf8 { get; }
 
+    /// <summary>Compile-time site id (0 = absent / not attributed).</summary>
+    public ushort SourceLocationId { get; }
+
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
+    public bool HasSourceLocation => SourceLocationId != 0;
+
     public NamedSpanEventData(byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, ReadOnlyMemory<byte> nameUtf8)
+        ulong traceIdHi, ulong traceIdLo, ReadOnlyMemory<byte> nameUtf8, ushort sourceLocationId = 0)
     {
         ThreadSlot = threadSlot;
         StartTimestamp = startTimestamp;
@@ -38,6 +43,7 @@ public readonly struct NamedSpanEventData
         TraceIdHi = traceIdHi;
         TraceIdLo = traceIdLo;
         NameUtf8 = nameUtf8;
+        SourceLocationId = sourceLocationId;
     }
 
     /// <summary>Decode <see cref="NameUtf8"/> as a <see cref="string"/>. Allocates.</summary>
@@ -66,8 +72,10 @@ public static class NamedSpanEventCodec
     /// </summary>
     public static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ReadOnlySpan<byte> nameUtf8, out int bytesWritten)
+        ReadOnlySpan<byte> nameUtf8, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         if (nameUtf8.Length > ushort.MaxValue)
         {
             throw new ArgumentException($"NamedSpan name too long: {nameUtf8.Length} bytes (max {ushort.MaxValue})", nameof(nameUtf8));
@@ -75,16 +83,22 @@ public static class NamedSpanEventCodec
 
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSize(hasTraceContext, nameUtf8.Length);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
 
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.NamedSpan, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
+        }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
         }
 
         var payload = destination[headerSize..];
@@ -97,7 +111,8 @@ public static class NamedSpanEventCodec
     /// <summary>Convenience — encode from a <see cref="string"/>. Allocates a UTF-8 buffer. Not intended for hot paths.</summary>
     public static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        string name, out int bytesWritten)
+        string name, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         Span<byte> nameBuffer = stackalloc byte[512];
         int byteCount;
@@ -105,7 +120,7 @@ public static class NamedSpanEventCodec
         {
             byteCount = Encoding.UTF8.GetBytes(name, nameBuffer);
             Encode(destination, endTimestamp, threadSlot, startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo,
-                nameBuffer[..byteCount], out bytesWritten);
+                nameBuffer[..byteCount], out bytesWritten, sourceLocationId);
         }
         else
         {
@@ -114,7 +129,7 @@ public static class NamedSpanEventCodec
             {
                 byteCount = Encoding.UTF8.GetBytes(name, rented);
                 Encode(destination, endTimestamp, threadSlot, startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo,
-                    rented.AsSpan(0, byteCount), out bytesWritten);
+                    rented.AsSpan(0, byteCount), out bytesWritten, sourceLocationId);
             }
             finally
             {
@@ -130,18 +145,26 @@ public static class NamedSpanEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(span[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
 
+        var hasTraceContext = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
         ulong traceIdHi = 0, traceIdLo = 0;
-        if ((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0)
+        if (hasTraceContext)
         {
             TraceRecordHeader.ReadTraceContext(span[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0);
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(span[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..]);
+        }
+
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         var payload = span[headerSize..];
         var nameByteCount = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(payload);
         var nameMemory = source.Slice(headerSize + NameLengthSize, nameByteCount);
 
-        return new NamedSpanEventData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo, nameMemory);
+        return new NamedSpanEventData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo, nameMemory, sourceLocationId);
     }
 }
 

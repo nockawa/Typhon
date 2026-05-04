@@ -188,6 +188,17 @@ public class FileExporterIntegrationTests
             Assert.That(decodedDiskWrite, Is.True, "PageCacheDiskWrite decoded with PageCount=4");
             Assert.That(decodedClusterMigration, Is.True, "ClusterMigration decoded with MigrationCount=128");
         });
+
+        // ── Assert: trailer carries the source-loc manifest so the Workbench can resolve siteIds. ──
+        // The FileExporter must append a SourceLocationManifest and patch the header offsets at close,
+        // otherwise the Workbench detail panel can't surface a Source row for any span.
+        Assert.That(header.FileTableOffset, Is.GreaterThan(0L), "Header.FileTableOffset must point at the FileTable trailer");
+        Assert.That(header.SourceLocationManifestOffset, Is.GreaterThan(header.FileTableOffset),
+            "Header.SourceLocationManifestOffset must follow FileTable");
+        Assert.That(reader.TryReadSourceLocationManifest(out var manifestFiles, out var manifestEntries), Is.True,
+            "Manifest must be readable from the trailer");
+        Assert.That(manifestFiles.Length, Is.GreaterThan(0), "Manifest must include at least one source file");
+        Assert.That(manifestEntries.Length, Is.GreaterThan(0), "Manifest must include at least one entry");
     }
 
     private static ProfilerSessionMetadata BuildMetadata()

@@ -20,6 +20,8 @@ public ref struct CheckpointCycleEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public long TargetLsn;
     public byte Reason;
@@ -34,11 +36,15 @@ public ref struct CheckpointCycleEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeCycleSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = CheckpointEventCodec.ComputeCycleSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => CheckpointEventCodec.EncodeCycle(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, TargetLsn, Reason, _optMask, _dirtyPageCount, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, TargetLsn, Reason, _optMask, _dirtyPageCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -56,11 +62,13 @@ public ref struct CheckpointCollectEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
+    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0, SourceLocationId != 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => CheckpointEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.CheckpointCollect, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -79,6 +87,8 @@ public ref struct CheckpointWriteEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     private int _writtenCount;
     private byte _optMask;
@@ -90,11 +100,15 @@ public ref struct CheckpointWriteEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => CheckpointEventCodec.EncodeOptionalCount(destination, endTimestamp, TraceEventKind.CheckpointWrite, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _writtenCount, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _writtenCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -112,11 +126,13 @@ public ref struct CheckpointFsyncEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
+    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0, SourceLocationId != 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => CheckpointEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.CheckpointFsync, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -135,6 +151,8 @@ public ref struct CheckpointTransitionEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     private int _transitionedCount;
     private byte _optMask;
@@ -146,11 +164,15 @@ public ref struct CheckpointTransitionEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => CheckpointEventCodec.EncodeOptionalCount(destination, endTimestamp, TraceEventKind.CheckpointTransition, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _transitionedCount, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _transitionedCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -169,6 +191,8 @@ public ref struct CheckpointRecycleEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     private int _recycledCount;
     private byte _optMask;
@@ -180,11 +204,15 @@ public ref struct CheckpointRecycleEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = CheckpointEventCodec.ComputeOptionalCountSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => CheckpointEventCodec.EncodeOptionalCount(destination, endTimestamp, TraceEventKind.CheckpointRecycle, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _recycledCount, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, _optMask, _recycledCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

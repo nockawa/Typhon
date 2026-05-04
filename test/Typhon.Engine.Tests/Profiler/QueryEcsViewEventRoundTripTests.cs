@@ -33,7 +33,7 @@ public class QueryEcsViewEventRoundTripTests
         Span<byte> buf = stackalloc byte[size];
         EcsQueryEventCodec.Encode(buf, EndTs, TraceEventKind.EcsQueryExecute, ThreadSlot, StartTs,
             SpanId, ParentSpanId, TraceIdHi, TraceIdLo, archetypeTypeId: 42, optMask,
-            resultCount: 1234, scanMode: EcsQueryScanMode.Targeted, found: false, out var bytesWritten, variant);
+            resultCount: 1234, scanMode: EcsQueryScanMode.Targeted, found: false, out var bytesWritten, variant: variant);
 
         Assert.That(bytesWritten, Is.EqualTo(size));
 

@@ -51,18 +51,25 @@ public readonly struct EcsQueryEventData
     /// <summary>Phase 7 (D2): variant byte for consolidated kind 32 producers. Valid iff <see cref="HasVariant"/> is <c>true</c>.</summary>
     public EcsQueryVariant Variant { get; }
 
+    /// <summary>Compile-time site id (0 = absent / not attributed). See `claude/design/observability/09-profiler-source-attribution.md`.</summary>
+    public ushort SourceLocationId { get; }
+
     public bool HasResultCount => (OptionalFieldMask & EcsQueryEventCodec.OptResultCount) != 0;
     public bool HasScanMode => (OptionalFieldMask & EcsQueryEventCodec.OptScanMode) != 0;
     public bool HasFound => (OptionalFieldMask & EcsQueryEventCodec.OptFound) != 0;
     public bool HasVariant => (OptionalFieldMask & EcsQueryEventCodec.OptVariant) != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
+    /// <summary><c>true</c> when <see cref="SourceLocationId"/> is non-zero (the record was emitted via an intercepted call site).</summary>
+    public bool HasSourceLocation => SourceLocationId != 0;
+
     public EcsQueryEventData(
         TraceEventKind kind, byte threadSlot, long startTimestamp, long durationTicks,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         ushort archetypeTypeId, byte optionalFieldMask,
         int resultCount, EcsQueryScanMode scanMode, bool found,
-        EcsQueryVariant variant = EcsQueryVariant.Execute)
+        EcsQueryVariant variant = EcsQueryVariant.Execute,
+        ushort sourceLocationId = 0)
     {
         Kind = kind;
         ThreadSlot = threadSlot;
@@ -78,6 +85,7 @@ public readonly struct EcsQueryEventData
         ScanMode = scanMode;
         Found = found;
         Variant = variant;
+        SourceLocationId = sourceLocationId;
     }
 }
 
@@ -163,24 +171,32 @@ public static class EcsQueryEventCodec
         EcsQueryScanMode scanMode,
         bool found,
         out int bytesWritten,
+        ushort sourceLocationId = 0,
         EcsQueryVariant variant = EcsQueryVariant.Execute)
     {
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
+        var hasSourceLocation = sourceLocationId != 0;
         var size = ComputeSize(hasTraceContext, optMask);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
 
         // ── Common header + span extension ──
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks: endTimestamp - startTimestamp,
             spanId: spanId,
             parentSpanId: parentSpanId,
             spanFlags: spanFlags);
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
+        }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
         }
 
         // ── Required payload ──
@@ -218,13 +234,21 @@ public static class EcsQueryEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
 
+        var hasTraceContext = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
         ulong traceIdHi = 0, traceIdLo = 0;
-        if ((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0)
+        if (hasTraceContext)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0);
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..]);
+        }
+
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         var payload = source[headerSize..];
         var archetypeTypeId = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         var optMask = payload[2];
@@ -261,7 +285,7 @@ public static class EcsQueryEventCodec
         }
 
         return new EcsQueryEventData(kind, threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            archetypeTypeId, optMask, resultCount, scanMode, found, variant);
+            archetypeTypeId, optMask, resultCount, scanMode, found, variant, sourceLocationId);
     }
 }
 

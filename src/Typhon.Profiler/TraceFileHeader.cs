@@ -53,15 +53,32 @@ public struct TraceFileHeader
     /// </summary>
     public long SamplingSessionStartQpc;
 
-    /// <summary>Reserved for future use.</summary>
-    public unsafe fixed byte Reserved[9];
+    /// <summary>
+    /// Byte offset of the trailing <c>FileTable</c> (interned source-file paths). 0 when no source-location manifest was written
+    /// (e.g. the source-attribution generator emitted nothing). See claude/design/observability/09-profiler-source-attribution.md §4.7.2.
+    /// </summary>
+    public long FileTableOffset;
+
+    /// <summary>
+    /// Byte offset of the trailing <c>SourceLocationManifest</c> (id → file/line/method/kind table). 0 when absent.
+    /// Bound to a non-zero <see cref="FileTableOffset"/> when the trace carries source attribution.
+    /// </summary>
+    public long SourceLocationManifestOffset;
+
+    /// <summary>Padding to keep on-disk layout future-extension-friendly. Zero-initialized; readers must ignore.</summary>
+    public ushort Reserved0;
+    /// <summary>Padding (aligning the next field to 4 bytes); zero-initialized.</summary>
+    public ushort Reserved1;
 
     /// <summary>File magic constant: ASCII "TYTR".</summary>
     public const uint MagicValue = 0x52_54_59_54; // 'T','Y','T','R' little-endian
 
     /// <summary>
-    /// Current format version. Bumped to 4 when ThreadInfo records gained the trailing <see cref="ThreadKind"/> byte
-    /// (#289 follow-up). Older v3 files would silently miss the byte; the version gate forces a regenerate.
+    /// Current format version.
+    /// v3: variable-size typed-record layout (Tracy-style profiler rewrite).
+    /// v4: ThreadInfo records gained the trailing <c>ThreadKind</c> byte (#289 follow-up).
+    /// v5 (current): trailer carries <c>FileTable</c> + <c>SourceLocationManifest</c> at offsets in the header
+    ///     (#293 — profiler source attribution). Old v4 files miss the new offsets entirely; the version gate forces a regenerate.
     /// </summary>
-    public const ushort CurrentVersion = 4;
+    public const ushort CurrentVersion = 5;
 }

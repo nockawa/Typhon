@@ -92,15 +92,21 @@ public static class SchedulerMetronomeEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext, ushort sourceLocationId)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, TraceEventKind.SchedulerMetronomeWait, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
+        }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
         }
     }
 
@@ -113,13 +119,16 @@ public static class SchedulerMetronomeEventCodec
     /// </summary>
     public static void EncodeWait(Span<byte> destination, byte threadSlot, long startTimestamp, long endTimestamp,
         ulong spanId, ulong parentSpanId,
-        long scheduledTimestamp, byte multiplier, byte intentClass, byte phaseFlags, out int bytesWritten)
+        long scheduledTimestamp, byte multiplier, byte intentClass, byte phaseFlags, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         const bool hasTC = false;
         var size = ComputeSizeWait(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, (ushort)size, threadSlot, startTimestamp,
             endTimestamp - startTimestamp, spanId, parentSpanId,
-            traceIdHi: 0, traceIdLo: 0, hasTC);
+            traceIdHi: 0, traceIdLo: 0, hasTC, sourceLocationId);
         var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
         BinaryPrimitives.WriteInt64LittleEndian(p, scheduledTimestamp);
         p[8] = multiplier;

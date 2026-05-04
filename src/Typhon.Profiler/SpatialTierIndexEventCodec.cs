@@ -17,8 +17,10 @@ public readonly struct SpatialTierIndexRebuildData
     public int OldVersion { get; }
     public int NewVersion { get; }
 
-    public SpatialTierIndexRebuildData(byte threadSlot, long startTimestamp, long durationTicks, ushort archetypeId, int clusterCount, int oldVersion, int newVersion)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; ArchetypeId = archetypeId; ClusterCount = clusterCount; OldVersion = oldVersion; NewVersion = newVersion; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialTierIndexRebuildData(byte threadSlot, long startTimestamp, long durationTicks, ushort archetypeId, int clusterCount, int oldVersion, int newVersion, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; ArchetypeId = archetypeId; ClusterCount = clusterCount; OldVersion = oldVersion; NewVersion = newVersion; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded TierIndex VersionSkip instant. Payload: <c>archetypeId u16, version i32, reason u8</c> (7 B).</summary>
@@ -45,19 +47,27 @@ public static class SpatialTierIndexEventCodec
 
     public static void EncodeRebuild(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort archetypeId, int clusterCount, int oldVersion, int newVersion, out int bytesWritten)
+        ushort archetypeId, int clusterCount, int oldVersion, int newVersion, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
+        var hasSourceLocation = sourceLocationId != 0;
         var size = ComputeSizeRebuild(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SpatialTierIndexRebuild, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(payload, archetypeId);
         BinaryPrimitives.WriteInt32LittleEndian(payload[2..], clusterCount);
         BinaryPrimitives.WriteInt32LittleEndian(payload[6..], oldVersion);
@@ -71,12 +81,18 @@ public static class SpatialTierIndexEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SpatialTierIndexRebuildData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadUInt16LittleEndian(payload),
             BinaryPrimitives.ReadInt32LittleEndian(payload[2..]),
             BinaryPrimitives.ReadInt32LittleEndian(payload[6..]),
-            BinaryPrimitives.ReadInt32LittleEndian(payload[10..]));
+            BinaryPrimitives.ReadInt32LittleEndian(payload[10..]), sourceLocationId);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

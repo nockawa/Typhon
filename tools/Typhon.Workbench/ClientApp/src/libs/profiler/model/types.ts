@@ -500,6 +500,8 @@ export interface TraceEvent {
   parentSpanId?: string;
   traceIdHi?: string;
   traceIdLo?: string;
+  /** Compile-time source-location id from `SourceLocationGenerator` (issue #293), or undefined when absent. */
+  sourceLocationId?: number;
 
   // Instant-event fields
   phase?: number;

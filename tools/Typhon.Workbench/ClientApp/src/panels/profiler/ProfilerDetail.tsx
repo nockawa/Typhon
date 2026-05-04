@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, Blocks, Clock, Crosshair, Layers, Tag } from 'lucide-react';
+import { Activity, Blocks, Clock, Crosshair, ExternalLink, FileCode, Layers, Tag } from 'lucide-react';
 import type { ChunkSpan, MarkerSelection, PhaseMarker, PhaseSpan, SpanData, TickData } from '@/libs/profiler/model/traceModel';
 import { TraceEventKind } from '@/libs/profiler/model/types';
 import type { TickSummary } from '@/libs/profiler/model/types';
@@ -7,6 +7,9 @@ import type { TimeRange } from '@/libs/profiler/model/uiTypes';
 import type { ProfilerSelection } from '@/stores/useProfilerSelectionStore';
 import { useProfilerSessionStore } from '@/stores/useProfilerSessionStore';
 import { computeSelectionStats } from '@/libs/profiler/stats/selectionStats';
+import { useSourceLocationStore } from '@/stores/useSourceLocationStore';
+import { useOptionsStore } from '@/stores/useOptionsStore';
+import { openSourcePreview } from '@/shell/commands/openSchemaBrowser';
 
 /**
  * Profiler selection detail — the fourth DetailPanel render branch (Phase 2e). Mirrors the
@@ -72,6 +75,71 @@ const DL_CLASS = 'grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px] select-t
 
 // ─── Spans ─────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Source-location row for span details (issue #293). Resolves the span's `sourceLocationId` via the
+ * compile-time table emitted by `SourceLocationGenerator` and offers a one-click "Open in editor"
+ * handoff to the user's configured editor (VS Code / Cursor / Rider / VS / custom).
+ *
+ * Rendered only when:
+ *   - The span carries a non-zero `sourceLocationId` (its call site was intercepted at compile time).
+ *   - The Workbench has loaded the manifest (live-attach init handshake or trace-load).
+ *
+ * For un-attributed spans (siteId = 0 — the design's documented fallback for non-Engine call sites)
+ * this row simply doesn't render. No silent error / placeholder.
+ */
+function SpanSourceRow({ span }: { span: SpanData }): React.JSX.Element | null {
+  const resolve = useSourceLocationStore((s) => s.resolve);
+  const openInEditor = useOptionsStore((s) => s.openInEditor);
+  const [error, setError] = useState<string | null>(null);
+
+  const siteId = span.rawEvent?.sourceLocationId;
+  const loc = resolve(siteId);
+  if (!loc) return null;
+
+  async function handleOpen(): Promise<void> {
+    setError(null);
+    try {
+      const result = await openInEditor(loc!.file, loc!.line);
+      if (!result.ok) {
+        setError(result.error || 'Editor launch failed');
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  return (
+    <div className="mt-2 flex items-center gap-2 rounded-md border border-border bg-muted/30 p-2 text-[12px]">
+      <FileCode className="h-3.5 w-3.5 text-muted-foreground" />
+      <span className="font-mono text-foreground">
+        {loc.file}<span className="text-muted-foreground">:{loc.line}</span>
+        {loc.method && <span className="ml-2 text-muted-foreground"> · {loc.method}</span>}
+      </span>
+      <button
+        type="button"
+        onClick={() => openSourcePreview(loc.file, loc.line)}
+        className="ml-auto flex items-center gap-1 rounded border border-border bg-background px-2 py-0.5 text-[11px] hover:bg-accent"
+        title="Open an inline source-code preview around this line"
+      >
+        <FileCode className="h-3 w-3" /> Show inline
+      </button>
+      <button
+        type="button"
+        onClick={handleOpen}
+        className="flex items-center gap-1 rounded border border-border bg-background px-2 py-0.5 text-[11px] hover:bg-accent"
+        title="Open this file at the emission line in your configured editor"
+      >
+        <ExternalLink className="h-3 w-3" /> Open in editor
+      </button>
+      {error && (
+        <span className="ml-2 text-[11px] text-destructive" title={error}>
+          {error.length > 60 ? error.slice(0, 60) + '…' : error}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function SpanDetail({ span }: { span: SpanData }): React.JSX.Element {
   const globalStartUs = useGlobalStartUs();
   return (
@@ -128,6 +196,9 @@ function SpanDetail({ span }: { span: SpanData }): React.JSX.Element {
               <dd className="truncate font-mono text-foreground">{span.traceIdHi}.{span.traceIdLo}</dd>
             </>
           )}
+        </dl>
+        <SpanSourceRow span={span} />
+        <dl className={DL_CLASS}>
 
           {/* Kind-specific payload surfaced from the rawEvent. ClusterMigration carries archetype +
               entity count + total component instances moved (= entities × per-entity component slots). */}

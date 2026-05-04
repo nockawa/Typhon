@@ -30,11 +30,13 @@ public readonly struct DataIndexBTreeRangeScanData
     public ulong TraceIdLo { get; }
     public int ResultCount { get; }
     public byte RestartCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
     public DataIndexBTreeRangeScanData(byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, int resultCount, byte restartCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SpanId = spanId; ParentSpanId = parentSpanId;
-      TraceIdHi = traceIdHi; TraceIdLo = traceIdLo; ResultCount = resultCount; RestartCount = restartCount; }
+        ulong traceIdHi, ulong traceIdLo, int resultCount, byte restartCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SpanId = spanId; ParentSpanId = parentSpanId;
+      TraceIdHi = traceIdHi; TraceIdLo = traceIdLo; ResultCount = resultCount; RestartCount = restartCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded Data:Index:BTree:RangeScan:Revalidate instant. Payload: <c>restartCount u8</c> (1 B).</summary>
@@ -72,11 +74,13 @@ public readonly struct DataIndexBTreeBulkInsertData
     public ulong TraceIdLo { get; }
     public int BufferId { get; }
     public int EntryCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
     public DataIndexBTreeBulkInsertData(byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, int bufferId, int entryCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SpanId = spanId; ParentSpanId = parentSpanId;
-      TraceIdHi = traceIdHi; TraceIdLo = traceIdLo; BufferId = bufferId; EntryCount = entryCount; }
+        ulong traceIdHi, ulong traceIdLo, int bufferId, int entryCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SpanId = spanId; ParentSpanId = parentSpanId;
+      TraceIdHi = traceIdHi; TraceIdLo = traceIdLo; BufferId = bufferId; EntryCount = entryCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded Data:Index:BTree:Root instant (op variant). Payload: <c>op u8, rootChunkId i32, height u8</c> (6 B).</summary>
@@ -204,27 +208,59 @@ public static class DataIndexBTreeEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC, ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ReadOnlySpan<byte> ReadSpanPreamble(ReadOnlySpan<byte> source,
+        out byte threadSlot, out long startTimestamp, out long durationTicks, out ulong spanId, out ulong parentSpanId,
+        out ulong traceIdHi, out ulong traceIdLo, out ushort sourceLocationId)
+    {
+        TraceRecordHeader.ReadCommonHeader(source, out _, out _, out threadSlot, out startTimestamp);
+        TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
+            out durationTicks, out spanId, out parentSpanId, out var spanFlags);
+        traceIdHi = 0; traceIdLo = 0;
+        sourceLocationId = 0;
+        var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        if (hasTC)
+        {
+            TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
+        }
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        return source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
     }
 
     public static void EncodeRangeScan(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int resultCount, byte restartCount, out int bytesWritten)
+        int resultCount, byte restartCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeRangeScan(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.DataIndexBTreeRangeScan, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, resultCount);
         p[4] = restartCount;
         bytesWritten = size;
@@ -232,29 +268,24 @@ public static class DataIndexBTreeEventCodec
 
     public static DataIndexBTreeRangeScanData DecodeRangeScan(ReadOnlySpan<byte> source)
     {
-        TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
-        TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
-            out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
-        ulong traceIdHi = 0, traceIdLo = 0;
-        var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        if (hasTC)
-        {
-            TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
-        }
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var p = ReadSpanPreamble(source, out var threadSlot, out var startTimestamp, out var durationTicks,
+            out var spanId, out var parentSpanId, out var traceIdHi, out var traceIdLo, out var srcLoc);
         return new DataIndexBTreeRangeScanData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            BinaryPrimitives.ReadInt32LittleEndian(p), p[4]);
+            BinaryPrimitives.ReadInt32LittleEndian(p), p[4], srcLoc);
     }
 
     public static void EncodeBulkInsert(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int bufferId, int entryCount, out int bytesWritten)
+        int bufferId, int entryCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeBulkInsert(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.DataIndexBTreeBulkInsert, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, bufferId);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], entryCount);
         bytesWritten = size;
@@ -262,18 +293,10 @@ public static class DataIndexBTreeEventCodec
 
     public static DataIndexBTreeBulkInsertData DecodeBulkInsert(ReadOnlySpan<byte> source)
     {
-        TraceRecordHeader.ReadCommonHeader(source, out _, out _, out var threadSlot, out var startTimestamp);
-        TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
-            out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
-        ulong traceIdHi = 0, traceIdLo = 0;
-        var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        if (hasTC)
-        {
-            TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
-        }
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var p = ReadSpanPreamble(source, out var threadSlot, out var startTimestamp, out var durationTicks,
+            out var spanId, out var parentSpanId, out var traceIdHi, out var traceIdLo, out var srcLoc);
         return new DataIndexBTreeBulkInsertData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
-            BinaryPrimitives.ReadInt32LittleEndian(p[4..]));
+            BinaryPrimitives.ReadInt32LittleEndian(p[4..]), srcLoc);
     }
 }

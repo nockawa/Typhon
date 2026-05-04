@@ -25,6 +25,7 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
     private readonly string _filePath;
     private FileStream _stream;
     private TraceFileWriter _writer;
+    private TraceFileHeader _header;
     private bool _disposed;
     private long _batchesProcessed;
     private long _recordsProcessed;
@@ -55,7 +56,7 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
         _stream = new FileStream(_filePath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024);
         _writer = new TraceFileWriter(_stream);
 
-        var header = new TraceFileHeader
+        _header = new TraceFileHeader
         {
             Magic = TraceFileHeader.MagicValue,
             Version = TraceFileHeader.CurrentVersion,
@@ -69,7 +70,7 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
             CreatedUtcTicks = metadata.StartedUtc.Ticks,
             SamplingSessionStartQpc = metadata.SamplingSessionStartQpc,
         };
-        _writer.WriteHeader(in header);
+        _writer.WriteHeader(in _header);
         _writer.WriteSystemDefinitions(metadata.Systems);
         _writer.WriteArchetypes(metadata.Archetypes);
         _writer.WriteComponentTypes(metadata.ComponentTypes);
@@ -106,6 +107,21 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
 
         if (disposing)
         {
+            // Append the compile-time SourceLocationManifest trailer so the Workbench can resolve span
+            // siteIds to file:line. Skipping this for empty tables keeps legacy traces byte-identical.
+            // Failures here must not block close — the trace records themselves are already on disk.
+            try
+            {
+                if (_writer != null)
+                {
+                    AppendSourceLocationManifest();
+                }
+            }
+            catch
+            {
+                // ignored — trace file is still readable, just without the source-loc trailer.
+            }
+
             try { _writer?.Dispose(); }
             catch
             {
@@ -121,5 +137,25 @@ public sealed class FileExporter : ResourceNode, IProfilerExporter
             }
         }
         base.Dispose(disposing);
+    }
+
+    private void AppendSourceLocationManifest()
+    {
+        var files = Generated.SourceLocations.Files;
+        var entries = Generated.SourceLocations.All;
+        if (files.Length == 0 || entries.Length == 0)
+        {
+            return;
+        }
+        var manifestEntries = new SourceLocationManifestEntry[entries.Length];
+        for (int i = 0; i < entries.Length; i++)
+        {
+            var e = entries[i];
+            manifestEntries[i] = new SourceLocationManifestEntry(e.Id, e.FileId, (uint)e.Line, e.KindByte, e.Method);
+        }
+        var (fileTableOffset, manifestOffset) = _writer.WriteSourceLocationManifest(files, manifestEntries);
+        _header.FileTableOffset = fileTableOffset;
+        _header.SourceLocationManifestOffset = manifestOffset;
+        _writer.RewriteHeader(in _header);
     }
 }

@@ -19,10 +19,12 @@ public readonly struct DurabilityWalQueueDrainData
     public ulong TraceIdLo { get; }
     public int BytesAligned { get; }
     public int FrameCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public DurabilityWalQueueDrainData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int ba, int fc)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; BytesAligned = ba; FrameCount = fc; }
+    public DurabilityWalQueueDrainData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int ba, int fc, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; BytesAligned = ba; FrameCount = fc; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -38,10 +40,12 @@ public readonly struct DurabilityWalOsWriteData
     public int BytesAligned { get; }
     public int FrameCount { get; }
     public long HighLsn { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public DurabilityWalOsWriteData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int ba, int fc, long hl)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; BytesAligned = ba; FrameCount = fc; HighLsn = hl; }
+    public DurabilityWalOsWriteData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int ba, int fc, long hl, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; BytesAligned = ba; FrameCount = fc; HighLsn = hl; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -55,10 +59,12 @@ public readonly struct DurabilityWalSignalData
     public ulong TraceIdHi { get; }
     public ulong TraceIdLo { get; }
     public long HighLsn { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public DurabilityWalSignalData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, long hl)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; HighLsn = hl; }
+    public DurabilityWalSignalData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, long hl, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; HighLsn = hl; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -96,10 +102,12 @@ public readonly struct DurabilityWalBufferData
     public ulong TraceIdLo { get; }
     public int BytesAligned { get; }
     public int Pad { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public DurabilityWalBufferData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int ba, int p)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; BytesAligned = ba; Pad = p; }
+    public DurabilityWalBufferData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int ba, int p, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; BytesAligned = ba; Pad = p; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -125,10 +133,12 @@ public readonly struct DurabilityWalBackpressureData
     public ulong TraceIdLo { get; }
     public uint WaitUs { get; }
     public int ProducerThread { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public DurabilityWalBackpressureData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, uint wu, int pt)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; WaitUs = wu; ProducerThread = pt; }
+    public DurabilityWalBackpressureData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, uint wu, int pt, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; WaitUs = wu; ProducerThread = pt; SourceLocationId = srcLoc; }
 }
 
 public static class DurabilityWalEventCodec
@@ -151,44 +161,59 @@ public static class DurabilityWalEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC,
+        bool hasSourceLocation, ushort sourceLocationId)
     {
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ReadOnlySpan<byte> ReadSpanPreamble(ReadOnlySpan<byte> source,
         out byte threadSlot, out long startTs, out long dur, out ulong spanId, out ulong parentSpanId,
-        out ulong traceIdHi, out ulong traceIdLo)
+        out ulong traceIdHi, out ulong traceIdLo, out ushort sourceLocationId)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out threadSlot, out startTs);
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out dur, out spanId, out parentSpanId, out var spanFlags);
         traceIdHi = 0; traceIdLo = 0;
+        sourceLocationId = 0;
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
         if (hasTC)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
-        return source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        return source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
     }
 
     // ── QueueDrain ──
     public static void EncodeQueueDrain(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int frameCount, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int frameCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeQueueDrain(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.DurabilityWalQueueDrain, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, hasSourceLocation, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, bytesAligned);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], frameCount);
         bytesWritten = size;
@@ -196,21 +221,25 @@ public static class DurabilityWalEventCodec
 
     public static DurabilityWalQueueDrainData DecodeQueueDrain(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new DurabilityWalQueueDrainData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
-            BinaryPrimitives.ReadInt32LittleEndian(p[4..]));
+            BinaryPrimitives.ReadInt32LittleEndian(p[4..]),
+            srcLoc);
     }
 
     // ── OsWrite ──
     public static void EncodeOsWrite(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int frameCount, long highLsn, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int frameCount, long highLsn, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeOsWrite(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.DurabilityWalOsWrite, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, hasSourceLocation, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, bytesAligned);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], frameCount);
         BinaryPrimitives.WriteInt64LittleEndian(p[8..], highLsn);
@@ -219,31 +248,36 @@ public static class DurabilityWalEventCodec
 
     public static DurabilityWalOsWriteData DecodeOsWrite(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new DurabilityWalOsWriteData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
             BinaryPrimitives.ReadInt32LittleEndian(p[4..]),
-            BinaryPrimitives.ReadInt64LittleEndian(p[8..]));
+            BinaryPrimitives.ReadInt64LittleEndian(p[8..]),
+            srcLoc);
     }
 
     // ── Signal ──
     public static void EncodeSignal(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, long highLsn, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, long highLsn, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeSignal(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.DurabilityWalSignal, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, hasSourceLocation, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt64LittleEndian(p, highLsn);
         bytesWritten = size;
     }
 
     public static DurabilityWalSignalData DecodeSignal(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new DurabilityWalSignalData(ts, sts, dur, sid, psid, thi, tlo,
-            BinaryPrimitives.ReadInt64LittleEndian(p));
+            BinaryPrimitives.ReadInt64LittleEndian(p),
+            srcLoc);
     }
 
     // ── GroupCommit (instant) ──
@@ -286,13 +320,16 @@ public static class DurabilityWalEventCodec
 
     // ── Buffer ──
     public static void EncodeBuffer(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int pad, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int bytesAligned, int pad, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeBuffer(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.DurabilityWalBuffer, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, hasSourceLocation, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, bytesAligned);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], pad);
         bytesWritten = size;
@@ -300,10 +337,11 @@ public static class DurabilityWalEventCodec
 
     public static DurabilityWalBufferData DecodeBuffer(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new DurabilityWalBufferData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
-            BinaryPrimitives.ReadInt32LittleEndian(p[4..]));
+            BinaryPrimitives.ReadInt32LittleEndian(p[4..]),
+            srcLoc);
     }
 
     // ── Frame (instant) ──
@@ -327,13 +365,16 @@ public static class DurabilityWalEventCodec
 
     // ── Backpressure ──
     public static void EncodeBackpressure(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, uint waitUs, int producerThread, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, uint waitUs, int producerThread, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeBackpressure(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.DurabilityWalBackpressure, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, hasSourceLocation, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt32LittleEndian(p, waitUs);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], producerThread);
         bytesWritten = size;
@@ -341,9 +382,10 @@ public static class DurabilityWalEventCodec
 
     public static DurabilityWalBackpressureData DecodeBackpressure(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new DurabilityWalBackpressureData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadUInt32LittleEndian(p),
-            BinaryPrimitives.ReadInt32LittleEndian(p[4..]));
+            BinaryPrimitives.ReadInt32LittleEndian(p[4..]),
+            srcLoc);
     }
 }

@@ -16,11 +16,17 @@ public ref struct DataTransactionInitEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public long Tsn;
     public ushort UowId;
 
-    public readonly int ComputeSize() => DataTransactionEventCodec.ComputeSizeInit(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = DataTransactionEventCodec.ComputeSizeInit(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten) => 
         DataTransactionEventCodec.EncodeInit(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, UowId, 
             out bytesWritten);
@@ -41,10 +47,16 @@ public ref struct DataTransactionPrepareEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public long Tsn;
 
-    public readonly int ComputeSize() => DataTransactionEventCodec.ComputeSizePrepare(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = DataTransactionEventCodec.ComputeSizePrepare(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => DataTransactionEventCodec.EncodePrepare(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 
             out bytesWritten);
@@ -65,14 +77,20 @@ public ref struct DataTransactionValidateEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public long Tsn;
     public int EntryCount;
 
-    public readonly int ComputeSize() => DataTransactionEventCodec.ComputeSizeValidate(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = DataTransactionEventCodec.ComputeSizeValidate(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => DataTransactionEventCodec.EncodeValidate(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 
-            EntryCount, out bytesWritten);
+            EntryCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -90,14 +108,20 @@ public ref struct DataTransactionCleanupEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public long Tsn;
     public int EntityCount;
 
-    public readonly int ComputeSize() => DataTransactionEventCodec.ComputeSizeCleanup(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = DataTransactionEventCodec.ComputeSizeCleanup(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => DataTransactionEventCodec.EncodeCleanup(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 
-            EntityCount, out bytesWritten);
+            EntityCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -115,14 +139,20 @@ public ref struct DataMvccVersionCleanupEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public long Pk;
     public ushort EntriesFreed;
 
-    public readonly int ComputeSize() => DataMvccEventCodec.ComputeSizeVersionCleanup(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = DataMvccEventCodec.ComputeSizeVersionCleanup(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => DataMvccEventCodec.EncodeVersionCleanup(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Pk, 
-            EntriesFreed, out bytesWritten);
+            EntriesFreed, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -140,14 +170,20 @@ public ref struct DataIndexBTreeRangeScanEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int ResultCount;
     public byte RestartCount;
 
-    public readonly int ComputeSize() => DataIndexBTreeEventCodec.ComputeSizeRangeScan(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = DataIndexBTreeEventCodec.ComputeSizeRangeScan(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => DataIndexBTreeEventCodec.EncodeRangeScan(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, 
-            ResultCount, RestartCount, out bytesWritten);
+            ResultCount, RestartCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -165,14 +201,20 @@ public ref struct DataIndexBTreeBulkInsertEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int BufferId;
     public int EntryCount;
 
-    public readonly int ComputeSize() => DataIndexBTreeEventCodec.ComputeSizeBulkInsert(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = DataIndexBTreeEventCodec.ComputeSizeBulkInsert(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => DataIndexBTreeEventCodec.EncodeBulkInsert(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, 
-            BufferId, EntryCount, out bytesWritten);
+            BufferId, EntryCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

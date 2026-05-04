@@ -20,12 +20,18 @@ public ref struct RuntimePhaseSpanEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public byte Phase;
 
-    public readonly int ComputeSize() => RuntimePhaseSpanEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = RuntimePhaseSpanEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => RuntimePhaseSpanEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Phase, out bytesWritten);
+        => RuntimePhaseSpanEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Phase, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

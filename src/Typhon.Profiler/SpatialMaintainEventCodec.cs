@@ -16,8 +16,10 @@ public readonly struct SpatialMaintainInsertData
     public ushort ComponentTypeId { get; }
     public byte DidDegenerate { get; }
 
-    public SpatialMaintainInsertData(byte threadSlot, long startTimestamp, long durationTicks, long entityPK, ushort componentTypeId, byte didDegenerate)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityPK = entityPK; ComponentTypeId = componentTypeId; DidDegenerate = didDegenerate; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialMaintainInsertData(byte threadSlot, long startTimestamp, long durationTicks, long entityPK, ushort componentTypeId, byte didDegenerate, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityPK = entityPK; ComponentTypeId = componentTypeId; DidDegenerate = didDegenerate; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded Maintain UpdateSlowPath span. Payload: <c>entityPK i64, componentTypeId u16, escapeDistSq f32</c> (14 B).</summary>
@@ -31,8 +33,10 @@ public readonly struct SpatialMaintainUpdateSlowPathData
     public ushort ComponentTypeId { get; }
     public float EscapeDistSq { get; }
 
-    public SpatialMaintainUpdateSlowPathData(byte threadSlot, long startTimestamp, long durationTicks, long entityPK, ushort componentTypeId, float escapeDistSq)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityPK = entityPK; ComponentTypeId = componentTypeId; EscapeDistSq = escapeDistSq; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialMaintainUpdateSlowPathData(byte threadSlot, long startTimestamp, long durationTicks, long entityPK, ushort componentTypeId, float escapeDistSq, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityPK = entityPK; ComponentTypeId = componentTypeId; EscapeDistSq = escapeDistSq; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded Maintain AabbValidate instant. Payload: <c>entityPK i64, componentTypeId u16, opcode u8</c> (11 B).</summary>
@@ -78,27 +82,36 @@ public static class SpatialMaintainEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext, ushort sourceLocationId)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
+        }
     }
 
     public static void EncodeInsert(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityPK, ushort componentTypeId, byte didDegenerate, out int bytesWritten)
+        long entityPK, ushort componentTypeId, byte didDegenerate, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeInsert(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SpatialMaintainInsert, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt64LittleEndian(p, entityPK);
         BinaryPrimitives.WriteUInt16LittleEndian(p[8..], componentTypeId);
         p[10] = didDegenerate;
@@ -111,22 +124,31 @@ public static class SpatialMaintainEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SpatialMaintainInsertData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadInt64LittleEndian(p),
             BinaryPrimitives.ReadUInt16LittleEndian(p[8..]),
-            p[10]);
+            p[10], sourceLocationId);
     }
 
     public static void EncodeUpdateSlowPath(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityPK, ushort componentTypeId, float escapeDistSq, out int bytesWritten)
+        long entityPK, ushort componentTypeId, float escapeDistSq, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeUpdateSlowPath(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SpatialMaintainUpdateSlowPath, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt64LittleEndian(p, entityPK);
         BinaryPrimitives.WriteUInt16LittleEndian(p[8..], componentTypeId);
         BinaryPrimitives.WriteSingleLittleEndian(p[10..], escapeDistSq);
@@ -139,11 +161,17 @@ public static class SpatialMaintainEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SpatialMaintainUpdateSlowPathData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadInt64LittleEndian(p),
             BinaryPrimitives.ReadUInt16LittleEndian(p[8..]),
-            BinaryPrimitives.ReadSingleLittleEndian(p[10..]));
+            BinaryPrimitives.ReadSingleLittleEndian(p[10..]), sourceLocationId);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

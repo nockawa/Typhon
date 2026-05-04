@@ -119,6 +119,13 @@ public class TcpExporterIntegrationTests
                        || kindCounts.GetValueOrDefault(TraceEventKind.BTreeDelete, 0) == 0))
             {
                 var (frameType, framePayload) = ReadFrame(stream);
+                // Phase 3 of profiler-source-attribution (issue #293): the engine ships FileTable +
+                // SourceLocationManifest frames immediately after Init, before the first Block. Skip
+                // them silently; this test asserts on Block-frame contents.
+                if (frameType == LiveFrameType.FileTable || frameType == LiveFrameType.SourceLocationManifest)
+                {
+                    continue;
+                }
                 Assert.That(frameType, Is.EqualTo(LiveFrameType.Block), $"Frame {framesRead} after INIT must be a Block");
                 framesRead++;
 

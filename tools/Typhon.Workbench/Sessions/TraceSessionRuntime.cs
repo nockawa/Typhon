@@ -287,6 +287,44 @@ public sealed partial class TraceSessionRuntime : IDisposable, IChunkProvider
     }
 
     /// <summary>
+    /// Read the source-location manifest from the trace file's trailer (issue #293, Phase 3 trace-mode).
+    /// Returns <see cref="SourceLocationManifestDto.Empty"/> when the file pre-dates the v5 format or
+    /// the engine emitted no intercepted call sites. The data is loaded lazily on first call —
+    /// trace-mode sessions don't need it during the cache-build phase, only when the client clicks an
+    /// attributed span in the Detail panel.
+    /// </summary>
+    public SourceLocationManifestDto ReadSourceLocationManifest()
+    {
+        try
+        {
+            using var fs = File.OpenRead(_filePath);
+            using var reader = new TraceFileReader(fs);
+            reader.ReadHeader();
+            if (!reader.TryReadSourceLocationManifest(out var files, out var entries))
+            {
+                return SourceLocationManifestDto.Empty;
+            }
+            var fileDtos = new SourceLocationFileDto[files.Length];
+            for (int i = 0; i < files.Length; i++)
+            {
+                fileDtos[i] = new SourceLocationFileDto((ushort)i, files[i] ?? string.Empty);
+            }
+            var entryDtos = new SourceLocationEntryDto[entries.Length];
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var e = entries[i];
+                entryDtos[i] = new SourceLocationEntryDto(e.Id, e.FileId, e.Line, e.Kind, e.Method);
+            }
+            return new SourceLocationManifestDto(fileDtos, entryDtos);
+        }
+        catch (Exception)
+        {
+            // Older v4 trace files reject on header version check — return empty so the client gracefully shows no Source row.
+            return SourceLocationManifestDto.Empty;
+        }
+    }
+
+    /// <summary>
     /// Walks a <see cref="TraceFileReader"/> positioned at offset 0 (header + 3 tables) and projects each into the wire DTO shape. Shared
     /// between the source-file path and the embedded-metadata path so both produce byte-identical metadata DTOs.
     /// </summary>

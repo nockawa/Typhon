@@ -17,10 +17,12 @@ public readonly struct EcsViewRefreshPullData
     public ulong TraceIdLo { get; }
     public uint QueryNs { get; }
     public ushort ArchetypeMaskBits { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public EcsViewRefreshPullData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, uint qn, ushort amb)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; QueryNs = qn; ArchetypeMaskBits = amb; }
+    public EcsViewRefreshPullData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, uint qn, ushort amb, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; QueryNs = qn; ArchetypeMaskBits = amb; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -35,10 +37,12 @@ public readonly struct EcsViewIncrementalDrainData
     public ulong TraceIdLo { get; }
     public int DeltaCount { get; }
     public byte Overflow { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public EcsViewIncrementalDrainData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int dc, byte ovf)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; DeltaCount = dc; Overflow = ovf; }
+    public EcsViewIncrementalDrainData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int dc, byte ovf, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; DeltaCount = dc; Overflow = ovf; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -90,10 +94,12 @@ public readonly struct EcsViewRefreshFullData
     public int OldCount { get; }
     public int NewCount { get; }
     public uint RequeryNs { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public EcsViewRefreshFullData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int oc, int nc, uint rn)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; OldCount = oc; NewCount = nc; RequeryNs = rn; }
+    public EcsViewRefreshFullData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int oc, int nc, uint rn, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; OldCount = oc; NewCount = nc; RequeryNs = rn; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -109,10 +115,12 @@ public readonly struct EcsViewRefreshFullOrData
     public int OldCount { get; }
     public int NewCount { get; }
     public byte BranchCount { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public EcsViewRefreshFullOrData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int oc, int nc, byte bc)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; OldCount = oc; NewCount = nc; BranchCount = bc; }
+    public EcsViewRefreshFullOrData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, int oc, int nc, byte bc, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; OldCount = oc; NewCount = nc; BranchCount = bc; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -159,44 +167,59 @@ public static class EcsViewEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC, ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ReadOnlySpan<byte> ReadSpanPreamble(ReadOnlySpan<byte> source,
         out byte threadSlot, out long startTs, out long dur, out ulong spanId, out ulong parentSpanId,
-        out ulong traceIdHi, out ulong traceIdLo)
+        out ulong traceIdHi, out ulong traceIdLo, out ushort sourceLocationId)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out threadSlot, out startTs);
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out dur, out spanId, out parentSpanId, out var spanFlags);
         traceIdHi = 0; traceIdLo = 0;
+        sourceLocationId = 0;
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
         if (hasTC)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
-        return source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        return source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
     }
 
     // ── RefreshPull (span) ──
     public static void EncodeRefreshPull(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, uint queryNs, ushort archetypeMaskBits, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, uint queryNs, ushort archetypeMaskBits, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeRefreshPull(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.EcsViewRefreshPull, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt32LittleEndian(p, queryNs);
         BinaryPrimitives.WriteUInt16LittleEndian(p[4..], archetypeMaskBits);
         bytesWritten = size;
@@ -204,21 +227,25 @@ public static class EcsViewEventCodec
 
     public static EcsViewRefreshPullData DecodeRefreshPull(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new EcsViewRefreshPullData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadUInt32LittleEndian(p),
-            BinaryPrimitives.ReadUInt16LittleEndian(p[4..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p[4..]),
+            srcLoc);
     }
 
     // ── IncrementalDrain (span) ──
     public static void EncodeIncrementalDrain(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int deltaCount, byte overflow, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int deltaCount, byte overflow, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeIncrementalDrain(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.EcsViewIncrementalDrain, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, deltaCount);
         p[4] = overflow;
         bytesWritten = size;
@@ -226,9 +253,9 @@ public static class EcsViewEventCodec
 
     public static EcsViewIncrementalDrainData DecodeIncrementalDrain(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new EcsViewIncrementalDrainData(ts, sts, dur, sid, psid, thi, tlo,
-            BinaryPrimitives.ReadInt32LittleEndian(p), p[4]);
+            BinaryPrimitives.ReadInt32LittleEndian(p), p[4], srcLoc);
     }
 
     // ── DeltaBufferOverflow (instant) ──
@@ -296,13 +323,16 @@ public static class EcsViewEventCodec
 
     // ── RefreshFull (span) ──
     public static void EncodeRefreshFull(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int oldCount, int newCount, uint requeryNs, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int oldCount, int newCount, uint requeryNs, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeRefreshFull(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.EcsViewRefreshFull, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, oldCount);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], newCount);
         BinaryPrimitives.WriteUInt32LittleEndian(p[8..], requeryNs);
@@ -311,22 +341,26 @@ public static class EcsViewEventCodec
 
     public static EcsViewRefreshFullData DecodeRefreshFull(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new EcsViewRefreshFullData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
             BinaryPrimitives.ReadInt32LittleEndian(p[4..]),
-            BinaryPrimitives.ReadUInt32LittleEndian(p[8..]));
+            BinaryPrimitives.ReadUInt32LittleEndian(p[8..]),
+            srcLoc);
     }
 
     // ── RefreshFullOr (span) ──
     public static void EncodeRefreshFullOr(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int oldCount, int newCount, byte branchCount, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, int oldCount, int newCount, byte branchCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeRefreshFullOr(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.EcsViewRefreshFullOr, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(p, oldCount);
         BinaryPrimitives.WriteInt32LittleEndian(p[4..], newCount);
         p[8] = branchCount;
@@ -335,11 +369,12 @@ public static class EcsViewEventCodec
 
     public static EcsViewRefreshFullOrData DecodeRefreshFullOr(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new EcsViewRefreshFullOrData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadInt32LittleEndian(p),
             BinaryPrimitives.ReadInt32LittleEndian(p[4..]),
-            p[8]);
+            p[8],
+            srcLoc);
     }
 
     // ── Registry Register/Deregister (instant) ──

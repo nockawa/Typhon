@@ -23,16 +23,22 @@ public ref struct WalFlushEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int BatchByteCount;
     public int FrameCount;
     public long HighLsn;
 
     public readonly int ComputeSize()
-        => WalEventCodec.ComputeSize(TraceEventKind.WalFlush, TraceIdHi != 0 || TraceIdLo != 0);
+    {
+        var s = WalEventCodec.ComputeSize(TraceEventKind.WalFlush, TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalFlush, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BatchByteCount, FrameCount, HighLsn, 0, 0, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BatchByteCount, FrameCount, HighLsn, 0, 0, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -55,10 +61,16 @@ public ref struct WalSegmentRotateEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int NewSegmentIndex;
 
     public readonly int ComputeSize()
-        => WalEventCodec.ComputeSize(TraceEventKind.WalSegmentRotate, TraceIdHi != 0 || TraceIdLo != 0);
+    {
+        var s = WalEventCodec.ComputeSize(TraceEventKind.WalSegmentRotate, TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalSegmentRotate, ThreadSlot, StartTimestamp,
@@ -87,10 +99,16 @@ public ref struct WalWaitEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public long TargetLsn;
 
     public readonly int ComputeSize()
-        => WalEventCodec.ComputeSize(TraceEventKind.WalWait, TraceIdHi != 0 || TraceIdLo != 0);
+    {
+        var s = WalEventCodec.ComputeSize(TraceEventKind.WalWait, TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalWait, ThreadSlot, StartTimestamp,

@@ -20,6 +20,8 @@ public ref struct ClusterMigrationEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public ushort ArchetypeId;
     public int MigrationCount;
     /// <summary>
@@ -29,11 +31,15 @@ public ref struct ClusterMigrationEvent : ITraceEventEncoder
     public int ComponentCount;
 
     public readonly int ComputeSize()
-        => ClusterMigrationEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
+    {
+        var s = ClusterMigrationEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => ClusterMigrationEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeId, MigrationCount, ComponentCount, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeId, MigrationCount, ComponentCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

@@ -81,10 +81,13 @@ public static class StorageMiscEventCodec
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EncodeDirtyWalk(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int rangeStart, int rangeLen, int dirtyMs, out int bytesWritten)
+        int rangeStart, int rangeLen, int dirtyMs, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
+        var hasSourceLocation = sourceLocationId != 0;
         var size = ComputeSizeDirtyWalk(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.StoragePageCacheDirtyWalk, threadSlot, startTimestamp);
         var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
@@ -106,12 +109,18 @@ public static class StorageMiscEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
         ulong traceIdHi = 0, traceIdLo = 0;
+        ushort sourceLocationId = 0;
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
         if (hasTC)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new StoragePageCacheDirtyWalkData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId,
             traceIdHi, traceIdLo,
             BinaryPrimitives.ReadInt32LittleEndian(p),

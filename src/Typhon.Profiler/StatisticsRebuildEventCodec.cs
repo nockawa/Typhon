@@ -24,10 +24,15 @@ public readonly struct StatisticsRebuildEventData
     /// <summary>Required — sampling interval used for the rebuild (e.g. every N-th entity).</summary>
     public int SamplingInterval { get; }
 
+    /// <summary>Compile-time site id (0 = absent / not attributed).</summary>
+    public ushort SourceLocationId { get; }
+
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
+    public bool HasSourceLocation => SourceLocationId != 0;
+
     public StatisticsRebuildEventData(byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, int entityCount, int mutationCount, int samplingInterval)
+        ulong traceIdHi, ulong traceIdLo, int entityCount, int mutationCount, int samplingInterval, ushort sourceLocationId = 0)
     {
         ThreadSlot = threadSlot;
         StartTimestamp = startTimestamp;
@@ -39,6 +44,7 @@ public readonly struct StatisticsRebuildEventData
         EntityCount = entityCount;
         MutationCount = mutationCount;
         SamplingInterval = samplingInterval;
+        SourceLocationId = sourceLocationId;
     }
 }
 
@@ -56,20 +62,28 @@ public static class StatisticsRebuildEventCodec
 
     internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int entityCount, int mutationCount, int samplingInterval, out int bytesWritten)
+        int entityCount, int mutationCount, int samplingInterval, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSize(hasTraceContext);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
 
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.StatisticsRebuild, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
+        }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
         }
 
         var payload = destination[headerSize..];
@@ -86,20 +100,28 @@ public static class StatisticsRebuildEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
 
+        var hasTraceContext = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
         ulong traceIdHi = 0, traceIdLo = 0;
-        if ((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0)
+        if (hasTraceContext)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0);
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..]);
+        }
+
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         var payload = source[headerSize..];
         var entityCount = BinaryPrimitives.ReadInt32LittleEndian(payload);
         var mutationCount = BinaryPrimitives.ReadInt32LittleEndian(payload[EntityCountSize..]);
         var samplingInterval = BinaryPrimitives.ReadInt32LittleEndian(payload[(EntityCountSize + MutationCountSize)..]);
 
         return new StatisticsRebuildEventData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            entityCount, mutationCount, samplingInterval);
+            entityCount, mutationCount, samplingInterval, sourceLocationId);
     }
 }
 

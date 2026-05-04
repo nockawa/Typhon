@@ -52,7 +52,8 @@ public static class MemoryAllocEventCodec
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void WriteMemoryAllocEvent(Span<byte> destination, byte threadSlot, long timestamp, MemoryAllocDirection direction, ushort sourceTag, 
-        ulong sizeBytes, ulong totalAfterBytes, out int bytesWritten)
+        ulong sizeBytes, ulong totalAfterBytes, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         TraceRecordHeader.WriteCommonHeader(destination, EventSize, TraceEventKind.MemoryAllocEvent, threadSlot, timestamp);
         var p = destination[TraceRecordHeader.CommonHeaderSize..];

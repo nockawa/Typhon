@@ -35,14 +35,21 @@ public readonly struct WalEventData
     /// <summary>Required for <see cref="TraceEventKind.WalWait"/> — the LSN the caller is blocking for. Zero for other kinds.</summary>
     public long TargetLsn { get; }
 
+    /// <summary>Compile-time site id (0 = absent / not attributed).</summary>
+    public ushort SourceLocationId { get; }
+
     /// <summary><c>true</c> when <see cref="TraceIdHi"/> and <see cref="TraceIdLo"/> are non-zero (the record carried distributed-trace context).</summary>
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
+
+    /// <summary><c>true</c> when <see cref="SourceLocationId"/> is non-zero (the record was emitted via an intercepted call site).</summary>
+    public bool HasSourceLocation => SourceLocationId != 0;
 
     public WalEventData(
         TraceEventKind kind, byte threadSlot, long startTimestamp, long durationTicks,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         int batchByteCount, int frameCount, long highLsn,
-        int newSegmentIndex, long targetLsn)
+        int newSegmentIndex, long targetLsn,
+        ushort sourceLocationId = 0)
     {
         Kind = kind;
         ThreadSlot = threadSlot;
@@ -57,6 +64,7 @@ public readonly struct WalEventData
         HighLsn = highLsn;
         NewSegmentIndex = newSegmentIndex;
         TargetLsn = targetLsn;
+        SourceLocationId = sourceLocationId;
     }
 }
 
@@ -133,20 +141,28 @@ public static class WalEventCodec
         long highLsn,
         int newSegmentIndex,
         long targetLsn,
-        out int bytesWritten)
+        out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
+        var hasSourceLocation = sourceLocationId != 0;
         var size = ComputeSize(kind, hasTraceContext);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
 
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
+        }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
         }
 
         var payload = destination[headerSize..];
@@ -179,13 +195,21 @@ public static class WalEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
 
+        var hasTraceContext = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
         ulong traceIdHi = 0, traceIdLo = 0;
-        if ((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0)
+        if (hasTraceContext)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0);
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..]);
+        }
+
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         var payload = source[headerSize..];
 
         int batchByteCount = 0, frameCount = 0, newSegmentIndex = 0;
@@ -209,7 +233,7 @@ public static class WalEventCodec
         }
 
         return new WalEventData(kind, threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            batchByteCount, frameCount, highLsn, newSegmentIndex, targetLsn);
+            batchByteCount, frameCount, highLsn, newSegmentIndex, targetLsn, sourceLocationId);
     }
 }
 

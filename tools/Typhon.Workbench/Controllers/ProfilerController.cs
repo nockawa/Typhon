@@ -70,6 +70,30 @@ public sealed class ProfilerController : ControllerBase
     }
 
     /// <summary>
+    /// Compile-time source-location manifest for the session (issue #293, Phase 3). For live-attach sessions
+    /// this returns the FileTable + entries received from the engine in the init handshake. For trace-mode
+    /// sessions, this would read the trailer of the <c>.typhon-trace</c> file (deferred — see Implementation
+    /// Notes in the design doc; for now trace-mode returns an empty manifest and falls back to whatever is
+    /// embedded in the trace file's trailer at parse time elsewhere). Empty manifest means the engine ran
+    /// without intercepted call sites — the client renders no Source row, which matches the design's
+    /// fallback semantics.
+    /// </summary>
+    [HttpGet("source-locations")]
+    public ActionResult<SourceLocationManifestDto> GetSourceLocations(Guid sessionId)
+    {
+        var session = HttpContext.Items["Session"];
+        if (session is AttachSession attach)
+        {
+            return Ok(attach.Runtime.SourceLocationManifest);
+        }
+        if (session is TraceSession trace)
+        {
+            return Ok(trace.Runtime.ReadSourceLocationManifest());
+        }
+        return Ok(SourceLocationManifestDto.Empty);
+    }
+
+    /// <summary>
     /// User-initiated disconnect for an Attach session. Drops the TCP connection to the engine and pins the
     /// runtime status to <c>disconnected</c>; the session itself stays alive in the <see cref="SessionManager"/>
     /// so the client can keep inspecting the captured tick buffer. Idempotent — repeated calls are 204 no-ops.

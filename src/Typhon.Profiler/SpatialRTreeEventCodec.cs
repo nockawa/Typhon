@@ -17,8 +17,10 @@ public readonly struct SpatialRTreeInsertData
     public byte DidSplit { get; }
     public byte RestartCount { get; }
 
-    public SpatialRTreeInsertData(byte threadSlot, long startTimestamp, long durationTicks, long entityId, byte depth, byte didSplit, byte restartCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityId = entityId; Depth = depth; DidSplit = didSplit; RestartCount = restartCount; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialRTreeInsertData(byte threadSlot, long startTimestamp, long durationTicks, long entityId, byte depth, byte didSplit, byte restartCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityId = entityId; Depth = depth; DidSplit = didSplit; RestartCount = restartCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded RTree Remove span. Payload: <c>entityId i64, leafCollapse u8</c> (9 B).</summary>
@@ -31,8 +33,10 @@ public readonly struct SpatialRTreeRemoveData
     public long EntityId { get; }
     public byte LeafCollapse { get; }
 
-    public SpatialRTreeRemoveData(byte threadSlot, long startTimestamp, long durationTicks, long entityId, byte leafCollapse)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityId = entityId; LeafCollapse = leafCollapse; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialRTreeRemoveData(byte threadSlot, long startTimestamp, long durationTicks, long entityId, byte leafCollapse, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityId = entityId; LeafCollapse = leafCollapse; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded RTree NodeSplit span. Payload: <c>depth u8, splitAxis u8, leftCount u8, rightCount u8</c> (4 B).</summary>
@@ -47,8 +51,10 @@ public readonly struct SpatialRTreeNodeSplitData
     public byte LeftCount { get; }
     public byte RightCount { get; }
 
-    public SpatialRTreeNodeSplitData(byte threadSlot, long startTimestamp, long durationTicks, byte depth, byte splitAxis, byte leftCount, byte rightCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; Depth = depth; SplitAxis = splitAxis; LeftCount = leftCount; RightCount = rightCount; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialRTreeNodeSplitData(byte threadSlot, long startTimestamp, long durationTicks, byte depth, byte splitAxis, byte leftCount, byte rightCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; Depth = depth; SplitAxis = splitAxis; LeftCount = leftCount; RightCount = rightCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded RTree BulkLoad span. Payload: <c>entityCount i32, leafCount i32</c> (8 B).</summary>
@@ -61,8 +67,10 @@ public readonly struct SpatialRTreeBulkLoadData
     public int EntityCount { get; }
     public int LeafCount { get; }
 
-    public SpatialRTreeBulkLoadData(byte threadSlot, long startTimestamp, long durationTicks, int entityCount, int leafCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityCount = entityCount; LeafCount = leafCount; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SpatialRTreeBulkLoadData(byte threadSlot, long startTimestamp, long durationTicks, int entityCount, int leafCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; EntityCount = entityCount; LeafCount = leafCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>
@@ -82,27 +90,36 @@ public static class SpatialRTreeEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext, ushort sourceLocationId)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
+        }
     }
 
     public static void EncodeInsert(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityId, byte depth, byte didSplit, byte restartCount, out int bytesWritten)
+        long entityId, byte depth, byte didSplit, byte restartCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeInsert(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeInsert, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt64LittleEndian(payload, entityId);
         payload[8] = depth;
         payload[9] = didSplit;
@@ -116,21 +133,30 @@ public static class SpatialRTreeEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SpatialRTreeInsertData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadInt64LittleEndian(payload),
-            payload[8], payload[9], payload[10]);
+            payload[8], payload[9], payload[10], sourceLocationId);
     }
 
     public static void EncodeRemove(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long entityId, byte leafCollapse, out int bytesWritten)
+        long entityId, byte leafCollapse, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeRemove(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeRemove, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt64LittleEndian(payload, entityId);
         payload[8] = leafCollapse;
         bytesWritten = size;
@@ -142,20 +168,29 @@ public static class SpatialRTreeEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SpatialRTreeRemoveData(threadSlot, startTimestamp, durationTicks,
-            BinaryPrimitives.ReadInt64LittleEndian(payload), payload[8]);
+            BinaryPrimitives.ReadInt64LittleEndian(payload), payload[8], sourceLocationId);
     }
 
     public static void EncodeNodeSplit(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        byte depth, byte splitAxis, byte leftCount, byte rightCount, out int bytesWritten)
+        byte depth, byte splitAxis, byte leftCount, byte rightCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeNodeSplit(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeNodeSplit, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         payload[0] = depth;
         payload[1] = splitAxis;
         payload[2] = leftCount;
@@ -169,19 +204,28 @@ public static class SpatialRTreeEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
-        return new SpatialRTreeNodeSplitData(threadSlot, startTimestamp, durationTicks, payload[0], payload[1], payload[2], payload[3]);
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
+        return new SpatialRTreeNodeSplitData(threadSlot, startTimestamp, durationTicks, payload[0], payload[1], payload[2], payload[3], sourceLocationId);
     }
 
     public static void EncodeBulkLoad(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        int entityCount, int leafCount, out int bytesWritten)
+        int entityCount, int leafCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeBulkLoad(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SpatialRTreeBulkLoad, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var payload = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt32LittleEndian(payload, entityCount);
         BinaryPrimitives.WriteInt32LittleEndian(payload[4..], leafCount);
         bytesWritten = size;
@@ -193,9 +237,15 @@ public static class SpatialRTreeEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var payload = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SpatialRTreeBulkLoadData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadInt32LittleEndian(payload),
-            BinaryPrimitives.ReadInt32LittleEndian(payload[4..]));
+            BinaryPrimitives.ReadInt32LittleEndian(payload[4..]), sourceLocationId);
     }
 }

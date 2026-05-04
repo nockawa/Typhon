@@ -24,6 +24,8 @@ public ref struct EcsSpawnEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public ushort ArchetypeId;
 
@@ -44,11 +46,15 @@ public ref struct EcsSpawnEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => EcsSpawnEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = EcsSpawnEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsSpawnEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeId, _optMask, _entityId, _tsn, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeId, _optMask, _entityId, _tsn, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -71,6 +77,8 @@ public ref struct EcsDestroyEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public ulong EntityId;
 
@@ -91,11 +99,15 @@ public ref struct EcsDestroyEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => EcsDestroyEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = EcsDestroyEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsDestroyEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, EntityId, _optMask, _cascadeCount, _tsn, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, EntityId, _optMask, _cascadeCount, _tsn, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -119,6 +131,8 @@ public ref struct EcsViewRefreshEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public ushort ArchetypeTypeId;
 
@@ -146,11 +160,15 @@ public ref struct EcsViewRefreshEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => EcsViewRefreshEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = EcsViewRefreshEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsViewRefreshEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _mode, _resultCount, _deltaCount, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _mode, _resultCount, _deltaCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

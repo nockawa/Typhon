@@ -16,15 +16,21 @@ public ref struct RuntimeTransactionLifecycleEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public ushort SysIdx;
     public uint TxDurUs;
     public byte Success;
 
-    public readonly int ComputeSize() => RuntimeEventCodec.ComputeSizeLifecycle(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = RuntimeEventCodec.ComputeSizeLifecycle(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => RuntimeEventCodec.EncodeLifecycle(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, SysIdx, TxDurUs, Success, out bytesWritten);
+            TraceIdHi, TraceIdLo, SysIdx, TxDurUs, Success, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -42,6 +48,8 @@ public ref struct RuntimeSubscriptionOutputExecuteEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public long Tick;
     public byte Level;
     public ushort ClientCount;
@@ -49,11 +57,15 @@ public ref struct RuntimeSubscriptionOutputExecuteEvent : ITraceEventEncoder
     public uint DeltasPushed;
     public ushort OverflowCount;
 
-    public readonly int ComputeSize() => RuntimeEventCodec.ComputeSizeOutputExecute(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = RuntimeEventCodec.ComputeSizeOutputExecute(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => RuntimeEventCodec.EncodeOutputExecute(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, Tick, Level, ClientCount, ViewsRefreshed, DeltasPushed, OverflowCount, out bytesWritten);
+            TraceIdHi, TraceIdLo, Tick, Level, ClientCount, ViewsRefreshed, DeltasPushed, OverflowCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

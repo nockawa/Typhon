@@ -5,6 +5,11 @@
         <Configurations>Debug;Release</Configurations>
         <Platforms>AnyCPU</Platforms>
         <LangVersion>default</LangVersion>
+        <!--
+          C# 14 stable interceptors opt-in for SourceLocationGenerator-emitted [InterceptsLocation] attributes
+          (under Typhon.Generators.Generated namespace). See claude/design/observability/09-profiler-source-attribution.md.
+        -->
+        <InterceptorsNamespaces>$(InterceptorsNamespaces);Typhon.Generators.Generated</InterceptorsNamespaces>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">

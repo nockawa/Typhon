@@ -36,6 +36,8 @@ public ref struct EcsQueryExecuteEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     /// <summary>Required — archetype type ID.</summary>
     public ushort ArchetypeTypeId;
@@ -57,11 +59,15 @@ public ref struct EcsQueryExecuteEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryExecute, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -77,6 +83,8 @@ public ref struct EcsQueryCountEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public ushort ArchetypeTypeId;
 
@@ -97,11 +105,15 @@ public ref struct EcsQueryCountEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryCount, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -117,6 +129,8 @@ public ref struct EcsQueryAnyEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public ushort ArchetypeTypeId;
 
@@ -137,11 +151,15 @@ public ref struct EcsQueryAnyEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryAny, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, 0, _scanMode, _found, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, 0, _scanMode, _found, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

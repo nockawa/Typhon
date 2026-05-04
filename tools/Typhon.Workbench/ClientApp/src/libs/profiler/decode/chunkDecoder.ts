@@ -32,6 +32,10 @@ const SPAN_HEADER_EXT_SIZE = 25;
 const TRACE_CONTEXT_SIZE = 16;
 /** bit 0 of spanFlags: set when the span record carries an OpenTelemetry-style trace context. */
 const SPAN_FLAGS_HAS_TRACE_CONTEXT = 0x01;
+/** bit 1 of spanFlags: set when the span record carries a 2-byte compile-time source-location id (issue #293). */
+const SPAN_FLAGS_HAS_SOURCE_LOCATION = 0x02;
+/** Optional 2-byte source-location id, appended after the trace context (when present). */
+const SOURCE_LOCATION_ID_SIZE = 2;
 
 /**
  * Entry point. Decode an LZ4-decompressed record block. <paramref name="firstTick"/> primes the tick counter so events carry the correct
@@ -439,6 +443,8 @@ interface SpanHeader {
   parentSpanId: string;
   traceIdHi: string | null;
   traceIdLo: string | null;
+  /** Compile-time source-location id from `SourceLocationGenerator`, or null when the record didn't carry one. */
+  sourceLocationId: number | null;
   payloadOffset: number;
   /** Absolute end offset of the record in the chunk reader. Lets per-kind decoders validate trailing wire-additive fields. */
   recordEnd: number;
@@ -468,6 +474,12 @@ function readSpanHeader(reader: BinaryReader, recordPos: number, ticksPerUs: num
     payloadOffset += TRACE_CONTEXT_SIZE;
   }
 
+  let sourceLocationId: number | null = null;
+  if ((spanFlags & SPAN_FLAGS_HAS_SOURCE_LOCATION) !== 0) {
+    sourceLocationId = reader.readU16(payloadOffset);
+    payloadOffset += SOURCE_LOCATION_ID_SIZE;
+  }
+
   return {
     durationUs: durationTicks / ticksPerUs,
     spanId,
@@ -475,6 +487,7 @@ function readSpanHeader(reader: BinaryReader, recordPos: number, ticksPerUs: num
     recordEnd,
     traceIdHi,
     traceIdLo,
+    sourceLocationId,
     payloadOffset,
   };
 }
@@ -492,6 +505,9 @@ function baseSpanEvent(
   if (header.traceIdHi !== null) {
     evt.traceIdHi = header.traceIdHi;
     evt.traceIdLo = header.traceIdLo ?? undefined;
+  }
+  if (header.sourceLocationId !== null) {
+    evt.sourceLocationId = header.sourceLocationId;
   }
   return evt;
 }

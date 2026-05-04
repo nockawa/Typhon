@@ -30,10 +30,16 @@ public readonly struct SchedulerChunkEventData
     /// <summary>Required — number of entities processed by this chunk.</summary>
     public int EntitiesProcessed { get; }
 
+    /// <summary>Compile-time site id (0 = absent / not attributed).</summary>
+    public ushort SourceLocationId { get; }
+
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
 
+    public bool HasSourceLocation => SourceLocationId != 0;
+
     public SchedulerChunkEventData(byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, ushort systemIndex, ushort chunkIndex, ushort totalChunks, int entitiesProcessed)
+        ulong traceIdHi, ulong traceIdLo, ushort systemIndex, ushort chunkIndex, ushort totalChunks, int entitiesProcessed,
+        ushort sourceLocationId = 0)
     {
         ThreadSlot = threadSlot;
         StartTimestamp = startTimestamp;
@@ -46,6 +52,7 @@ public readonly struct SchedulerChunkEventData
         ChunkIndex = chunkIndex;
         TotalChunks = totalChunks;
         EntitiesProcessed = entitiesProcessed;
+        SourceLocationId = sourceLocationId;
     }
 }
 
@@ -60,20 +67,28 @@ public static class SchedulerChunkEventCodec
 
     internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort systemIndex, ushort chunkIndex, ushort totalChunks, int entitiesProcessed, out int bytesWritten)
+        ushort systemIndex, ushort chunkIndex, ushort totalChunks, int entitiesProcessed, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSize(hasTraceContext);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
 
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SchedulerChunk, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
+        }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
         }
 
         var payload = destination[headerSize..];
@@ -91,13 +106,21 @@ public static class SchedulerChunkEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
 
+        var hasTraceContext = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
         ulong traceIdHi = 0, traceIdLo = 0;
-        if ((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0)
+        if (hasTraceContext)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
 
-        var headerSize = TraceRecordHeader.SpanHeaderSize((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0);
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..]);
+        }
+
+        var headerSize = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
         var payload = source[headerSize..];
         var systemIndex = BinaryPrimitives.ReadUInt16LittleEndian(payload);
         var chunkIndex = BinaryPrimitives.ReadUInt16LittleEndian(payload[2..]);
@@ -105,7 +128,7 @@ public static class SchedulerChunkEventCodec
         var entitiesProcessed = BinaryPrimitives.ReadInt32LittleEndian(payload[6..]);
 
         return new SchedulerChunkEventData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
-            systemIndex, chunkIndex, totalChunks, entitiesProcessed);
+            systemIndex, chunkIndex, totalChunks, entitiesProcessed, sourceLocationId);
     }
 }
 

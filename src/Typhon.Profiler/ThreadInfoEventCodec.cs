@@ -56,14 +56,17 @@ public static class ThreadInfoEventCodec
     /// Encode a ThreadInfo record. Caller has pre-computed <paramref name="nameUtf8"/> (via <see cref="Encoding.UTF8"/>).
     /// </summary>
     public static void WriteThreadInfo(Span<byte> destination, byte threadSlot, long timestamp, int managedThreadId,
-        ReadOnlySpan<byte> nameUtf8, ThreadKind kind, out int bytesWritten)
+        ReadOnlySpan<byte> nameUtf8, ThreadKind kind, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         if (nameUtf8.Length > ushort.MaxValue)
         {
             throw new ArgumentException($"Thread name too long: {nameUtf8.Length} bytes (max {ushort.MaxValue})", nameof(nameUtf8));
         }
 
+        var hasSourceLocation = sourceLocationId != 0;
         var size = ComputeSize(nameUtf8.Length);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
 
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.ThreadInfo, threadSlot, timestamp);
         var p = destination[TraceRecordHeader.CommonHeaderSize..];

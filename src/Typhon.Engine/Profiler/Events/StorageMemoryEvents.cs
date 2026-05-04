@@ -16,15 +16,21 @@ public ref struct StoragePageCacheDirtyWalkEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public int RangeStart;
     public int RangeLen;
     public int DirtyMs;
 
-    public readonly int ComputeSize() => StorageMiscEventCodec.ComputeSizeDirtyWalk(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = StorageMiscEventCodec.ComputeSizeDirtyWalk(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => StorageMiscEventCodec.EncodeDirtyWalk(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, RangeStart, RangeLen, DirtyMs, out bytesWritten);
+            TraceIdHi, TraceIdLo, RangeStart, RangeLen, DirtyMs, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

@@ -31,11 +31,13 @@ public readonly struct DataMvccVersionCleanupData
     public ulong TraceIdLo { get; }
     public long Pk { get; }
     public ushort EntriesFreed { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
     public DataMvccVersionCleanupData(byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo, long pk, ushort entriesFreed)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SpanId = spanId; ParentSpanId = parentSpanId;
-      TraceIdHi = traceIdHi; TraceIdLo = traceIdLo; Pk = pk; EntriesFreed = entriesFreed; }
+        ulong traceIdHi, ulong traceIdLo, long pk, ushort entriesFreed, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; SpanId = spanId; ParentSpanId = parentSpanId;
+      TraceIdHi = traceIdHi; TraceIdLo = traceIdLo; Pk = pk; EntriesFreed = entriesFreed; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Wire codec for Data:MVCC events (kinds 178-179).</summary>
@@ -66,19 +68,27 @@ public static class DataMvccEventCodec
 
     public static void EncodeVersionCleanup(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        long pk, ushort entriesFreed, out int bytesWritten)
+        long pk, ushort entriesFreed, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeVersionCleanup(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.DataMvccVersionCleanup, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteInt64LittleEndian(p, pk);
         BinaryPrimitives.WriteUInt16LittleEndian(p[8..], entriesFreed);
         bytesWritten = size;
@@ -90,14 +100,21 @@ public static class DataMvccEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
         ulong traceIdHi = 0, traceIdLo = 0;
+        ushort sourceLocationId = 0;
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
         if (hasTC)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new DataMvccVersionCleanupData(threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo,
             BinaryPrimitives.ReadInt64LittleEndian(p),
-            BinaryPrimitives.ReadUInt16LittleEndian(p[8..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p[8..]),
+            sourceLocationId);
     }
 }

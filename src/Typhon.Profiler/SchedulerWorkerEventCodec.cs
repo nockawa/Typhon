@@ -15,8 +15,10 @@ public readonly struct SchedulerWorkerIdleData
     public byte WorkerId { get; }
     public ushort SpinCount { get; }
     public uint IdleUs { get; }
-    public SchedulerWorkerIdleData(byte threadSlot, long startTimestamp, long durationTicks, byte workerId, ushort spinCount, uint idleUs)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; WorkerId = workerId; SpinCount = spinCount; IdleUs = idleUs; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SchedulerWorkerIdleData(byte threadSlot, long startTimestamp, long durationTicks, byte workerId, ushort spinCount, uint idleUs, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; WorkerId = workerId; SpinCount = spinCount; IdleUs = idleUs; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Decoded Worker Wake instant. Payload: <c>workerId u8, delayUs u32</c> (5 B).</summary>
@@ -41,8 +43,10 @@ public readonly struct SchedulerWorkerBetweenTickData
     public byte WorkerId { get; }
     public uint WaitUs { get; }
     public byte WakeReason { get; }
-    public SchedulerWorkerBetweenTickData(byte threadSlot, long startTimestamp, long durationTicks, byte workerId, uint waitUs, byte wakeReason)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; WorkerId = workerId; WaitUs = waitUs; WakeReason = wakeReason; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SchedulerWorkerBetweenTickData(byte threadSlot, long startTimestamp, long durationTicks, byte workerId, uint waitUs, byte wakeReason, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; WorkerId = workerId; WaitUs = waitUs; WakeReason = wakeReason; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Wire codec for Scheduler:Worker events (kinds 150-152).</summary>
@@ -57,27 +61,36 @@ public static class SchedulerWorkerEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTraceContext, ushort sourceLocationId)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
+        }
     }
 
     public static void EncodeIdle(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        byte workerId, ushort spinCount, uint idleUs, out int bytesWritten)
+        byte workerId, ushort spinCount, uint idleUs, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeIdle(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SchedulerWorkerIdle, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         p[0] = workerId;
         BinaryPrimitives.WriteUInt16LittleEndian(p[1..], spinCount);
         BinaryPrimitives.WriteUInt32LittleEndian(p[3..], idleUs);
@@ -90,9 +103,15 @@ public static class SchedulerWorkerEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SchedulerWorkerIdleData(threadSlot, startTimestamp, durationTicks,
-            p[0], BinaryPrimitives.ReadUInt16LittleEndian(p[1..]), BinaryPrimitives.ReadUInt32LittleEndian(p[3..]));
+            p[0], BinaryPrimitives.ReadUInt16LittleEndian(p[1..]), BinaryPrimitives.ReadUInt32LittleEndian(p[3..]), sourceLocationId);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -113,13 +132,16 @@ public static class SchedulerWorkerEventCodec
 
     public static void EncodeBetweenTick(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        byte workerId, uint waitUs, byte wakeReason, out int bytesWritten)
+        byte workerId, uint waitUs, byte wakeReason, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeBetweenTick(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.SchedulerWorkerBetweenTick, (ushort)size, threadSlot, startTimestamp,
-            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            endTimestamp - startTimestamp, spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         p[0] = workerId;
         BinaryPrimitives.WriteUInt32LittleEndian(p[1..], waitUs);
         p[5] = wakeReason;
@@ -132,8 +154,14 @@ public static class SchedulerWorkerEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SchedulerWorkerBetweenTickData(threadSlot, startTimestamp, durationTicks,
-            p[0], BinaryPrimitives.ReadUInt32LittleEndian(p[1..]), p[5]);
+            p[0], BinaryPrimitives.ReadUInt32LittleEndian(p[1..]), p[5], sourceLocationId);
     }
 }

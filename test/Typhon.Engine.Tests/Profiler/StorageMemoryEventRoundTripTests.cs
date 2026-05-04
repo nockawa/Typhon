@@ -34,7 +34,7 @@ public class StorageMemoryEventRoundTripTests
         Span<byte> buf = stackalloc byte[size];
         PageCacheEventCodec.Encode(buf, EndTs, TraceEventKind.PageEvicted, ThreadSlot, StartTs,
             SpanId, ParentSpanId, TraceIdHi, TraceIdLo,
-            filePageIndex, pageCount: 0, optMask, out var bytesWritten, dirtyBit);
+            filePageIndex, pageCount: 0, optMask, out var bytesWritten, dirtyBit: dirtyBit);
 
         Assert.That(bytesWritten, Is.EqualTo(size));
 

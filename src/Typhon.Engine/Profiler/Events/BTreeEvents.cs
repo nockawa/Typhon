@@ -23,16 +23,18 @@ public ref struct BTreeInsertEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public readonly int ComputeSize()
     {
         var hasTraceContext = TraceIdHi != 0 || TraceIdLo != 0;
-        return TraceRecordHeader.SpanHeaderSize(hasTraceContext);
+        return TraceRecordHeader.SpanHeaderSize(hasTraceContext, SourceLocationId != 0);
     }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeInsert, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
+            TraceIdHi, TraceIdLo, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -50,11 +52,13 @@ public ref struct BTreeDeleteEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
+    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0, SourceLocationId != 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeDelete, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
+            TraceIdHi, TraceIdLo, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -72,11 +76,13 @@ public ref struct BTreeNodeSplitEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
+    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0, SourceLocationId != 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeNodeSplit, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
+            TraceIdHi, TraceIdLo, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -94,11 +100,13 @@ public ref struct BTreeNodeMergeEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
+    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0, SourceLocationId != 0);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeNodeMerge, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
+            TraceIdHi, TraceIdLo, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

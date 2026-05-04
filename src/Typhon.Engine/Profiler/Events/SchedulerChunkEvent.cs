@@ -20,6 +20,8 @@ public ref struct SchedulerChunkEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public ushort SystemIndex;
     public ushort ChunkIndex;
@@ -27,11 +29,15 @@ public ref struct SchedulerChunkEvent : ITraceEventEncoder
     public int EntitiesProcessed;
 
     public readonly int ComputeSize()
-        => SchedulerChunkEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
+    {
+        var s = SchedulerChunkEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => SchedulerChunkEventCodec.Encode(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, SystemIndex, ChunkIndex, TotalChunks, EntitiesProcessed, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, SystemIndex, ChunkIndex, TotalChunks, EntitiesProcessed, out bytesWritten, SourceLocationId);
 
     // Intentionally no Dispose() method: SchedulerChunkEvent is emitted in one shot via TyphonEvent.EmitSchedulerChunk, never via `using var`.
     // Not exposing Dispose prevents a future maintainer from writing `using var chunk = new SchedulerChunkEvent { ... };` and silently dropping

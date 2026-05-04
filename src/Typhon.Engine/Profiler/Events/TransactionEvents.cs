@@ -19,6 +19,8 @@ public ref struct TransactionCommitEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public long Tsn;
 
@@ -39,11 +41,15 @@ public ref struct TransactionCommitEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommit, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommit, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionCommit, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 0, _optMask, _componentCount, _conflictDetected, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 0, _optMask, _componentCount, _conflictDetected, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -59,6 +65,8 @@ public ref struct TransactionRollbackEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public long Tsn;
 
@@ -80,11 +88,15 @@ public ref struct TransactionRollbackEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionRollback, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = TransactionEventCodec.ComputeSize(TraceEventKind.TransactionRollback, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionRollback, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 0, _optMask, _componentCount, false, out bytesWritten, _reason);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, 0, _optMask, _componentCount, false, out bytesWritten, SourceLocationId, _reason);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -100,6 +112,8 @@ public ref struct TransactionCommitComponentEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public long Tsn;
     public int ComponentTypeId;
@@ -115,7 +129,11 @@ public ref struct TransactionCommitComponentEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommitComponent, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = TransactionEventCodec.ComputeSize(TraceEventKind.TransactionCommitComponent, TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => TransactionEventCodec.Encode(destination, endTimestamp, TraceEventKind.TransactionCommitComponent, ThreadSlot, StartTimestamp,
@@ -141,6 +159,8 @@ public ref struct TransactionPersistEvent : ITraceEventEncoder
     public ulong PreviousSpanId;
     public ulong TraceIdHi;
     public ulong TraceIdLo;
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
 
     public long Tsn;
 
@@ -154,11 +174,15 @@ public ref struct TransactionPersistEvent : ITraceEventEncoder
     }
 
     public readonly int ComputeSize()
-        => TransactionEventCodec.ComputePersistSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+    {
+        var s = TransactionEventCodec.ComputePersistSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => TransactionEventCodec.EncodePersist(destination, endTimestamp, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, _optMask, _walLsn, out bytesWritten);
+            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Tsn, _optMask, _walLsn, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

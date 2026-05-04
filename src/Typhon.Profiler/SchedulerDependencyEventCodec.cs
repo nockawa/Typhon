@@ -29,8 +29,10 @@ public readonly struct SchedulerDependencyFanOutData
     public ushort CompletingSysIdx { get; }
     public ushort SuccCount { get; }
     public ushort SkippedCount { get; }
-    public SchedulerDependencyFanOutData(byte threadSlot, long startTimestamp, long durationTicks, ushort completingSysIdx, ushort succCount, ushort skippedCount)
-    { ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; CompletingSysIdx = completingSysIdx; SuccCount = succCount; SkippedCount = skippedCount; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
+    public SchedulerDependencyFanOutData(byte threadSlot, long startTimestamp, long durationTicks, ushort completingSysIdx, ushort succCount, ushort skippedCount, ushort srcLoc = 0)
+    {  ThreadSlot = threadSlot; StartTimestamp = startTimestamp; DurationTicks = durationTicks; CompletingSysIdx = completingSysIdx; SuccCount = succCount; SkippedCount = skippedCount; SourceLocationId = srcLoc; }
 }
 
 /// <summary>Wire codec for Scheduler:Dependency events (kinds 154-155).</summary>
@@ -65,19 +67,27 @@ public static class SchedulerDependencyEventCodec
 
     public static void EncodeFanOut(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
-        ushort completingSysIdx, ushort succCount, ushort skippedCount, out int bytesWritten)
+        ushort completingSysIdx, ushort succCount, ushort skippedCount, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeFanOut(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, TraceEventKind.SchedulerDependencyFanOut, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             endTimestamp - startTimestamp, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, completingSysIdx);
         BinaryPrimitives.WriteUInt16LittleEndian(p[2..], succCount);
         BinaryPrimitives.WriteUInt16LittleEndian(p[4..], skippedCount);
@@ -90,10 +100,16 @@ public static class SchedulerDependencyEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out _, out _, out var spanFlags);
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
-        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
+        ushort sourceLocationId = 0;
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        var p = source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         return new SchedulerDependencyFanOutData(threadSlot, startTimestamp, durationTicks,
             BinaryPrimitives.ReadUInt16LittleEndian(p),
             BinaryPrimitives.ReadUInt16LittleEndian(p[2..]),
-            BinaryPrimitives.ReadUInt16LittleEndian(p[4..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p[4..]), sourceLocationId);
     }
 }

@@ -26,6 +26,13 @@ public sealed class WorkbenchFactory : WebApplicationFactory<Program>
             // parallel tests. Each factory gets its own in-memory token + its own file.
             services.RemoveAll<BootstrapTokenGate>();
             services.AddSingleton(_ => new BootstrapTokenGate(DemoDirectory));
+
+            // Same isolation for OptionsStore — pin its on-disk JSON to the per-test temp dir so
+            // tests don't pollute the developer's real LocalApplicationData/Typhon.Workbench/options.json.
+            services.RemoveAll<Typhon.Workbench.Hosting.OptionsStore>();
+            services.AddSingleton(sp => new Typhon.Workbench.Hosting.OptionsStore(
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<Typhon.Workbench.Hosting.OptionsStore>>(),
+                DemoDirectory));
         });
     }
 

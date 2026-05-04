@@ -16,17 +16,23 @@ public ref struct SpatialQueryAabbEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public ushort NodesVisited;
     public ushort LeavesEntered;
     public ushort ResultCount;
     public byte RestartCount;
     public uint CategoryMask;
 
-    public readonly int ComputeSize() => SpatialQueryEventCodec.ComputeSizeAabb(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = SpatialQueryEventCodec.ComputeSizeAabb(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => SpatialQueryEventCodec.EncodeAabb(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, NodesVisited, LeavesEntered, ResultCount, RestartCount, CategoryMask, out bytesWritten);
+            TraceIdHi, TraceIdLo, NodesVisited, LeavesEntered, ResultCount, RestartCount, CategoryMask, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -44,16 +50,22 @@ public ref struct SpatialQueryRadiusEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public ushort NodesVisited;
     public ushort ResultCount;
     public float Radius;
     public byte RestartCount;
 
-    public readonly int ComputeSize() => SpatialQueryEventCodec.ComputeSizeRadius(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = SpatialQueryEventCodec.ComputeSizeRadius(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => SpatialQueryEventCodec.EncodeRadius(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, NodesVisited, ResultCount, Radius, RestartCount, out bytesWritten);
+            TraceIdHi, TraceIdLo, NodesVisited, ResultCount, Radius, RestartCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -71,16 +83,22 @@ public ref struct SpatialQueryRayEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public ushort NodesVisited;
     public ushort ResultCount;
     public float MaxDist;
     public byte RestartCount;
 
-    public readonly int ComputeSize() => SpatialQueryEventCodec.ComputeSizeRay(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = SpatialQueryEventCodec.ComputeSizeRay(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => SpatialQueryEventCodec.EncodeRay(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, NodesVisited, ResultCount, MaxDist, RestartCount, out bytesWritten);
+            TraceIdHi, TraceIdLo, NodesVisited, ResultCount, MaxDist, RestartCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -98,16 +116,22 @@ public ref struct SpatialQueryFrustumEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public ushort NodesVisited;
     public ushort ResultCount;
     public byte PlaneCount;
     public byte RestartCount;
 
-    public readonly int ComputeSize() => SpatialQueryEventCodec.ComputeSizeFrustum(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = SpatialQueryEventCodec.ComputeSizeFrustum(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => SpatialQueryEventCodec.EncodeFrustum(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, NodesVisited, ResultCount, PlaneCount, RestartCount, out bytesWritten);
+            TraceIdHi, TraceIdLo, NodesVisited, ResultCount, PlaneCount, RestartCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -125,16 +149,22 @@ public ref struct SpatialQueryKnnEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public ushort K;
     public byte IterCount;
     public float FinalRadius;
     public ushort ResultCount;
 
-    public readonly int ComputeSize() => SpatialQueryEventCodec.ComputeSizeKnn(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = SpatialQueryEventCodec.ComputeSizeKnn(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => SpatialQueryEventCodec.EncodeKnn(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, K, IterCount, FinalRadius, ResultCount, out bytesWritten);
+            TraceIdHi, TraceIdLo, K, IterCount, FinalRadius, ResultCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
@@ -152,15 +182,21 @@ public ref struct SpatialQueryCountEvent : ITraceEventEncoder
     public ulong TraceIdHi;
     public ulong TraceIdLo;
 
+    /// <summary>Compile-time site id from <c>SourceLocationGenerator</c> (0 = not attributed). Wire-format implementation detail.</summary>
+    internal ushort SourceLocationId;
     public byte Variant;
     public ushort NodesVisited;
     public int ResultCount;
 
-    public readonly int ComputeSize() => SpatialQueryEventCodec.ComputeSizeCount(TraceIdHi != 0 || TraceIdLo != 0);
-
+    public readonly int ComputeSize()
+    {
+        var s = SpatialQueryEventCodec.ComputeSizeCount(TraceIdHi != 0 || TraceIdLo != 0);
+        if (SourceLocationId != 0) s += TraceRecordHeader.SourceLocationIdSize;
+        return s;
+    }
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
         => SpatialQueryEventCodec.EncodeCount(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, Variant, NodesVisited, ResultCount, out bytesWritten);
+            TraceIdHi, TraceIdLo, Variant, NodesVisited, ResultCount, out bytesWritten, SourceLocationId);
 
     public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

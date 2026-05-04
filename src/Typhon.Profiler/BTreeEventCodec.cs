@@ -17,9 +17,11 @@ public readonly struct BTreeEventData
     public ulong ParentSpanId { get; }
     public ulong TraceIdHi { get; }
     public ulong TraceIdLo { get; }
+    /// <summary>Compile-time site id (0 = absent / not attributed). See `claude/design/observability/09-profiler-source-attribution.md`.</summary>
+    public ushort SourceLocationId { get; }
 
     public BTreeEventData(TraceEventKind kind, byte threadSlot, long startTimestamp, long durationTicks, ulong spanId, ulong parentSpanId,
-        ulong traceIdHi, ulong traceIdLo)
+        ulong traceIdHi, ulong traceIdLo, ushort sourceLocationId = 0)
     {
         Kind = kind;
         ThreadSlot = threadSlot;
@@ -29,10 +31,14 @@ public readonly struct BTreeEventData
         ParentSpanId = parentSpanId;
         TraceIdHi = traceIdHi;
         TraceIdLo = traceIdLo;
+        SourceLocationId = sourceLocationId;
     }
 
     /// <summary><c>true</c> when <see cref="TraceIdHi"/> and <see cref="TraceIdLo"/> are non-zero (the record carried distributed-trace context).</summary>
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
+
+    /// <summary><c>true</c> when <see cref="SourceLocationId"/> is non-zero (the record was emitted via an intercepted call site).</summary>
+    public bool HasSourceLocation => SourceLocationId != 0;
 }
 
 /// <summary>
@@ -52,13 +58,16 @@ public static class BTreeEventCodec
         ulong parentSpanId,
         ulong traceIdHi,
         ulong traceIdLo,
-        out int bytesWritten)
+        out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTraceContext = traceIdHi != 0 || traceIdLo != 0;
-        var size = TraceRecordHeader.SpanHeaderSize(hasTraceContext);
+        var size = TraceRecordHeader.SpanHeaderSize(hasTraceContext, hasSourceLocation);
 
         TraceRecordHeader.WriteCommonHeader(destination, (ushort)size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTraceContext ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks: endTimestamp - startTimestamp,
             spanId: spanId,
@@ -68,6 +77,11 @@ public static class BTreeEventCodec
         if (hasTraceContext)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
+        }
+
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..], sourceLocationId);
         }
 
         bytesWritten = size;
@@ -82,13 +96,20 @@ public static class BTreeEventCodec
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out var durationTicks, out var spanId, out var parentSpanId, out var spanFlags);
 
+        var hasTraceContext = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
         ulong traceIdHi = 0, traceIdLo = 0;
-        if ((spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0)
+        if (hasTraceContext)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
 
-        return new BTreeEventData(kind, threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo);
+        ushort sourceLocationId = 0;
+        if ((spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTraceContext)..]);
+        }
+
+        return new BTreeEventData(kind, threadSlot, startTimestamp, durationTicks, spanId, parentSpanId, traceIdHi, traceIdLo, sourceLocationId);
     }
 }
 

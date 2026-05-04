@@ -5,6 +5,7 @@ import { refreshResourceGraph } from '@/hooks/useResourceIndex';
 import {
   openArchetypeBrowser,
   openDetailPanel,
+  openOptionsPanel,
   openSchemaArchetypes,
   openSchemaBrowser,
   openSchemaIndexes,
@@ -41,6 +42,7 @@ export function buildBaseCommands(): CommandItem[] {
     { id: 'schema-indexes', label: 'Open Component Indexes',       keywords: 'schema indexes btree fields',                 action: openSchemaIndexes },
     { id: 'schema-relationships', label: 'Open Component Relationships', keywords: 'schema systems relationships',          action: openSchemaRelationships },
     { id: 'open-detail',   label: 'Open Detail Panel',        keywords: 'detail inspector selection', action: openDetailPanel },
+    { id: 'open-options',  label: 'Open Options',             keywords: 'options settings preferences editor profiler workspace', action: openOptionsPanel },
     { id: 'toggle-theme',  label: 'Toggle Dark / Light Mode', keywords: 'theme dark light',  action: toggleTheme },
     ...buildProfilerPaletteCommands(),
     { id: 'reload',        label: 'Reload',                   keywords: 'refresh',           action: () => location.reload() },

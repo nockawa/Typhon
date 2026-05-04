@@ -55,6 +55,37 @@ export function openDetailPanel(): void {
   openDockPanel('detail', 'Detail', 'Detail');
 }
 
+/**
+ * Open (or focus) the Workbench Options panel — issue #293, Phase 4a. Available from anywhere via
+ * the command palette. The panel is dockview-registered like every other tool window so the user
+ * can keep it open alongside the profiler view.
+ */
+export function openOptionsPanel(): void {
+  openDockPanel('options', 'Options', 'Options');
+}
+
+/**
+ * Open the inline source-preview panel for a given file:line (issue #293, Phase 5). Each invocation
+ * reuses one panel id so opening a second source from the Source row replaces the contents instead
+ * of stacking panels.
+ */
+export function openSourcePreview(path: string, line: number): void {
+  const api = registeredApi;
+  if (!api) return;
+  const existing = api.getPanel('source-preview');
+  if (existing) {
+    existing.api.updateParameters({ path, line });
+    existing.focus();
+    return;
+  }
+  api.addPanel({
+    id: 'source-preview',
+    component: 'SourcePreview',
+    title: 'Source Preview',
+    params: { path, line },
+  });
+}
+
 function openDockPanel(id: string, componentKey: string, title: string): void {
   const api = registeredApi;
   if (!api) return;

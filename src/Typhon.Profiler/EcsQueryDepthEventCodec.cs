@@ -18,10 +18,12 @@ public readonly struct EcsQueryConstructData
     public ushort TargetArchId { get; }
     public byte Polymorphic { get; }
     public byte MaskSize { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public EcsQueryConstructData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort tai, byte poly, byte mask)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; TargetArchId = tai; Polymorphic = poly; MaskSize = mask; }
+    public EcsQueryConstructData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort tai, byte poly, byte mask, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; TargetArchId = tai; Polymorphic = poly; MaskSize = mask; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -48,10 +50,12 @@ public readonly struct EcsQuerySubtreeExpandData
     public ulong TraceIdLo { get; }
     public ushort SubtreeCount { get; }
     public ushort RootId { get; }
+    public ushort SourceLocationId { get; }
+    public bool HasSourceLocation => SourceLocationId != 0;
     public bool HasTraceContext => TraceIdHi != 0 || TraceIdLo != 0;
-    public EcsQuerySubtreeExpandData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort sc, ushort ri)
-    { ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
-      TraceIdHi = thi; TraceIdLo = tlo; SubtreeCount = sc; RootId = ri; }
+    public EcsQuerySubtreeExpandData(byte ts, long sts, long dur, ulong sid, ulong psid, ulong thi, ulong tlo, ushort sc, ushort ri, ushort srcLoc = 0)
+    {  ThreadSlot = ts; StartTimestamp = sts; DurationTicks = dur; SpanId = sid; ParentSpanId = psid;
+      TraceIdHi = thi; TraceIdLo = tlo; SubtreeCount = sc; RootId = ri; SourceLocationId = srcLoc; }
 }
 
 [PublicAPI]
@@ -92,44 +96,59 @@ public static class EcsQueryDepthEventCodec
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void WriteSpanPreamble(Span<byte> destination, TraceEventKind kind, ushort size, byte threadSlot, long startTimestamp,
-        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC)
+        long durationTicks, ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, bool hasTC, ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         TraceRecordHeader.WriteCommonHeader(destination, size, kind, threadSlot, startTimestamp);
-        var spanFlags = hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : (byte)0;
+        var spanFlags = (byte)((hasTC ? TraceRecordHeader.SpanFlagsHasTraceContext : 0)
+                             | (hasSourceLocation ? TraceRecordHeader.SpanFlagsHasSourceLocation : 0));
         TraceRecordHeader.WriteSpanHeaderExtension(destination[TraceRecordHeader.CommonHeaderSize..],
             durationTicks, spanId, parentSpanId, spanFlags);
         if (hasTC)
         {
             TraceRecordHeader.WriteTraceContext(destination[TraceRecordHeader.MinSpanHeaderSize..], traceIdHi, traceIdLo);
         }
+        if (hasSourceLocation)
+        {
+            TraceRecordHeader.WriteSourceLocationId(destination[TraceRecordHeader.SourceLocationIdOffset(hasTC)..], sourceLocationId);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ReadOnlySpan<byte> ReadSpanPreamble(ReadOnlySpan<byte> source,
         out byte threadSlot, out long startTs, out long dur, out ulong spanId, out ulong parentSpanId,
-        out ulong traceIdHi, out ulong traceIdLo)
+        out ulong traceIdHi, out ulong traceIdLo, out ushort sourceLocationId)
     {
         TraceRecordHeader.ReadCommonHeader(source, out _, out _, out threadSlot, out startTs);
         TraceRecordHeader.ReadSpanHeaderExtension(source[TraceRecordHeader.CommonHeaderSize..],
             out dur, out spanId, out parentSpanId, out var spanFlags);
         traceIdHi = 0; traceIdLo = 0;
+        sourceLocationId = 0;
         var hasTC = (spanFlags & TraceRecordHeader.SpanFlagsHasTraceContext) != 0;
+        var hasSourceLocation = (spanFlags & TraceRecordHeader.SpanFlagsHasSourceLocation) != 0;
         if (hasTC)
         {
             TraceRecordHeader.ReadTraceContext(source[TraceRecordHeader.MinSpanHeaderSize..], out traceIdHi, out traceIdLo);
         }
-        return source[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+        if (hasSourceLocation)
+        {
+            sourceLocationId = TraceRecordHeader.ReadSourceLocationId(source[TraceRecordHeader.SourceLocationIdOffset(hasTC)..]);
+        }
+        return source[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
     }
 
     // ── Construct (span) ──
     public static void EncodeConstruct(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort targetArchId, byte polymorphic, byte maskSize, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort targetArchId, byte polymorphic, byte maskSize, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeConstruct(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.EcsQueryConstruct, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, targetArchId);
         p[2] = polymorphic;
         p[3] = maskSize;
@@ -138,9 +157,9 @@ public static class EcsQueryDepthEventCodec
 
     public static EcsQueryConstructData DecodeConstruct(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new EcsQueryConstructData(ts, sts, dur, sid, psid, thi, tlo,
-            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2], p[3]);
+            BinaryPrimitives.ReadUInt16LittleEndian(p), p[2], p[3], srcLoc);
     }
 
     // ── MaskAnd (instant) ──
@@ -166,13 +185,16 @@ public static class EcsQueryDepthEventCodec
 
     // ── SubtreeExpand (span) ──
     public static void EncodeSubtreeExpand(Span<byte> destination, long endTs, byte threadSlot, long startTs,
-        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort subtreeCount, ushort rootId, out int bytesWritten)
+        ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo, ushort subtreeCount, ushort rootId, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
+        var hasSourceLocation = sourceLocationId != 0;
         var hasTC = traceIdHi != 0 || traceIdLo != 0;
         var size = ComputeSizeSubtreeExpand(hasTC);
+        if (hasSourceLocation) size += TraceRecordHeader.SourceLocationIdSize;
         WriteSpanPreamble(destination, TraceEventKind.EcsQuerySubtreeExpand, (ushort)size, threadSlot, startTs, endTs - startTs,
-            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC);
-        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC)..];
+            spanId, parentSpanId, traceIdHi, traceIdLo, hasTC, sourceLocationId);
+        var p = destination[TraceRecordHeader.SpanHeaderSize(hasTC, hasSourceLocation)..];
         BinaryPrimitives.WriteUInt16LittleEndian(p, subtreeCount);
         BinaryPrimitives.WriteUInt16LittleEndian(p[2..], rootId);
         bytesWritten = size;
@@ -180,10 +202,11 @@ public static class EcsQueryDepthEventCodec
 
     public static EcsQuerySubtreeExpandData DecodeSubtreeExpand(ReadOnlySpan<byte> source)
     {
-        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo);
+        var p = ReadSpanPreamble(source, out var ts, out var sts, out var dur, out var sid, out var psid, out var thi, out var tlo, out var srcLoc);
         return new EcsQuerySubtreeExpandData(ts, sts, dur, sid, psid, thi, tlo,
             BinaryPrimitives.ReadUInt16LittleEndian(p),
-            BinaryPrimitives.ReadUInt16LittleEndian(p[2..]));
+            BinaryPrimitives.ReadUInt16LittleEndian(p[2..]),
+            srcLoc);
     }
 
     // ── ConstraintEnabled (instant) ──

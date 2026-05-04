@@ -346,6 +346,16 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
                 socket.SendTimeout = 5000;
                 socket.Send(frameBuffer);
 
+                // Phase 3 of profiler-source-attribution (issue #293): after the Init frame and
+                // before the catch-up ThreadInfo frame, ship the compile-time SourceLocations table.
+                // Two frames in a known order: FileTable (paths) then SourceLocationManifest (entries).
+                // Receiver treats both as one logical handshake step. Empty payloads are sent when the
+                // generator emitted nothing (e.g. running on an engine build with no intercepted sites)
+                // so the receiver can rely on the frames always being sent.
+                var (fileTablePayload, manifestPayload) = BuildSourceLocationFramePayloads();
+                SendFrame(socket, LiveFrameType.FileTable, fileTablePayload);
+                SendFrame(socket, LiveFrameType.SourceLocationManifest, manifestPayload);
+
                 // Before switching to non-blocking (and before exposing _client to ProcessBatch), send a catch-up Block frame
                 // carrying a synthetic ThreadInfo record for every currently-claimed slot. Without this, mid-session live
                 // connections never see the one-shot ThreadInfo records emitted when each worker claimed its slot — those
@@ -446,6 +456,65 @@ public sealed class TcpExporter : ResourceNode, IProfilerExporter
 
         bw.Flush();
         return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Build the FileTable + SourceLocationManifest frame payloads from the compile-time
+    /// <c>SourceLocations</c> static table emitted by <c>SourceLocationGenerator</c> (issue #293).
+    /// Both payloads use the same wire format as the file-format trailer sections — no magic prefix
+    /// here because the LiveFrameType enum already discriminates the frames.
+    /// </summary>
+    private static (byte[] FileTable, byte[] Manifest) BuildSourceLocationFramePayloads()
+    {
+        var files = Typhon.Engine.Profiler.Generated.SourceLocations.Files;
+        var entries = Typhon.Engine.Profiler.Generated.SourceLocations.All;
+
+        // FileTable payload: u32 entryCount, then per-entry: u16 fileId, u16 pathLen, UTF-8 bytes.
+        using var fileMs = new MemoryStream();
+        using (var fileBw = new BinaryWriter(fileMs, Encoding.UTF8, true))
+        {
+            fileBw.Write((uint)files.Length);
+            for (ushort i = 0; i < files.Length; i++)
+            {
+                fileBw.Write(i);
+                var bytes = Encoding.UTF8.GetBytes(files[i] ?? string.Empty);
+                fileBw.Write((ushort)bytes.Length);
+                fileBw.Write(bytes);
+            }
+        }
+
+        // SourceLocationManifest payload: u32 entryCount, then per-entry: u16 id, u16 fileId,
+        // u32 line, u8 kind, u8 methodLen, UTF-8 method bytes.
+        using var manifestMs = new MemoryStream();
+        using (var manifestBw = new BinaryWriter(manifestMs, Encoding.UTF8, true))
+        {
+            manifestBw.Write((uint)entries.Length);
+            foreach (var e in entries)
+            {
+                manifestBw.Write(e.Id);
+                manifestBw.Write(e.FileId);
+                manifestBw.Write((uint)e.Line);
+                manifestBw.Write(e.KindByte);
+                var methodBytes = Encoding.UTF8.GetBytes(e.Method ?? string.Empty);
+                manifestBw.Write((byte)Math.Min(methodBytes.Length, 255));
+                manifestBw.Write(methodBytes, 0, Math.Min(methodBytes.Length, 255));
+            }
+        }
+
+        return (fileMs.ToArray(), manifestMs.ToArray());
+    }
+
+    /// <summary>
+    /// Send a single live-stream frame: header + payload. Used by the init handshake for the
+    /// FileTable + SourceLocationManifest frames (#293, Phase 3). Blocking send — only called
+    /// while the socket is still blocking.
+    /// </summary>
+    private static void SendFrame(System.Net.Sockets.Socket socket, LiveFrameType type, byte[] payload)
+    {
+        var frameBuffer = new byte[LiveStreamProtocol.FrameHeaderSize + payload.Length];
+        LiveStreamProtocol.WriteFrameHeader(frameBuffer.AsSpan(), type, payload.Length);
+        payload.CopyTo(frameBuffer.AsSpan(LiveStreamProtocol.FrameHeaderSize));
+        socket.Send(frameBuffer);
     }
 
     /// <summary>

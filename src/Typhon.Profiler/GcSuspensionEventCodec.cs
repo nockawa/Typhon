@@ -44,7 +44,8 @@ public static class GcSuspensionEventCodec
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void Write(Span<byte> destination, byte threadSlot, long startTimestamp, long endTimestamp, ulong spanId, ulong parentSpanId, 
-        GcSuspendReason reason, out int bytesWritten)
+        GcSuspendReason reason, out int bytesWritten,
+        ushort sourceLocationId = 0)
     {
         TraceRecordHeader.WriteCommonHeader(destination, Size, TraceEventKind.GcSuspension, threadSlot, startTimestamp);
         TraceRecordHeader.WriteSpanHeaderExtension(
