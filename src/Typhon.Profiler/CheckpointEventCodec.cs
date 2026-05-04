@@ -130,6 +130,7 @@ public static class CheckpointEventCodec
         return size;
     }
 
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void EncodeCycle(
         Span<byte> destination,
         long endTimestamp,
@@ -191,6 +192,7 @@ public static class CheckpointEventCodec
         return size;
     }
 
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void EncodeOptionalCount(
         Span<byte> destination,
         long endTimestamp,
@@ -235,6 +237,7 @@ public static class CheckpointEventCodec
     // ── Collect / Fsync (no payload — span header only) ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void EncodeNoPayload(
         Span<byte> destination,
         long endTimestamp,

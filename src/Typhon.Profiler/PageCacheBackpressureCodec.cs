@@ -87,6 +87,7 @@ public static class PageCacheBackpressureCodec
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int ComputeSize(bool hasTraceContext) => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + PayloadSize;
 
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         int retryCount, int dirtyCount, int epochCount, out int bytesWritten)
@@ -156,6 +157,10 @@ public static class PageCacheEventCodec
         return size;
     }
 
+    // PageCacheEventCodec.Encode is NOT obsolete — the page-cache family escape-hatch (PageCacheFetch, DiskRead,
+    // DiskWrite, AllocatePage, Flush) keeps calling this codec because the generator's standard layout doesn't model
+    // the always-on optMask byte or the FilePageIndex slot reuse for Flush. EmitPageEvicted in TyphonEvent.cs also
+    // calls it. See PageCacheFlushEvent's <remarks> for the full escape-hatch rationale.
     internal static void Encode(Span<byte> destination, long endTimestamp, TraceEventKind kind, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         int filePageIndex, int pageCount, byte optMask, out int bytesWritten, byte dirtyBit = 0)

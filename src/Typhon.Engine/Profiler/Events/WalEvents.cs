@@ -11,30 +11,16 @@ namespace Typhon.Engine.Profiler;
 /// <remarks>
 /// Payload: <c>[i32 batchByteCount][i32 frameCount][i64 highLsn]</c> = 16 bytes after the span header.
 /// </remarks>
-public ref struct WalFlushEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.WalFlush, EmitEncoder = true)]
+public ref partial struct WalFlushEvent
 {
-    public static byte Kind => (byte)TraceEventKind.WalFlush;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int BatchByteCount;
+    [BeginParam]
     public int FrameCount;
+    [BeginParam]
     public long HighLsn;
 
-    public readonly int ComputeSize()
-        => WalEventCodec.ComputeSize(TraceEventKind.WalFlush, TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalFlush, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, BatchByteCount, FrameCount, HighLsn, 0, 0, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>
@@ -43,29 +29,12 @@ public ref struct WalFlushEvent : ITraceEventEncoder
 /// <remarks>
 /// Payload: <c>[i32 newSegmentIndex]</c> = 4 bytes after the span header.
 /// </remarks>
-public ref struct WalSegmentRotateEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.WalSegmentRotate, EmitEncoder = true)]
+public ref partial struct WalSegmentRotateEvent
 {
-    public static byte Kind => (byte)TraceEventKind.WalSegmentRotate;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int NewSegmentIndex;
 
-    public readonly int ComputeSize()
-        => WalEventCodec.ComputeSize(TraceEventKind.WalSegmentRotate, TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalSegmentRotate, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, 0, 0, 0, NewSegmentIndex, 0,
-            out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>
@@ -75,28 +44,11 @@ public ref struct WalSegmentRotateEvent : ITraceEventEncoder
 /// <remarks>
 /// Payload: <c>[i64 targetLsn]</c> = 8 bytes after the span header.
 /// </remarks>
-public ref struct WalWaitEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.WalWait, EmitEncoder = true)]
+public ref partial struct WalWaitEvent
 {
-    public static byte Kind => (byte)TraceEventKind.WalWait;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long TargetLsn;
 
-    public readonly int ComputeSize()
-        => WalEventCodec.ComputeSize(TraceEventKind.WalWait, TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => WalEventCodec.Encode(destination, endTimestamp, TraceEventKind.WalWait, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, 0, 0, 0, 0, TargetLsn,
-            out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 

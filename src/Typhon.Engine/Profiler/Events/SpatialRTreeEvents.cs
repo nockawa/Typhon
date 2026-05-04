@@ -4,105 +4,45 @@ using Typhon.Profiler;
 namespace Typhon.Engine.Profiler;
 
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeInsert"/>.</summary>
-public ref struct SpatialRTreeInsertEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.SpatialRTreeInsert, EmitEncoder = true)]
+public ref partial struct SpatialRTreeInsertEvent
 {
-    public static byte Kind => (byte)TraceEventKind.SpatialRTreeInsert;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long EntityId;
     public byte Depth;
     public byte DidSplit;
     public byte RestartCount;
 
-    public readonly int ComputeSize() => SpatialRTreeEventCodec.ComputeSizeInsert(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => SpatialRTreeEventCodec.EncodeInsert(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, EntityId, Depth, DidSplit, RestartCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeRemove"/>.</summary>
-public ref struct SpatialRTreeRemoveEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.SpatialRTreeRemove, EmitEncoder = true)]
+public ref partial struct SpatialRTreeRemoveEvent
 {
-    public static byte Kind => (byte)TraceEventKind.SpatialRTreeRemove;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public long EntityId;
     public byte LeafCollapse;
 
-    public readonly int ComputeSize() => SpatialRTreeEventCodec.ComputeSizeRemove(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => SpatialRTreeEventCodec.EncodeRemove(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, EntityId, LeafCollapse, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeNodeSplit"/>.</summary>
-public ref struct SpatialRTreeNodeSplitEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.SpatialRTreeNodeSplit, EmitEncoder = true)]
+public ref partial struct SpatialRTreeNodeSplitEvent
 {
-    public static byte Kind => (byte)TraceEventKind.SpatialRTreeNodeSplit;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public byte Depth;
     public byte SplitAxis;
     public byte LeftCount;
     public byte RightCount;
 
-    public readonly int ComputeSize() => SpatialRTreeEventCodec.ComputeSizeNodeSplit(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => SpatialRTreeEventCodec.EncodeNodeSplit(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, Depth, SplitAxis, LeftCount, RightCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>Producer-side ref struct for <see cref="TraceEventKind.SpatialRTreeBulkLoad"/>.</summary>
-public ref struct SpatialRTreeBulkLoadEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.SpatialRTreeBulkLoad, EmitEncoder = true)]
+public ref partial struct SpatialRTreeBulkLoadEvent
 {
-    public static byte Kind => (byte)TraceEventKind.SpatialRTreeBulkLoad;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public int EntityCount;
     public int LeafCount;
 
-    public readonly int ComputeSize() => SpatialRTreeEventCodec.ComputeSizeBulkLoad(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => SpatialRTreeEventCodec.EncodeBulkLoad(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, EntityCount, LeafCount, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

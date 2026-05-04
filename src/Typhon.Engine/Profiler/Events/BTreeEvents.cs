@@ -1,5 +1,3 @@
-using System;
-using System.Runtime.CompilerServices;
 using Typhon.Profiler;
 
 namespace Typhon.Engine.Profiler;
@@ -12,94 +10,25 @@ namespace Typhon.Engine.Profiler;
 /// fields that were always zero for this event type. At ~1M inserts/sec during an AntHill spawn burst, that's 27 MB/sec of wasted ring buffer
 /// reclaimed.
 /// </remarks>
-public ref struct BTreeInsertEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.BTreeInsert, EmitEncoder = true)]
+public ref partial struct BTreeInsertEvent
 {
-    public static byte Kind => (byte)TraceEventKind.BTreeInsert;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
-    public readonly int ComputeSize()
-    {
-        var hasTraceContext = TraceIdHi != 0 || TraceIdLo != 0;
-        return TraceRecordHeader.SpanHeaderSize(hasTraceContext);
-    }
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeInsert, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>B+Tree delete span — same no-payload shape as <see cref="BTreeInsertEvent"/>.</summary>
-public ref struct BTreeDeleteEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.BTreeDelete, EmitEncoder = true)]
+public ref partial struct BTreeDeleteEvent
 {
-    public static byte Kind => (byte)TraceEventKind.BTreeDelete;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeDelete, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>B+Tree node split span — same no-payload shape.</summary>
-public ref struct BTreeNodeSplitEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.BTreeNodeSplit, EmitEncoder = true)]
+public ref partial struct BTreeNodeSplitEvent
 {
-    public static byte Kind => (byte)TraceEventKind.BTreeNodeSplit;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeNodeSplit, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 /// <summary>B+Tree node merge span — same no-payload shape.</summary>
-public ref struct BTreeNodeMergeEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.BTreeNodeMerge, EmitEncoder = true)]
+public ref partial struct BTreeNodeMergeEvent
 {
-    public static byte Kind => (byte)TraceEventKind.BTreeNodeMerge;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
-    public readonly int ComputeSize() => TraceRecordHeader.SpanHeaderSize(TraceIdHi != 0 || TraceIdLo != 0);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => BTreeEventCodec.EncodeNoPayload(destination, endTimestamp, TraceEventKind.BTreeNodeMerge, ThreadSlot, StartTimestamp, SpanId, ParentSpanId,
-            TraceIdHi, TraceIdLo, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
-

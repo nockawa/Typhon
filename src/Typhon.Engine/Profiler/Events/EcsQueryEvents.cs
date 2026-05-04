@@ -25,124 +25,53 @@ namespace Typhon.Engine.Profiler;
 /// context + 2 B archetype + 1 B mask + 4 B result count + 1 B scan mode). Down from the old fixed 64 B struct's wasted space.
 /// </para>
 /// </remarks>
-public ref struct EcsQueryExecuteEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsQueryExecute, Codec = typeof(EcsQueryEventCodec), EmitEncoder = true)]
+public ref partial struct EcsQueryExecuteEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsQueryExecute;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
     /// <summary>Required — archetype type ID.</summary>
+    [BeginParam]
     public ushort ArchetypeTypeId;
 
+    [Optional]
     private int _resultCount;
+    [Optional]
     private EcsQueryScanMode _scanMode;
-    private byte _optMask;
 
-    public int ResultCount
-    {
-        readonly get => _resultCount;
-        set { _resultCount = value; _optMask |= EcsQueryEventCodec.OptResultCount; }
-    }
-
-    public EcsQueryScanMode ScanMode
-    {
-        readonly get => _scanMode;
-        set { _scanMode = value; _optMask |= EcsQueryEventCodec.OptScanMode; }
-    }
-
-    public readonly int ComputeSize()
-        => EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryExecute, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct EcsQueryCountEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsQueryCount, Codec = typeof(EcsQueryEventCodec), EmitEncoder = true)]
+public ref partial struct EcsQueryCountEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsQueryCount;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public ushort ArchetypeTypeId;
 
+    [Optional]
     private int _resultCount;
+    [Optional]
     private EcsQueryScanMode _scanMode;
-    private byte _optMask;
 
-    public int ResultCount
-    {
-        readonly get => _resultCount;
-        set { _resultCount = value; _optMask |= EcsQueryEventCodec.OptResultCount; }
-    }
-
-    public EcsQueryScanMode ScanMode
-    {
-        readonly get => _scanMode;
-        set { _scanMode = value; _optMask |= EcsQueryEventCodec.OptScanMode; }
-    }
-
-    public readonly int ComputeSize()
-        => EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
-
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryCount, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, _resultCount, _scanMode, false, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct EcsQueryAnyEvent : ITraceEventEncoder
+// Escape-hatch from the Phase 3 generator: EcsQueryAny shares EcsQueryEventCodec with Execute / Count, but
+// the codec packs `Found` (bool) and `ResultCount` (i32) into the same 4-byte slot — when OptFound is set
+// the wire reserves 4 bytes (not 1) for the value. The generator's per-field standard layout doesn't model
+// this slot-sharing, so this kind keeps its hand-written codec call.
+[TraceEvent(TraceEventKind.EcsQueryAny, Codec = typeof(EcsQueryEventCodec))]
+public ref partial struct EcsQueryAnyEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsQueryAny;
-
-    public byte ThreadSlot;
-    public long StartTimestamp;
-    public ulong SpanId;
-    public ulong ParentSpanId;
-    public ulong PreviousSpanId;
-    public ulong TraceIdHi;
-    public ulong TraceIdLo;
-
+    [BeginParam]
     public ushort ArchetypeTypeId;
 
+    [Optional]
     private bool _found;
+    [Optional]
     private EcsQueryScanMode _scanMode;
-    private byte _optMask;
-
-    public bool Found
-    {
-        readonly get => _found;
-        set { _found = value; _optMask |= EcsQueryEventCodec.OptFound; }
-    }
-
-    public EcsQueryScanMode ScanMode
-    {
-        readonly get => _scanMode;
-        set { _scanMode = value; _optMask |= EcsQueryEventCodec.OptScanMode; }
-    }
 
     public readonly int ComputeSize()
-        => EcsQueryEventCodec.ComputeSize(TraceIdHi != 0 || TraceIdLo != 0, _optMask);
+        => EcsQueryEventCodec.ComputeSize(Header.TraceIdHi != 0 || Header.TraceIdLo != 0, _optMask);
 
     public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryAny, ThreadSlot, StartTimestamp,
-            SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ArchetypeTypeId, _optMask, 0, _scanMode, _found, out bytesWritten);
-
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
+        => EcsQueryEventCodec.Encode(destination, endTimestamp, TraceEventKind.EcsQueryAny, Header.ThreadSlot, Header.StartTimestamp,
+            Header.SpanId, Header.ParentSpanId, Header.TraceIdHi, Header.TraceIdLo, ArchetypeTypeId, _optMask, 0, _scanMode, _found, out bytesWritten);
 }
 

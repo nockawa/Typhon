@@ -8,219 +8,153 @@ namespace Typhon.Engine.Profiler;
 // Instants are emitted directly via EmitX factories (no ref struct needed).
 // ═════════════════════════════════════════════════════════════════════════════
 
-public ref struct QueryParseEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryParse, EmitEncoder = true)]
+public ref partial struct QueryParseEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryParse;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public ushort PredicateCount;
+    [BeginParam]
     public byte BranchCount;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizeParse(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodeParse(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, PredicateCount, BranchCount, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryParseDnfEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryParseDnf, EmitEncoder = true)]
+public ref partial struct QueryParseDnfEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryParseDnf;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public ushort InBranches;
+    [BeginParam]
     public ushort OutBranches;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizeParseDnf(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodeParseDnf(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, InBranches, OutBranches, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryPlanEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryPlan, EmitEncoder = true)]
+public ref partial struct QueryPlanEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryPlan;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public byte EvaluatorCount;
+    [BeginParam]
     public ushort IndexFieldIdx;
+    [BeginParam]
     public long RangeMin;
+    [BeginParam]
     public long RangeMax;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizePlan(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodePlan(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, EvaluatorCount, IndexFieldIdx, RangeMin, RangeMax, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryEstimateEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryEstimate, EmitEncoder = true)]
+public ref partial struct QueryEstimateEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryEstimate;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public ushort FieldIdx;
+    [BeginParam]
     public long Cardinality;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizeEstimate(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodeEstimate(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FieldIdx, Cardinality, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryPlanSortEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryPlanSort, EmitEncoder = true)]
+public ref partial struct QueryPlanSortEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryPlanSort;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public byte EvaluatorCount;
+    [BeginParam]
     public uint SortNs;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizePlanSort(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodePlanSort(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, EvaluatorCount, SortNs, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryExecuteIndexScanEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryExecuteIndexScan, EmitEncoder = true)]
+public ref partial struct QueryExecuteIndexScanEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryExecuteIndexScan;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public ushort PrimaryFieldIdx;
+    [BeginParam]
     public byte Mode;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizeIndexScan(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodeIndexScan(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, PrimaryFieldIdx, Mode, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryExecuteIterateEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryExecuteIterate, EmitEncoder = true)]
+public ref partial struct QueryExecuteIterateEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryExecuteIterate;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int ChunkCount;
     public int EntryCount;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizeIterate(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodeIterate(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ChunkCount, EntryCount, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryExecuteFilterEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryExecuteFilter, EmitEncoder = true)]
+public ref partial struct QueryExecuteFilterEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryExecuteFilter;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public byte FilterCount;
     public int RejectedCount;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizeFilter(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodeFilter(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, FilterCount, RejectedCount, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryExecutePaginationEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryExecutePagination, EmitEncoder = true)]
+public ref partial struct QueryExecutePaginationEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryExecutePagination;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int Skip;
+    [BeginParam]
     public int Take;
     public byte EarlyTerm;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizePagination(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodePagination(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, Skip, Take, EarlyTerm, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct QueryCountEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.QueryCount, EmitEncoder = true)]
+public ref partial struct QueryCountEvent
 {
-    public static byte Kind => (byte)TraceEventKind.QueryCount;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int ResultCount;
-    public readonly int ComputeSize() => QueryEventCodec.ComputeSizeCount(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => QueryEventCodec.EncodeCount(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, ResultCount, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 // ── ECS:Query depth spans ──
 
-public ref struct EcsQueryConstructEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsQueryConstruct, EmitEncoder = true)]
+public ref partial struct EcsQueryConstructEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsQueryConstruct;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public ushort TargetArchId;
+    [BeginParam]
     public byte Polymorphic;
+    [BeginParam]
     public byte MaskSize;
-    public readonly int ComputeSize() => EcsQueryDepthEventCodec.ComputeSizeConstruct(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsQueryDepthEventCodec.EncodeConstruct(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, TargetArchId, Polymorphic, MaskSize, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct EcsQuerySubtreeExpandEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsQuerySubtreeExpand, EmitEncoder = true)]
+public ref partial struct EcsQuerySubtreeExpandEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsQuerySubtreeExpand;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public ushort SubtreeCount;
+    [BeginParam]
     public ushort RootId;
-    public readonly int ComputeSize() => EcsQueryDepthEventCodec.ComputeSizeSubtreeExpand(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsQueryDepthEventCodec.EncodeSubtreeExpand(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, SubtreeCount, RootId, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
 // ── ECS:View depth spans ──
 
-public ref struct EcsViewRefreshPullEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsViewRefreshPull, EmitEncoder = true)]
+public ref partial struct EcsViewRefreshPullEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsViewRefreshPull;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public uint QueryNs;
+    [BeginParam]
     public ushort ArchetypeMaskBits;
-    public readonly int ComputeSize() => EcsViewEventCodec.ComputeSizeRefreshPull(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsViewEventCodec.EncodeRefreshPull(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, QueryNs, ArchetypeMaskBits, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct EcsViewIncrementalDrainEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsViewIncrementalDrain, EmitEncoder = true)]
+public ref partial struct EcsViewIncrementalDrainEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsViewIncrementalDrain;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
     public int DeltaCount;
     public byte Overflow;
-    public readonly int ComputeSize() => EcsViewEventCodec.ComputeSizeIncrementalDrain(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsViewEventCodec.EncodeIncrementalDrain(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, DeltaCount, Overflow, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct EcsViewRefreshFullEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsViewRefreshFull, EmitEncoder = true)]
+public ref partial struct EcsViewRefreshFullEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsViewRefreshFull;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int OldCount;
+    [BeginParam]
     public int NewCount;
+    [BeginParam]
     public uint RequeryNs;
-    public readonly int ComputeSize() => EcsViewEventCodec.ComputeSizeRefreshFull(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsViewEventCodec.EncodeRefreshFull(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, OldCount, NewCount, RequeryNs, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }
 
-public ref struct EcsViewRefreshFullOrEvent : ITraceEventEncoder
+[TraceEvent(TraceEventKind.EcsViewRefreshFullOr, EmitEncoder = true)]
+public ref partial struct EcsViewRefreshFullOrEvent
 {
-    public static byte Kind => (byte)TraceEventKind.EcsViewRefreshFullOr;
-
-    public byte ThreadSlot; public long StartTimestamp; public ulong SpanId; public ulong ParentSpanId; public ulong PreviousSpanId; public ulong TraceIdHi; public ulong TraceIdLo;
+    [BeginParam]
     public int OldCount;
+    [BeginParam]
     public int NewCount;
+    [BeginParam]
     public byte BranchCount;
-    public readonly int ComputeSize() => EcsViewEventCodec.ComputeSizeRefreshFullOr(TraceIdHi != 0 || TraceIdLo != 0);
-    public readonly void EncodeTo(Span<byte> destination, long endTimestamp, out int bytesWritten)
-        => EcsViewEventCodec.EncodeRefreshFullOr(destination, endTimestamp, ThreadSlot, StartTimestamp, SpanId, ParentSpanId, TraceIdHi, TraceIdLo, OldCount, NewCount, BranchCount, out bytesWritten);
-    public void Dispose() => TyphonEvent.PublishEvent(ref this, ThreadSlot, PreviousSpanId, SpanId);
 }

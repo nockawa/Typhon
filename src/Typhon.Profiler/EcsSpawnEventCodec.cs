@@ -67,6 +67,7 @@ public static class EcsSpawnEventCodec
         return size;
     }
 
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         ushort archetypeId, byte optMask, ulong entityId, long tsn, out int bytesWritten)
@@ -203,6 +204,7 @@ public static class EcsDestroyEventCodec
         return size;
     }
 
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         ulong entityId, byte optMask, int cascadeCount, long tsn, out int bytesWritten)
@@ -348,6 +350,7 @@ public static class EcsViewRefreshEventCodec
         return size;
     }
 
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp,
         ulong spanId, ulong parentSpanId, ulong traceIdHi, ulong traceIdLo,
         ushort archetypeTypeId, byte optMask, EcsViewRefreshMode mode, int resultCount, int deltaCount, out int bytesWritten)

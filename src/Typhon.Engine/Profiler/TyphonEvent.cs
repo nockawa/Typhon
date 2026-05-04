@@ -29,7 +29,7 @@ namespace Typhon.Engine.Profiler;
 /// per-thread opt-out for skipping <see cref="Activity.Current"/> reads.
 /// </para>
 /// </remarks>
-public static class TyphonEvent
+public static partial class TyphonEvent
 {
     /// <summary>Innermost open Typhon span on this thread. Captured in the <c>Begin*</c> factories as the new span's <c>ParentSpanId</c>.</summary>
     [ThreadStatic] 
@@ -297,445 +297,17 @@ public static class TyphonEvent
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Typed event factories — one per TraceEventKind
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Begin a <see cref="TraceEventKind.EcsQueryExecute"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryExecuteEvent BeginEcsQueryExecute(ushort archetypeTypeId)
-    {
-        if (!BeginPrologue(TraceEventKind.EcsQueryExecute, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new EcsQueryExecuteEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            ArchetypeTypeId = archetypeTypeId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.EcsQueryCount"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryCountEvent BeginEcsQueryCount(ushort archetypeTypeId)
-    {
-        if (!BeginPrologue(TraceEventKind.EcsQueryCount, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new EcsQueryCountEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            ArchetypeTypeId = archetypeTypeId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.EcsQueryAny"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryAnyEvent BeginEcsQueryAny(ushort archetypeTypeId)
-    {
-        if (!BeginPrologue(TraceEventKind.EcsQueryAny, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new EcsQueryAnyEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            ArchetypeTypeId = archetypeTypeId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.EcsViewRefresh"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshEvent BeginEcsViewRefresh(ushort archetypeTypeId)
-    {
-        if (!BeginPrologue(TraceEventKind.EcsViewRefresh, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new EcsViewRefreshEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            ArchetypeTypeId = archetypeTypeId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.EcsSpawn"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsSpawnEvent BeginEcsSpawn(ushort archetypeId)
-    {
-        if (!BeginPrologue(TraceEventKind.EcsSpawn, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new EcsSpawnEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            ArchetypeId = archetypeId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.EcsDestroy"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsDestroyEvent BeginEcsDestroy(ulong entityId)
-    {
-        if (!BeginPrologue(TraceEventKind.EcsDestroy, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new EcsDestroyEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            EntityId = entityId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.TransactionCommit"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionCommitEvent BeginTransactionCommit(long tsn)
-    {
-        if (!BeginPrologue(TraceEventKind.TransactionCommit, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new TransactionCommitEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            Tsn = tsn,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.TransactionRollback"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionRollbackEvent BeginTransactionRollback(long tsn)
-    {
-        if (!BeginPrologue(TraceEventKind.TransactionRollback, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new TransactionRollbackEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            Tsn = tsn,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.TransactionCommitComponent"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionCommitComponentEvent BeginTransactionCommitComponent(long tsn, int componentTypeId)
-    {
-        if (!BeginPrologue(TraceEventKind.TransactionCommitComponent, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new TransactionCommitComponentEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            Tsn = tsn,
-            ComponentTypeId = componentTypeId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.BTreeInsert"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeInsertEvent BeginBTreeInsert()
-    {
-        if (!BeginPrologue(TraceEventKind.BTreeInsert, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new BTreeInsertEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.BTreeDelete"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeDeleteEvent BeginBTreeDelete()
-    {
-        if (!BeginPrologue(TraceEventKind.BTreeDelete, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new BTreeDeleteEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.BTreeNodeSplit"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeNodeSplitEvent BeginBTreeNodeSplit()
-    {
-        if (!BeginPrologue(TraceEventKind.BTreeNodeSplit, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new BTreeNodeSplitEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.BTreeNodeMerge"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static BTreeNodeMergeEvent BeginBTreeNodeMerge()
-    {
-        if (!BeginPrologue(TraceEventKind.BTreeNodeMerge, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new BTreeNodeMergeEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.PageCacheFetch"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheFetchEvent BeginPageCacheFetch(int filePageIndex)
-    {
-        if (!BeginPrologue(TraceEventKind.PageCacheFetch, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new PageCacheFetchEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            FilePageIndex = filePageIndex,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.PageCacheDiskRead"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheDiskReadEvent BeginPageCacheDiskRead(int filePageIndex)
-    {
-        if (!BeginPrologue(TraceEventKind.PageCacheDiskRead, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new PageCacheDiskReadEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            FilePageIndex = filePageIndex,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.PageCacheDiskWrite"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheDiskWriteEvent BeginPageCacheDiskWrite(int filePageIndex)
-    {
-        if (!BeginPrologue(TraceEventKind.PageCacheDiskWrite, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new PageCacheDiskWriteEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            FilePageIndex = filePageIndex,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.PageCacheAllocatePage"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheAllocatePageEvent BeginPageCacheAllocatePage(int filePageIndex)
-    {
-        if (!BeginPrologue(TraceEventKind.PageCacheAllocatePage, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new PageCacheAllocatePageEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            FilePageIndex = filePageIndex,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.PageCacheFlush"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheFlushEvent BeginPageCacheFlush(int pageCount)
-    {
-        if (!BeginPrologue(TraceEventKind.PageCacheFlush, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new PageCacheFlushEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            PageCount = pageCount,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.ClusterMigration"/> span.</summary>
-    /// <param name="componentCount">Total component instances moved this batch (entities × per-entity slot count). Surfaces in the viewer's tooltip alongside entity count.</param>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static ClusterMigrationEvent BeginClusterMigration(ushort archetypeId, int migrationCount, int componentCount)
-    {
-        if (!BeginPrologue(TraceEventKind.ClusterMigration, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new ClusterMigrationEvent
-        {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTs,
-            SpanId = spanId,
-            ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId,
-            TraceIdHi = traceIdHi,
-            TraceIdLo = traceIdLo,
-            ArchetypeId = archetypeId,
-            MigrationCount = migrationCount,
-            ComponentCount = componentCount,
-        };
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Runtime tick lifecycle phase span
+    // Header construction helper — used by every Begin* factory below.
     // ═══════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Begin a <see cref="TraceEventKind.RuntimePhaseSpan"/> span covering one tick lifecycle phase. Child spans started inside the phase
-    /// attach via <c>parentSpanId</c>, giving the profiler view a correct parent-child hierarchy in the phase track. Replaces the pre-existing
-    /// <c>EmitPhaseStart</c>+<c>EmitPhaseEnd</c> instant pair on the producer side.
+    /// Builds a populated <see cref="TraceSpanHeader"/> from the seven prologue out-params returned by <see cref="BeginPrologue"/>. Inlined into
+    /// every Begin* factory so the produced code is identical to the pre-#294 hand-written field assignments.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimePhaseSpanEvent BeginRuntimePhase(TickPhase phase)
-    {
-        if (!BeginPrologue(TraceEventKind.RuntimePhaseSpan, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new RuntimePhaseSpanEvent
+    private static TraceSpanHeader MakeHeader(int slotIdx, long startTs, ulong spanId, ulong parentSpanId, ulong previousSpanId,
+        ulong traceIdHi, ulong traceIdLo)
+        => new()
         {
             ThreadSlot = (byte)slotIdx,
             StartTimestamp = startTs,
@@ -744,226 +316,7 @@ public static class TyphonEvent
             PreviousSpanId = previousSpanId,
             TraceIdHi = traceIdHi,
             TraceIdLo = traceIdLo,
-            Phase = (byte)phase,
         };
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Transaction persist
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Begin a <see cref="TraceEventKind.TransactionPersist"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static TransactionPersistEvent BeginTransactionPersist(long tsn)
-    {
-        if (!BeginPrologue(TraceEventKind.TransactionPersist, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new TransactionPersistEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn,
-        };
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Page cache backpressure
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Begin a <see cref="TraceEventKind.PageCacheBackpressure"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static PageCacheBackpressureEvent BeginPageCacheBackpressure()
-    {
-        if (!BeginPrologue(TraceEventKind.PageCacheBackpressure, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new PageCacheBackpressureEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-        };
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // WAL events
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Begin a <see cref="TraceEventKind.WalFlush"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static WalFlushEvent BeginWalFlush(int batchByteCount, int frameCount, long highLsn)
-    {
-        if (!BeginPrologue(TraceEventKind.WalFlush, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new WalFlushEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            BatchByteCount = batchByteCount, FrameCount = frameCount, HighLsn = highLsn,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.WalSegmentRotate"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static WalSegmentRotateEvent BeginWalSegmentRotate(int newSegmentIndex)
-    {
-        if (!BeginPrologue(TraceEventKind.WalSegmentRotate, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new WalSegmentRotateEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            NewSegmentIndex = newSegmentIndex,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.WalWait"/> span. Only emitted when the fast path (already durable) misses.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static WalWaitEvent BeginWalWait(long targetLsn)
-    {
-        if (!BeginPrologue(TraceEventKind.WalWait, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new WalWaitEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            TargetLsn = targetLsn,
-        };
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Checkpoint events
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Begin a <see cref="TraceEventKind.CheckpointCycle"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointCycleEvent BeginCheckpointCycle(long targetLsn, CheckpointReason reason)
-    {
-        if (!BeginPrologue(TraceEventKind.CheckpointCycle, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new CheckpointCycleEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            TargetLsn = targetLsn, Reason = (byte)reason,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.CheckpointCollect"/> span (no payload).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointCollectEvent BeginCheckpointCollect()
-    {
-        if (!BeginPrologue(TraceEventKind.CheckpointCollect, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new CheckpointCollectEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.CheckpointWrite"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointWriteEvent BeginCheckpointWrite()
-    {
-        if (!BeginPrologue(TraceEventKind.CheckpointWrite, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new CheckpointWriteEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.CheckpointFsync"/> span (no payload).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointFsyncEvent BeginCheckpointFsync()
-    {
-        if (!BeginPrologue(TraceEventKind.CheckpointFsync, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new CheckpointFsyncEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.CheckpointTransition"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointTransitionEvent BeginCheckpointTransition()
-    {
-        if (!BeginPrologue(TraceEventKind.CheckpointTransition, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new CheckpointTransitionEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.CheckpointRecycle"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static CheckpointRecycleEvent BeginCheckpointRecycle()
-    {
-        if (!BeginPrologue(TraceEventKind.CheckpointRecycle, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new CheckpointRecycleEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-        };
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Statistics events
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Begin a <see cref="TraceEventKind.StatisticsRebuild"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StatisticsRebuildEvent BeginStatisticsRebuild(int entityCount, int mutationCount, int samplingInterval)
-    {
-        if (!BeginPrologue(TraceEventKind.StatisticsRebuild, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new StatisticsRebuildEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            EntityCount = entityCount, MutationCount = mutationCount, SamplingInterval = samplingInterval,
-        };
-    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Scheduler-internal fast paths — called from DagScheduler wrappers
@@ -1156,10 +509,13 @@ public static class TyphonEvent
 
         var evt = new SchedulerChunkEvent
         {
-            ThreadSlot = (byte)slotIdx,
-            StartTimestamp = startTimestamp,
-            SpanId = spanId,
-            ParentSpanId = CurrentOpenSpanId,
+            Header = new TraceSpanHeader
+            {
+                ThreadSlot = (byte)slotIdx,
+                StartTimestamp = startTimestamp,
+                SpanId = spanId,
+                ParentSpanId = CurrentOpenSpanId,
+            },
             SystemIndex = (ushort)systemIdx,
             ChunkIndex = (ushort)chunkIdx,
             TotalChunks = (ushort)totalChunks,
@@ -2306,207 +1662,7 @@ public static class TyphonEvent
 
     // ── Spatial:Query spans (kinds 117-122) ─────────────────────────────────
 
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryAabb"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryAabbEvent BeginSpatialQueryAabb(uint categoryMask)
-    {
-        if (!TelemetryConfig.SpatialQueryAabbActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialQueryAabb, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialQueryAabbEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, CategoryMask = categoryMask,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryRadius"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryRadiusEvent BeginSpatialQueryRadius(float radius)
-    {
-        if (!TelemetryConfig.SpatialQueryRadiusActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialQueryRadius, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialQueryRadiusEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Radius = radius,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryRay"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryRayEvent BeginSpatialQueryRay(float maxDist)
-    {
-        if (!TelemetryConfig.SpatialQueryRayActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialQueryRay, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialQueryRayEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, MaxDist = maxDist,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryFrustum"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryFrustumEvent BeginSpatialQueryFrustum(byte planeCount)
-    {
-        if (!TelemetryConfig.SpatialQueryFrustumActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialQueryFrustum, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialQueryFrustumEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, PlaneCount = planeCount,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryKnn"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryKnnEvent BeginSpatialQueryKnn(ushort k)
-    {
-        if (!TelemetryConfig.SpatialQueryKnnActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialQueryKnn, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialQueryKnnEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, K = k,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialQueryCount"/> span. <paramref name="variant"/>: 0=AABB, 1=Radius.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialQueryCountEvent BeginSpatialQueryCount(byte variant)
-    {
-        if (!TelemetryConfig.SpatialQueryCountActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialQueryCount, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialQueryCountEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Variant = variant,
-        };
-    }
-
     // ── Spatial:RTree spans (kinds 123-126) ─────────────────────────────────
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeInsert"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeInsertEvent BeginSpatialRTreeInsert(long entityId)
-    {
-        if (!TelemetryConfig.SpatialRTreeInsertActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialRTreeInsert, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialRTreeInsertEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, EntityId = entityId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeRemove"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeRemoveEvent BeginSpatialRTreeRemove(long entityId)
-    {
-        if (!TelemetryConfig.SpatialRTreeRemoveActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialRTreeRemove, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialRTreeRemoveEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, EntityId = entityId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeNodeSplit"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeNodeSplitEvent BeginSpatialRTreeNodeSplit(byte depth)
-    {
-        if (!TelemetryConfig.SpatialRTreeNodeSplitActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialRTreeNodeSplit, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialRTreeNodeSplitEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Depth = depth,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialRTreeBulkLoad"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialRTreeBulkLoadEvent BeginSpatialRTreeBulkLoad(int entityCount)
-    {
-        if (!TelemetryConfig.SpatialRTreeBulkLoadActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialRTreeBulkLoad, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialRTreeBulkLoadEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, EntityCount = entityCount,
-        };
-    }
 
     // ── Spatial:Grid instants (kinds 127-129) ───────────────────────────────
 
@@ -2741,26 +1897,6 @@ public static class TyphonEvent
 
     // ── Spatial:TierIndex (kind 136 span + 137 instant) ─────────────────────
 
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialTierIndexRebuild"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialTierIndexRebuildEvent BeginSpatialTierIndexRebuild(ushort archetypeId)
-    {
-        if (!TelemetryConfig.SpatialTierIndexRebuildActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialTierIndexRebuild, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialTierIndexRebuildEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, ArchetypeId = archetypeId,
-        };
-    }
-
     /// <summary>Emit <see cref="TraceEventKind.SpatialTierIndexVersionSkip"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitSpatialTierIndexVersionSkip(ushort archetypeId, int version, byte reason)
@@ -2787,48 +1923,6 @@ public static class TyphonEvent
     }
 
     // ── Spatial:Maintain (kinds 138-141) ────────────────────────────────────
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialMaintainInsert"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialMaintainInsertEvent BeginSpatialMaintainInsert(long entityPK, ushort componentTypeId)
-    {
-        if (!TelemetryConfig.SpatialMaintainInsertActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialMaintainInsert, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialMaintainInsertEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            EntityPK = entityPK, ComponentTypeId = componentTypeId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialMaintainUpdateSlowPath"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialMaintainUpdateSlowPathEvent BeginSpatialMaintainUpdateSlowPath(long entityPK, ushort componentTypeId, float escapeDistSq)
-    {
-        if (!TelemetryConfig.SpatialMaintainUpdateSlowPathActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialMaintainUpdateSlowPath, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialMaintainUpdateSlowPathEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            EntityPK = entityPK, ComponentTypeId = componentTypeId, EscapeDistSq = escapeDistSq,
-        };
-    }
 
     /// <summary>Emit <see cref="TraceEventKind.SpatialMaintainAabbValidate"/>. <paramref name="opcode"/>: 0=insert, 1=update, 2=remove.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2905,26 +1999,6 @@ public static class TyphonEvent
 
         SpatialTriggerEventCodec.WriteRegion(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), op, regionId, categoryMask);
         ring.Publish();
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SpatialTriggerEval"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SpatialTriggerEvalEvent BeginSpatialTriggerEval(ushort regionId)
-    {
-        if (!TelemetryConfig.SpatialTriggerEvalActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SpatialTriggerEval, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SpatialTriggerEvalEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, RegionId = regionId,
-        };
     }
 
     /// <summary>Emit <see cref="TraceEventKind.SpatialTriggerOccupantDiff"/> (stats only — no bitmap).</summary>
@@ -3062,48 +2136,7 @@ public static class TyphonEvent
         ring.Publish();
     }
 
-    /// <summary>Begin a <see cref="TraceEventKind.SchedulerSystemSingleThreaded"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerSystemSingleThreadedEvent BeginSchedulerSystemSingleThreaded(ushort sysIdx, byte isParallelQuery, ushort chunkCount)
-    {
-        if (!TelemetryConfig.SchedulerSystemSingleThreadedActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SchedulerSystemSingleThreaded, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SchedulerSystemSingleThreadedEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            SysIdx = sysIdx, IsParallelQuery = isParallelQuery, ChunkCount = chunkCount,
-        };
-    }
-
     // ── Scheduler:Worker (kinds 150-152) ────────────────────────────────────
-
-    /// <summary>Begin a <see cref="TraceEventKind.SchedulerWorkerIdle"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerWorkerIdleEvent BeginSchedulerWorkerIdle(byte workerId)
-    {
-        if (!TelemetryConfig.SchedulerWorkerIdleActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SchedulerWorkerIdle, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SchedulerWorkerIdleEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, WorkerId = workerId,
-        };
-    }
 
     /// <summary>Emit <see cref="TraceEventKind.SchedulerWorkerWake"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -3128,26 +2161,6 @@ public static class TyphonEvent
 
         SchedulerWorkerEventCodec.WriteWake(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), workerId, delayUs);
         ring.Publish();
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SchedulerWorkerBetweenTick"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerWorkerBetweenTickEvent BeginSchedulerWorkerBetweenTick(byte workerId)
-    {
-        if (!TelemetryConfig.SchedulerWorkerBetweenTickActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SchedulerWorkerBetweenTick, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SchedulerWorkerBetweenTickEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, WorkerId = workerId,
-        };
     }
 
     // ── Scheduler:Dispense (kind 153) ───────────────────────────────────────
@@ -3202,26 +2215,6 @@ public static class TyphonEvent
 
         SchedulerDependencyEventCodec.WriteReady(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), fromSysIdx, toSysIdx, fanOut, predRemain);
         ring.Publish();
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SchedulerDependencyFanOut"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerDependencyFanOutEvent BeginSchedulerDependencyFanOut(ushort completingSysIdx)
-    {
-        if (!TelemetryConfig.SchedulerDependencyFanOutActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SchedulerDependencyFanOut, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SchedulerDependencyFanOutEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, CompletingSysIdx = completingSysIdx,
-        };
     }
 
     // ── Scheduler:Overload (kinds 156-158) ──────────────────────────────────
@@ -3382,47 +2375,6 @@ public static class TyphonEvent
 
     // ── Scheduler:Graph (kinds 159-160) ─────────────────────────────────────
 
-    /// <summary>Begin a <see cref="TraceEventKind.SchedulerGraphBuild"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerGraphBuildEvent BeginSchedulerGraphBuild()
-    {
-        if (!TelemetryConfig.SchedulerGraphBuildActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SchedulerGraphBuild, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SchedulerGraphBuildEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.SchedulerGraphRebuild"/> span. Design stub — no Phase 4 producer.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static SchedulerGraphRebuildEvent BeginSchedulerGraphRebuild(ushort oldSysCount, ushort newSysCount, byte reason)
-    {
-        if (!TelemetryConfig.SchedulerGraphRebuildActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.SchedulerGraphRebuild, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new SchedulerGraphRebuildEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            OldSysCount = oldSysCount, NewSysCount = newSysCount, Reason = reason,
-        };
-    }
-
     // ── Runtime:Phase + Transaction + Subscription (kinds 161-164) ──────────
 
     /// <summary>Emit <see cref="TraceEventKind.RuntimePhaseUoWCreate"/>.</summary>
@@ -3473,26 +2425,6 @@ public static class TyphonEvent
 
         RuntimeEventCodec.WriteUoWFlush(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), tick, changeCount);
         ring.Publish();
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.RuntimeTransactionLifecycle"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeTransactionLifecycleEvent BeginRuntimeTransactionLifecycle(ushort sysIdx)
-    {
-        if (!TelemetryConfig.RuntimeTransactionLifecycleActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.RuntimeTransactionLifecycle, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new RuntimeTransactionLifecycleEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, SysIdx = sysIdx,
-        };
     }
 
     // ── TLS-based cross-method Tx Lifecycle bracketing ────────────────────────────────────────
@@ -3563,27 +2495,6 @@ public static class TyphonEvent
         _txLifecycleSpanId = 0;
     }
 
-    /// <summary>Begin a <see cref="TraceEventKind.RuntimeSubscriptionOutputExecute"/> span.</summary>
-    /// <remarks>Stats fields (clientCount, viewsRefreshed, deltasPushed, overflowCount) default to 0; Phase 9 wires them through.</remarks>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionOutputExecuteEvent BeginRuntimeSubscriptionOutputExecute(long tick, byte level)
-    {
-        if (!TelemetryConfig.RuntimeSubscriptionOutputExecuteActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionOutputExecute, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new RuntimeSubscriptionOutputExecuteEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tick = tick, Level = level,
-        };
-    }
-
     // ═══════════════════════════════════════════════════════════════════════
     // Phase 5 — Storage & Memory factories
     // ═══════════════════════════════════════════════════════════════════════
@@ -3602,27 +2513,6 @@ public static class TyphonEvent
         }
         var durationMs = (completionTimestamp - beginTimestamp) * 1000L / Stopwatch.Frequency;
         return durationMs < thresholdMs;
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.StoragePageCacheDirtyWalk"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StoragePageCacheDirtyWalkEvent BeginStoragePageCacheDirtyWalk(int rangeStart, int rangeLen)
-    {
-        if (!TelemetryConfig.StoragePageCacheDirtyWalkActive)
-        {
-            return default;
-        }
-        if (!BeginPrologue(TraceEventKind.StoragePageCacheDirtyWalk, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                           out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new StoragePageCacheDirtyWalkEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            RangeStart = rangeStart, RangeLen = rangeLen, DirtyMs = 0,
-        };
     }
 
     /// <summary>Emit a <see cref="TraceEventKind.StorageSegmentCreate"/> instant.</summary>
@@ -3807,70 +2697,6 @@ public static class TyphonEvent
     // Phase 6 — Data plane factories
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>Begin a <see cref="TraceEventKind.DataTransactionInit"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionInitEvent BeginDataTransactionInit(long tsn, ushort uowId)
-    {
-        if (!TelemetryConfig.DataTransactionInitActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DataTransactionInit, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new DataTransactionInitEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            Tsn = tsn, UowId = uowId,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.DataTransactionPrepare"/> span (high-freq, default-suppressed at the leaf gate).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionPrepareEvent BeginDataTransactionPrepare(long tsn)
-    {
-        if (!TelemetryConfig.DataTransactionPrepareActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DataTransactionPrepare, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new DataTransactionPrepareEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn,
-        };
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.DataTransactionValidate"/> span (wraps the commit-loop validation pass).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionValidateEvent BeginDataTransactionValidate(long tsn, int entryCount)
-    {
-        if (!TelemetryConfig.DataTransactionValidateActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DataTransactionValidate, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new DataTransactionValidateEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn, EntryCount = entryCount,
-        };
-    }
-
     /// <summary>Emit a <see cref="TraceEventKind.DataTransactionConflict"/> instant — fires only when a real conflict is detected.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataTransactionConflict(long tsn, long pk, int componentTypeId, byte conflictType)
@@ -3894,27 +2720,6 @@ public static class TyphonEvent
 
         DataTransactionEventCodec.WriteConflict(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), tsn, pk, componentTypeId, conflictType);
         ring.Publish();
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.DataTransactionCleanup"/> span (wraps deferred-cleanup batch enqueue).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataTransactionCleanupEvent BeginDataTransactionCleanup(long tsn, int entityCount)
-    {
-        if (!TelemetryConfig.DataTransactionCleanupActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DataTransactionCleanup, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new DataTransactionCleanupEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Tsn = tsn, EntityCount = entityCount,
-        };
     }
 
     /// <summary>Emit a <see cref="TraceEventKind.DataMvccChainWalk"/> instant. Slow path — only emitted when the full revision-chain walk runs.</summary>
@@ -3947,27 +2752,6 @@ public static class TyphonEvent
         ring.Publish();
     }
 
-    /// <summary>Begin a <see cref="TraceEventKind.DataMvccVersionCleanup"/> span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataMvccVersionCleanupEvent BeginDataMvccVersionCleanup(long pk)
-    {
-        if (!TelemetryConfig.DataMvccVersionCleanupActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DataMvccVersionCleanup, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new DataMvccVersionCleanupEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, Pk = pk, EntriesFreed = 0,
-        };
-    }
-
     /// <summary>Emit a <see cref="TraceEventKind.DataIndexBTreeSearch"/> instant. Extreme-frequency — also default-suppressed.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDataIndexBTreeSearch(byte retryReason, byte restartCount)
@@ -3996,28 +2780,6 @@ public static class TyphonEvent
 
         DataIndexBTreeEventCodec.WriteSearch(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), retryReason, restartCount);
         ring.Publish();
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.DataIndexBTreeRangeScan"/> span (covers the whole enumeration).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataIndexBTreeRangeScanEvent BeginDataIndexBTreeRangeScan()
-    {
-        if (!TelemetryConfig.DataIndexBTreeRangeScanActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DataIndexBTreeRangeScan, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new DataIndexBTreeRangeScanEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo,
-            ResultCount = 0, RestartCount = 0,
-        };
     }
 
     /// <summary>Emit a <see cref="TraceEventKind.DataIndexBTreeRangeScanRevalidate"/> instant on each OLC restart.</summary>
@@ -4068,27 +2830,6 @@ public static class TyphonEvent
 
         DataIndexBTreeEventCodec.WriteRebalanceFallback(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), reason);
         ring.Publish();
-    }
-
-    /// <summary>Begin a <see cref="TraceEventKind.DataIndexBTreeBulkInsert"/> span (multi-value index insert).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DataIndexBTreeBulkInsertEvent BeginDataIndexBTreeBulkInsert(int bufferId, int entryCount)
-    {
-        if (!TelemetryConfig.DataIndexBTreeBulkInsertActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DataIndexBTreeBulkInsert, out var slotIdx, out var startTs, out var spanId, out var parentSpanId,
-                out var previousSpanId, out var traceIdHi, out var traceIdLo))
-        {
-            return default;
-        }
-        return new DataIndexBTreeBulkInsertEvent
-        {
-            ThreadSlot = (byte)slotIdx, StartTimestamp = startTs, SpanId = spanId, ParentSpanId = parentSpanId,
-            PreviousSpanId = previousSpanId, TraceIdHi = traceIdHi, TraceIdLo = traceIdLo, BufferId = bufferId, EntryCount = entryCount,
-        };
     }
 
     /// <summary>Emit a <see cref="TraceEventKind.DataIndexBTreeRoot"/> instant. <paramref name="op"/> = 0 (Init) or 1 (Split).</summary>
@@ -4151,70 +2892,6 @@ public static class TyphonEvent
     // ═══════════════════════════════════════════════════════════════════════
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryParseEvent BeginQueryParse(ushort predicateCount, byte branchCount)
-    {
-        if (!TelemetryConfig.QueryParseActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryParse, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryParseEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, PredicateCount = predicateCount, BranchCount = branchCount };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryParseDnfEvent BeginQueryParseDnf(ushort inBranches, ushort outBranches)
-    {
-        if (!TelemetryConfig.QueryParseDnfActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryParseDnf, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryParseDnfEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, InBranches = inBranches, OutBranches = outBranches };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryPlanEvent BeginQueryPlan(byte evaluatorCount, ushort indexFieldIdx, long rangeMin, long rangeMax)
-    {
-        if (!TelemetryConfig.QueryPlanEnabledActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryPlan, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryPlanEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, EvaluatorCount = evaluatorCount, IndexFieldIdx = indexFieldIdx, RangeMin = rangeMin, RangeMax = rangeMax };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryEstimateEvent BeginQueryEstimate(ushort fieldIdx, long cardinality)
-    {
-        if (!TelemetryConfig.QueryEstimateActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryEstimate, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryEstimateEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, FieldIdx = fieldIdx, Cardinality = cardinality };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitQueryPlanPrimarySelect(byte candidates, byte winnerIdx, byte reason)
     {
         if (!TelemetryConfig.QueryPlanPrimarySelectActive)
@@ -4236,86 +2913,6 @@ public static class TyphonEvent
 
         QueryEventCodec.WritePrimarySelect(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), candidates, winnerIdx, reason);
         ring.Publish();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryPlanSortEvent BeginQueryPlanSort(byte evaluatorCount, uint sortNs)
-    {
-        if (!TelemetryConfig.QueryPlanSortActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryPlanSort, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryPlanSortEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, EvaluatorCount = evaluatorCount, SortNs = sortNs };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecuteIndexScanEvent BeginQueryExecuteIndexScan(ushort primaryFieldIdx, byte mode)
-    {
-        if (!TelemetryConfig.QueryExecuteIndexScanActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryExecuteIndexScan, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryExecuteIndexScanEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, PrimaryFieldIdx = primaryFieldIdx, Mode = mode };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecuteIterateEvent BeginQueryExecuteIterate()
-    {
-        if (!TelemetryConfig.QueryExecuteIterateActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryExecuteIterate, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryExecuteIterateEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecuteFilterEvent BeginQueryExecuteFilter(byte filterCount)
-    {
-        if (!TelemetryConfig.QueryExecuteFilterActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryExecuteFilter, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryExecuteFilterEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, FilterCount = filterCount };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryExecutePaginationEvent BeginQueryExecutePagination(int skip, int take)
-    {
-        if (!TelemetryConfig.QueryExecutePaginationActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryExecutePagination, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryExecutePaginationEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, Skip = skip, Take = take };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4342,39 +2939,7 @@ public static class TyphonEvent
         ring.Publish();
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static QueryCountEvent BeginQueryCount()
-    {
-        if (!TelemetryConfig.QueryCountActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.QueryCount, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new QueryCountEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
-    }
-
     // ── ECS:Query depth ──
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQueryConstructEvent BeginEcsQueryConstruct(ushort targetArchId, byte polymorphic, byte maskSize)
-    {
-        if (!TelemetryConfig.EcsQueryConstructActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.EcsQueryConstruct, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new EcsQueryConstructEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, TargetArchId = targetArchId, Polymorphic = polymorphic, MaskSize = maskSize };
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitEcsQueryMaskAnd(ushort bitsBefore, ushort bitsAfter, byte opType)
@@ -4398,22 +2963,6 @@ public static class TyphonEvent
 
         EcsQueryDepthEventCodec.WriteMaskAnd(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), bitsBefore, bitsAfter, opType);
         ring.Publish();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsQuerySubtreeExpandEvent BeginEcsQuerySubtreeExpand(ushort subtreeCount, ushort rootId)
-    {
-        if (!TelemetryConfig.EcsQuerySubtreeExpandActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.EcsQuerySubtreeExpand, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new EcsQuerySubtreeExpandEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SubtreeCount = subtreeCount, RootId = rootId };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4465,38 +3014,6 @@ public static class TyphonEvent
     }
 
     // ── ECS:View depth ──
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshPullEvent BeginEcsViewRefreshPull(uint queryNs, ushort archetypeMaskBits)
-    {
-        if (!TelemetryConfig.EcsViewRefreshPullActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.EcsViewRefreshPull, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new EcsViewRefreshPullEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, QueryNs = queryNs, ArchetypeMaskBits = archetypeMaskBits };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewIncrementalDrainEvent BeginEcsViewIncrementalDrain()
-    {
-        if (!TelemetryConfig.EcsViewIncrementalDrainActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.EcsViewIncrementalDrain, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new EcsViewIncrementalDrainEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
-    }
 
     /// <summary>
     /// Emit a <see cref="TraceEventKind.EcsViewDeltaBufferOverflow"/> instant — operationally critical, never default-suppressed.
@@ -4572,38 +3089,6 @@ public static class TyphonEvent
 
         EcsViewEventCodec.WriteProcessEntryOr(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), pk, branchCount, bitmapDelta);
         ring.Publish();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshFullEvent BeginEcsViewRefreshFull(int oldCount, int newCount, uint requeryNs)
-    {
-        if (!TelemetryConfig.EcsViewRefreshFullActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.EcsViewRefreshFull, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new EcsViewRefreshFullEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, OldCount = oldCount, NewCount = newCount, RequeryNs = requeryNs };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static EcsViewRefreshFullOrEvent BeginEcsViewRefreshFullOr(int oldCount, int newCount, byte branchCount)
-    {
-        if (!TelemetryConfig.EcsViewRefreshFullOrActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.EcsViewRefreshFullOr, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new EcsViewRefreshFullOrEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, OldCount = oldCount, NewCount = newCount, BranchCount = branchCount };
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -4685,54 +3170,6 @@ public static class TyphonEvent
     // ── WAL ──
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalQueueDrainEvent BeginDurabilityWalQueueDrain(int bytesAligned, int frameCount)
-    {
-        if (!TelemetryConfig.DurabilityWalQueueDrainActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityWalQueueDrain, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityWalQueueDrainEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, BytesAligned = bytesAligned, FrameCount = frameCount };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalOsWriteEvent BeginDurabilityWalOsWrite(int bytesAligned, int frameCount, long highLsn)
-    {
-        if (!TelemetryConfig.DurabilityWalOsWriteActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityWalOsWrite, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityWalOsWriteEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, BytesAligned = bytesAligned, FrameCount = frameCount, HighLsn = highLsn };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalSignalEvent BeginDurabilityWalSignal(long highLsn)
-    {
-        if (!TelemetryConfig.DurabilityWalSignalActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityWalSignal, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityWalSignalEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, HighLsn = highLsn };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityWalGroupCommit(ushort triggerMs, int producerThread)
     {
         if (!TelemetryConfig.DurabilityWalGroupCommitActive)
@@ -4780,22 +3217,6 @@ public static class TyphonEvent
         ring.Publish();
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalBufferEvent BeginDurabilityWalBuffer(int bytesAligned, int pad)
-    {
-        if (!TelemetryConfig.DurabilityWalBufferActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityWalBuffer, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityWalBufferEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, BytesAligned = bytesAligned, Pad = pad };
-    }
-
     /// <summary>Emit per-frame WAL CRC instant — extreme-freq, deny-listed.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void EmitDurabilityWalFrame(ushort frameCount, uint crcStart)
@@ -4826,71 +3247,7 @@ public static class TyphonEvent
         ring.Publish();
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityWalBackpressureEvent BeginDurabilityWalBackpressure(uint waitUs, int producerThread)
-    {
-        if (!TelemetryConfig.DurabilityWalBackpressureActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityWalBackpressure, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityWalBackpressureEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, WaitUs = waitUs, ProducerThread = producerThread };
-    }
-
     // ── Checkpoint depth ──
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityCheckpointWriteBatchEvent BeginDurabilityCheckpointWriteBatch(int writeBatchSize, int stagingAllocated)
-    {
-        if (!TelemetryConfig.DurabilityCheckpointWriteBatchActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointWriteBatch, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityCheckpointWriteBatchEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, WriteBatchSize = writeBatchSize, StagingAllocated = stagingAllocated };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityCheckpointBackpressureEvent BeginDurabilityCheckpointBackpressure(uint waitMs, byte exhausted)
-    {
-        if (!TelemetryConfig.DurabilityCheckpointBackpressureActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointBackpressure, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityCheckpointBackpressureEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, WaitMs = waitMs, Exhausted = exhausted };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityCheckpointSleepEvent BeginDurabilityCheckpointSleep(uint sleepMs, byte wakeReason)
-    {
-        if (!TelemetryConfig.DurabilityCheckpointSleepActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityCheckpointSleep, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityCheckpointSleepEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SleepMs = sleepMs, WakeReason = wakeReason };
-    }
 
     // ── Recovery ──
 
@@ -4916,38 +3273,6 @@ public static class TyphonEvent
 
         DurabilityRecoveryEventCodec.WriteStart(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), checkpointLsn, reason);
         ring.Publish();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryDiscoverEvent BeginDurabilityRecoveryDiscover(int segCount, long totalBytes, int firstSegId)
-    {
-        if (!TelemetryConfig.DurabilityRecoveryDiscoverActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryDiscover, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityRecoveryDiscoverEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SegCount = segCount, TotalBytes = totalBytes, FirstSegId = firstSegId };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoverySegmentEvent BeginDurabilityRecoverySegment(int segId)
-    {
-        if (!TelemetryConfig.DurabilityRecoverySegmentActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoverySegment, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityRecoverySegmentEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SegId = segId, RecCount = 0, Bytes = 0, Truncated = 0 };
     }
 
     /// <summary>Emit recovery per-record instant — extreme-freq, deny-listed.</summary>
@@ -4978,70 +3303,6 @@ public static class TyphonEvent
 
         DurabilityRecoveryEventCodec.WriteRecord(dst, (byte)slotIdx, Stopwatch.GetTimestamp(), chunkType, lsn, size);
         ring.Publish();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryFpiEvent BeginDurabilityRecoveryFpi(int fpiCount)
-    {
-        if (!TelemetryConfig.DurabilityRecoveryFpiActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryFpi, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityRecoveryFpiEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, FpiCount = fpiCount, RepairedCount = 0, Mismatches = 0 };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryRedoEvent BeginDurabilityRecoveryRedo()
-    {
-        if (!TelemetryConfig.DurabilityRecoveryRedoActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryRedo, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityRecoveryRedoEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryUndoEvent BeginDurabilityRecoveryUndo(int voidedUowCount)
-    {
-        if (!TelemetryConfig.DurabilityRecoveryUndoActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryUndo, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityRecoveryUndoEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, VoidedUowCount = voidedUowCount };
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static DurabilityRecoveryTickFenceEvent BeginDurabilityRecoveryTickFence()
-    {
-        if (!TelemetryConfig.DurabilityRecoveryTickFenceActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.DurabilityRecoveryTickFence, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new DurabilityRecoveryTickFenceEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
     }
 
     // ── UoW ──
@@ -5106,109 +3367,4 @@ public static class TyphonEvent
         ring.Publish();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Phase 9 — Subscription dispatch factories (per-subscriber depth)
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// <summary>Begin a per-subscriber invocation span. High-freq, deny-listed by default.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionSubscriberEvent BeginRuntimeSubscriptionSubscriber(uint subscriberId, ushort viewId, int deltaCount)
-    {
-        if (!TelemetryConfig.RuntimeSubscriptionSubscriberActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionSubscriber, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new RuntimeSubscriptionSubscriberEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, SubscriberId = subscriberId, ViewId = viewId, DeltaCount = deltaCount };
-    }
-
-    /// <summary>Begin a delta-builder span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionDeltaBuildEvent BeginRuntimeSubscriptionDeltaBuild(ushort viewId)
-    {
-        if (!TelemetryConfig.RuntimeSubscriptionDeltaBuildActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaBuild, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new RuntimeSubscriptionDeltaBuildEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, ViewId = viewId };
-    }
-
-    /// <summary>Begin a per-client delta-serialize span. High-freq, deny-listed by default.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionDeltaSerializeEvent BeginRuntimeSubscriptionDeltaSerialize(uint clientId, ushort viewId, byte format)
-    {
-        if (!TelemetryConfig.RuntimeSubscriptionDeltaSerializeActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaSerialize, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new RuntimeSubscriptionDeltaSerializeEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, ClientId = clientId, ViewId = viewId, Format = format };
-    }
-
-    /// <summary>Begin a Subscription:Transition:BeginSync span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionTransitionBeginSyncEvent BeginRuntimeSubscriptionTransitionBeginSync(uint clientId, ushort viewId, int entitySnapshot)
-    {
-        if (!TelemetryConfig.RuntimeSubscriptionTransitionBeginSyncActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionTransitionBeginSync, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new RuntimeSubscriptionTransitionBeginSyncEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo, ClientId = clientId, ViewId = viewId, EntitySnapshot = entitySnapshot };
-    }
-
-    /// <summary>Begin a dead-client cleanup span.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionOutputCleanupEvent BeginRuntimeSubscriptionOutputCleanup()
-    {
-        if (!TelemetryConfig.RuntimeSubscriptionOutputCleanupActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionOutputCleanup, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new RuntimeSubscriptionOutputCleanupEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
-    }
-
-    /// <summary>Begin a dirty-bitmap-supplement span (when ring overflows).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent BeginRuntimeSubscriptionDeltaDirtyBitmapSupplement()
-    {
-        if (!TelemetryConfig.RuntimeSubscriptionDeltaDirtyBitmapSupplementActive)
-        {
-            return default;
-        }
-
-        if (!BeginPrologue(TraceEventKind.RuntimeSubscriptionDeltaDirtyBitmapSupplement, out var s, out var t, out var sid, out var psid, out var prev, out var thi, out var tlo))
-        {
-            return default;
-        }
-
-        return new RuntimeSubscriptionDeltaDirtyBitmapSupplementEvent { ThreadSlot = (byte)s, StartTimestamp = t, SpanId = sid, ParentSpanId = psid, PreviousSpanId = prev, TraceIdHi = thi, TraceIdLo = tlo };
-    }
 }

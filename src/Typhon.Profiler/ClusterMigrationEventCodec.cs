@@ -62,6 +62,7 @@ public static class ClusterMigrationEventCodec
     public static int ComputeSize(bool hasTraceContext)
         => TraceRecordHeader.SpanHeaderSize(hasTraceContext) + PayloadSize;
 
+    [global::System.Obsolete("Replaced by Typhon.Generators.TraceEventGenerator (EmitEncoder = true). No producer-side code calls this anymore. Kept temporarily so external callers fail loudly; will be removed in a follow-up cleanup PR.")]
     internal static void Encode(Span<byte> destination, long endTimestamp, byte threadSlot, long startTimestamp, ulong spanId, ulong parentSpanId,
         ulong traceIdHi, ulong traceIdLo, ushort archetypeId, int migrationCount, int componentCount, out int bytesWritten)
     {
