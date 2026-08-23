@@ -1,6 +1,8 @@
 using JetBrains.Annotations;
+using System;
 using System.Collections.Generic;
 using Typhon.Schema.Definition;
+using System.Diagnostics;
 
 namespace Typhon.Engine;
 
@@ -64,7 +66,7 @@ public struct TickContext
 
     /// <summary>
     /// Event queues this system consumes. Null if the system has no consumed queues.
-    /// Cast to <see cref="EventQueue{T}"/> and call <c>Drain(span)</c> or <c>AsSpan()</c> to read events.
+    /// Cast to <see cref="EventQueue{T}"/> and call <c>Drain(span)</c> to read events; size the span from <c>Count</c>, which a short span throws on.
     /// </summary>
     public EventQueueBase[] ConsumedQueues { get; init; }
 
@@ -121,11 +123,98 @@ public struct TickContext
     public TierBudgetMetrics TierBudgetMetrics { get; init; }
 
     /// <summary>
-    /// Zero-based worker index for the thread executing this system chunk. Range: [0, WorkerCount).
-    /// For non-parallel systems, always 0. Use this to index into per-worker data structures
-    /// (e.g., per-worker render buffers) without any synchronization.
+    /// Sentinel <see cref="WorkerId"/> for a context that is <b>not</b> executing on a scheduler worker — the runtime lifecycle hooks
+    /// (<c>OnFirstTick</c>, <c>OnShutdown</c>), which run on the tick thread or the caller's thread rather than on a dispatched worker.
     /// </summary>
+    /// <remarks>
+    /// Deliberately negative so that indexing a per-worker array with it throws instead of silently aliasing worker 0 (#860). Code that indexes
+    /// per-worker storage by <see cref="WorkerId"/> must either be unreachable from a lifecycle hook or handle this value explicitly.
+    /// </remarks>
+    public const int NonWorkerId = -1;
+
+    /// <summary>
+    /// Worker slot for the thread executing this system chunk. Use it to index per-worker data structures (per-worker scratch buffers, accumulators)
+    /// without any synchronization.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Range is <c>[0, WorkerCount]</c> — inclusive of the upper bound</b>, so per-worker arrays must be sized
+    /// <see cref="DagScheduler.WorkerSlotCount"/>, not <c>WorkerCount</c>. Slots <c>[0, WorkerCount)</c> are the pool's worker threads; the extra slot
+    /// <see cref="DagScheduler.DispatcherWorkerId"/> belongs to the dispatcher (timer) thread, which runs a system body when a skipped root chains its
+    /// successor into <c>ExecuteInline</c>. The dispatcher slot is disjoint from every worker slot by construction, which is what makes it safe to write
+    /// without synchronization — see <see cref="DagScheduler.DispatcherWorkerId"/> for why disjointness, not quiescence, is the guarantee.
+    /// </para>
+    /// <para>
+    /// <b>Single-worker runtimes never produce the dispatcher slot.</b> <c>WorkerCount == 1</c> takes <c>ExecuteTickSingleThreaded</c>, which runs the
+    /// whole tick inline on the tick thread and stamps slot 0 — truthfully, since that thread is the one and only worker. The dispatcher slot arises
+    /// only from multi-worker track dispatch. Size per-worker arrays by <see cref="DagScheduler.WorkerSlotCount"/> regardless, so the same code is
+    /// correct under both.
+    /// </para>
+    /// <para>
+    /// Contexts handed to the runtime lifecycle hooks (<c>OnFirstTick</c>, <c>OnShutdown</c>) carry <see cref="NonWorkerId"/> instead — those run on the
+    /// tick thread or on whichever thread called <c>Shutdown</c>, outside system dispatch entirely, so no slot belongs to them.
+    /// </para>
+    /// <para>
+    /// <b>Withdrawn in #860:</b> this used to be documented as "for non-parallel systems, always 0", and four of the six construction sites left it at
+    /// the default 0 — so every thread claimed slot 0 and per-worker partitioning aliased instead of separating. A non-parallel system now reports
+    /// whichever pool worker picked it up that tick, which varies from tick to tick. Code that read <c>perWorker[0]</c> on the strength of the old
+    /// wording must aggregate across all slots instead.
+    /// </para>
+    /// </remarks>
     public int WorkerId { get; init; }
+
+    /// <summary>
+    /// Opens a writer on <paramref name="queue"/> bound to this context's worker slot (#861). Resolve it once per system body and push through it.
+    /// </summary>
+    /// <remarks>
+    /// This is the only supported way to produce events: it supplies <see cref="WorkerId"/> for you, so a producer cannot accidentally write another
+    /// worker's segment. Calling it from a lifecycle hook throws — those contexts carry <see cref="NonWorkerId"/> and own no segment.
+    /// </remarks>
+    /// <typeparam name="T">The event type.</typeparam>
+    /// <param name="queue">The queue to produce into, or null for a no-op writer — the <c>queue?.Push(...)</c> idiom, kept working.
+    /// The system should declare the queue via <c>WritesEvents</c> / <c>produces:</c>.</param>
+    public readonly EventWriter<T> Writer<T>(EventQueue<T> queue) => queue == null ? default : queue.GetWriter(WorkerId);
+
+    /// <summary>
+    /// Debug-only guard that <see cref="WorkerId"/> is a usable worker slot on every context that reaches user system code (#860).
+    /// </summary>
+    /// <param name="slotCount"><see cref="DagScheduler.WorkerSlotCount"/> — worker threads plus the dispatcher slot.</param>
+    /// <param name="systemName">System whose context is being validated; named in the assertion message.</param>
+    /// <remarks>
+    /// Compiled out entirely in Release. It exists because the failure it catches is silent: an unassigned <c>init</c> property leaves
+    /// <see cref="WorkerId"/> at 0, so every worker claims slot 0 and per-worker partitioning aliases instead of throwing. <see cref="NonWorkerId"/> is
+    /// rejected here on purpose — lifecycle-hook contexts carry it, but they never reach system dispatch.
+    /// </remarks>
+    [Conditional("DEBUG")]
+    internal readonly void DebugValidateWorkerId(int slotCount, string systemName)
+    {
+        DebugValidateWorkerSlot(WorkerId, slotCount, systemName);
+    }
+
+    /// <summary>
+    /// Slot-value overload of <see cref="DebugValidateWorkerId"/>, for dispatch paths that build their context inside a <c>try</c> and so must
+    /// validate the slot before entering it — otherwise the enclosing handler converts the failure into an ordinary system failure.
+    /// </summary>
+    /// <param name="workerSlot">The slot about to be stamped onto a context.</param>
+    /// <param name="slotCount"><see cref="DagScheduler.WorkerSlotCount"/> — worker threads plus the dispatcher slot.</param>
+    /// <param name="systemName">System whose dispatch is being validated; named in the assertion message.</param>
+    [Conditional("DEBUG")]
+    internal static void DebugValidateWorkerSlot(int workerSlot, int slotCount, string systemName)
+    {
+        // Branch first, format second: Debug.Assert(bool, string) evaluates its message eagerly, so an interpolated string there would allocate on
+        // every system dispatch and every chunk in Debug — the configuration the whole test suite runs in. Same reasoning as CLAUDE.md's
+        // [LoggerMessage] rule.
+        if (workerSlot >= 0 && workerSlot < slotCount)
+        {
+            return;
+        }
+
+        // Throw, do NOT Debug.Fail: Fail terminates the process and is not catchable, so in Debug — the configuration the whole suite runs in — a
+        // single mis-stamped slot would abort the test host and lose every fixture with no attribution, instead of producing one red test.
+        throw new InvalidOperationException(
+            $"TickContext.WorkerId ({workerSlot}) is outside [0, {slotCount}) for system '{systemName}'. "
+            + "Every dispatch path must stamp the executing worker's slot onto the context (#860).");
+    }
 
     /// <summary>
     /// Zero-based chunk index for chunked-parallel systems (e.g. <see cref="ChunkedCallbackSystem"/>).

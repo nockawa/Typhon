@@ -1,6 +1,7 @@
 using JetBrains.Annotations;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Reflection;
 using Typhon.Schema.Definition;
@@ -125,7 +126,8 @@ public sealed class RuntimeSchedule
     /// </summary>
     /// <typeparam name="T">Event type.</typeparam>
     /// <param name="name">Diagnostic name for the queue.</param>
-    /// <param name="capacity">Maximum events per tick. Must be a power of 2.</param>
+    /// <param name="capacity">Expected events per tick, a power of 2. Split across per-worker segments and used as each segment's growth
+    /// ceiling — not a hard cap. Reported unchanged as <see cref="EventQueueBase.Capacity"/>.</param>
     public EventQueue<T> CreateEventQueue<T>(string name, int capacity = 1024)
     {
         ThrowIfBuilt();
@@ -222,7 +224,7 @@ public sealed class RuntimeSchedule
 
         // ── Build-time validation (global duplicate names + per-registration rules) ──
         var seenNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (reg, dag) in allRegs)
+        foreach (var (reg, _) in allRegs)
         {
             if (!seenNames.Add(reg.Name))
             {
@@ -238,11 +240,9 @@ public sealed class RuntimeSchedule
 
         // Phase 1: register all systems into one flat global DAG builder. The dag-side index matches the allRegs iteration order; mirror it into
         // ISystem.Index for class-based systems.
-        var systemDagId = new int[allRegs.Count];
         var dagIndex = 0;
-        foreach (var (reg, dag) in allRegs)
+        foreach (var (reg, _) in allRegs)
         {
-            systemDagId[dagIndex] = dag.Id;
             var sourceOverride = reg.SystemInstance != null ? SystemSourceResolver.ResolveOverride(reg.SystemInstance, "Execute") : null;
             switch (reg.Type)
             {
@@ -438,6 +438,25 @@ public sealed class RuntimeSchedule
             }
 
             systems[sysIdx].ConsumesQueueIndices = indices;
+        }
+
+        // Distinct by system name: `Consumes` appends without dedup, so declaring the same consumer twice would otherwise report
+        // "consumed by 2 systems (A, A)" — naming a second system that does not exist.
+        //
+        // Drain is single-consumer, and nothing enforced the CARDINALITY of that — only the parallel-consumer case. Two CallbackSystems each
+        // declaring ReadsEvents(q) built fine and the derived DAG was Producer -> {A, B} with no A-B edge, so both flipped ready together and raced
+        // inside Drain: overlapping CopyTo of the same prefix (events delivered twice), both storing Count = 0, and a lost update on `Consumed`.
+        foreach (var (queue, consumerNames) in _consumes.SelectMany(kv => kv.Value.Select(q => (Queue: q, kv.Key)))
+                     .GroupBy(x => x.Queue)
+                     .Select(g => (g.Key, g.Select(x => x.Key).Distinct(StringComparer.Ordinal).ToList())))
+        {
+            if (consumerNames.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Event queue '{queue.Name}' is consumed by {consumerNames.Count} systems ({string.Join(", ", consumerNames)}). "
+                    + "Event queue drain is single-consumer: two consumers race inside Drain and each sees a partial, overlapping batch. "
+                    + "Use one consumer, or give each consumer its own queue.");
+            }
         }
 
         // Phase 4b: validate parallel QuerySystem constraints (must run after queue wiring).

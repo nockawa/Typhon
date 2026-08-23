@@ -393,7 +393,10 @@ public sealed partial class TyphonRuntime : IDisposable
                 CreateSideTransaction = _createSideTxDelegate,
                 Entities = PooledEntityList.Empty,
                 TierBudgetMetrics = _previousTickMetrics,
-                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid),
+                // Runs on whichever thread called Shutdown()/FatalStop() — no worker slot belongs to it (#860).
+                WorkerId = TickContext.NonWorkerId,
+                ChunkCount = 1
             };
             OnShutdown.Invoke(ctx);
             tx.Commit();
@@ -1492,7 +1495,7 @@ public sealed partial class TyphonRuntime : IDisposable
 
         if (sys.WritesVersioned)
         {
-            ExecuteChunkWithTransaction(sysIdx, chunkIndex, totalChunks);
+            ExecuteChunkWithTransaction(sysIdx, chunkIndex, totalChunks, workerId);
             return;
         }
 
@@ -1518,6 +1521,7 @@ public sealed partial class TyphonRuntime : IDisposable
             TierBudgetMetrics = _previousTickMetrics,
             SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
         };
+        ctx.DebugValidateWorkerId(Scheduler.WorkerSlotCount, sys.Name);
         sys.CallbackAction(ctx);
     }
 
@@ -1649,9 +1653,12 @@ public sealed partial class TyphonRuntime : IDisposable
             ClusterIds = clusterIdArray,
             TierBudgetMetrics = _previousTickMetrics,
             SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid),
-            WorkerId = workerId
+            WorkerId = workerId,
+            ChunkIndex = chunkIndex,
+            ChunkCount = totalChunks
         };
 
+        ctx.DebugValidateWorkerId(Scheduler.WorkerSlotCount, Scheduler.Systems[sysIdx].Name);
         Scheduler.Systems[sysIdx].CallbackAction(ctx);
     }
 
@@ -1741,7 +1748,7 @@ public sealed partial class TyphonRuntime : IDisposable
     }
 
     /// <summary>Paths 3 &amp; 4: Versioned fallback — per-chunk Transaction (original path).</summary>
-    private void ExecuteChunkWithTransaction(int sysIdx, int chunkIndex, int totalChunks)
+    private void ExecuteChunkWithTransaction(int sysIdx, int chunkIndex, int totalChunks, int workerId)
     {
         var fullList = _parallelEntityLists[sysIdx];
         var totalEntities = fullList.Count;
@@ -1751,6 +1758,8 @@ public sealed partial class TyphonRuntime : IDisposable
         var remainder = totalEntities % totalChunks;
         var start = chunkIndex * baseSize + Math.Min(chunkIndex, remainder);
         var count = baseSize + (chunkIndex < remainder ? 1 : 0);
+
+        TickContext.DebugValidateWorkerSlot(workerId, Scheduler.WorkerSlotCount, Scheduler.Systems[sysIdx].Name);
 
         // Create per-chunk Transaction on THIS worker thread (respects thread affinity)
         var tx = _currentUow.CreateTransaction();
@@ -1802,7 +1811,10 @@ public sealed partial class TyphonRuntime : IDisposable
                 EndClusterIndex = clusterEnd,
                 ClusterIds = clusterIdArray,
                 TierBudgetMetrics = _previousTickMetrics,
-                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid),
+                WorkerId = workerId,
+                ChunkIndex = chunkIndex,
+                ChunkCount = totalChunks
             };
 
             Scheduler.Systems[sysIdx].CallbackAction(ctx);
@@ -1895,7 +1907,10 @@ public sealed partial class TyphonRuntime : IDisposable
                 CreateSideTransaction = _createSideTxDelegate,
                 Entities = PooledEntityList.Empty,
                 TierBudgetMetrics = _previousTickMetrics,
-                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
+                SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid),
+                // Runs on the tick thread before any worker wakes — no worker slot belongs to it (#860).
+                WorkerId = TickContext.NonWorkerId,
+                ChunkCount = 1
             };
 
             try
@@ -2262,7 +2277,7 @@ public sealed partial class TyphonRuntime : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int[] ReadActiveClusterList(ArchetypeClusterState cs, out int count) => cs.ReadActiveClusterList(out count);
 
-    private TickContext OnSystemStartInternal(int sysIdx)
+    private TickContext OnSystemStartInternal(int sysIdx, int workerId)
     {
         TyphonEvent.BeginRuntimeTransactionLifecycleTls((ushort)sysIdx);
 
@@ -2322,7 +2337,11 @@ public sealed partial class TyphonRuntime : IDisposable
             Entities = entities,
             ConsumedQueues = _systemConsumedQueues[sysIdx],
             TierBudgetMetrics = _previousTickMetrics,
-            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid)
+            SpatialGrid = new SpatialGridAccessor(Engine?.SpatialGrid),
+            WorkerId = workerId,
+            // Single-invocation system: one chunk, index 0. Left at the default 0 before #860, which made the documented slicing formula
+            // (start = ChunkIndex * len / ChunkCount) divide by zero for any non-chunked system that used it.
+            ChunkCount = 1
         };
     }
 

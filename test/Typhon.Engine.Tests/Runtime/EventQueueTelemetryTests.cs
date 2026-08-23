@@ -25,9 +25,9 @@ public sealed class EventQueueTelemetryTests
     public void Push_BumpsProduced_AndPeakDepth()
     {
         var q = new EventQueue<DamageEvent>("Damage", capacity: 64);
-        q.Push(new DamageEvent { Amount = 1 });
-        q.Push(new DamageEvent { Amount = 2 });
-        q.Push(new DamageEvent { Amount = 3 });
+        q.Push(0, new DamageEvent { Amount = 1 });
+        q.Push(0, new DamageEvent { Amount = 2 });
+        q.Push(0, new DamageEvent { Amount = 3 });
         Assert.That(q.Produced, Is.EqualTo(3u));
         Assert.That(q.PeakDepth, Is.EqualTo(3u));
     }
@@ -36,7 +36,7 @@ public sealed class EventQueueTelemetryTests
     public void Drain_BumpsConsumed_DoesNotResetPeak()
     {
         var q = new EventQueue<DamageEvent>("Damage", capacity: 64);
-        for (var i = 0; i < 5; i++) q.Push(new DamageEvent { Amount = i });
+        for (var i = 0; i < 5; i++) q.Push(0, new DamageEvent { Amount = i });
         var buf = new DamageEvent[5];
         var drained = q.Drain(buf);
         Assert.That(drained, Is.EqualTo(5));
@@ -49,34 +49,35 @@ public sealed class EventQueueTelemetryTests
     public void Push_AfterDrainInSameTick_ContinuesToTrackPeak()
     {
         var q = new EventQueue<DamageEvent>("Damage", capacity: 64);
-        for (var i = 0; i < 3; i++) q.Push(new DamageEvent { Amount = i });
+        for (var i = 0; i < 3; i++) q.Push(0, new DamageEvent { Amount = i });
         var buf = new DamageEvent[3];
         q.Drain(buf);
         // After drain, push more — peak should NOT regress to current count.
-        q.Push(new DamageEvent { Amount = 100 });
+        q.Push(0, new DamageEvent { Amount = 100 });
         Assert.That(q.PeakDepth, Is.EqualTo(3u), "peak is high-water-mark across the tick, not a snapshot of current depth");
     }
 
     [Test]
-    public void Push_OnFullQueue_BumpsOverflowCount_AndThrows()
+    public void Push_AtCeiling_BumpsOverflowCount_WithoutThrowing()
     {
-        var q = new EventQueue<DamageEvent>("Tiny", capacity: 2);
-        q.Push(new DamageEvent { Amount = 1 });
-        q.Push(new DamageEvent { Amount = 2 });
-        Assert.Throws<System.InvalidOperationException>(() => q.Push(new DamageEvent { Amount = 3 }));
-        Assert.That(q.OverflowCount, Is.EqualTo(1u));
-        Assert.That(q.Produced, Is.EqualTo(2u), "overflowed push does not count toward Produced");
+        var q = new EventQueue<DamageEvent>("Tiny", capacity: 2, allowGrowth: false);
+        q.Push(0, new DamageEvent { Amount = 1 });
+        q.Push(0, new DamageEvent { Amount = 2 });
+
+        Assert.That(q.Push(0, new DamageEvent { Amount = 3 }), Is.False);
+        Assert.That(q.OverflowCount, Is.EqualTo(1u), "OverflowCount still means 'events were lost' — the Workbench DAG paints it red");
+        Assert.That(q.Produced, Is.EqualTo(2u), "a dropped push does not count toward Produced");
     }
 
     [Test]
     public void Reset_ClearsAllAccumulators()
     {
-        var q = new EventQueue<DamageEvent>("Damage", capacity: 4);
-        q.Push(new DamageEvent());
-        q.Push(new DamageEvent());
-        q.Push(new DamageEvent());
-        q.Push(new DamageEvent());
-        try { q.Push(new DamageEvent()); } catch (System.InvalidOperationException) { /* expected: full */ }
+        var q = new EventQueue<DamageEvent>("Damage", capacity: 4, allowGrowth: false);
+        q.Push(0, new DamageEvent());
+        q.Push(0, new DamageEvent());
+        q.Push(0, new DamageEvent());
+        q.Push(0, new DamageEvent());
+        q.Push(0, new DamageEvent());   // dropped at the ceiling — Reset must clear OverflowCount too
         var buf = new DamageEvent[4];
         q.Drain(buf);
 
