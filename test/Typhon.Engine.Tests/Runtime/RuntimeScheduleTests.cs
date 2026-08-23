@@ -143,7 +143,7 @@ public class RuntimeScheduleTests
         var damageQueue = dag.CreateEventQueue<int>("DamageEvents");
 
         using var scheduler = dag
-            .CallbackSystem("Combat", _ => damageQueue.Push(42), after: null)
+            .CallbackSystem("Combat", ctx => ctx.Writer(damageQueue).Push(42), after: null)
             .QuerySystem("LootDrop", _ =>
             {
                 Span<int> events = stackalloc int[16];
@@ -170,12 +170,13 @@ public class RuntimeScheduleTests
         var pushCount = 0;
 
         using var scheduler = dag
-            .CallbackSystem("Producer", _ =>
+            .CallbackSystem("Producer", ctx =>
             {
                 // Push 3 items per tick
-                queue.Push(1);
-                queue.Push(2);
-                queue.Push(3);
+                var w = ctx.Writer(queue);
+                w.Push(1);
+                w.Push(2);
+                w.Push(3);
                 Interlocked.Increment(ref pushCount);
             })
             .Build(_registry.Runtime);

@@ -506,14 +506,19 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         _options = options;
         _exceptionPolicy = options.SystemExceptionPolicy;   // hoisted: read on the dispatch path, never changes after construction
         _eventQueues = eventQueues ?? [];
+        _logger = logger ?? NullLogger.Instance;
+        _workerCount = options.ResolveWorkerCount();
+
         // Assign stable queue IDs (#311) so the per-queue telemetry path can carry a small u16 instead of the queue's name on the wire.
         // QueueId == array index here; the cache builder writes a parallel `QueueNameTable` section so consumers can map index → name.
+        //
+        // Same pass sizes each queue's per-worker segments (#861). This is the earliest point the resolved worker count is known, and it is
+        // single-threaded — the workers do not exist yet — which is what rule MD-02 requires of a per-worker array.
         for (var qi = 0; qi < _eventQueues.Length; qi++)
         {
             _eventQueues[qi].QueueId = (ushort)qi;
+            _eventQueues[qi].BindWorkerSlots(_workerCount + 1);
         }
-        _logger = logger ?? NullLogger.Instance;
-        _workerCount = options.ResolveWorkerCount();
 
         // Tick interval
         _tickIntervalTicks = Stopwatch.Frequency / options.BaseTickRate;

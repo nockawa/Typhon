@@ -23,7 +23,7 @@ It also carries the escape hatches from the one-transaction-per-tick default: **
 
 - [`TickContext`](xref:Typhon.Engine.TickContext) — [`Transaction`](xref:Typhon.Engine.TickContext.Transaction) / [`Accessor`](xref:Typhon.Engine.TickContext.Accessor) / [`Entities`](xref:Typhon.Engine.TickContext.Entities) / [`DeltaTime`](xref:Typhon.Engine.TickContext.DeltaTime) / [`SpatialGrid`](xref:Typhon.Engine.TickContext.SpatialGrid).
 - [`TickContext.CreateSideTransaction(DurabilityMode, CommitDiscipline)`](xref:Typhon.Engine.TickContext.CreateSideTransaction) — an independent mid-tick transaction.
-- Typed [`EventQueue<T>`](xref:Typhon.Engine.EventQueue`1) — single-producer inter-system signalling, drained per tick.
+- Typed [`EventQueue<T>`](xref:Typhon.Engine.EventQueue`1) — multi-producer inter-system signalling, drained per tick. Produce through `ctx.Writer(queue)`, which binds the calling worker's own segment.
 
 ## Learn & use
 

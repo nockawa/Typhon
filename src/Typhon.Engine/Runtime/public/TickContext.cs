@@ -1,4 +1,5 @@
 using JetBrains.Annotations;
+using System;
 using System.Collections.Generic;
 using Typhon.Schema.Definition;
 using System.Diagnostics;
@@ -65,7 +66,7 @@ public struct TickContext
 
     /// <summary>
     /// Event queues this system consumes. Null if the system has no consumed queues.
-    /// Cast to <see cref="EventQueue{T}"/> and call <c>Drain(span)</c> or <c>AsSpan()</c> to read events.
+    /// Cast to <see cref="EventQueue{T}"/> and call <c>Drain(span)</c> to read events; size the span from <c>Count</c>, which a short span throws on.
     /// </summary>
     public EventQueueBase[] ConsumedQueues { get; init; }
 
@@ -163,6 +164,18 @@ public struct TickContext
     public int WorkerId { get; init; }
 
     /// <summary>
+    /// Opens a writer on <paramref name="queue"/> bound to this context's worker slot (#861). Resolve it once per system body and push through it.
+    /// </summary>
+    /// <remarks>
+    /// This is the only supported way to produce events: it supplies <see cref="WorkerId"/> for you, so a producer cannot accidentally write another
+    /// worker's segment. Calling it from a lifecycle hook throws — those contexts carry <see cref="NonWorkerId"/> and own no segment.
+    /// </remarks>
+    /// <typeparam name="T">The event type.</typeparam>
+    /// <param name="queue">The queue to produce into, or null for a no-op writer — the <c>queue?.Push(...)</c> idiom, kept working.
+    /// The system should declare the queue via <c>WritesEvents</c> / <c>produces:</c>.</param>
+    public readonly EventWriter<T> Writer<T>(EventQueue<T> queue) => queue == null ? default : queue.GetWriter(WorkerId);
+
+    /// <summary>
     /// Debug-only guard that <see cref="WorkerId"/> is a usable worker slot on every context that reaches user system code (#860).
     /// </summary>
     /// <param name="slotCount"><see cref="DagScheduler.WorkerSlotCount"/> — worker threads plus the dispatcher slot.</param>
@@ -179,8 +192,8 @@ public struct TickContext
     }
 
     /// <summary>
-    /// Slot-value overload of <see cref="DebugValidateWorkerId"/>, for dispatch paths that must validate before the <c>try</c> that builds the context
-    /// (an assertion raised inside that <c>try</c> would be converted into a system failure by the enclosing handler rather than stopping the build).
+    /// Slot-value overload of <see cref="DebugValidateWorkerId"/>, for dispatch paths that build their context inside a <c>try</c> and so must
+    /// validate the slot before entering it — otherwise the enclosing handler converts the failure into an ordinary system failure.
     /// </summary>
     /// <param name="workerSlot">The slot about to be stamped onto a context.</param>
     /// <param name="slotCount"><see cref="DagScheduler.WorkerSlotCount"/> — worker threads plus the dispatcher slot.</param>
@@ -196,7 +209,9 @@ public struct TickContext
             return;
         }
 
-        Debug.Fail(
+        // Throw, do NOT Debug.Fail: Fail terminates the process and is not catchable, so in Debug — the configuration the whole suite runs in — a
+        // single mis-stamped slot would abort the test host and lose every fixture with no attribution, instead of producing one red test.
+        throw new InvalidOperationException(
             $"TickContext.WorkerId ({workerSlot}) is outside [0, {slotCount}) for system '{systemName}'. "
             + "Every dispatch path must stamp the executing worker's slot onto the context (#860).");
     }

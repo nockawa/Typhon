@@ -41,7 +41,7 @@ class EventQueueIntegrationTests : TestBase<EventQueueIntegrationTests>
             queue = dag.CreateEventQueue<int>("TestEvents");
 
             dag
-                .CallbackSystem("Producer", _ => queue.Push(42))
+                .CallbackSystem("Producer", ctx => ctx.Writer(queue).Push(42))
                 .CallbackSystem("Consumer", ctx =>
                 {
                     if (captured == 0)
@@ -105,11 +105,12 @@ class EventQueueIntegrationTests : TestBase<EventQueueIntegrationTests>
             queue = dag.CreateEventQueue<int>("Damage");
 
             dag
-                .CallbackSystem("Combat", _ =>
+                .CallbackSystem("Combat", ctx =>
                 {
-                    queue.Push(10);
-                    queue.Push(20);
-                    queue.Push(30);
+                    var w = ctx.Writer(queue);
+                    w.Push(10);
+                    w.Push(20);
+                    w.Push(30);
                 })
                 .CallbackSystem("LootDrop", ctx =>
                 {
