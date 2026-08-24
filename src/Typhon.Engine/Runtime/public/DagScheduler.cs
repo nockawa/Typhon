@@ -306,8 +306,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     /// <summary>Called at tick end (after all systems complete). Flushes/disposes UoW.</summary>
     internal Action<DagScheduler> TickEndCallback;
 
-    /// <summary>Called before a CallbackSystem/QuerySystem executes. Creates per-system Transaction. Returns TickContext.</summary>
-    internal Func<int, TickContext> SystemStartCallback;
+    /// <summary>
+    /// Called before a CallbackSystem/QuerySystem executes. Creates per-system Transaction. Returns TickContext.
+    /// Arguments: <c>sysIdx</c>, then the zero-based index of the worker running the system (#860) — the callback stamps it onto
+    /// <see cref="TickContext.WorkerId"/> so system code can partition per-worker state without synchronization.
+    /// </summary>
+    internal Func<int, int, TickContext> SystemStartCallback;
 
     /// <summary>Called after a CallbackSystem/QuerySystem completes. Commits/disposes per-system Transaction.</summary>
     internal Action<int, bool> SystemEndCallback;
@@ -502,14 +506,19 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         _options = options;
         _exceptionPolicy = options.SystemExceptionPolicy;   // hoisted: read on the dispatch path, never changes after construction
         _eventQueues = eventQueues ?? [];
+        _logger = logger ?? NullLogger.Instance;
+        _workerCount = options.ResolveWorkerCount();
+
         // Assign stable queue IDs (#311) so the per-queue telemetry path can carry a small u16 instead of the queue's name on the wire.
         // QueueId == array index here; the cache builder writes a parallel `QueueNameTable` section so consumers can map index → name.
+        //
+        // Same pass sizes each queue's per-worker segments (#861). This is the earliest point the resolved worker count is known, and it is
+        // single-threaded — the workers do not exist yet — which is what rule MD-02 requires of a per-worker array.
         for (var qi = 0; qi < _eventQueues.Length; qi++)
         {
             _eventQueues[qi].QueueId = (ushort)qi;
+            _eventQueues[qi].BindWorkerSlots(_workerCount + 1);
         }
-        _logger = logger ?? NullLogger.Instance;
-        _workerCount = options.ResolveWorkerCount();
 
         // Tick interval
         _tickIntervalTicks = Stopwatch.Frequency / options.BaseTickRate;
@@ -779,6 +788,51 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
     /// <summary>Number of worker threads.</summary>
     public int WorkerCount => _workerCount;
+
+    /// <summary>
+    /// The reserved worker slot for the dispatcher (timer) thread — always <see cref="WorkerCount"/>, one past the last real worker (#860).
+    /// </summary>
+    /// <remarks>
+    /// The timer thread runs system bodies in one narrow case: <see cref="MarkTrackRootsReady"/> skips a root, and <c>OnSystemComplete</c> chains the
+    /// successor into <c>ExecuteInline</c> right there. Internally the scheduler passes <c>workerId = -1</c> for this thread; <see cref="ToWorkerSlot"/>
+    /// translates it to this slot so system code can index per-worker state on every path that runs system code.
+    /// <para>
+    /// <b>Why a dedicated slot is safe: disjointness, not quiescence.</b> It is tempting to argue that the inline execution happens before
+    /// <c>_tickStartSignal.Set()</c> wakes the pool and is therefore serialized against every worker. That is NOT true across tracks:
+    /// <see cref="DispatchTrackMultiThreaded"/> clears <c>_tickInProgress</c> only after its completion barrier, so a worker that has already evaluated
+    /// its <c>while (_tickInProgress == 1 &amp;&amp; _systemsRemaining.Value &gt; 0)</c> loop condition can still be inside <c>FindReadySystem</c> while
+    /// the timer thread has advanced into the next track's <see cref="MarkTrackRootsReady"/>. The slot is safe because the dispatcher never writes a
+    /// worker's slot and no worker ever writes this one — do not weaken that to "the dispatcher can share a worker slot because nothing overlaps".
+    /// </para>
+    /// <para>
+    /// Consequence: per-worker structures reachable from system code must be sized <c>WorkerCount + 1</c>, and
+    /// <see cref="TickContext.WorkerId"/> ranges over <c>[0, WorkerCount]</c>, not <c>[0, WorkerCount)</c>.
+    /// </para>
+    /// </remarks>
+    public int DispatcherWorkerId => _workerCount;
+
+    /// <summary>
+    /// Number of distinct worker slots a context can report — <see cref="WorkerCount"/> real workers plus the dispatcher slot (#860).
+    /// </summary>
+    /// <remarks>
+    /// <b>Two different indices share the name "worker id" — size against the right one.</b> This value sizes arrays indexed by
+    /// <see cref="TickContext.WorkerId"/>, the slot a system body sees. The scheduler's own per-worker pools (<c>_partitionViews</c>, the tier-range view
+    /// pool, <c>ParallelTransactionAccessor.GetWorkerAccessor</c>) are indexed by the <i>internal</i> <c>workerId</c> that chunk dispatch hands out,
+    /// which is always a real pool index and never the dispatcher slot — they are correctly sized <see cref="WorkerCount"/> and must stay that way.
+    /// </remarks>
+    public int WorkerSlotCount => _workerCount + 1;
+
+    /// <summary>
+    /// Maps an internal scheduler <c>workerId</c> — where <c>-1</c> means "the dispatcher thread" — onto the worker slot a
+    /// <see cref="TickContext"/> reports (#860).
+    /// </summary>
+    /// <remarks>
+    /// Only <c>ExecuteInline</c> can actually be reached with <c>-1</c> (via <see cref="MarkTrackRootsReady"/> → <c>OnSystemComplete</c>);
+    /// <c>ProcessCallbackOrQuery</c> is reached only from <c>WorkerLoop</c>, where the id is always a real pool index. It is applied on both for
+    /// uniformity — the two call sites are otherwise identical and diverging them invites the wrong one being copied.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int ToWorkerSlot(int workerId) => workerId < 0 ? _workerCount : workerId;
 
     /// <summary>
     /// Number of user-registered systems (systems whose track does not carry the <see cref="Track.EngineTag"/> — i.e. excludes the Fence DAG). This is the
@@ -1101,7 +1155,10 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
             }
             else // CallbackSystem or non-parallel QuerySystem — single invocation
             {
-                var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
+                // Single-threaded dispatch: the tick thread is the one and only worker, so worker 0 is the truthful id (#860).
+                var ctx = SystemStartCallback?.Invoke(sysIdx, 0)
+                          ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f, WorkerId = 0, ChunkCount = 1 };
+                ctx.DebugValidateWorkerId(WorkerSlotCount, sys.Name);
                 SystemAccessValidator.EnterSystem(sys.Access, sys.Name);
                 try
                 {
@@ -1387,12 +1444,15 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
 
         // ShouldRun was already evaluated at dispatch time (OnSystemComplete or root marking).
         // System lifecycle hook: create per-system Transaction (called on the worker thread)
-        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
+        var workerSlot = ToWorkerSlot(workerId);
+        var ctx = SystemStartCallback?.Invoke(sysIdx, workerSlot)
+                  ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f, WorkerId = workerSlot, ChunkCount = 1 };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
         InspectorChunkStart(sysIdx, 0, workStart, 1);
 
         var success = true;
+        ctx.DebugValidateWorkerId(WorkerSlotCount, Systems[sysIdx].Name);
         SystemAccessValidator.EnterSystem(Systems[sysIdx].Access, Systems[sysIdx].Name);
         try
         {
@@ -1861,12 +1921,15 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     private void ExecuteInline(int sysIdx, int workerId, bool trackUtilization)
     {
         // ShouldRun was already evaluated by the caller (OnSystemComplete).
-        var ctx = SystemStartCallback?.Invoke(sysIdx) ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f };
+        var workerSlot = ToWorkerSlot(workerId);
+        var ctx = SystemStartCallback?.Invoke(sysIdx, workerSlot)
+                  ?? new TickContext { TickNumber = _currentTickNumber, DeltaTime = 0f, WorkerId = workerSlot, ChunkCount = 1 };
         var workStart = Stopwatch.GetTimestamp();
         RecordFirstChunkGrab(sysIdx, workStart);
         InspectorChunkStart(sysIdx, 0, workStart, 1);
 
         var success = true;
+        ctx.DebugValidateWorkerId(WorkerSlotCount, Systems[sysIdx].Name);
         SystemAccessValidator.EnterSystem(Systems[sysIdx].Access, Systems[sysIdx].Name);
         try
         {
