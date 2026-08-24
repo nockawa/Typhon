@@ -177,6 +177,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-membership"))
+            {
+                MembershipRefreshProfile.Run(args);
+                return;
+            }
+
             if (args.Contains("--parallel-dispatch"))
             {
                 ParallelDispatchBenchmark.Run();

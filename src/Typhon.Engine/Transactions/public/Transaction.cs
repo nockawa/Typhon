@@ -2231,6 +2231,8 @@ public unsafe partial class Transaction : EntityAccessor
                 // Notify views of index change (delta buffer for incremental views)
                 var viewTable = es.SlotToComponentTable[ixSlot.Slot];
                 var views = viewTable.ViewRegistry.GetViewsForField(fi);
+                // Hoisted out of the per-view loop: a [ThreadStatic] read is a TLS-base helper call, and this is the engine's busiest publisher.
+                var appendHook = QueryPathProbe.PrePublishAppendHook;
                 for (int v = 0; v < views.Length; v++)
                 {
                     var reg = views[v];
@@ -2238,6 +2240,10 @@ public unsafe partial class Transaction : EntityAccessor
                     {
                         continue;
                     }
+
+                    // The #864 window: everything below writes through reg.DeltaBuffer's raw pointers, and the IsDisposed check above is a filter,
+                    // never a guarantee. A verifier disposes the view from here to prove the buffer is still mapped when the write lands.
+                    appendHook?.Invoke();
 
                     if (newComp != null && oldComp != null)
                     {
