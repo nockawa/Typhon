@@ -11,6 +11,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Reflection;
 using System.Linq.Expressions;
+using Typhon.Engine.internals;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -665,6 +666,33 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// <summary>Per-engine archetype runtime state, indexed by per-process catalog id (<see cref="ArchetypeMetadata.ArchetypeId"/>). Separates per-engine
     /// mutable data from shared schema metadata. Reached from an <see cref="EntityId"/> via <see cref="GetMetaByRouting"/> then the meta's catalog id.</summary>
     internal ArchetypeEngineState[] _archetypeStates;
+
+    /// <summary>Per-catalog-id membership registries, allocated once per engine so they survive a repeat <c>InitializeArchetypes</c> (#790).</summary>
+    private ArchetypeMembershipRegistry[] _membershipByCatalog;
+
+    private ViewBufferReclaimer _viewBufferReclaimer;
+
+    /// <summary>
+    /// Defers the free of a disposed view's pinned delta buffer until no commit can still be publishing into it (#864).
+    /// </summary>
+    /// <remarks>
+    /// Interlocked, not <c>??=</c>. Views are constructed and disposed from user threads, so a plain read-test-write races: two threads each
+    /// allocate a reclaimer and one store wins, leaving the loser's retired blocks on a list nothing will ever drain — a permanent leak — and
+    /// leaving a test that reads this property looking at a different instance from the one the view captured.
+    /// </remarks>
+    internal ViewBufferReclaimer ViewBufferReclaimer
+    {
+        get
+        {
+            var existing = Volatile.Read(ref _viewBufferReclaimer);
+            if (existing != null)
+            {
+                return existing;
+            }
+            var created = new ViewBufferReclaimer(EpochManager);
+            return Interlocked.CompareExchange(ref _viewBufferReclaimer, created, null) ?? created;
+        }
+    }
 
     // ── Per-DB archetype routing (claude/design/Ecs/SourceGeneratedRegistry/04-solution-design.md §2/§6) ───────────
     // The EntityId carries a per-DB routing id (low 16 bits), NOT the per-process catalog id. These two per-engine tables translate between the two id spaces:
@@ -3142,6 +3170,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // Allocate per-engine state array indexed by per-process catalog id, plus the per-DB routing tables. Fixed sizing (RoutingTableSize) so a concurrent
         // registration in a peer engine can never overflow these — removes Face A's IndexOutOfRange sizing coupling.
         _archetypeStates = new ArchetypeEngineState[RoutingTableSize];
+        // Allocated ONCE per engine and deliberately not reallocated here: membership registries must outlive a repeat InitializeArchetypes, or
+        // every view already subscribed keeps a reference to an orphan whose structural epoch stops moving and silently reports "nothing changed"
+        // for the rest of its life (#790).
+        _membershipByCatalog ??= new ArchetypeMembershipRegistry[RoutingTableSize];
         _metaByRouting = new ArchetypeMetadata[RoutingTableSize];
         _stateByRouting = new ArchetypeEngineState[RoutingTableSize];
         _routingByCatalog = new ushort[RoutingTableSize];
@@ -3360,6 +3392,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             // Routing-indexed view of the same state object (populated for both reload and fresh paths).
             _stateByRouting[routingId] = _archetypeStates[meta.ArchetypeId];
+
+            // Re-attach the surviving membership registry (or create it on first sight of this archetype).
+            _archetypeStates[meta.ArchetypeId].MembershipViews =
+                _membershipByCatalog[meta.ArchetypeId] ??= new ArchetypeMembershipRegistry();
 
             // Create or reload ClusterState for cluster-eligible archetypes.
             if (isClusterEligible)

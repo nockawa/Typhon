@@ -171,6 +171,18 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-viewfanout"))
+            {
+                ViewFanOutProfile.Run(args);
+                return;
+            }
+
+            if (args.Contains("--profile-membership"))
+            {
+                MembershipRefreshProfile.Run(args);
+                return;
+            }
+
             if (args.Contains("--parallel-dispatch"))
             {
                 ParallelDispatchBenchmark.Run();

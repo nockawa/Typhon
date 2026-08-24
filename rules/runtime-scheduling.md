@@ -462,15 +462,17 @@ all. Both failures are silent.
              entities of this archetype" — it registers nothing. The API rewarded NARROWING with correctness. It is also
              #631's actual cause: a harness that builds its views before loading its data reports zero entities processed on
              every tick, and the Data Flow panel is then honestly empty.
-  note the cost is an O(N) re-query per pull system input per tick, against O(deltas) on the incremental path, plus the set
-       `EcsQuery.Execute` allocates. This is direction 2 of the three the issue lists — correct for every pull view including
-       the `.Where(lambda)` and spatial ones. Direction 1, a lifecycle-level channel views subscribe to BY ARCHETYPE, is the
-       endpoint and keeps the O(1) prepare; it needs a design, because ViewRegistry is keyed per indexed FIELD and an
-       unfiltered query has no field to register under.
-  note a pull View held by USER code and never refreshed is still a snapshot. This rule binds system inputs only, which is
-       why `ViewCreatedBeforeTheSpawns_ConvergesWithOneCreatedAfter` stays quarantined — against #722, not #718: the parent
-       closed with this rule's half shipped, and a suppression may only cite an OPEN issue (the #703 lint enforces exactly
-       that, and caught the stale reference on main within minutes of the merge).
+  note direction 1 — the lifecycle-level channel views subscribe to BY ARCHETYPE — shipped in #790 and is the `MEMB` module in
+       `rules/ecs.md`. This rule still names `IsPullMode` rather than `IsMembershipEligible`, and deliberately: it must go on
+       driving all THREE pull shapes, and only the archetype-only one has a channel. For that one the per-tick refresh is now
+       O(changed) with an O(1) gate when the archetype is untouched (measured ~3 100 us -> 0.25 us at 50 000 entities, three runs); for the
+       `.Where(lambda)` and spatial ones the cost is unchanged — an O(N) re-query plus the set `EcsQuery.Execute` allocates —
+       because a membership notification cannot re-evaluate an opaque delegate or a position. See `MEMB-03`.
+  note a pull View held by USER code and never refreshed is still a snapshot — that part is unchanged and is deliberate
+       (ADR-042: a View holds no transaction, so it has no snapshot to become live against).
+       `ViewCreatedBeforeTheSpawns_ConvergesWithOneCreatedAfter` is no longer quarantined: #790 gave it the channel it was
+       waiting for, and it now asserts convergence after ONE refresh plus which PATH delivered it, because convergence alone
+       is satisfied by the O(N) rescan the channel exists to remove.
   verified: SystemInputViewLivenessTests.SystemInputView_SeesEntitiesSpawnedWhileTheRuntimeIsRunning — spawns while the
             runtime is ticking, which no fixture anywhere did before, and asserts the system sees 20 rather than 10.
   requires BIND-01 (a system with no input View has no membership to keep fresh)

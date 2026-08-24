@@ -584,9 +584,11 @@ internal sealed unsafe class ArchetypeClusterState
     /// <para>
     /// <b>The maximum is an upper bound, not the exact largest BornTSN present, and it is not monotone with the TSN clock.</b> Cluster migration folds the TSN
     /// high-water mark because the migrated entity's own <c>BornTSN</c> is not readable until after the claim, so a migrated-into cluster can carry a bound
-    /// ABOVE anything committed — and a later spawn into it then moves nothing. Every consumer must treat "unmoved" as "no information", never as "unchanged";
-    /// see <c>EcsView.ScanArchetypeOccupancy</c>, which reads the occupancy word unconditionally for exactly this reason. Overshooting is otherwise free of
-    /// consequence: it only denies the whole-cluster shortcut to readers who would have been granted it, which costs a probe and never emits an entity.
+    /// ABOVE anything committed — and a later spawn into it then moves nothing. Every consumer must therefore treat "unmoved" as "no information", never as
+    /// "unchanged", and must read the occupancy word unconditionally rather than gating that read on the maximum having moved — which is what
+    /// <c>EcsQuery.TryCountViaOccupancy</c> does. No consumer currently uses this value as a CHANGE TOKEN, and one that did would be unsound for exactly this
+    /// reason. Overshooting is otherwise free of consequence: it only denies the whole-cluster shortcut to readers who would have been granted it, which costs
+    /// a probe and never emits an entity.
     /// </para>
     /// </remarks>
     internal void NoteClusterBorn(int clusterChunkId, long bornTsn)
@@ -730,21 +732,14 @@ internal sealed unsafe class ArchetypeClusterState
     /// True when every entity in <paramref name="clusterChunkId"/> is visible to a reader at <paramref name="txTsn"/>, so the scan may skip the per-entity
     /// EntityMap probe for the whole cluster. False whenever the answer is not certain — an unsized array, an unestablished maximum, or any recorded death.
     /// </summary>
-    internal bool IsClusterFullyVisibleAt(int clusterChunkId, long txTsn) => IsClusterFullyVisibleAt(clusterChunkId, txTsn, out _, out _);
-
-    /// <summary>
-    /// As <see cref="IsClusterFullyVisibleAt(int, long)"/>, additionally handing back the two watermark values the decision was made on.
-    /// </summary>
     /// <remarks>
-    /// A caller that needs the values as well as the verdict — <c>EcsView</c> stores them as its change token — must not re-read the arrays afterwards. A
-    /// second read can observe a fold that landed AFTER the gate ran, which would be recorded as already-accounted-for while the occupancy word the caller
-    /// paired it with predates that fold; the cluster then reads quiet on the next refresh and the change is lost. One read, one decision, one pair of values.
+    /// There was a second overload handing the two watermark values back to the caller, added for a view-refresh prototype that would have kept them as a
+    /// per-cluster CHANGE TOKEN. That prototype was never merged (#722), the overload had no callers, and the idea it existed for is unsound anyway — the
+    /// born maximum is an upper bound that migration can move without a spawn and that a spawn can leave unmoved, so "unmoved" is not "unchanged". See the
+    /// remark on <see cref="NoteClusterBorn"/>. Reinstating it needs that argument answered first, not just the two <c>out</c> parameters back.
     /// </remarks>
-    internal bool IsClusterFullyVisibleAt(int clusterChunkId, long txTsn, out long bornWatermark, out long diedWatermark)
+    internal bool IsClusterFullyVisibleAt(int clusterChunkId, long txTsn)
     {
-        bornWatermark = VisibilityUnknown;
-        diedWatermark = 0;
-
         // Acquire loads, and in THIS order. The growth path publishes the resized ClusterMaxDiedTsn before release-storing ClusterMaxBornTsn, so a reader that
         // reads maxBorn first is guaranteed the died array it then reads is at least as new. Reading them the other way round could pair a new maxBorn with a
         // stale short died array — and a missing died entry reads as "no death", which is a phantom.
@@ -755,7 +750,6 @@ internal sealed unsafe class ArchetypeClusterState
         }
 
         var born = Volatile.Read(ref maxBorn[clusterChunkId]);
-        bornWatermark = born;
 
         // A died array that is absent or too short is NOT evidence of "nobody died" — it is evidence that this reader cannot tell. Fall back to the probe.
         var died = Volatile.Read(ref ClusterMaxDiedTsn);
@@ -764,7 +758,7 @@ internal sealed unsafe class ArchetypeClusterState
             return false;
         }
 
-        diedWatermark = Volatile.Read(ref died[clusterChunkId]);
+        var diedWatermark = Volatile.Read(ref died[clusterChunkId]);
 
         if (born == VisibilityUnknown || born > txTsn)
         {

@@ -1088,6 +1088,7 @@ public partial class DatabaseEngine
                                     }
 
                                     var delFlags = (byte)((f & 0x3F) | 0x80); // isDeletion
+                                    QueryPathProbe.PrePublishAppendHook?.Invoke();
                                     reg.DeltaBuffer.TryAppend(entry.EntityPK, entry.OldKey, default, 0, delFlags, reg.ComponentTag);
                                 }
 
@@ -1142,6 +1143,7 @@ public partial class DatabaseEngine
                                     }
 
                                     var flags = (byte)(f & 0x3F);
+                                    QueryPathProbe.PrePublishAppendHook?.Invoke();
                                     reg.DeltaBuffer.TryAppend(entry.EntityPK, oldKey, newKey, 0, flags, reg.ComponentTag);
                                 }
                             }
@@ -1201,6 +1203,7 @@ public partial class DatabaseEngine
                     }
 
                     var delFlags = (byte)((fieldIdx & 0x3F) | 0x80); // isDeletion
+                    QueryPathProbe.PrePublishAppendHook?.Invoke();
                     reg.DeltaBuffer.TryAppend(entry.EntityPK, entry.OldKey, default, 0, delFlags, reg.ComponentTag);
                 }
 
@@ -1243,6 +1246,7 @@ public partial class DatabaseEngine
                 }
 
                 var flags = (byte)(fieldIdx & 0x3F);
+                QueryPathProbe.PrePublishAppendHook?.Invoke();
                 reg.DeltaBuffer.TryAppend(entry.EntityPK, oldKey, newKey, 0, flags, reg.ComponentTag);
             }
         }

@@ -84,6 +84,16 @@ internal sealed class EpochThreadRegistry : IDisposable
     /// </summary>
     public bool IsCurrentThreadInScope => _threadRegistry == this && _slots[_threadSlotIndex].Depth > 0;
 
+    /// <summary>
+    /// The epoch this thread is currently pinned to, or 0 when it is not pinned. Diagnostic only.
+    /// </summary>
+    /// <remarks>
+    /// Exists so a publish pass can assert its own pin did not move underneath it — the invariant every deferred reclaimer keyed on this epoch
+    /// depends on, and one that is otherwise held only by nobody having called <c>RefreshScope</c> in the wrong place. See MEMB-04.
+    /// </remarks>
+    internal long CurrentThreadPinnedEpoch =>
+        _threadRegistry == this ? Volatile.Read(ref _slots[_threadSlotIndex].PinnedEpoch) : 0;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Slot Management
     // ═══════════════════════════════════════════════════════════════════════
@@ -106,8 +116,17 @@ internal sealed class EpochThreadRegistry : IDisposable
 
         if (depth == 0)
         {
-            // Outermost scope: pin to current epoch
-            _slots[slot].PinnedEpoch = epoch;
+            // Outermost scope: pin to current epoch.
+            //
+            // SEQUENTIALLY CONSISTENT, not a plain store and not a release. This is one half of a Dekker pair with a reclaimer that stores its
+            // retire stamp and then reads these slots: the publisher stores its pin and then reads the structure it is about to touch. Either the
+            // reclaimer observes this pin (and defers), or this thread observes the reclaimer's prior work (and finds the structure already
+            // withdrawn) — never neither. A plain or release store permits exactly "neither": the StoreLoad reordering, which x64 ALSO allows, so
+            // this is not an arm64-only concern. Interlocked.Exchange is a full fence on both.
+            //
+            // Cost is ~0.25 ns on the OUTERMOST scope entry only — once per transaction, once per fence chunk — against a commit measured in
+            // microseconds. Nested entries do not reach here.
+            Interlocked.Exchange(ref _slots[slot].PinnedEpoch, epoch);
         }
 
         return depth;
@@ -136,8 +155,9 @@ internal sealed class EpochThreadRegistry : IDisposable
 
         if (expectedDepth == 0)
         {
-            // Outermost scope: unpin
-            _slots[slot].PinnedEpoch = 0;
+            // Outermost scope: unpin. Release, so everything this thread did inside the scope is visible to a reclaimer that subsequently observes
+            // the slot as free and proceeds to reclaim what the thread was using.
+            Volatile.Write(ref _slots[slot].PinnedEpoch, 0);
             return true;
         }
 
@@ -164,8 +184,9 @@ internal sealed class EpochThreadRegistry : IDisposable
 
         if (currentDepth == 1)
         {
-            // Was the outermost scope: unpin
-            _slots[slot].PinnedEpoch = 0;
+            // Was the outermost scope: unpin. Release, for the same reason as UnpinCurrentThread — everything done inside the scope must be
+            // visible to a reclaimer that then sees the slot free.
+            Volatile.Write(ref _slots[slot].PinnedEpoch, 0);
             return true;
         }
 
@@ -182,7 +203,10 @@ internal sealed class EpochThreadRegistry : IDisposable
         Debug.Assert(_threadRegistry == this, "RefreshPinnedEpoch called on wrong registry");
         var slot = _threadSlotIndex;
         Debug.Assert(_slots[slot].Depth > 0, "RefreshPinnedEpoch called outside epoch scope");
-        _slots[slot].PinnedEpoch = newEpoch;
+        // Seq-cst, same Dekker obligation as the initial pin: this raises the thread's floor, and a reclaimer scanning concurrently must not pair
+        // the NEW value with structures the thread read under the OLD one. Callers must therefore not refresh between reading a reclaimable
+        // reference and their last use of it — see the publish-pass clause in rules/ecs.md.
+        Interlocked.Exchange(ref _slots[slot].PinnedEpoch, newEpoch);
     }
 
     /// <summary>
@@ -238,9 +262,15 @@ internal sealed class EpochThreadRegistry : IDisposable
 
     private bool TryClaimSlot(int index, Thread thread)
     {
+        // The owner reference is published BEFORE the slot is marked Active, not after. Published after, a scanner that observes SlotActive can
+        // still read a STALE owner — the previous thread, now dead — and free the slot out from under the thread that just claimed it. Two threads
+        // then share one PaddedEpochSlot: Depth corrupts (UnpinCurrentThread throws its mismatch) and one thread's pin can be overwritten by the
+        // other's, which is a pin no reclaimer will see. That last consequence used to be an early page eviction; since #864 it is a
+        // NativeMemory.AlignedFree under a live publisher, which is why the ordering is now load-bearing rather than merely tidy.
+        Volatile.Write(ref _ownerThreads[index], thread);
+
         if (Interlocked.CompareExchange(ref _slots[index].SlotState, SlotActive, SlotFree) == SlotFree)
         {
-            _ownerThreads[index] = thread;
             _slots[index].PinnedEpoch = 0;
             _slots[index].Depth = 0;
             _threadSlotIndex = index;
@@ -317,16 +347,21 @@ internal sealed class EpochThreadRegistry : IDisposable
         var scanLimit = Math.Min(Volatile.Read(ref _highWaterMark), MaxSlots);
         for (int i = 0; i < scanLimit; i++)
         {
-            var pinned = _slots[i].PinnedEpoch;
+            // Acquire, pairing with PinCurrentThread's release/seq-cst store. A plain load here can observe a slot as unpinned after the pinning
+            // thread has already read the structure this scan is deciding to reclaim — the other half of the Dekker pair.
+            var pinned = Volatile.Read(ref _slots[i].PinnedEpoch);
             if (pinned == 0)
             {
                 continue;
             }
 
-            // Liveness check: if the thread died, clear the slot
-            if (_slots[i].SlotState == SlotActive)
+            // Liveness check: if the thread died, clear the slot.
+            //
+            // Acquire on both, pairing with the release-publication of the owner ahead of the claiming CAS. Plain loads here can pair a freshly
+            // Active state with a stale owner and free a slot a live thread is using — see the remark in TryClaimSlot.
+            if (Volatile.Read(ref _slots[i].SlotState) == SlotActive)
             {
-                var thread = _ownerThreads[i];
+                var thread = Volatile.Read(ref _ownerThreads[i]);
                 if (thread != null && !thread.IsAlive)
                 {
                     FreeSlot(i);

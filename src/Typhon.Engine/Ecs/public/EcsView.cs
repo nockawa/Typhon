@@ -1,8 +1,10 @@
+using Typhon.Engine.Internals;
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using JetBrains.Annotations;
 using System.Diagnostics;
+using Typhon.Engine.internals;
 using Typhon.Profiler;
 
 namespace Typhon.Engine;
@@ -22,6 +24,46 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
     private EcsQuery<TArchetype> _query;
     private readonly ComponentTable _componentTable;
     private readonly ViewRegistry _registry;
+
+    /// <summary>
+    /// The archetype membership channels this view subscribes to, or null when it is not membership-eligible (#790).
+    /// </summary>
+    /// <remarks>
+    /// An array, not one registry: <c>Query&lt;TRoot&gt;()</c> matches the whole archetype subtree, and <c>.With</c>/<c>.Without</c>
+    /// narrow that to a fixed SET of archetypes. Membership is the union of their live sets, so the view subscribes to each one.
+    /// </remarks>
+    private ArchetypeMembershipRegistry[] _membershipRegistries;
+
+    /// <summary>
+    /// The per-archetype structural epochs this view has accounted for, parallel to <see cref="_membershipRegistries"/>.
+    /// </summary>
+    /// <remarks>
+    /// Per-archetype, not a sum. A sum is read non-atomically across k counters, so a read that straddles a bump on one archetype and a
+    /// later read of another can total to exactly the recorded value while entries sit undrained — the gate then reports "nothing changed"
+    /// over a commit that is visible at the reader's snapshot. Monotonicity of each term does not save the sum, because the reads are not
+    /// simultaneous. Comparing element-wise has the same O(k) cost and no such window.
+    /// </remarks>
+    private long[] _lastEpochs;
+
+
+    /// <summary>
+    /// Set when the view's entity set may not correspond to any single consistent snapshot, so the next refresh must re-query rather than
+    /// apply deltas.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Set at subscription, which is what restores the self-healing the pull path had. <c>RefreshPull</c> re-executed the query at the
+    /// REFRESH transaction's TSN every time, so any error in the seed corrected itself on the next tick. The channel never re-executes, so
+    /// without this the seed is permanent — and the seed is taken at the CREATING transaction's fixed TSN, with that transaction's
+    /// uncommitted spawns folded in. Two consequences, both reproduced before this flag existed: a commit landing between that snapshot and
+    /// the subscription was in neither the scan nor the buffer and was lost for the life of the view; and a creating transaction that rolled
+    /// back left phantom ids in the set forever.
+    /// </para>
+    /// <para>
+    /// Also set when a resync could not be proven clean — see <c>RefreshMembershipResync</c>.
+    /// </para>
+    /// </remarks>
+    private bool _needsResync;
     private readonly int[] _evaluatorLookup;
 
     // Typed delegate for reading component data + evaluating fields (captures component type T at construction)
@@ -79,10 +121,80 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
         : base([], [], allocator, resourceParent, bufferCapacity, baseTSN, sourceFile, sourceLine, sourceMethod)
     {
         _query = query;
+        _reclaimerFromQuery = (resourceParent as ComponentTable)?.DBE?.ViewBufferReclaimer;
     }
 
+    /// <summary>
+    /// Subscribe this view to its archetype's whole-membership channel (#790). Called from <c>EcsQuery.ToPullView</c> for archetype-only
+    /// queries, BEFORE the initial population — registering after it would leave a window in which a concurrent commit's entities reach
+    /// neither the population scan nor the buffer.
+    /// </summary>
+    internal void SubscribeToMembership(ArchetypeMembershipRegistry[] registries)
+    {
+        _membershipRegistries = registries;
+        _lastEpochs = new long[registries.Length];
+        // The first refresh re-queries regardless, so the epochs recorded here are a placeholder, not a claim. Anything that lands between
+        // now and then is repaired by that re-query rather than gated away — see _needsResync.
+        _needsResync = true;
+        for (var i = 0; i < registries.Length; i++)
+        {
+            registries[i].Register(this, DeltaBuffer);
+        }
+        ReadEpochsInto(_lastEpochs);
+        IsMembershipEligible = true;
+    }
+
+    /// <summary>Snapshots each subscribed archetype's structural epoch into <paramref name="into"/>.</summary>
+    private void ReadEpochsInto(long[] into)
+    {
+        var regs = _membershipRegistries;
+        for (var i = 0; i < regs.Length; i++)
+        {
+            into[i] = regs[i].StructuralEpoch;
+        }
+    }
+
+
+
+    /// <summary>True when no subscribed archetype's epoch has moved since <see cref="_lastEpochs"/> was recorded.</summary>
+    private bool EpochsUnchanged()
+    {
+        var regs = _membershipRegistries;
+        for (var i = 0; i < regs.Length; i++)
+        {
+            if (regs[i].StructuralEpoch != _lastEpochs[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <inheritdoc/>
+    private protected override ViewBufferReclaimer BufferReclaimer => _componentTable?.DBE?.ViewBufferReclaimer ?? _reclaimerFromQuery;
+
+    /// <summary>
+    /// Reclaimer captured at construction, for the pull/membership shape whose <c>_componentTable</c> is null.
+    /// </summary>
+    /// <remarks>
+    /// Set ONLY by that constructor. The incremental and OR constructors both set <c>_componentTable</c>, so the left operand of
+    /// <see cref="BufferReclaimer"/> always wins for them — assigning this there as well was dead, and it pulled the engine's reclaimer
+    /// allocation onto every view construction rather than the far rarer disposal.
+    /// </remarks>
+    private readonly ViewBufferReclaimer _reclaimerFromQuery;
+
     /// <summary>Removes this view from its query registry so it stops receiving change notifications; invoked during teardown.</summary>
-    protected override void DeregisterFromRegistries() => _registry?.DeregisterView(this);
+    protected override void DeregisterFromRegistries()
+    {
+        _registry?.DeregisterView(this);
+        if (_membershipRegistries != null)
+        {
+            for (var i = 0; i < _membershipRegistries.Length; i++)
+            {
+                _membershipRegistries[i].Deregister(this);
+            }
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // EntityId convenience API (converts from internal long representation)
@@ -222,6 +334,14 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             _addedCache.Clear();
             _removedCache.Clear();
 
+            // Membership mode: an archetype-only query, fed by the per-archetype channel (#790). Checked before the pull branch because it is
+            // a strict subset of it — see ViewBase.IsMembershipEligible for why the other two pull shapes must NOT come down here.
+            if (IsMembershipEligible)
+            {
+                RefreshMembership(tx, ref scope);
+                return;
+            }
+
             // Pull mode: no FieldEvaluators → full re-query every time
             if (Evaluators.Length == 0)
             {
@@ -294,12 +414,240 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Membership mode (archetype-only — epoch gate + channel drain)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Advances an archetype-only view from the membership channel: an O(1) gate when nothing spawned or died, otherwise O(changes).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The gate is the dominant win, not the drain.</b> A simulation holds tens of views and most of their archetypes are untouched on
+    /// any given tick; for those this is one acquire load per archetype and a compare, against the whole-archetype rescan and set-difference
+    /// the pull path would otherwise run every tick whether or not anything changed.
+    /// </para>
+    /// <para>
+    /// <b>It is sound only because of MEMB-01</b> — the publisher bumps the epoch AFTER appending every entry for that commit, and before
+    /// the commit publishes its TSN. Both halves matter: released early, this returns "nothing to do" over a buffer that has entries in it.
+    /// </para>
+    /// <para>
+    /// Overflow falls back to <c>RefreshFull</c>, which for a view with no evaluators is the pull re-query — the same graceful degradation
+    /// the incremental path already has, and no worse than the behaviour this replaces.
+    /// </para>
+    /// </remarks>
+    private void RefreshMembership(Transaction tx, ref EcsViewRefreshEvent scope)
+    {
+        // Checked FIRST, before overflow. Checked after it, the override stops overriding: a view forced onto the re-query never drains, so
+        // past the ring's capacity the sticky overflow flag latches and every subsequent "forced" refresh silently takes the overflow arm
+        // instead — which is not the path the caller asked to measure or to use as a differential oracle.
+        if (QueryPathProbe.ForceViewRequery)
+        {
+            // canSettle must still respect pending work: this arm is checked FIRST, so when both hold it would otherwise settle the view over
+            // state that exists only in this transaction's staging — the same permanent-phantom bug the arm below was fixed for. The differential
+            // test uses this path as its ORACLE, so letting it settle would make the oracle silently become the thing under test.
+            RefreshMembershipResync(tx, ref scope, EcsViewRefreshMode.Pull, canSettle: !tx.HasPendingEcsWork);
+            return;
+        }
+
+        // The channel carries COMMITTED entries only, and uncommitted work moves no epoch — so against a transaction holding its own pending
+        // spawns or destroys the gate would short-circuit and the view would contradict the transaction refreshing it. RefreshPull folds that
+        // overlay in exactly as it always did (pending spawns included, pending destroys excluded), so read-your-own-writes is preserved by
+        // falling back to it rather than by teaching the channel about uncommitted state.
+        if (tx.HasPendingEcsWork)
+        {
+            // canSettle: false — this resync CANNOT leave the view anchored. RefreshPull folds in the transaction's uncommitted spawns and skips its
+            // pending destroys, so the resulting set is true only for that transaction and only while it is open. Uncommitted work moves no epoch,
+            // so the epoch comparison at the end would find nothing changed, clear _needsResync, and mark the view clean over staged-only state: if
+            // the transaction then rolls back, no commit ever publishes a matching entry, no epoch ever moves, and every later refresh takes the gate.
+            // The phantoms are permanent — the exact failure _needsResync exists to prevent, arriving through the door opened to fix a different one.
+            RefreshMembershipResync(tx, ref scope, EcsViewRefreshMode.Pull, canSettle: false);
+            return;
+        }
+
+        // Overflow, or a seed/resync that has not been proven consistent yet.
+        var overflowed = DeltaBuffer.HasOverflow;
+        if (_needsResync || overflowed)
+        {
+            if (overflowed)
+            {
+                TyphonEvent.EmitEcsViewDeltaBufferOverflow(tx.TSN, LastRefreshTSN, 0);
+                SetOverflowDetected(true);
+            }
+            // Report Overflow only for a REAL one. Every view's first refresh is a seed resync, so reporting the mode unconditionally would make
+            // the profiler show an overflow per view per lifetime while EmitEcsViewDeltaBufferOverflow fires only for genuine ones — two signals
+            // that disagree, and an overflow rate that looks catastrophic and is not.
+            RefreshMembershipResync(tx, ref scope, overflowed ? EcsViewRefreshMode.Overflow : EcsViewRefreshMode.Pull, canSettle: true);
+            return;
+        }
+
+        if (EpochsUnchanged())
+        {
+            // Nothing has spawned or been destroyed in any archetype this view spans since the last refresh. ClearDelta already ran, so the
+            // caller correctly observes no changes.
+            QueryPathProbe.MembershipGateHits++;
+            SetLastRefreshTSN(tx.TSN);
+            scope.Mode = EcsViewRefreshMode.Incremental;
+            scope.ResultCount = _entityIds.Count;
+            scope.DeltaCount = 0;
+            return;
+        }
+
+        // Read the epochs BEFORE draining. Read after, a commit that appended during the drain — and whose entries TryPeek left behind
+        // because its TSN exceeds this snapshot — would be recorded as already accounted for.
+        _epochScratch ??= new long[_membershipRegistries.Length];
+        ReadEpochsInto(_epochScratch);
+
+        QueryPathProbe.MembershipDrains++;
+        var drainScope = TyphonEvent.BeginEcsViewIncrementalDrain();
+        try
+        {
+            var targetTSN = tx.TSN;
+            var deltaCount = 0;
+            while (DeltaBuffer.TryPeek(targetTSN, out var entry, out var flags, out var tsn, out _))
+            {
+                DeltaBuffer.Advance();
+                ProcessMembershipEntry(ref entry, (flags & 0x80) != 0);
+                SetLastRefreshTSN(tsn);
+                deltaCount++;
+            }
+            drainScope.DeltaCount = deltaCount;
+            drainScope.Overflow = 0;
+
+            // Record the epochs as consumed only if the buffer actually drained. TryPeek stops at the first entry whose TSN exceeds this
+            // snapshot — correct, those commits are not visible here yet — and recording anyway would gate the next refresh away from
+            // entries still sitting there. Count is the live tail-minus-head, so a concurrent append also (harmlessly) keeps the gate open.
+            if (DeltaBuffer.Count == 0)
+            {
+                Array.Copy(_epochScratch, _lastEpochs, _lastEpochs.Length);
+            }
+
+            SetLastRefreshTSN(targetTSN);
+            BuildEntityIdCaches();
+            scope.Mode = EcsViewRefreshMode.Incremental;
+            scope.ResultCount = _entityIds.Count;
+            scope.DeltaCount = deltaCount;
+        }
+        finally
+        {
+            drainScope.Dispose();
+        }
+    }
+
+    /// <summary>Scratch for the pre-drain epoch snapshot; reused so the refresh path allocates nothing.</summary>
+    private long[] _epochScratch;
+
+    /// <summary>
+    /// Rebuilds membership by re-querying at the refresh transaction's snapshot, and returns the view to the channel if it can prove nothing
+    /// changed underneath it while doing so.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the self-healing arm, and the reason the channel is safe to gate on an epoch at all: any state the incremental path cannot
+    /// account for — the initial seed, an overflow that dropped entries, a transaction with its own uncommitted work — is repaired by a full
+    /// recomputation rather than papered over.
+    /// </para>
+    /// <para>
+    /// <b>Why the epochs are re-read afterwards.</b> The re-query runs at this transaction's snapshot; a commit that lands while it runs is
+    /// in neither the result nor (after the buffer is cleared) the ring. Recording the pre-read epochs would then gate that commit away
+    /// forever. Instead the view stays in resync until one completes with no concurrent structural change, which under sustained churn simply
+    /// means it keeps re-querying — the behaviour it had before the channel existed, and the correct degradation.
+    /// </para>
+    /// </remarks>
+    private void RefreshMembershipResync(Transaction tx, ref EcsViewRefreshEvent scope, EcsViewRefreshMode mode, bool canSettle)
+    {
+        _epochScratch ??= new long[_membershipRegistries.Length];
+        ReadEpochsInto(_epochScratch);
+
+        // Clear the flag BEFORE the re-query, atomically — and KEEP the result. "Anything dropped up to here is about to be recomputed" is false
+        // for a commit whose TSN exceeds this reader's snapshot: RefreshPull re-queries at tx.TSN only, so entries dropped for a LATER commit are
+        // in neither the result nor the ring, and discarding the flag here would let EpochsMatch call the resync clean and gate them away forever.
+        var droppedBeforeResync = DeltaBuffer.ClearOverflow();
+
+        RefreshPull(tx);
+
+        // Discard what the re-query already accounted for. Not Reset, which would also throw away entries for commits this reader cannot see yet.
+        DrainBufferAfterRefreshFull(tx.TSN);
+
+        // A producer that overflowed WHILE the re-query ran dropped entries the re-query's snapshot could not include, and its epoch bump lands
+        // after the drop — so the epoch comparison alone would call this clean.
+        var overflowedDuringResync = DeltaBuffer.ClearOverflow() || droppedBeforeResync;
+
+        // Two separate questions, and conflating them is what left the public flag latched.
+        //
+        // (a) Is the SET exact? Yes — the re-query rebuilt it from storage. So the consumer-facing overflow flag, whose contract is "granular
+        //     per-field tracking was lost, treat this as a full invalidation", is honestly cleared by any completed resync.
+        SetOverflowDetected(false);
+
+        // (b) May the view go back to trusting the channel? Only if nothing happened underneath this resync that the re-query cannot have covered.
+        //     An overflow seen at either end disqualifies it: the dropped entries may belong to a commit whose TSN exceeds this snapshot, in which
+        //     case the re-query did not include them AND the epochs read at the start already accounted for the bump — so settling would gate them
+        //     away for good. Staying in resync costs one more O(N) at a later snapshot, which does cover them.
+        if (canSettle && !overflowedDuringResync && EpochsMatch(_epochScratch))
+        {
+            Array.Copy(_epochScratch, _lastEpochs, _lastEpochs.Length);
+            _needsResync = false;
+        }
+        else
+        {
+            _needsResync = true;
+        }
+
+        SetLastRefreshTSN(tx.TSN);
+        BuildEntityIdCaches();
+        scope.Mode = mode;
+        scope.ResultCount = _entityIds.Count;
+    }
+
+    /// <summary>True when every subscribed archetype's epoch still equals <paramref name="snapshot"/>.</summary>
+    private bool EpochsMatch(long[] snapshot)
+    {
+        var regs = _membershipRegistries;
+        for (var i = 0; i < regs.Length; i++)
+        {
+            if (regs[i].StructuralEpoch != snapshot[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Applies one membership entry. No evaluator lookup, no component read, no archetype mask test — the channel is per-archetype and the
+    /// view subscribed to exactly the archetypes its mask selects, so every entry that arrives already belongs.
+    /// </summary>
+    /// <remarks>
+    /// The entry's <c>BeforeKey</c> carries the entity's <c>ClusterLocation</c> as an OPAQUE value. Nothing here dereferences it, and
+    /// nothing here may start to (MEMB-02): resolving it to a chunk pointer at refresh time would reintroduce the whole #582 freed-chunk
+    /// hazard on a path that currently has none. It is carried so cluster-native membership (stage 2) needs no second entry format.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ProcessMembershipEntry(ref ViewDeltaEntry entry, bool isDeletion)
+    {
+        var pk = (long)entry.EntityPK.RawValue;
+        if (isDeletion)
+        {
+            if (_entityIds.TryRemove(pk))
+            {
+                CompactDelta(pk, DeltaKind.Removed);
+            }
+            return;
+        }
+
+        if (_entityIds.TryAdd(pk))
+        {
+            CompactDelta(pk, DeltaKind.Added);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Pull mode (no FieldEvaluators — re-query + diff)
     // ═══════════════════════════════════════════════════════════════════════
 
     private void RefreshPull(Transaction tx)
     {
         // Phase 7: ECS:View:RefreshPull span. queryNs/archetypeMaskBits left at 0 — no per-call accounting at this layer.
+        QueryPathProbe.ViewRequeries++;
         var pullScope = TyphonEvent.BeginEcsViewRefreshPull(0, 0);
         try
         {

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using Typhon.Engine.internals;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine.Internals;
@@ -217,6 +218,23 @@ internal class ArchetypeEngineState
 
     /// <summary>Cluster storage state. Non-null for cluster-eligible archetypes.</summary>
     public ArchetypeClusterState ClusterState;
+
+    /// <summary>
+    /// Views subscribed to this archetype's whole-membership channel, plus the structural epoch their refresh gate reads (#790).
+    /// </summary>
+    /// <remarks>
+    /// Lives here rather than on <see cref="ClusterState"/> because <see cref="ClusterState"/> is null for every archetype that is not
+    /// cluster-eligible — "all SV, no non-Dynamic spatial" (<see cref="ArchetypeMetadata.IsClusterEligible"/>) — while an unfiltered
+    /// <c>ToView()</c> over one of those is perfectly legal and says nothing about storage mode. Hanging the channel off the cluster state
+    /// would leave those views on the O(N) re-query forever with nothing in the API explaining why.
+    /// </remarks>
+    /// <remarks>
+    /// Assigned from the engine's per-catalog table, NOT allocated per state object. <c>InitializeArchetypes</c> is public, unguarded against a
+    /// repeat call, and reallocates <c>_archetypeStates</c> / <c>_stateByRouting</c> wholesale — so a registry owned by the state object would be
+    /// replaced under every view already subscribed to it, leaving them pointed at an orphan whose epoch can never move again. Views cannot be
+    /// re-pointed (the engine does not know them), so the registry has to be the thing that survives.
+    /// </remarks>
+    public ArchetypeMembershipRegistry MembershipViews;
 }
 
 /// <summary>
