@@ -443,7 +443,9 @@ public sealed class TyphonBridge : IDisposable
         }, serviceProvider: _serviceProvider);
 
         // Per-worker render buffers: each parallel FillRender worker writes to its own buffer
-        _workerBuffers = new RenderWorkerBuffer[workerCount];
+        // WorkerSlotCount, not WorkerCount: #860 widened TickContext.WorkerId to [0, WorkerCount] inclusive — slot WorkerCount is the dispatcher's,
+        // reached whenever this system runs as the inline successor of a skipped root.
+        _workerBuffers = new RenderWorkerBuffer[workerCount + 1];
         for (var i = 0; i < workerCount; i++)
         {
             _workerBuffers[i] = new RenderWorkerBuffer(_config.AntCount / workerCount + 1024);
@@ -863,9 +865,12 @@ public sealed class TyphonBridge : IDisposable
         var foodGrid = _foodGrid;
         var nests = _nestPositions;
         var nestStock = _nestFoodStock;
-        var deathQueue = AntDiedQueue;
-        var pickedUpQueue = FoodPickedUpQueue;
-        var deliveredQueue = FoodDeliveredQueue;
+        // Event writers, resolved once per chunk body (#861). AntUpdateSystem is .Parallel(), so every chunk worker pushes into these queues
+        // concurrently — a writer binds this worker's own segment, which is what makes that safe. Before #861 these were direct Push calls into a
+        // single-producer buffer, i.e. an unsynchronised `_buffer[_count++]` from every worker at once.
+        var deathWriter = ctx.Writer(AntDiedQueue);
+        var pickedUpWriter = ctx.Writer(FoodPickedUpQueue);
+        var deliveredWriter = ctx.Writer(FoodDeliveredQueue);
         var tierMirror = _tierMirror;
         var heightmap = _heightmap;            // null-check once per tick
         var ccRead = _cellColonyCountRead;     // previous tick's complete per-cell-per-colony totals
@@ -1181,7 +1186,7 @@ public sealed class TyphonBridge : IDisposable
                             // ant teleports to its nest immediately so the flash is brief but visible).
                             state.HitFlashTicks = HitFlashDuration;
                             var ni = gen.HomeNestIndex;
-                            deathQueue?.Push(new AntDiedEvent((uint)((cluster.ChunkId << 8) | idx), ni));
+                            deathWriter.Push(new AntDiedEvent((uint)((cluster.ChunkId << 8) | idx), ni));
 
                             var freeE = gen.BaseEnergy * 0.5f;
                             var bonusE = 0f;
@@ -1221,7 +1226,7 @@ public sealed class TyphonBridge : IDisposable
                     if (state.Energy <= 0f)
                     {
                         var ni = gen.HomeNestIndex;
-                        deathQueue?.Push(new AntDiedEvent((uint)((cluster.ChunkId << 8) | idx), ni));
+                        deathWriter.Push(new AntDiedEvent((uint)((cluster.ChunkId << 8) | idx), ni));
 
                         var freeE = gen.BaseEnergy * 0.5f;
                         var bonusE = 0f;
@@ -1289,7 +1294,7 @@ public sealed class TyphonBridge : IDisposable
                                     state.Energy = gen.BaseEnergy;
                                     vel.X = -vel.X;
                                     vel.Y = -vel.Y;
-                                    pickedUpQueue?.Push(new FoodPickedUpEvent((uint)((cluster.ChunkId << 8) | idx), fi));
+                                    pickedUpWriter.Push(new FoodPickedUpEvent((uint)((cluster.ChunkId << 8) | idx), fi));
                                     // Depletion: the count just transitioned from 1 → 0. Rare (~once per food source);
                                     // ConcurrentQueue.Enqueue is thread-safe across all sim workers.
                                     if (after == 0)
@@ -1333,7 +1338,7 @@ public sealed class TyphonBridge : IDisposable
                     if (dx * dx + dy * dy < NestDropRangeSq)
                     {
                         Interlocked.Add(ref nestStock[ni], 3);
-                        deliveredQueue?.Push(new FoodDeliveredEvent((uint)((cluster.ChunkId << 8) | idx), ni, 3));
+                        deliveredWriter.Push(new FoodDeliveredEvent((uint)((cluster.ChunkId << 8) | idx), ni, 3));
                         state.State = AntState.Foraging;
                     }
                 }

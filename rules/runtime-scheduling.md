@@ -209,6 +209,80 @@ Every same-phase access relationship that is *allowed* produces a derived edge.
 
 ---
 
+## Module: EQ — Event queue production
+
+### EQ-01: One worker slot, one producer `[fatal][silent]`
+  invariant ∀ event queue Q, ∀ worker slot w: at most ONE thread appends to Q.segment[w] at any instant
+  enforce a producer reaches a segment only through `TickContext.Writer(queue)`, which supplies the caller's
+    `TickContext.WorkerId`. The slot-taking overloads are `internal` precisely so no caller can name another
+    worker's slot.
+  never cache a segment's buffer across pushes. Two live writers on one slot leave one holding an orphaned array
+    after the other grows it; a later `Drain` drops `Count` below the stale length and the orphan then accepts
+    writes, losing the event and re-delivering a consumed one. Slot disjointness (rule #860: `[0, WorkerCount)` are pool workers, `WorkerCount` is the
+    dispatcher) is what makes the segment's non-atomic `Count`/`Produced` increments correct.
+  never index a segment by `ChunkIndex`. Oversubscription (`ChunksPerWorker > 1`) makes `ChunkIndex >= WorkerCount`,
+    and two chunks of one system routinely run on one worker — the same trap `_partitionViews` documents.
+  never produce from a lifecycle-hook context. `OnFirstTick` / `OnShutdown` carry `TickContext.NonWorkerId`, own no
+    segment, and `GetWriter` throws rather than aliasing slot 0.
+  rationale: the pre-#861 implementation was a single `_buffer[_count++]`, and `AntUpdateSystem` — declared
+    `.Parallel().ChunksPerWorker(2f)` AND `.WritesEvents(...)` — drove it from every chunk worker. Shipping.
+    A count-only assertion does NOT catch this: two racing increments can yield the right total while one event is
+    lost and another slot is written twice. Assert exact multiset equality after a drain.
+  scope: EventQueue`1.GetWriter, EventWriter`1.Push, TickContext.Writer
+  verified: EventQueueConcurrencyTests.ParallelProducer_EveryEventArrivesExactlyOnce [VerifiesRule],
+    EventQueueConcurrencyTests.LifecycleHookContext_CannotProduce [VerifiesRule],
+    EventQueueTests.SecondWriterOnASlot_SeesAGrowthPerformedByTheFirst [VerifiesRule] — the stale-buffer aliasing case
+  on_violation:
+    two workers sharing a slot → lost events AND duplicated slots, silently, with a plausible total
+    indexing by ChunkIndex → IndexOutOfRange under oversubscription, or slot aliasing when chunks share a worker
+
+### EQ-02: The consumer fences; the producer does not `[fatal][silent]`
+  invariant ∀ Q: every consumer-side fold of segment state (`Drain`, `Count`, `IsEmpty`, `OverflowCount`) issues an
+    acquire barrier BEFORE its first segment load
+  enforce `EventQueue`1.AcquireSegments` — `if (!X86Base.IsSupported) Interlocked.MemoryBarrier()`, JIT-folded to
+    nothing on x64.
+  never rely on the DAG completion barrier alone. That was the original claim here and it is WRONG: the barrier is
+    decremented with `Interlocked` but SPUN ON with a plain load (`while (_systemsRemaining.Value > 0)`), so an arm64
+    reader may sink its segment loads above it. CLAUDE.md states the general form — an acquire load does not stop
+    earlier plain reads from sinking below it.
+  never add a release store to the push path to compensate. One fence per read is O(reads); a release per push is
+    O(events), and avoiding exactly that is why the queue is segmented.
+  rationale: producers 2..N issue no ordering store at all — `MarkProduced` fires only on a segment's 0 -> 1
+    transition — so nothing on the write side publishes them.
+  scope: EventQueue`1.Drain, EventQueue`1.Count, EventQueue`1.IsEmpty
+  on_violation: a stale per-slot Count folds to 0 -> the consumer is marked EmptyInput and the tick's events are
+    discarded by the next Reset, silently
+
+### EQ-04: One consumer per queue `[fatal][silent]`
+  invariant ∀ Q: at most one system declares `ReadsEvents(Q)` / `Consumes(Q)`
+  enforce rejected at schedule build in `RuntimeSchedule.Build`.
+  rationale: two consumers get no derived edge between them (ED-03 only relates producers to consumers), so both flip
+    ready on the producer's completion and race inside `Drain` — overlapping `CopyTo` of the same prefix delivers the
+    same events twice, both store `Count = 0`, and `Consumed +=` loses an update, which corrupts the derived
+    `Produced` on the telemetry wire. Only the PARALLEL-consumer case was enforced before; cardinality was not.
+  scope: RuntimeSchedule.Build
+  verified: EventQueueValidationTests.TwoConsumers_AreRejectedAtBuild [VerifiesRule]
+
+### EQ-05: `Capacity` is a construction constant `[correctness]`
+  invariant `EventQueue`1.Capacity` returns the value passed to the constructor, never a fold over live allocations
+  rationale: the profiler builds its one-shot `EventQueueRecord` catalog inside `TyphonRuntime.Create` — before the
+    first tick, before any segment is allocated — and the Workbench divides per-tick depth by it. A fold over lazily
+    allocated buffers reported 0 for every queue in every trace. Live allocation is `AllocatedCapacity`.
+  scope: EventQueue`1.Capacity
+  verified: EventQueueTests.Capacity_IsTheConstructionConstant_NotTheLiveAllocation [VerifiesRule]
+
+### EQ-03: Overflow drops and counts — it never throws `[correctness]`
+  invariant a `Push` that cannot be stored returns false and increments `OverflowCount`; it raises no exception
+  rationale: `Push` runs inside parallel chunks, where an exception is caught into `_systemFailed` and, under
+    `SystemExceptionPolicy.AbortTickAndStop` (#567), cancels the rest of the tick — a queue sizing mistake must not be
+    able to stop the simulation. `OverflowCount` keeps its wire meaning ("events were lost"): the Workbench DAG paints
+    an edge deep red on `overflowSum > 0` and says so in its legend.
+  never truncate on the DRAIN side to match. A short destination span throws: silent truncation is event loss that
+    `OverflowCount` does not count and the Workbench cannot show.
+  scope: EventWriter`1.Push, EventQueue`1.PushSlow, EventQueue`1.Drain
+  verified: EventQueueTests.Push_WhenAtCeiling_DropsAndCounts_NeverThrows [VerifiesRule],
+    EventQueueTests.Drain_IntoAShortSpan_Throws [VerifiesRule]
+
 ## Module: Debug-Runtime Write Validation
 
 Compile-time stripped in RELEASE; active in DEBUG to catch declaration drift.
