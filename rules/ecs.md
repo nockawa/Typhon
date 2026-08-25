@@ -140,6 +140,137 @@ discipline (MVCC revision chains vs in-place SV vs heap-backed Transient), so re
 
 ---
 
+## Module: MEMB — The archetype membership channel
+
+An unfiltered `Query<TArchetype>().ToView()` subscribes to a per-archetype channel (`ArchetypeMembershipRegistry`) and is fed spawn/destroy entries from the
+commit path, rather than re-running the whole archetype scan on every refresh. Two things make that sound: a publication order, and a promise about what the
+entry may be used for. Both are silent when broken, which is why they are rules rather than comments.
+
+### MEMB-01: The structural epoch is released after the entries it accounts for `[fatal][silent]`
+  invariant at every instant a view can observe `StructuralEpoch == view.LastStructuralEpoch`, that view's delta buffer holds no entry it has
+            not applied
+  never bumping the epoch before appending this commit's membership entries, and never caching the epoch into a local ahead of the appends —
+        the second is the first wearing a different hat, exactly as `CLUSTERWALK-02` describes for the active-cluster pair
+  enforce `Transaction.PublishMembershipDeltas` appends to every subscribed buffer for every spawned and destroyed entity FIRST, then bumps each
+          touched archetype's epoch. `Bump` is `Interlocked.Increment` — a full fence on x64 and arm64 — so the appends cannot sink past it, and
+          the reader's `Volatile.Read` of the epoch pairs with that release.
+  enforce it runs at the end of `FlushEcsPendingOperations`, which is inside the commit's PUBLISH phase and BEFORE `WaitAndFinalize` publishes the
+          TSN. A reader whose snapshot can see the commit can therefore also see the counter move; bump it after the TSN and a view refreshing in
+          between reads a visible commit against an unmoved epoch.
+  enforce the refresh records the epoch as consumed only after the drain, and only when the buffer is empty. `TryPeek` stops at the first entry
+          whose TSN exceeds the reader's snapshot — correct, those commits are not visible yet — and recording the epoch anyway would gate the
+          next refresh away from entries that are still sitting there.
+  enforce an archetype with no subscriber is skipped entirely — no append, no bump. Nothing can observe the epoch of an archetype nobody
+          listens to, and bumping it would not close the registration window either (a commit that read the empty subscriber array before a
+          view registered is missed by that view regardless, because its population scan is older than the commit). That window is inherited
+          from `ToIncrementalView`, which has the identical one on the field channel.
+  enforce the FIRST refresh after subscribing re-queries rather than draining (`EcsView._needsResync`). The seed is taken at the CREATING
+          transaction's snapshot and folds in that transaction's uncommitted spawns, so it corresponds to no committed instant: a commit between
+          that snapshot and the subscription is in neither the seed nor the buffer, and a creating transaction that rolls back leaves phantom ids
+          that no channel entry can ever remove. `RefreshPull` re-executed at the REFRESH TSN every time and so healed both; the channel never
+          re-executes, which is what makes an unrepaired seed permanent rather than transient.
+  enforce a resync records the epochs it started from only if none moved while it ran, and stays in resync otherwise. A commit landing during the
+          re-query is in neither its result nor the drained buffer, so recording the pre-read epochs would gate it away for good; under sustained
+          churn the view simply keeps re-querying, which is the behaviour it had before the channel and the correct degradation.
+  scope: Transaction.PublishMembershipDeltas, Transaction.FlushEcsPendingOperations, ArchetypeMembershipRegistry.Bump,
+         ArchetypeMembershipRegistry.StructuralEpoch, EcsView.RefreshMembership, EcsView.SubscribeToMembership
+  on_violation: the view reads "nothing changed", skips the drain, records the epoch as consumed, and NEVER sees those entities. Silent and
+                permanent — the system runs every tick over a plausible entity count while the missing entities are committed, durable and
+                queryable by everything else. This is #718's failure mode reintroduced through a different door.
+  rationale: #790. The gate is what makes a view over a quiet archetype cost a load and a compare instead of a whole-archetype rescan, and a gate
+             is only ever as sound as the order in which its counter is published.
+  verified: SystemInputViewLivenessTests.EpochIsReleasedOnlyAfterTheEntriesItAccountsFor — CONSTRUCTS the interleaving via
+            `QueryPathProbe.MembershipPrePublishBumpHook` rather than racing for it (the argument CLUSTERWALK-02 makes about a two-instruction
+            window applies here too) and asserts the rule directly: entries already buffered, epoch not yet moved. MUTATION-CHECKED — moving
+            `Bump()` above the appends turns it red and nothing else. The randomised differential
+            `MembershipRefresh_AgreesWithTheReQuery_UnderRandomisedChurn` is complementary, not a verifier for this rule: it is sequential, so it
+            has no reader between the bump and the appends and stays green against that same mutant.
+            `ViewBuiltAfterACommitItsSnapshotPredates_StillConverges` covers the seed clause.
+
+### MEMB-02: A membership refresh never dereferences a cluster chunk `[fatal][silent]`
+  invariant the refresh path reads only its own ring buffer and its own entity set — never `ActiveClusterIds`, never a cluster chunk address
+  never resolving the entry's `BeforeKey` cluster location to a chunk pointer at refresh time. It is carried as an OPAQUE value, for stage 2's
+        per-cluster match bits, and reading it is what would make it dangerous
+  enforce `EcsView.ProcessMembershipEntry` takes the entity id from the entry and touches nothing else. Everything the refresh needs was captured
+          at commit, where the publishing thread already held it
+  scope: EcsView.ProcessMembershipEntry, EcsView.RefreshMembership, Transaction.PublishMembershipEntry
+  on_violation: reintroduces `CLUSTERWALK-01` on a path that has none. A cluster drained by a concurrent destroy is freed inline on the committing
+                thread and its chunk id is immediately reusable (`ChunkBasedSegment.AllocateChunkInternal` takes the lowest clear bit), so the read
+                lands in another archetype's cluster interpreted through this one's layout. No exception, no assert.
+  rationale: #790, and it is the whole reason the feature does not wait on #582. The 2026-08-13 occupancy prototype put exactly this walk on the
+             refresh path and was rejected for it. Stage 2 keeps the property by a different route — the view supplies match bits, the runtime
+             supplies the cluster list it read at dispatch.
+  requires CLUSTERWALK-01 (the hazard this rule exists to stay out of)
+  verified: NOT COVERED — an absence is hard to assert directly. `MembershipRefresh_OnAQuietArchetype_TakesTheEpochGate` and
+            `MembershipRefresh_Destroy_RemovesFromTheView` pin that the refresh takes the channel rather than any scan, which is the observable
+            half; the invariant itself is held by review of one small method.
+  note the sticky overflow flag is cleared by `ViewDeltaRingBuffer.ClearOverflow`, NOT by `Reset`. Reset also discards entries a producer appended
+       for a commit the resyncing reader cannot see yet, which would lose them outright; clearing the flag alone keeps that tail.
+       `MembershipRefresh_BurstBeyondTheRingBuffer_FallsBackAndStaysExact` asserts the view returns to the channel afterwards rather than latching
+       onto the re-query for the life of the process.
+
+### MEMB-04: A disposed view's delta buffer is retired, never freed under a publisher `[fatal][silent]`
+  invariant ∀ append into a view's delta buffer: the pinned block behind it is still MAPPED, whether or not that view has been disposed
+  never freeing the block inside `ViewBase.Dispose`. The publisher reads `IsDisposed` and then writes 24 bytes through raw pointers; those are two
+        steps with nothing sequencing them, and `Thread.SpinWait(100)` — ~200 ns — is not a happens-before edge. Reasoning about the DURATION of an
+        append against the duration of a spin is not reasoning about ordering
+  never nulling the buffer's pointers on the retire path. A null base in unsafe pointer arithmetic is an access violation, not a catchable
+        NullReferenceException — leaving them valid is the entire mechanism, not an oversight
+  enforce `ViewBase.Dispose` deregisters from every registry FIRST, then calls `ViewDeltaRingBuffer.Retire`, which hands the block to the engine's
+          `ViewBufferReclaimer` with a stamp from `EpochManager.BumpEpochForRetire`. A late publisher then writes into a ring nobody will drain, in
+          mapped memory that is still owned. Harmless by construction rather than by exclusion
+  enforce the stamp is taken AFTER the deregistration. That ordering carries the whole safety argument: a publisher whose registry read preceded the
+          deregistration necessarily pinned an epoch below the stamp, and one that pinned above it cannot have read the registration at all
+  enforce `ViewBufferReclaimer.Drain` frees only blocks whose stamp is at or below `EpochManager.MinActiveEpoch`
+  enforce the Dekker pair this rests on: `EpochThreadRegistry.PinCurrentThread` stores the pin SEQ-CST (`Interlocked.Exchange`) and
+          `BumpEpochForRetire` is an `Interlocked.Increment`, with `ComputeMinActiveEpoch` acquire-reading each slot. Release alone is NOT enough —
+          the reordering that breaks it is StoreLoad, which x64 also permits, so this is not an arm64-only obligation
+  enforce no epoch refresh between reading a view registration and the last append through it. All publish sites satisfy this today; a
+          `RefreshPinnedEpoch` inside a publish pass would raise the thread's floor above a stamp it is still exposed to
+  scope: ViewBase.Dispose, ViewDeltaRingBuffer.Retire, ViewDeltaRingBuffer.BlockIsLive, ViewBufferReclaimer.Retire, ViewBufferReclaimer.Drain,
+         EpochManager.BumpEpochForRetire, EpochThreadRegistry.PinCurrentThread, EpochThreadRegistry.ComputeMinActiveEpoch
+  on_violation: `TryAppend` writes 24 bytes through a pointer into freed pinned memory. `PinnedMemoryBlock.Dispose` calls
+                `NativeMemory.AlignedFree`, so the bytes are immediately re-issuable to any other allocation in the process. Silent heap corruption
+                with no exception and no trace back to the view.
+  rationale: #864. #790 did not invent this race — `ViewRegistry`'s field-channel publishers have the same unguarded shape and predate it — but it
+             changed WHICH views have a producer: before it a plain `Query<T>().ToView()` registered with nothing, so disposing one was race-free by
+             construction, and the race needed the narrower `WhereField` shape. One mechanism now covers both channels.
+             An earlier attempt excluded the disposer with a shared/exclusive latch instead. It was withdrawn: it cost the publisher a synchronised
+             acquire on a path measured at ~15.6 ns per append, it had to be hoisted out of loops the field-channel sites are buried three deep in,
+             and on exclusive-acquire timeout it waited a full `DefaultCommitTimeout` PER ARCHETYPE and then freed the buffer unlatched anyway —
+             trading a memory-safety hazard for a liveness hazard while keeping both. Deferral costs the publisher nothing and `Dispose` never waits.
+  note the free is deferred, so memory is held for the length of the longest epoch scope live at retire time — the same trade ADR-033 and ADR-035
+       already accept. `ViewBufferReclaimer.PendingCount` / `PendingBytes` / `FreedTotal` surface it, because a cost nothing reports is a cost nobody
+       can diagnose.
+  verified: SystemInputViewLivenessTests.ViewDisposedMidPublish_IsWrittenThroughLiveMemory_AndFreedOnlyAfterTheEpochPasses — disposes the view from
+            `QueryPathProbe.PrePublishAppendHook`, i.e. INSIDE the window, and asserts the block is mapped at the append and freed only once nothing
+            is pinned below the stamp. Deterministic and single-threaded, which the latch design could not be: disposing from that hook under a
+            shared latch was a self-deadlocking upgrade, which is why this rule previously read NOT COVERED.
+            .FieldChannelView_DisposedMidPublish_IsAlsoWrittenThroughLiveMemory covers the other channel; .DisposingManyViews_NeverBlocks covers the
+            liveness half; Memb04Verifier_RejectsAFreeAtDisposalTime is the mutant.
+
+### MEMB-03: The epoch gate binds membership queries only, never every pull view `[fatal][silent]`
+  invariant only a query whose result IS the whole live membership of its archetype set may take the channel or the structural-epoch gate
+  never keying either on `ViewBase.IsPullMode`. That is `Evaluators.Length == 0`, which is true for THREE query shapes — archetype-only,
+        `.Where(lambda)` and the spatial predicates — and only the first has membership that changes exclusively on spawn and destroy
+  enforce the SUBSCRIPTION is gated by `EcsQuery.IsMembershipQuery` — no field predicates, no `_whereFilter`, no `_spatialQueryType`, no
+          enabled/disabled constraint. `ViewBase.IsMembershipEligible` is a CONSEQUENCE of having subscribed, set only by
+          `EcsView.SubscribeToMembership` alongside the registry array it dispatches on, never a precondition anything else may assert. Setting
+          the flag from a second construction path without routing through that method is how the two fall out of step
+  enforce a membership refresh falls back to the re-query when the refreshing transaction holds its own uncommitted spawns or destroys
+          (`Transaction.HasPendingEcsWork`). The channel carries committed entries only and uncommitted work moves no epoch, so the gate would
+          otherwise make the view contradict the transaction that refreshed it — `tx.Destroy(id); view.Refresh(tx);` still showing the entity
+  enforce `TyphonRuntime.RefreshSystemInputViewsAtTickStart` keeps using `IsPullMode`, because `BIND-04` obliges it to drive all three shapes
+  scope: EcsQuery.IsMembershipQuery, EcsQuery.ToPullView, ViewBase.IsMembershipEligible, ViewBase.IsPullMode, EcsView.RefreshMembership
+  on_violation: a `.Where(lambda)` or spatial view is gated on a counter that does not move when its membership changes. An entity whose component
+                write flipped the predicate, or which moved out of the query radius, produces no spawn and no destroy — so the view reads "nothing
+                happened" and goes quietly stale. Usually right, silently wrong, which is strictly worse than the honest O(N) it replaced.
+  rationale: #790 decision D2. The channel reports entities APPEARING and DISAPPEARING; it knows nothing about entities CHANGING. For "all ships"
+             that is the complete story and for the other two it is a fraction of it.
+  verified: SystemInputViewLivenessTests.WhereLambdaView_IsNotMembershipEligible_AndStillReQueries — asserts a lambda view takes neither the gate
+            nor the drain and still re-queries, which is what stops a future "IsPullMode is close enough" simplification.
+            MembershipRefresh_AgainstATransactionWithItsOwnPendingWork_SeesTheOverlay covers the second enforce clause.
+
 ## Module: CLUSTERWALK — Concurrent cluster enumeration vs structural mutation
 
 Cluster *topology* changes (migration, AABB refresh) and spatial-index updates are **fence-deferred**: `WriteSpatial` only flags, and the post-track parallel

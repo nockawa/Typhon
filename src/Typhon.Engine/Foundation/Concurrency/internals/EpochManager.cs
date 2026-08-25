@@ -54,6 +54,21 @@ public sealed class EpochManager : ResourceNode, IMetricSource
     internal int EnterScope() => _registry.PinCurrentThread(_globalEpoch);
 
     /// <summary>
+    /// Advances the global epoch and returns the new value, as the retire stamp for a resource being handed to a deferred reclaimer.
+    /// </summary>
+    /// <remarks>
+    /// <c>Interlocked.Increment</c> rather than a plain read of <see cref="GlobalEpoch"/>, for two reasons. It is a full fence on x64 and arm64,
+    /// so the retiring thread's preceding work — removing the resource from wherever readers find it — cannot sink below the reclaimer's
+    /// subsequent scan of the pin slots; that is the reclaimer half of the Dekker pair whose other half is the seq-cst store in
+    /// <c>EpochThreadRegistry.PinCurrentThread</c>. And it guarantees the stamp is strictly greater than any epoch a thread already pinned, so
+    /// an in-flight reader is never mistaken for one that arrived afterwards.
+    /// </remarks>
+    internal long BumpEpochForRetire() => Interlocked.Increment(ref _globalEpoch);
+
+    /// <summary>The epoch the calling thread is pinned to, or 0 if unpinned. Diagnostic only — for asserting a pin did not move mid-operation.</summary>
+    internal long CurrentThreadPinnedEpoch => _registry.CurrentThreadPinnedEpoch;
+
+    /// <summary>
     /// Exit an epoch scope on the current thread. If this is the outermost scope,
     /// unpins the thread and advances the global epoch. Enforces LIFO ordering.
     /// </summary>

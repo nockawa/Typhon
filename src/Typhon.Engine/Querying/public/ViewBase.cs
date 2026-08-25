@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Typhon.Engine.internals;
 
 namespace Typhon.Engine;
 
@@ -125,6 +126,27 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     /// </remarks>
     internal bool IsPullMode => Evaluators is { Length: 0 };
 
+    /// <summary>
+    /// True when this view's membership is exactly "every live entity of one archetype", so it can be maintained from the archetype
+    /// membership channel instead of a re-query (#790).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Strictly narrower than <see cref="IsPullMode"/>, and the difference is load-bearing.</b> <see cref="IsPullMode"/> is
+    /// "no field evaluators", which is true for THREE query shapes: archetype-only, <c>.Where(lambda)</c>, and the spatial predicates.
+    /// Only the first changes membership exclusively on spawn and destroy. The other two change it on ordinary component writes — a
+    /// delegate's verdict flips, or an entity moves — which produce no structural event at all. Feeding those from the channel, or
+    /// gating them on the structural epoch, would silently miss most of their membership changes: usually right, quietly wrong, which
+    /// is strictly worse than an honest O(N) re-query and is the failure mode #718 was.
+    /// </para>
+    /// <para>
+    /// So this gates BOTH the channel subscription and the epoch fast-path. <see cref="IsPullMode"/> keeps its own meaning for
+    /// <c>TyphonRuntime.RefreshSystemInputViewsAtTickStart</c>, which must go on driving all three shapes per <c>BIND-04</c>.
+    /// </para>
+    /// </remarks>
+    internal bool IsMembershipEligible { get; private protected set; }
+
+
     /// <summary>Tick number of the last runtime-driven system-input refresh; guards against refreshing one shared view once per consuming system.</summary>
     internal long LastSystemInputRefreshTick { get; set; } = -1;
 
@@ -240,6 +262,11 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
     protected abstract void DeregisterFromRegistries();
 
     /// <summary>
+    /// The engine reclaimer that takes ownership of this view's pinned buffer at disposal, or null for a view built outside an engine.
+    /// </summary>
+    private protected virtual ViewBufferReclaimer BufferReclaimer => null;
+
+    /// <summary>
     /// Deregisters the view from all owning registries and releases the delta ring buffer and entity set. Idempotent — subsequent calls are no-ops.
     /// </summary>
     public void Dispose()
@@ -250,9 +277,14 @@ public abstract class ViewBase : IView, IDisposable, IEnumerable<long>
         }
 
         DeregisterFromRegistries();
-        // Safety fence: allow in-flight producers to complete TryAppend before freeing buffer memory
-        Thread.SpinWait(100);
-        DeltaBuffer.Dispose();
+
+        // RETIRE, not free — and the order matters: deregistration must complete first, because the retire stamp taken inside Retire is what
+        // separates publishers that could still hold this view's registration from those that cannot.
+        //
+        // The Thread.SpinWait(100) that used to stand here was not a fence. It was ~200 ns of hope between a publisher's IsDisposed read and its
+        // 24-byte write through this buffer's raw pointers, and reasoning about its DURATION (as claude/design/Querying/ViewSystem/07-concurrency.md
+        // once did) is not reasoning about ORDERING. Deferring the free removes the need for either: a late write lands in live mapped memory.
+        DeltaBuffer.Retire(BufferReclaimer);
         _entityIds.Dispose();
         _deltas.Clear();
         _addedCount = 0;

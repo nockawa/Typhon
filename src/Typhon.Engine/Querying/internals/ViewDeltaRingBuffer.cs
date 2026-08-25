@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Engine.internals;
 
 namespace Typhon.Engine.Internals;
 
@@ -87,7 +88,15 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
 
     public long Count => _tail.Value - _head.Value;
 
-    public bool HasOverflow => _overflow != 0;
+    /// <summary>
+    /// True when a producer has dropped at least one entry because the ring was full. Sticky until a consumer clears it.
+    /// </summary>
+    /// <remarks>
+    /// Acquire-read, paired with the release in <see cref="TryAppend"/>. The consumer's whole self-healing story rests on this flag surviving until a resync
+    /// has observed it — a stale read here is a resync that concludes it is clean while entries have been dropped, and those entries are then gone with
+    /// nothing left to repair them.
+    /// </remarks>
+    public bool HasOverflow => Volatile.Read(ref _overflow) != 0;
 
     public bool IsDisposed => _disposed != 0;
 
@@ -105,7 +114,8 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
 
             if (tail - head >= _capacity)
             {
-                _overflow = 1;
+                // Release, so a consumer that acquire-reads HasOverflow cannot see the flag set without also seeing the state that preceded it.
+                Volatile.Write(ref _overflow, 1);
                 return false;
             }
 
@@ -194,6 +204,24 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
     }
 
     /// <summary>
+    /// Atomically clears the sticky overflow flag without discarding the ring's contents, and reports whether it had been set.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Reset"/> is the only other way to clear <c>_overflow</c>, and it also throws away every entry — including ones a producer appended for a
+    /// commit the resyncing reader could not yet see. A membership resync re-queries at its own snapshot and then wants the flag gone but the not-yet-visible
+    /// tail kept, which is exactly this.
+    /// </para>
+    /// <para>
+    /// <b>Interlocked, and it returns the previous value, because a plain write here loses entries.</b> A producer sets the flag AFTER dropping entries and
+    /// bumps the structural epoch after that; a consumer that clears the flag with a plain store can therefore swallow an overflow whose epoch bump has not
+    /// landed yet, conclude from the unchanged epoch that its resync was clean, and leave the drain arm to run next refresh with the flag already gone. The
+    /// dropped entries are then unrecoverable. Handing back the prior value lets the caller keep itself in resync instead.
+    /// </para>
+    /// </remarks>
+    public bool ClearOverflow() => Interlocked.Exchange(ref _overflow, 0) != 0;
+
+    /// <summary>
     /// Reset the buffer to empty state. Not thread-safe — caller must ensure no concurrent access.
     /// </summary>
     /// <param name="newBaseTSN">When >= 0, reanchors the base TSN for delta computation.</param>
@@ -203,11 +231,75 @@ internal sealed unsafe class ViewDeltaRingBuffer : IDisposable
         NativeMemory.Clear(_componentTags, (nuint)_capacity);
         _head.Value = 0;
         _tail.Value = 0;
-        _overflow = 0;
+        // Interlocked for the same reason ClearOverflow is: a plain store here can swallow an overflow a producer raised concurrently, and the
+        // caller then treats a buffer that dropped entries as clean. Reset's own doc says callers must exclude concurrent access, but its callers
+        // (EcsView.RefreshFull / RefreshFullOr, NavigationView) run on the consumer thread while commit-path producers are live.
+        Interlocked.Exchange(ref _overflow, 0);
         if (newBaseTSN >= 0)
         {
             _baseTSN = newBaseTSN;
         }
+    }
+
+    /// <summary>True while the pinned block behind this buffer is still mapped — false once it has actually been freed.</summary>
+    /// <remarks>Exists so a verifier can assert that a write racing a disposal lands in live memory, which is the whole claim of #864's fix.</remarks>
+    internal bool BlockIsLive => _block is { IsDisposed: false };
+
+    /// <summary>
+    /// Marks this buffer dead to consumers and hands its pinned block to <paramref name="reclaimer"/>, WITHOUT freeing it.
+    /// </summary>
+    /// <remarks>
+    /// The pointers stay valid on purpose. A publisher already past its <c>IsDisposed</c> check writes 24 bytes into a ring nobody will drain,
+    /// in memory that is still mapped and still owned — harmless, where a free would have made it silent heap corruption. The block is freed
+    /// later, once no thread can still hold the registration that names it. See <c>ViewBufferReclaimer</c>.
+    /// </remarks>
+    internal void Retire(ViewBufferReclaimer reclaimer)
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        if (reclaimer == null)
+        {
+            // No reclaimer (a buffer built outside an engine, e.g. a unit test on the type itself): nothing can be publishing into it, so the
+            // immediate free is safe and leaking it would not be.
+            _block?.Dispose();
+            _block = null;
+            _entries = null;
+            _deltaTSNs = null;
+            _flags = null;
+            _componentTags = null;
+            _written = null;
+            return;
+        }
+
+        // The pointers are DELIBERATELY left valid, and this is the whole mechanism — nulling them here would recreate the very fault the deferral
+        // exists to remove. A publisher already past its IsDisposed check writes 24 bytes through _entries; if that is null the write faults, and in
+        // unsafe pointer arithmetic a null base is an access violation, not a catchable NullReferenceException. Leaving them pointing at the retired
+        // block makes the write land in mapped, owned memory that nobody will ever drain.
+        //
+        // The buffer goes WITH the block so the reclaimer can null them at the moment it frees. Leaving them dangling afterwards would trade a loud
+        // null fault for a silent write into whatever the allocator re-issued that address to — and Reset in particular memsets 8 KB through them.
+        reclaimer.Retire(this, _block);
+    }
+
+    /// <summary>
+    /// Invoked by <c>ViewBufferReclaimer</c> at the instant it frees this buffer's block, once no thread can still reach it.
+    /// </summary>
+    /// <remarks>
+    /// Nulling here rather than in <see cref="Retire"/> is the difference between a loud fault and silent corruption. Before the free the pointers
+    /// must stay valid (a late publisher writes through them); after it they must NOT, or any later use — <see cref="Reset"/>'s 8 KB
+    /// <c>NativeMemory.Clear</c> most of all — writes into memory the allocator has re-issued.
+    /// </remarks>
+    internal void OnBlockReclaimed()
+    {
+        _block = null;
+        _entries = null;
+        _deltaTSNs = null;
+        _flags = null;
+        _componentTags = null;
+        _written = null;
     }
 
     public void Dispose()

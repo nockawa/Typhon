@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Typhon.Engine.internals;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine;
@@ -200,6 +201,23 @@ public unsafe partial class Transaction
 
     /// <summary>Pending entity destroys. Flushed at commit (DiedTSN set). HashSet for O(1) Contains.</summary>
     private HashSet<EntityId> _pendingDestroys;
+
+    /// <summary>Archetype membership channels this commit structurally changed; their epochs are bumped once each, after every append (#790).</summary>
+    private List<ArchetypeMembershipRegistry> _membershipTouched;
+
+    /// <summary>
+    /// True when this transaction holds ECS structural work that has not been committed — spawns or destroys visible only to itself.
+    /// </summary>
+    /// <remarks>
+    /// A membership view refreshed against such a transaction must not take the channel: the channel carries committed entries only, and
+    /// uncommitted work moves no structural epoch, so the gate would report "nothing changed" while the transaction's own reads disagree with
+    /// the view it just refreshed. <c>RefreshPull</c> folds the overlay in — pending spawns included, pending destroys excluded — which is what
+    /// the pull path always did.
+    /// </remarks>
+    /// <summary>Per-commit snapshot of each touched archetype's subscriber array, parallel to <see cref="_membershipTouched"/> (#790).</summary>
+    private List<ViewRegistration[]> _membershipViewSnapshots;
+
+    internal bool HasPendingEcsWork => _spawnedEntities is { Count: > 0 } || _pendingDestroys is { Count: > 0 };
 
     /// <summary>Pending EnabledBits changes — keyed by EntityId.</summary>
     private Dictionary<EntityId, ushort> _pendingEnableDisable;
@@ -1466,6 +1484,184 @@ public unsafe partial class Transaction
         // Finalize spawned entities: set BornTSN from sentinel to actual TSN, insert SV secondary indexes.
         FinalizeSpawns();
         FlushPendingDestroys();
+        PublishMembershipDeltas();
+    }
+
+    /// <summary>
+    /// Publishes this commit's structural changes to every view subscribed to the affected archetypes' membership channels, then moves those
+    /// archetypes' structural epochs (#790).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a separate pass rather than a line inside each loop.</b> A membership entry must not become drainable before the entity it names
+    /// is queryable — a concurrent transaction with a higher TSN can drain this buffer while <c>FinalizeSpawns</c> is still running, and would
+    /// otherwise hand its caller an id that <c>EntityMap</c> does not yet resolve. Running after BOTH loops makes that ordering true by
+    /// construction instead of by inspection of two thousand lines of spawn code.
+    /// </para>
+    /// <para>
+    /// <b>MEMB-01 — epochs move last.</b> Every <c>TryAppend</c> completes before any <c>Bump</c>. <c>Interlocked.Increment</c> is a full fence
+    /// on x64 and arm64 so the appends cannot sink past it, and the refresh gate's acquire load pairs with it. Reversed, a view reads the new
+    /// epoch, drains an empty buffer, records it as consumed, and never sees those entities — silent and permanent. This also runs before
+    /// <c>WaitAndFinalize</c> publishes the commit's TSN, so any reader whose snapshot can see this commit can also see the counter move.
+    /// </para>
+    /// <para>
+    /// <b>An archetype nobody subscribes to costs one array index and a branch per entity, and nothing else.</b> No append, no epoch bump, no
+    /// list. Bumping it anyway would be pure waste: nothing can observe the epoch of an archetype with no subscriber, and it does not close the
+    /// registration window below either — a commit that read the empty subscriber array before a view registered is missed by that view whether
+    /// or not the counter moved, because the entities are not in its buffer and its population scan is older than the commit.
+    /// </para>
+    /// <para>
+    /// <b>That registration window is inherited, not introduced.</b> A commit publishing between the view transaction's snapshot and its
+    /// <c>Register</c> call reaches neither the buffer nor the scan. <c>ToIncrementalView</c> has the identical window on the field channel and
+    /// always has. Recorded rather than fixed here so it is not mistaken for new.
+    /// </para>
+    /// </remarks>
+    private void PublishMembershipDeltas()
+    {
+        // Cleared at ENTRY, not at exit. A throw between an Add and the Bump loop below leaves this commit's entries in the subscriber buffers
+        // with no epoch bump — the silent MEMB-01 miss — and, because Transaction instances are pooled, would carry the stale registries into
+        // the next logical transaction and bump archetypes it never touched. Clearing here bounds the damage to the commit that threw.
+        _membershipTouched?.Clear();
+        _membershipViewSnapshots?.Clear();
+
+        var haveSpawns = _spawnedEntities is { Count: > 0 };
+        var haveDestroys = _pendingDestroys is { Count: > 0 };
+        if (!haveSpawns && !haveDestroys)
+        {
+            return;
+        }
+
+        // MEMB-04's last enforce clause, made checkable. Every deferred buffer free is decided against the oldest epoch any thread is pinned to, so a
+        // publish pass that RAISED its own pin midway would announce a floor above a stamp it is still exposed to — and the reclaimer would free a
+        // block this pass can still write through. True at every publish site today only because nobody calls RefreshScope from one; an enforce
+        // clause with nothing enforcing it is what the MEMB-01 episode was about.
+        var pinAtEntry = _epochManager?.CurrentThreadPinnedEpoch ?? 0;
+
+        // Resolve the subscriber list ONCE per archetype for the whole commit, before publishing anything. Re-reading it per entity would let a
+        // view that registers midway through this loop receive a TORN HALF of one commit: the entities before it registered are neither in the
+        // buffer nor in its population scan, yet the single Bump at the end opens its gate as though it had received all of them. The
+        // registration window this does not close — a view that registers before ANY of this commit is published — is the all-or-nothing one
+        // inherited from ToIncrementalView, and the view's own first-refresh resync repairs it.
+        // The try MUST open before the publish loops, not after them. The shared latches are taken inside PublishMembershipEntry, i.e. DURING these
+        // loops; with the try opening after them, anything that threw in between — an allocation failure, a bad routing id — stranded every latch
+        // taken so far. The only reference to release them through is _membershipTouched, which the next commit clears at entry, so the latch would
+        // be held for the life of the process: every later EcsView.Dispose on that archetype then blocks for a full DefaultCommitTimeout before
+        // giving up and proceeding UNLATCHED, which reopens the use-after-free the latch exists to close.
+        try
+        {
+            if (haveSpawns)
+            {
+                foreach (var entry in _spawnedEntities)
+                {
+                    // Spawned and destroyed in the same transaction: FinalizeSpawns skipped the EntityMap insert, so there is nothing to announce.
+                    // The matching destroy below is still announced and lands on a view that never held the id, where TryRemove reports no change.
+                    if (_pendingDestroys != null && _pendingDestroys.Contains(entry.Id))
+                    {
+                        continue;
+                    }
+                    PublishMembershipEntry(entry.Id, isCreation: true);
+                }
+            }
+
+            if (haveDestroys)
+            {
+                foreach (var entityId in _pendingDestroys)
+                {
+                    PublishMembershipEntry(entityId, isCreation: false);
+                }
+            }
+
+            if (_membershipTouched == null || _membershipTouched.Count == 0)
+            {
+                return;
+            }
+
+            // MEMB-01's observation point: every entry for this commit is appended, no epoch has moved. One null check per commit in production.
+            QueryPathProbe.MembershipPrePublishBumpHook?.Invoke();
+
+            for (var i = 0; i < _membershipTouched.Count; i++)
+            {
+                _membershipTouched[i].Bump();
+            }
+        }
+        finally
+        {
+            System.Diagnostics.Debug.Assert(pinAtEntry == 0 || (_epochManager?.CurrentThreadPinnedEpoch ?? 0) == pinAtEntry,
+                "MEMB-04: the publishing thread's pinned epoch moved during the publish pass. Every retired view buffer is freed once no thread is "
+                + "pinned below its stamp, so a pass that raises its own floor mid-flight can have a buffer it is still writing through reclaimed "
+                + "underneath it. Whatever called RefreshScope from inside this pass must not.");
+
+            // Still a finally, and the try still opens BEFORE the publish loops — not for a latch any more, but because these per-commit lists must
+            // not survive a throw into the next transaction (instances are pooled), and MEMB-01's all-or-nothing snapshot depends on them.
+            _membershipTouched?.Clear();
+            _membershipViewSnapshots?.Clear();
+        }
+    }
+
+    /// <summary>Appends one membership entry to every subscribed view of <paramref name="entityId"/>'s archetype, and records the archetype as needing an epoch bump.</summary>
+    private void PublishMembershipEntry(EntityId entityId, bool isCreation)
+    {
+        // Unguarded indexing would be a throw on the commit path for a routing id with no state; a membership notification is never worth that.
+        var routing = entityId.ArchetypeId;
+        var states = _dbe._stateByRouting;
+        var engineState = (uint)routing < (uint)states.Length ? states[routing] : null;
+        var registry = engineState?.MembershipViews;
+
+        // The whole cost of this feature for a database that does not use it: one array index and one branch per structurally-changed entity.
+        // Checked before anything is allocated or recorded, because the overwhelmingly common case is that nobody is listening.
+        if (registry == null || registry.IsEmpty)
+        {
+            return;
+        }
+
+        // Linear scan, not a set: a transaction touches one archetype in the overwhelming majority of cases and a handful at worst, so the
+        // scan beats a hash lookup and allocates nothing beyond the list itself. The snapshot taken on first touch is what makes this commit
+        // all-or-nothing for each view (see the remark in PublishMembershipDeltas).
+        _membershipTouched ??= [];
+        _membershipViewSnapshots ??= [];
+        var slot = -1;
+        for (var i = 0; i < _membershipTouched.Count; i++)
+        {
+            if (ReferenceEquals(_membershipTouched[i], registry))
+            {
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0)
+        {
+            // Shared latch for the whole publish pass, taken once per archetype per commit and released in PublishMembershipDeltas. It excludes
+            // view DISPOSAL, which would otherwise free the pinned ring buffer under the appends below.
+            //
+            // A timeout is not a commit failure, and it must skip the ARCHETYPE for the rest of this commit — not just this entity. Returning
+            // without recording the refusal left the next entity of the same archetype to retry: entity 1 refused, entity 2 admitted, and the
+            // archetype then reaching the bump loop. Every subscriber would be told a change happened while holding only half of it, drain what
+            // was there, record the epoch as consumed, and never see entity 1 again. Silent and permanent — MEMB-01's on_violation, arrived at
+            // through the recovery path of a different rule.
+            slot = _membershipTouched.Count;
+            _membershipTouched.Add(registry);
+            _membershipViewSnapshots.Add(registry.ViewsSnapshot());
+        }
+
+        var views = _membershipViewSnapshots[slot];
+
+        // BeforeKey carries the entity's cluster location for stage 2's per-cluster match bits; stage 1 leaves it zero and never reads it.
+        // Populating it means threading the location out of FinalizeSpawns' cluster branch, which is only worth doing when stage 2 needs it.
+        byte flags = isCreation ? (byte)0x40 : (byte)0x80;
+
+        // Hoisted: a [ThreadStatic] read is a TLS-base helper call, not a plain load, and this loop runs per view per entity on a path whose whole
+        // design argument is that ~15.6 ns per append cannot afford a synchronised acquire. One read per entity instead of one per view.
+        var hook = QueryPathProbe.PrePublishAppendHook;
+        for (var v = 0; v < views.Length; v++)
+        {
+            var reg = views[v];
+            if (reg.View.IsDisposed)
+            {
+                continue;
+            }
+            hook?.Invoke();
+            reg.DeltaBuffer.TryAppend(entityId, default, default, TSN, flags);
+        }
     }
 
     /// <summary>
@@ -1517,6 +1713,9 @@ public unsafe partial class Transaction
                 // Notify views of creation (isCreation flag so incremental views detect the new entity)
                 var spawnTable = ctx.EngineState.SlotToComponentTable[ixSlot.Slot];
                 var views = spawnTable.ViewRegistry.GetViewsForField(fi);
+                // Hoisted out of the per-view loop: a [ThreadStatic] read is a TLS-base helper call, not a plain load, and this loop is the spawn
+                // hot path — leaving it inside measured a 46% regression on the 15.6 ns/append figure this design's whole argument rests on.
+                var spawnHook = QueryPathProbe.PrePublishAppendHook;
                 for (int v = 0; v < views.Length; v++)
                 {
                     var reg = views[v];
@@ -1537,6 +1736,7 @@ public unsafe partial class Transaction
 
                     var newKey = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
                     byte flags = (byte)((fi & 0x3F) | 0x40); // isCreation
+                    spawnHook?.Invoke();
                     reg.DeltaBuffer.TryAppend(entityId, default, newKey, TSN, flags, reg.ComponentTag);
                 }
             }
@@ -1620,6 +1820,7 @@ public unsafe partial class Transaction
                 if (views.Length > 0 && field.FieldSize <= sizeof(long))
                 {
                     var key = KeyBytes8.FromPointer(fieldPtr, field.FieldSize);
+                    var destroyHook = QueryPathProbe.PrePublishAppendHook;
                     for (int v = 0; v < views.Length; v++)
                     {
                         var reg = views[v];
@@ -1629,6 +1830,7 @@ public unsafe partial class Transaction
                         }
 
                         byte flags = (byte)((fi & 0x3F) | 0x80); // isDeletion
+                        destroyHook?.Invoke();
                         reg.DeltaBuffer.TryAppend(entityId, key, default, TSN, flags, reg.ComponentTag);
                     }
                 }
@@ -3119,6 +3321,7 @@ public unsafe partial class Transaction
 
                     // isDeletion (0x80) for disable, isCreation (0x40) for enable
                     byte flags = wasEnabled ? (byte)((fi & 0x3F) | 0x80) : (byte)((fi & 0x3F) | 0x40);
+                    QueryPathProbe.PrePublishAppendHook?.Invoke();
                     reg.DeltaBuffer.TryAppend(entityId, default, default, TSN, flags, reg.ComponentTag);
                 }
             }

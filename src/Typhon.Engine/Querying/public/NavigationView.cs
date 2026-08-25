@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using Typhon.Engine.internals;
 
 namespace Typhon.Engine;
 
@@ -110,6 +111,14 @@ public unsafe class NavigationView<TSource, TTarget> : ViewBase where TSource : 
             return true;
         }
     }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// A NavigationView publishes into BOTH its source and target registries, so it is exposed to the same use-after-free as every other view
+    /// (#864). Without this override <c>ViewBase.BufferReclaimer</c> returns null, <c>Retire</c> takes its no-reclaimer branch and frees the block
+    /// inline — which after the removal of <c>Thread.SpinWait(100)</c> would be strictly worse than the behaviour it replaced.
+    /// </remarks>
+    private protected override ViewBufferReclaimer BufferReclaimer => _sourceTable?.DBE?.ViewBufferReclaimer;
 
     /// <inheritdoc/>
     protected override void DeregisterFromRegistries()

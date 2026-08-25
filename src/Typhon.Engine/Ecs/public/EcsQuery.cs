@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 using System.Threading;
 using JetBrains.Annotations;
+using Typhon.Engine.internals;
 using Typhon.Profiler;
 using Typhon.Schema.Definition;
 
@@ -716,23 +717,91 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         return ToPullView(bufferCapacity, callerFile, callerLine, callerMethod);
     }
 
+    /// <summary>
+    /// True when this query's result IS the whole live membership of its archetype set, so an unfiltered view over it can be maintained from
+    /// the per-archetype membership channel instead of a re-query (#790).
+    /// </summary>
+    /// <remarks>
+    /// Deliberately narrower than "took the pull path". A <c>.Where(lambda)</c> predicate is an opaque delegate over component values and a
+    /// spatial predicate depends on position — both change membership on ordinary component writes that emit no spawn and no destroy, so the
+    /// channel would report a fraction of their real changes and the view would be quietly wrong. They keep the honest re-query.
+    /// The archetype mask itself is a static property of each archetype, so narrowing it with <c>.With</c>/<c>.Without</c> is still membership.
+    /// </remarks>
+    private readonly bool IsMembershipQuery => !HasFieldPredicates && _whereFilter == null && _spatialQueryType == SpatialQueryType.None && !HasT2;
+
+    /// <summary>
+    /// The membership channels of every archetype this query's mask selects. A root-archetype query spans its whole subtree, so membership is
+    /// the union of their live sets and the view must subscribe to each.
+    /// </summary>
+    private ArchetypeMembershipRegistry[] CollectMembershipRegistries()
+    {
+        var dbe = _tx.DBE;
+        var maxId = MaskMaxId;
+        var found = new List<ArchetypeMembershipRegistry>(4);
+        for (var archBit = 0; archBit <= maxId; archBit++)
+        {
+            if (!MaskTest((ushort)archBit))
+            {
+                continue;
+            }
+
+            var meta = ArchetypeRegistry.GetMetadata((ushort)archBit);
+            if (meta == null)
+            {
+                continue;
+            }
+
+            var es = dbe._archetypeStates[meta.ArchetypeId];
+            if (es != null)
+            {
+                found.Add(es.MembershipViews);
+            }
+        }
+        return found.ToArray();
+    }
+
     private EcsView<TArchetype> ToPullView(int bufferCapacity, string callerFile, int callerLine, string callerMethod)
     {
-        var initialSet = Execute();
         var meta = ArchetypeRegistry.GetMetadata<TArchetype>();
         var engineState = _tx.DBE._archetypeStates[meta.ArchetypeId];
         var firstTable = engineState.SlotToComponentTable[0];
 
         var view = new EcsView<TArchetype>(this, firstTable.DBE.MemoryAllocator, firstTable, bufferCapacity, _tx.TSN, callerFile, callerLine, callerMethod);
 
-        // Pre-size the entity-id set to the exact final count: initialSet is a HashSet (all keys distinct) and the View's map is fresh, so every key is a
-        // genuine add. This collapses the ~log2(count/64) incremental resizes of the populate loop into a single right-sized POH allocation.
-        view.EntityIdsInternal.EnsureCapacity(initialSet.Count);
-
-        // Populate initial entity set
-        foreach (var id in initialSet)
+        // Subscribe BEFORE the initial scan, for the same reason ToIncrementalView registers before its population: a commit landing between
+        // the two would otherwise reach neither the scan nor the buffer, and the entity would be missing until something unrelated forced a
+        // full refresh. The reverse overlap is harmless — an entity in both the scan and the buffer re-adds idempotently and yields no delta.
+        // Everything from the subscription onward can throw — Execute runs a plan, and on two of the three pull shapes it runs USER code (the
+        // .Where delegate, the spatial predicates). A throw after subscribing would leave a view nobody holds, so nobody can Dispose it, so
+        // nothing ever deregisters it: a permanently-subscribed orphan whose pinned ring buffer every future commit on those archetypes appends
+        // into. Before the subscription moved above Execute() the same throw simply propagated having allocated nothing.
+        try
         {
-            view.AddEntityDirect((long)id.RawValue);
+            if (IsMembershipQuery)
+            {
+                var registries = CollectMembershipRegistries();
+                if (registries.Length > 0)
+                {
+                    view.SubscribeToMembership(registries);
+                }
+            }
+
+            var initialSet = Execute();
+
+            // Pre-size the entity-id set to the exact final count: initialSet is a HashSet (all keys distinct) and the View's map is fresh, so every key is a
+            // genuine add. This collapses the ~log2(count/64) incremental resizes of the populate loop into a single right-sized POH allocation.
+            view.EntityIdsInternal.EnsureCapacity(initialSet.Count);
+
+            // Populate initial entity set
+            foreach (var id in initialSet)
+            {
+                view.AddEntityDirect((long)id.RawValue);
+            }
+        }
+        catch
+        {
+            view.Dispose();
+            throw;
         }
 
         return view;

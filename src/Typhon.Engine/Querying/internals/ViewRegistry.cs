@@ -42,15 +42,22 @@ internal class ViewRegistry
 
     public int FieldCount => _viewsByField.Length;
 
+    /// <remarks>
+    /// <b>Acquire, not a plain load.</b> The publisher reads a registration's <c>DeltaBuffer</c> through this span with no lock; the registering
+    /// thread release-stores the new array. Without the matching acquire the loads of the registration's fields have nothing to pair with, and on
+    /// arm64 nothing stops them floating above the array load. <c>ArchetypeMembershipRegistry.Views</c> has carried this reasoning since #790; this
+    /// channel is older and never got it. Free on x64, where acquire folds to a plain <c>mov</c>.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ViewRegistration> GetViewsForField(int fieldIndex)
     {
+        // The outer array is readonly and never replaced — only its ELEMENTS are swapped, so only the element load needs the acquire.
         var views = _viewsByField;
         if ((uint)fieldIndex >= (uint)views.Length)
         {
             return ReadOnlySpan<ViewRegistration>.Empty;
         }
-        return views[fieldIndex];
+        return Volatile.Read(ref views[fieldIndex]);
     }
 
     public void RegisterView(IView view, ViewDeltaRingBuffer deltaBuffer)
@@ -96,7 +103,8 @@ internal class ViewRegistry
                 var newArray = new ViewRegistration[existing.Length + 1];
                 Array.Copy(existing, newArray, existing.Length);
                 newArray[existing.Length] = new ViewRegistration(view, deltaBuffer, componentTag);
-                _viewsByField[fieldIndex] = newArray;
+                // Release: every field of the new registration must be visible before the array reference that names it.
+                Volatile.Write(ref _viewsByField[fieldIndex], newArray);
             }
             _viewCount++;
         }
@@ -133,7 +141,7 @@ internal class ViewRegistry
                 removedAny = true;
                 if (removeCount == existing.Length)
                 {
-                    _viewsByField[f] = [];
+                    Volatile.Write(ref _viewsByField[f], []);
                 }
                 else
                 {
@@ -146,7 +154,7 @@ internal class ViewRegistry
                             newArray[k++] = existing[j];
                         }
                     }
-                    _viewsByField[f] = newArray;
+                    Volatile.Write(ref _viewsByField[f], newArray);
                 }
             }
             if (removedAny)

@@ -85,9 +85,71 @@ internal static class QueryPathProbe
     [ThreadStatic]
     internal static int MapProbeCounts;
 
+    /// <summary>
+    /// Forces a membership-eligible view to refresh by re-querying, for the CURRENT THREAD. False in production; set by tests and profiles only.
+    /// </summary>
+    /// <remarks>
+    /// Same argument as <see cref="Forced"/> and <see cref="ForcedCount"/>. Two uses, and both need it to be a real override rather than a hope: a
+    /// differential test asserts the channel and the re-query produce the SAME membership over a randomised workload, which requires running one view both
+    /// ways; and the A/B profile behind #790's numbers needs the before-and-after of one view rather than a comparison against a differently-shaped query
+    /// that carries costs of its own. Forcing the slow path is always safe — it is a full recomputation, correct for every view shape.
+    /// </remarks>
+    [ThreadStatic]
+    internal static bool ForceViewRequery;
+
+    /// <summary>
+    /// Invoked on the commit thread at the instant every membership entry for this commit has been appended and no structural epoch has been bumped yet.
+    /// Null in production; set by tests only.
+    /// </summary>
+    /// <remarks>
+    /// MEMB-01 is a publication-ORDER rule, and its failure needs a reader positioned between the bump and the appends. No sequential test can be there, and
+    /// racing for the window does not work — the same argument <c>ActiveClusterListPublicationTests</c> makes about the active-cluster pair, where a 40 000-add
+    /// spin landed inside a two-instruction window zero times in three runs. So the interleaving is CONSTRUCTED: a verifier hooks this point and asserts the
+    /// state the rule promises — entries already in the buffer, epoch not yet moved. Reversing the two makes that assertion fail deterministically, which is
+    /// what a rule marked <c>[fatal][silent]</c> needs from its verifier and what a differential over sequential commits cannot give it.
+    /// </remarks>
+    [ThreadStatic]
+    internal static Action MembershipPrePublishBumpHook;
+
+
+    /// <summary>
+    /// Invoked on the publishing thread between a registration's <c>IsDisposed</c> check and its <c>TryAppend</c>. Null in production; set by tests only.
+    /// </summary>
+    /// <remarks>
+    /// This is the window #864 is about, and until this hook existed <c>MEMB-04</c> was <c>verified: NOT COVERED</c> because nothing could schedule a
+    /// disposal inside it. Under the previous latch-based design a hook here was USELESS: disposing from it would upgrade shared-to-exclusive on the
+    /// publishing thread and self-deadlock, which is why that rule forbade it outright. Deferring the free removes the latch, so a verifier can dispose
+    /// the view right here, single-threaded and fully deterministic, and assert the buffer it is about to be written through is still mapped.
+    /// </remarks>
+    [ThreadStatic]
+    internal static Action PrePublishAppendHook;
+
+    /// <summary>Refreshes of a membership view short-circuited by the structural-epoch gate on this thread since the last <see cref="Reset"/>.</summary>
+    /// <remarks>
+    /// The gate is the whole point of the membership channel at realistic view counts — most archetypes are untouched on most ticks — and "it was fast" is not
+    /// an assertion a test can make durably. Counting the branch makes "nothing was scanned" checkable instead of hoped for.
+    /// </remarks>
+    [ThreadStatic]
+    internal static int MembershipGateHits;
+
+    /// <summary>Refreshes of a membership view that drained the channel on this thread since the last <see cref="Reset"/>.</summary>
+    [ThreadStatic]
+    internal static int MembershipDrains;
+
+    /// <summary>Refreshes of any view that re-executed the whole query on this thread since the last <see cref="Reset"/> — the pull path, and the membership
+    /// path's overflow fallback.</summary>
+    [ThreadStatic]
+    internal static int ViewRequeries;
+
     /// <summary>Clear the counters and return both path choices to the planner.</summary>
     internal static void Reset()
     {
+        ForceViewRequery = false;
+        MembershipPrePublishBumpHook = null;
+        PrePublishAppendHook = null;
+        MembershipGateHits = 0;
+        MembershipDrains = 0;
+        ViewRequeries = 0;
         Forced = ClusterScanPath.Planner;
         SelectiveScans = 0;
         FullScans = 0;
