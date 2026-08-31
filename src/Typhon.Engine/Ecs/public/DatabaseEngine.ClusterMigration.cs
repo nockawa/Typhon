@@ -218,8 +218,10 @@ public partial class DatabaseEngine
         var detectScanSpan = TyphonEvent.BeginSpatialClusterMigrationDetectScan(archetypeId, scanSlotCount);
         try
         {
-            // Pre-size pending-migration queue.
-            var expectedCapacity = Math.Max(16, clusterState.LastTickMigrationCount + (clusterState.LastTickMigrationCount >> 2));
+            // Pre-size pending-migration queue from LAST tick's count. Not LastTickMigrationCount: PrepareArchetypeFence zeroes that earlier in this same
+            // fence, so reading it here always yielded Max(16, 0) and the queue regrew from 16 every migration-heavy tick (#872).
+            var prevMigrations = clusterState.PreviousTickMigrationCount;
+            var expectedCapacity = Math.Max(16, prevMigrations + (prevMigrations >> 2));
             if (clusterState.PendingMigrations == null || clusterState.PendingMigrations.Length < expectedCapacity)
             {
                 clusterState.PendingMigrations = new MigrationRequest[expectedCapacity];
@@ -281,9 +283,14 @@ public partial class DatabaseEngine
             // goes through WriteSpatial, so step (a) is exhaustive.
             if (clusterState.SpatialBarrierOnly)
             {
-                clusterState.LastTickHysteresisAbsorbedCount = hysteresisAbsorbedCount;
+                // This branch contributes NOTHING to the absorbed count, and must not pretend otherwise. The local's only ++ is in step (b) below, which this
+                // branch returns before reaching, so it is provably zero here — writing it to the field or the span would be arithmetic that reads as if it
+                // did something. On the barrier-only path the count is produced at write time by ClusterRef.MaybeFlagMigration and already drained into
+                // LastTickHysteresisAbsorbedCount by PrepareArchetypeFence, so THAT is the truthful value for the span to report (#872).
+                Debug.Assert(hysteresisAbsorbedCount == 0,
+                    "step (a) has started counting absorbed crossings — fold it into the drain in PrepareArchetypeFence instead of dropping it here");
                 detectScanSpan.MigrationsQueued = migrationsQueuedCount;
-                detectScanSpan.HysteresisAbsorbed = hysteresisAbsorbedCount;
+                detectScanSpan.HysteresisAbsorbed = clusterState.LastTickHysteresisAbsorbedCount;
                 detectScanSpan.ClustersTouched = clustersTouched;
                 return;
             }
@@ -374,9 +381,14 @@ public partial class DatabaseEngine
                 }
             }
 
-            clusterState.LastTickHysteresisAbsorbedCount = hysteresisAbsorbedCount;
+            // This is the ONLY producer of the absorbed count on the non-barrier path, and the mirror image of the branch above: here the scan counts and the
+            // live write-time accumulator is the one that stays zero. `+=` rather than `=` so the two compose instead of one clobbering the other — the fence
+            // has already drained the live value into this field by the time we get here, and a `=` would silently discard it if an archetype ever produced
+            // both. Exactly one of the two is non-zero for a given archetype today; the Debug.Assert above is what says so out loud.
+            clusterState.LastTickHysteresisAbsorbedCount += hysteresisAbsorbedCount;
+            clusterState.TotalHysteresisAbsorbedCount += hysteresisAbsorbedCount;
             detectScanSpan.MigrationsQueued = migrationsQueuedCount;
-            detectScanSpan.HysteresisAbsorbed = hysteresisAbsorbedCount;
+            detectScanSpan.HysteresisAbsorbed = clusterState.LastTickHysteresisAbsorbedCount;
             detectScanSpan.ClustersTouched = clustersTouched;
         }
         finally
@@ -892,6 +904,13 @@ public partial class DatabaseEngine
         var durationMs = (endTimestamp - startTimestamp) * 1000.0 / Stopwatch.Frequency;
         // Accumulate per-slice counters atomically — multiple workers may slice the same archetype's PendingMigrations.
         Interlocked.Add(ref clusterState.LastTickMigrationCount, count);
+        // Cumulative twin of the above (#872 step 1). One Interlocked per SLICE, not per migration — the per-tick counter is reset every fence, so an
+        // asynchronous scrape of it samples one arbitrary tick and cannot yield a rate.
+        //
+        // This may well touch a SECOND contended cache line rather than sharing the one above: ArchetypeClusterState is a plain sealed class, so the CLR uses
+        // LayoutKind.Auto and groups fields by alignment — an 8-byte long and a 4-byte int declared adjacently are not laid out adjacently, and declaration
+        // order buys nothing. If the Migrate phase ever shows up as contended here, MD-03's remedy is an explicit padded struct, not a field reorder.
+        Interlocked.Add(ref clusterState.TotalMigrationCount, count);
         // Time accumulation as double via CAS-loop (no Interlocked.Add(double) in .NET).
         SpinWait sw = default;
         while (true)

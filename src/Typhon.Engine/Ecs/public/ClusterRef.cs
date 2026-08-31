@@ -494,6 +494,25 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         var exited = centerX < cellMinX - hyster || centerX > cellMaxX + hyster || centerY < cellMinY - hyster || centerY > cellMaxY + hyster;
         if (!exited)
         {
+            // Count the crossings the margin swallowed (#872). Without this the SpatialBarrierOnly path reports zero absorbed crossings forever:
+            // DetectClusterMigrations only increments inside its legacy dirty-bits scan, and the barrier-only branch returns before reaching it — so the
+            // ratio that tunes MigrationHysteresisRatio was structurally 0/N on the path both demos use. The decision is made here, so the count belongs here.
+            //
+            // The extra test is the SAME comparison without the margin: "left the cell" minus "left the cell plus margin" is exactly the absorbed set.
+            //
+            // Ungated on purpose, matching MigrationHint below and EntityMap's split counter: a static readonly profiler gate resolves to false by default, so
+            // gating it would leave the number a structural zero in exactly the tool built to read it — trading a defect nobody can see for four float
+            // compares in a method that already dereferences the grid, loads two arrays and calls CellKeyToCoords.
+            //
+            // Interlocked, unlike MigrationHint's plain ++ below: this value is PUBLISHED as an exact count through
+            // SpatialMigrationTelemetry, where MigrationHint is documented as an order-of-magnitude work estimate. The atomic is affordable precisely because
+            // it is rare — it fires only for a write that lands inside the margin band, not on every spatial write.
+            var rawExited = centerX < cellMinX || centerX > cellMaxX || centerY < cellMinY || centerY > cellMaxY;
+            if (rawExited)
+            {
+                Interlocked.Increment(ref _state.HysteresisAbsorbedLive);
+            }
+
             return false;
         }
 

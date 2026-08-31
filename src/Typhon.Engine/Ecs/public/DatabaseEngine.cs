@@ -3763,6 +3763,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // build. Each figure is summed across all archetypes; the WAL-recovery cost is logged separately at its own
         // call site (it runs in the engine ctor, before this method).
         var toMs = 1000.0 / Stopwatch.Frequency;
+
+        // #872 step 1: the two spatial rebuild costs were locals consumed only by the log line below, so nothing could read them back from a running engine —
+        // and they are precisely what decides whether the transient cell layer stays affordable at target entity counts (Q1 of the VDB partitioning design) or
+        // has to be persisted. Assign rather than accumulate: the names say "open-time cost", and a repeat InitializeArchetypes reallocates _archetypeStates
+        // anyway, so every per-archetype counter restarts with it — a lifetime sum here would be the one figure that did not.
+        _openCellStateRebuildMs = cellStateTicks * toMs;
+        _openClusterAabbRebuildMs = clusterAabbTicks * toMs;
+
         LogInitArchetypesTiming(
             (Stopwatch.GetTimestamp() - initStart) * toMs,
             versionedHeadTicks * toMs,

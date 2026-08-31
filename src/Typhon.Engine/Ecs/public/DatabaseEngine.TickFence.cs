@@ -575,8 +575,31 @@ public partial class DatabaseEngine
         clusterState.FenceEntryCount = 0;
         clusterState.FenceDirtyClusterCount = 0;
         clusterState.FenceProcessBitmapClusterCount = -1; // recomputed in Prep when in BarrierOnly mode
+        // Snapshot before zeroing: DetectClusterMigrations pre-sizes PendingMigrations from last tick's migration count, and reading the field itself would read
+        // the zero written on the line below — same fence, a few hundred lines earlier — so the estimate was always Max(16, 0) and the queue regrew from 16 on
+        // every migration-heavy tick (#872).
+        clusterState.PreviousTickMigrationCount = clusterState.LastTickMigrationCount;
         clusterState.LastTickMigrationCount = 0;
         clusterState.LastTickMigrationExecuteMs = 0d;
+
+        // LastTickHysteresisAbsorbedCount was NOT reset here until #872, and DetectClusterMigrations only ever ASSIGNED it (=, not +=). A tick in which
+        // detection did not run therefore reported the PREVIOUS tick's absorbed count as if it were this tick's — a stale reading indistinguishable from a live
+        // one, in the one counter that tunes MigrationHysteresisRatio. Detection is reached on a quiet tick only through the clean-bitmap branch below, which is
+        // gated on ActiveClusterCount > 0, so an archetype that empties out stopped updating it entirely.
+        //
+        // Drain rather than plain-zero: on the SpatialBarrierOnly path the count is accumulated live by ClusterRef.MaybeFlagMigration as writes happen, because
+        // that path never reaches the scan that would otherwise count it. Both producers now compose — this drains the live one, and DetectClusterMigrations
+        // adds its scan's tally with += rather than clobbering. Exactly one of the two is ever non-zero for a given archetype.
+        var absorbedLive = clusterState.HysteresisAbsorbedLive;
+        clusterState.HysteresisAbsorbedLive = 0;
+        clusterState.LastTickHysteresisAbsorbedCount = absorbedLive;
+        clusterState.TotalHysteresisAbsorbedCount += absorbedLive;
+
+        // No producer yet (steps 10/11); reset from the start so the future producer inherits a correct reset rather than having to remember to add one. Until
+        // then their zero is ambiguous between "not built" and "nothing happened this tick" — see the field docs; the surface does not separate the two.
+        clusterState.LastTickClustersScanned = 0;
+        clusterState.LastTickDriftersDetected = 0;
+        clusterState.LastTickReclusterBudgetUsedMs = 0d;
         clusterState._drainedCount = 0; // deferred-drain list reset (review C-1 fix)
 
         // Pure-Transient archetypes have no PersistentStore segment — nothing to persist to WAL, no migrations.

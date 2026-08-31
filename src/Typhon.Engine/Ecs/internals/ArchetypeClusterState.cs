@@ -455,6 +455,80 @@ internal sealed unsafe class ArchetypeClusterState
     public double LastTickMigrationExecuteMs;
 
     /// <summary>
+    /// Live accumulator for hysteresis-absorbed crossings on the <see cref="SpatialBarrierOnly"/> path, bumped by <c>ClusterRef.MaybeFlagMigration</c> as writes
+    /// happen and drained into <see cref="LastTickHysteresisAbsorbedCount"/> at the top of the next fence.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It exists because the barrier-only path could not count absorption at all. <c>DatabaseEngine.DetectClusterMigrations</c> only increments inside step (b),
+    /// its legacy dirty-bits scan, and the barrier-only branch returns before reaching it — so the counter that tunes
+    /// <see cref="SpatialGridConfig.MigrationHysteresisRatio"/> read a structural zero on precisely the path both demos use. Counting has to happen where the
+    /// decision is made, which is at write time.
+    /// </para>
+    /// <para>
+    /// <b>Non-atomic on purpose</b>, matching <see cref="MigrationHint"/>: many workers write one archetype's spatial field per tick, and a lost increment under
+    /// contention costs a fraction of a ratio that is read for order-of-magnitude tuning. An <c>Interlocked</c> here would put an uncontended-but-shared atomic
+    /// on the hottest write path in the engine to buy precision nothing consumes.
+    /// </para>
+    /// </remarks>
+    public int HysteresisAbsorbedLive;
+
+    /// <summary>
+    /// The value <see cref="LastTickMigrationCount"/> held for the PREVIOUS tick, snapshotted immediately before the fence zeroes it.
+    /// </summary>
+    /// <remarks>
+    /// Sizes the <c>PendingMigrations</c> queue in <c>DatabaseEngine.DetectClusterMigrations</c>. That pre-sizing used to read
+    /// <see cref="LastTickMigrationCount"/> directly, but <c>PrepareArchetypeFence</c> zeroes that field earlier in the SAME fence, so the estimate was always
+    /// <c>Max(16, 0)</c> and the queue regrew from 16 on every migration-heavy tick — the amortisation the code was written to get never happened.
+    /// </remarks>
+    public int PreviousTickMigrationCount;
+
+    /// <summary>
+    /// Telemetry counter: clusters examined by the intra-cell drifter scan in the most recently completed tick.
+    /// <b>No producer yet</b> — reads zero until step 10 (detect-and-relocate) of the VDB partitioning design lands.
+    /// <para>Declared now so the telemetry surface is complete before the mechanism exists, and reset at the fence from day one so the future producer inherits
+    /// a correct reset instead of having to remember to add one. Note that zero is therefore genuinely ambiguous between "not built" and "nothing happened this
+    /// tick" — the surface does not distinguish them, and a consumer that needs to must look at whether the feature exists, not at the value. See
+    /// <c>claude/design/Spatial/vdb-cell-grid-and-migration.md</c> §8.3.</para>
+    /// </summary>
+    public int LastTickClustersScanned;
+
+    /// <summary>
+    /// Telemetry counter: entities the intra-cell scan found outside their cluster's target region in the most recently completed tick.
+    /// <b>No producer yet</b> — reads zero until step 10 of the VDB partitioning design. See <see cref="LastTickClustersScanned"/>.
+    /// </summary>
+    public int LastTickDriftersDetected;
+
+    /// <summary>
+    /// Telemetry counter: milliseconds of the per-tick re-clustering budget consumed in the most recently completed tick.
+    /// <b>No producer yet</b> — reads zero until step 11 (throttle, priority queue, safety valve) of the VDB partitioning design.
+    /// See <see cref="LastTickClustersScanned"/>.
+    /// </summary>
+    public double LastTickReclusterBudgetUsedMs;
+
+    /// <summary>
+    /// Telemetry counter: migrations executed since this cluster state was created. Unlike <see cref="LastTickMigrationCount"/>, which is reset at the top of
+    /// every fence, this one only grows — a per-tick gauge sampled asynchronously (an OTel consumer polls every few seconds) reports one arbitrary tick out of
+    /// hundreds and cannot answer "what is the migration RATE", which is what sizes the throttle budget.
+    /// <para><b>Not engine lifetime.</b> <c>DatabaseEngine.InitializeArchetypes</c> reallocates <c>_archetypeStates</c>, so a repeat call discards every
+    /// cluster state and this counter restarts at zero. That call is rare and explicitly tolerated; the alternative — hoisting the counter to survive it — would
+    /// attribute one database's migrations to the next.</para>
+    /// </summary>
+    public long TotalMigrationCount;
+
+    /// <summary>
+    /// Telemetry counter: boundary crossings absorbed by the hysteresis margin since this cluster state was created. Cumulative counterpart to
+    /// <see cref="LastTickHysteresisAbsorbedCount"/>; see <see cref="TotalMigrationCount"/> for why the cumulative form is the one a scrape can use, and for
+    /// the repeat-<c>InitializeArchetypes</c> caveat that applies here too.
+    /// <para><b>Reads zero on the barrier-only path</b>, which is the path both demos use. Its source
+    /// <c>DatabaseEngine.DetectClusterMigrations</c> only ever increments inside step (b), the legacy dirty-bits scan; the
+    /// <see cref="SpatialBarrierOnly"/> branch returns before reaching it, and <c>ClusterRef.WriteSpatial</c> — the barrier-only writer — returns without
+    /// counting when a move stays inside the margin. So a ratio against <see cref="TotalMigrationCount"/> tunes
+    /// <see cref="SpatialGridConfig.MigrationHysteresisRatio"/> ONLY for archetypes that have not opted into barrier-only. See #872.</para>
+    /// </summary>
+    public long TotalHysteresisAbsorbedCount;
+
+    /// <summary>
     /// Coarse work-estimate counter bumped on every cell-crossing flagged by <c>WriteSpatial</c>. Read and reset (snapshot-then-zero) by the fence work-planner
     /// to size the per-archetype migration cost. Non-atomic on purpose: order-of-magnitude is enough for chunk bucketing; lost increments under contention are
     /// tolerable.
