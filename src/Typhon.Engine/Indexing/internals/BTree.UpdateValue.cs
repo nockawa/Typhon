@@ -35,6 +35,15 @@ internal abstract partial class BTree<TKey, TStore>
     /// </remarks>
     public bool TryUpdateValue(TKey key, int newValue, ref ChunkAccessor<TStore> accessor)
     {
+        // On an AllowMultiple tree the leaf slot holds a bufferId, not a value (see CreateInsertValue in BTree.Insert.cs), so SetValueOnly below would
+        // overwrite it with a ClusterLocation: the buffer is orphaned and every later read of that key dereferences an arbitrary chunk id as a buffer root.
+        // That is silent index corruption from a caller using the wrong overload, which is why this throws rather than returning false — `false` is the
+        // channel for "the key is absent", and EnumerateRange sets the precedent for refusing the wrong index kind outright (BTree.cs).
+        if (AllowMultiple)
+        {
+            ThrowHelper.ThrowUpdateValueOnAllowMultiple();
+        }
+
         // try/finally, not a bare rent: the warm accessor is pooled per segment and a path that leaves without returning it makes the NEXT rent a double-rent.
         // Debug.Fail catches that, which is how this was found — but only on the second call, so a single-test run would have looked clean.
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
@@ -43,8 +52,8 @@ internal abstract partial class BTree<TKey, TStore>
             for (var attempt = 0; attempt < MaxOptimisticRestarts; attempt++)
             {
                 // followRightLink stays at its default `true`: this looks up an EXISTING key, which is the case the B-link right-walk exists for. Move passes
-                // false for its second descent because that one picks an INSERTION target for a key that exists nowhere yet, so the walk would run past the leaf
-                // whose separator range owns it (see BTree.Move.cs).
+                // false for its second descent because that one picks an INSERTION target for a key that exists nowhere yet, so the walk would run
+                // past the leaf whose separator range owns it (see BTree.Move.cs).
                 var (leafId, version, keyIndex) = OptimisticDescendToLeaf(key, ref opAccessor);
                 if (leafId == 0)
                 {
@@ -105,15 +114,65 @@ internal abstract partial class BTree<TKey, TStore>
                 return true;
             }
 
-            // Bounded like every other OLC loop here. Unlike Insert there is no pessimistic fallback to take: a value update has no structural work to
-            // serialise, so exhausting the budget means sustained contention on one leaf and the honest answer is to report that rather than spin further.
-            // The caller (migration) retries on the next tick.
-            return false;
+            // The optimistic budget is 3 (MaxOptimisticRestarts), and returning `false` here would be a LIE: the caller reads false as "the key is not in
+            // the index" and a migration would then skip the update or re-Add a duplicate. Contention is a liveness condition, not a data fact, and every
+            // sibling operation keeps the two apart — TryGet falls back to TryGetPessimistic, Move to MovePessimistic, Insert and Remove to their own
+            // pessimistic loops. So does this one.
+            Interlocked.Increment(ref _pessimisticFallbacks);
+            return TryUpdateValuePessimistic(key, newValue, ref opAccessor);
         }
         finally
         {
             _segment.ReturnWarmAccessor();
         }
+    }
+
+    /// <summary>
+    /// The fallback for <see cref="TryUpdateValue"/> when the optimistic budget is exhausted: pessimistic descent, spin for the leaf's write lock, one store.
+    /// </summary>
+    /// <remarks>
+    /// Modelled on <c>RemoveValue</c>, which is written pessimistically throughout: <c>FindLeaf</c> is safe under OLC because internal nodes are stable, and
+    /// the re-descent on an obsolete latch is unbounded for the reason #716 records — a merge can detach the leaf between finding it and locking it, and each
+    /// pass sees a tree one merge closer to settled, so it terminates as long as writers make progress.
+    /// <para>
+    /// Takes the caller's already-rented warm accessor rather than renting its own; a second rent on the same segment is the double-rent
+    /// <c>Debug.Fail</c> exists to catch.
+    /// </para>
+    /// </remarks>
+    private bool TryUpdateValuePessimistic(TKey key, int newValue, ref ChunkAccessor<TStore> opAccessor)
+    {
+        NodeWrapper leaf;
+        PureSpin descentSpin = default;
+        while (true)
+        {
+            leaf = FindLeaf(key, out _, ref opAccessor);
+            if (!leaf.IsValid)
+            {
+                return false;
+            }
+
+            leaf.PreDirtyForWrite(ref opAccessor);
+            if (SpinWriteLock(leaf.GetLatch(ref opAccessor)) != WriteLockOutcome.Obsolete)
+            {
+                break;
+            }
+
+            Interlocked.Increment(ref _obsoleteRestarts);
+            descentSpin.Once();
+        }
+
+        // Re-find under the lock, and re-resolve the latch through the node id on every use: GetLatch hands out a reference into the chunk's page and the
+        // reads in between can evict that page and reuse the slot (the discipline OptimisticDescendToLeaf documents).
+        var index = leaf.Find(key, Comparer, ref opAccessor);
+        if (index < 0)
+        {
+            leaf.GetLatch(ref opAccessor).AbortWriteLock();
+            return false;
+        }
+
+        _storage.SetValueOnly(leaf, index, newValue, ref opAccessor);
+        leaf.GetLatch(ref opAccessor).WriteUnlock();
+        return true;
     }
 
     /// <summary>
@@ -143,9 +202,11 @@ internal abstract partial class BTree<TKey, TStore>
     /// </remarks>
     public bool TryUpdateValueAt(TKey key, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> accessor)
     {
+        // Symmetric with TryUpdateValue's guard, and for the same reason: a unique index has no element buffers at all, so there is nothing this could
+        // address. Returning false would report it as "the element is not there", which is a different and recoverable condition.
         if (!AllowMultiple)
         {
-            return false;
+            ThrowHelper.ThrowUpdateValueAtOnUnique();
         }
 
         ref var opAccessor = ref _segment.RentWarmAccessor(accessor.ChangeSet);
@@ -211,11 +272,24 @@ internal abstract partial class BTree<TKey, TStore>
                     }
 
                     var bufferId = leaf.GetItem(index, ref opAccessor).Value;
-                    var updated = _storage.UpdateInBuffer(bufferId, elementId, oldValue, newValue, ref sibAccessor);
+                    bool updated;
+                    try
+                    {
+                        updated = _storage.UpdateInBuffer(bufferId, elementId, oldValue, newValue, ref sibAccessor);
+                    }
+                    finally
+                    {
+                        // UpdateInBuffer CAN throw — LockBuffer times out into ThrowLockTimeout — and without this the leaf would stay write-locked for the
+                        // life of the process: ReadVersion returns 0 for every reader and TryWriteLock refuses every writer, with no restart able to clear it.
+                        // The latch is re-resolved through the node id rather than reusing the local, because the buffer reads in between can evict the leaf's
+                        // page and reuse the slot.
+                        //
+                        // WriteUnlock either way, including when the element was not found: a buffer write has already touched storage, and MoveValue's
+                        // discipline is explicit that anything which has written to a buffer is not a no-op. AbortWriteLock here would be the clever choice
+                        // and the wrong one.
+                        leaf.GetLatch(ref opAccessor).WriteUnlock();
+                    }
 
-                    // WriteUnlock either way: a buffer write has already touched storage even when the element was not found, and Move's discipline is
-                    // explicit that anything which has written to a buffer is not a no-op. AbortWriteLock here would be the clever choice and the wrong one.
-                    latch.WriteUnlock();
                     return updated;
                 }
 

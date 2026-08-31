@@ -62,6 +62,18 @@ internal static class ThrowHelper
     public static void ThrowEnumerateRangeMultipleOnUnique() => 
         throw new InvalidOperationException("EnumerateRangeMultiple/EnumerateRangeMultipleDescending cannot be used on unique indexes. Use EnumerateRange/EnumerateRangeDescending instead.");
 
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowUpdateValueOnAllowMultiple() =>
+        throw new InvalidOperationException(
+            "TryUpdateValue cannot be used on an AllowMultiple index: the leaf slot holds a bufferId there, not a value, so writing a value into it would "
+            + "orphan the buffer and leave the key pointing at an arbitrary chunk. Use TryUpdateValueAt instead.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowUpdateValueAtOnUnique() =>
+        throw new InvalidOperationException("TryUpdateValueAt cannot be used on a unique index, which has no element buffers. Use TryUpdateValue instead.");
+
     // --- Storage ---
 
     [DoesNotReturn]

@@ -48,7 +48,9 @@ public class BTreeUpdateValueTests
     private delegate void TreeAction(IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, EpochManager epochs,
         ref ChunkAccessor<PersistentStore> accessor);
 
-    /// <summary>Builds a healthy multi-leaf tree of 2 000 entries (keys 10..20000 by 10, value == key/10) and runs <paramref name="body"/> against it.</summary>
+    /// <summary>
+    /// Builds a healthy multi-leaf tree of 2 000 entries (keys 10..20000 by 10, value == key/10) and runs <paramref name="body"/> against it.
+    /// </summary>
     private unsafe void WithTree(TreeAction body)
     {
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
@@ -88,7 +90,11 @@ public class BTreeUpdateValueTests
     [CancelAfter(15_000)]
     public void TryUpdateValue_ExistingKey_UpdatesValueAndFindsIt()
     {
-        WithTree(static (IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, EpochManager epochs, ref ChunkAccessor<PersistentStore> accessor) =>
+        WithTree(static (
+            IntSingleBTree<PersistentStore> tree,
+            ChunkBasedSegment<PersistentStore> segment,
+            EpochManager epochs,
+            ref ChunkAccessor<PersistentStore> accessor) =>
         {
             Assert.That(tree.TryUpdateValue(5000, 999_999, ref accessor), Is.True, "key 5000 exists, so the update must report success");
 
@@ -115,7 +121,11 @@ public class BTreeUpdateValueTests
     [CancelAfter(15_000)]
     public void TryUpdateValue_AbsentKey_ReturnsFalseAndMutatesNothing()
     {
-        WithTree(static (IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, EpochManager epochs, ref ChunkAccessor<PersistentStore> accessor) =>
+        WithTree(static (
+            IntSingleBTree<PersistentStore> tree,
+            ChunkBasedSegment<PersistentStore> segment,
+            EpochManager epochs,
+            ref ChunkAccessor<PersistentStore> accessor) =>
         {
             // 5005 falls between two existing keys, so the descent lands on a real leaf and the miss is decided there rather than by an empty tree.
             Assert.That(tree.TryUpdateValue(5005, 123, ref accessor), Is.False, "an absent key must report failure");
@@ -141,7 +151,11 @@ public class BTreeUpdateValueTests
     [CancelAfter(15_000)]
     public unsafe void TryUpdateValue_LeavesEveryNonValueByteIdentical()
     {
-        WithTree(static (IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, EpochManager epochs, ref ChunkAccessor<PersistentStore> accessor) =>
+        WithTree(static (
+            IntSingleBTree<PersistentStore> tree,
+            ChunkBasedSegment<PersistentStore> segment,
+            EpochManager epochs,
+            ref ChunkAccessor<PersistentStore> accessor) =>
         {
             // Compare the raw chunk, not the tree's behaviour. A structural side effect that still answers every lookup correctly is precisely the one that
             // shows up later as corruption, and only a byte comparison rules it out.
@@ -207,7 +221,11 @@ public class BTreeUpdateValueTests
     [CancelAfter(15_000)]
     public void TryUpdateValue_AllocatesNothing()
     {
-        WithTree(static (IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, EpochManager epochs, ref ChunkAccessor<PersistentStore> accessor) =>
+        WithTree(static (
+            IntSingleBTree<PersistentStore> tree,
+            ChunkBasedSegment<PersistentStore> segment,
+            EpochManager epochs,
+            ref ChunkAccessor<PersistentStore> accessor) =>
         {
             for (var i = 0; i < 64; i++)
             {
@@ -239,7 +257,11 @@ public class BTreeUpdateValueTests
         //
         // Values are drawn from a set whose members are mutually distinguishable, so "torn" is detectable rather than merely improbable: a half-written int
         // would combine high and low halves that never appear together.
-        WithTree(static (IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment, EpochManager epochs, ref ChunkAccessor<PersistentStore> accessor) =>
+        WithTree(static (
+            IntSingleBTree<PersistentStore> tree,
+            ChunkBasedSegment<PersistentStore> segment,
+            EpochManager epochs,
+            ref ChunkAccessor<PersistentStore> accessor) =>
         {
             const int Key = 5000;
             const int ValueA = unchecked((int)0xAAAA_AAAA);
@@ -289,7 +311,10 @@ public class BTreeUpdateValueTests
 
             Assert.Multiple(() =>
             {
-                Assert.That(Volatile.Read(ref misses), Is.Zero, "the entry is never removed, so a reader must never fail to find it — this is the false negative Remove+Add has");
+                Assert.That(
+                    Volatile.Read(ref misses),
+                    Is.Zero,
+                    "the entry is never removed, so a reader must never fail to find it — this is the false negative Remove+Add has");
                 Assert.That(Volatile.Read(ref torn), Is.Zero, "a reader must observe one of the two written values, never a mixture of both");
             });
         });
@@ -379,5 +404,131 @@ public class BTreeUpdateValueTests
             var mismatched = tree.TryUpdateValueAt(Key, idB, 123_456, 1, ref accessor);
             Assert.That(mismatched, Is.False, "elements are addressed by value; a stale oldValue must find nothing rather than overwrite a neighbour");
         });
+    }
+
+    // ══════════════════════════════════════════════
+    // Index-kind guards — the wrong overload must refuse, not corrupt
+    // ══════════════════════════════════════════════
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void TryUpdateValue_OnAllowMultipleTree_ThrowsAndCorruptsNothing()
+    {
+        // The defect this guards was real and shipped: with no kind check, SetValueOnly overwrites the leaf slot, which on an AllowMultiple tree holds a
+        // BUFFER ID rather than a value. The buffer is orphaned and every later read of that key dereferences an arbitrary chunk as a buffer root — silent
+        // index corruption, from nothing worse than picking the wrong overload. The test asserts both halves: that it refuses, and that the key still reads
+        // back intact afterwards, which is what would have failed before the guard.
+        WithMultiTree(static (IntMultipleBTree<PersistentStore> tree, ref ChunkAccessor<PersistentStore> accessor) =>
+        {
+            const int Key = 42;
+            tree.Add(Key, 1001, ref accessor);
+            tree.Add(Key, 1002, ref accessor);
+
+            var localAccessor = accessor;
+            Assert.Throws<InvalidOperationException>(() => tree.TryUpdateValue(Key, 7777, ref localAccessor));
+
+            var seen = new System.Collections.Generic.List<int>();
+            var e = tree.EnumerateRangeMultiple(Key, Key);
+            while (e.MoveNext())
+            {
+                foreach (var v in e.CurrentValues)
+                {
+                    seen.Add(v);
+                }
+            }
+
+            seen.Sort();
+            Assert.That(seen, Is.EqualTo(new[] { 1001, 1002 }), "the refused call must leave the buffer and both its elements exactly as they were");
+        });
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void TryUpdateValueAt_OnUniqueTree_Throws()
+    {
+        // The mirror. A unique index has no element buffers at all, so `false` would report "the element is not there" — a recoverable data condition — for
+        // what is actually a caller bug.
+        WithTree(static (
+            IntSingleBTree<PersistentStore> tree,
+            ChunkBasedSegment<PersistentStore> segment,
+            EpochManager epochs,
+            ref ChunkAccessor<PersistentStore> accessor) =>
+        {
+            var localAccessor = accessor;
+            Assert.Throws<InvalidOperationException>(() => tree.TryUpdateValueAt(100, 1, 10, 20, ref localAccessor));
+        });
+    }
+
+    // ══════════════════════════════════════════════
+    // SetValueOnly across every chunk width — L16 / L64 / String64
+    // ══════════════════════════════════════════════
+
+    /// <summary>
+    /// Every width restates the same <c>Adjust(Start + index)</c> arithmetic in its own <c>SetValueOnly</c> override, and only <c>Index32</c> was covered.
+    /// An off-by-one in any one of the other three writes a neighbour's value with no test to notice — and the rotation offset is precisely the part an
+    /// ablation showed to be fragile.
+    /// </summary>
+    [Test]
+    [CancelAfter(15_000)]
+    public unsafe void TryUpdateValue_UpdatesTheRightSlot_AtEveryChunkWidth()
+    {
+        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var seg16 = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index16Chunk));
+            var seg64 = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index64Chunk));
+
+            var a16 = seg16.CreateChunkAccessor();
+            var a64 = seg64.CreateChunkAccessor();
+            try
+            {
+                var t16 = new ShortSingleBTree<PersistentStore>(seg16);
+                var t64 = new LongSingleBTree<PersistentStore>(seg64);
+
+                // Enough entries to fill several leaves, so the updated key is not the first item of its node and a rotation offset actually matters.
+                for (short i = 1; i <= 600; i++)
+                {
+                    t16.Add(i, i * 10, ref a16);
+                }
+
+                for (long i = 1; i <= 600; i++)
+                {
+                    t64.Add(i, (int)i * 10, ref a64);
+                }
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(t16.TryUpdateValue(377, 4_242, ref a16), Is.True, "L16: the key exists");
+                    Assert.That(t64.TryUpdateValue(377, 4_242, ref a64), Is.True, "L64: the key exists");
+                });
+
+                // The neighbours are the assertion. A slot-index mistake shows up as a changed neighbour, not as a failed update of the target.
+                Assert.Multiple(() =>
+                {
+                    Assert.That(t16.TryGet(377, ref a16).Value, Is.EqualTo(4_242), "L16 target");
+                    Assert.That(t16.TryGet(376, ref a16).Value, Is.EqualTo(3_760), "L16 left neighbour must be untouched");
+                    Assert.That(t16.TryGet(378, ref a16).Value, Is.EqualTo(3_780), "L16 right neighbour must be untouched");
+                    Assert.That(t64.TryGet(377, ref a64).Value, Is.EqualTo(4_242), "L64 target");
+                    Assert.That(t64.TryGet(376, ref a64).Value, Is.EqualTo(3_760), "L64 left neighbour must be untouched");
+                    Assert.That(t64.TryGet(378, ref a64).Value, Is.EqualTo(3_780), "L64 right neighbour must be untouched");
+                });
+
+                // CheckConsistency throws on a broken tree rather than returning a verdict, so calling it IS the assertion.
+                t16.CheckConsistency(ref a16);
+                t64.CheckConsistency(ref a64);
+            }
+            finally
+            {
+                a16.Dispose();
+                a64.Dispose();
+            }
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
     }
 }

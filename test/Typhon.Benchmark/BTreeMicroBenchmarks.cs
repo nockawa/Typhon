@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
 
 namespace Typhon.Benchmark;
 
@@ -165,19 +166,6 @@ public class BTreeMicroBenchmarks
 
 
     /// <summary>
-    /// Move a key to a free adjacent slot and back. Both keys live in the same leaf, which is what a spatial or positional index does on almost every update.
-    /// </summary>
-    /// <remarks>
-    /// #765 S8. There was no <c>Move</c> benchmark anywhere in this project, which is the reason #221's original "40-50%" claim could never be checked and why
-    /// the assessment had to re-derive it from source reading. Move is a compound operation with its own OLC protocol — two descents, a same-leaf fast path and
-    /// a two-leaf path with ordered locking — and none of it was measured by anything.
-    /// <para>
-    /// The pair moves 4000 to 4001 and back, so the tree returns to its starting state every two invocations and the measurement cannot drift the way
-    /// <c>ConcurrentInsert_Monotonic</c> does. <c>GlobalSetup</c> removes 4001 from the gapless pre-fill to create the vacant destination — without it, Move
-    /// would find the key occupied, return false immediately, and the benchmark would be timing a rejection.
-    /// </para>
-    /// </remarks>
-    /// <summary>
     /// The pair #872 step 4 replaces: change a value under an UNCHANGED key by removing the entry and adding it back.
     /// </summary>
     /// <remarks>
@@ -190,7 +178,13 @@ public class BTreeMicroBenchmarks
     public void RemoveAdd_SameKey()
     {
         var accessor = _segment.CreateChunkAccessor();
-        _tree.Remove(5000, out _, ref accessor);
+        // Both halves are checked. Move_SameLeaf's own remarks are about exactly this hazard — a benchmark that quietly times a REJECTION reads as a very
+        // fast implementation — and a ratio between two operations is only meaningful if both of them did the work.
+        if (!_tree.Remove(5000, out _, ref accessor))
+        {
+            ThrowBenchmarkDidNoWork(nameof(RemoveAdd_SameKey));
+        }
+
         _tree.Add(5000, (_updateToggle++ & 1) == 0 ? 50_000 : 50_001, ref accessor);
         accessor.Dispose();
     }
@@ -203,10 +197,32 @@ public class BTreeMicroBenchmarks
     public void UpdateValue_SameKey()
     {
         var accessor = _segment.CreateChunkAccessor();
-        _tree.TryUpdateValue(5000, (_updateToggle++ & 1) == 0 ? 50_000 : 50_001, ref accessor);
+        if (!_tree.TryUpdateValue(5000, (_updateToggle++ & 1) == 0 ? 50_000 : 50_001, ref accessor))
+        {
+            ThrowBenchmarkDidNoWork(nameof(UpdateValue_SameKey));
+        }
+
         accessor.Dispose();
     }
 
+    /// <summary>Kept out of line so the check above is a predictable not-taken branch rather than inlined throw setup on the measured path.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowBenchmarkDidNoWork(string benchmark) =>
+        throw new InvalidOperationException($"{benchmark} measured a rejected operation, not the operation — the tree is not in the shape it assumes.");
+
+    /// <summary>
+    /// Move a key to a free adjacent slot and back. Both keys live in the same leaf, which is what a spatial or positional index does on almost every update.
+    /// </summary>
+    /// <remarks>
+    /// #765 S8. There was no <c>Move</c> benchmark anywhere in this project, which is the reason #221's original "40-50%" claim could never be checked and why
+    /// the assessment had to re-derive it from source reading. Move is a compound operation with its own OLC protocol — two descents, a same-leaf fast path and
+    /// a two-leaf path with ordered locking — and none of it was measured by anything.
+    /// <para>
+    /// The pair moves 4000 to 4001 and back, so the tree returns to its starting state every two invocations and the measurement cannot drift the way
+    /// <c>ConcurrentInsert_Monotonic</c> does. <c>GlobalSetup</c> removes 4001 from the gapless pre-fill to create the vacant destination — without it, Move
+    /// would find the key occupied, return false immediately, and the benchmark would be timing a rejection.
+    /// </para>
+    /// </remarks>
     [Benchmark]
     [BenchmarkCategory("Regression")]
     public void Move_SameLeaf()

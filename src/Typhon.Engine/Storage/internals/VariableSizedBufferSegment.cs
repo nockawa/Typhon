@@ -679,8 +679,12 @@ public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentB
     /// Replace one element's value in place, leaving the element count, the buffer's chunk layout and every other element untouched.
     /// </summary>
     /// <param name="bufferId">The buffer's root chunk id.</param>
-    /// <param name="elementId">The chunk holding the element — the same identifier <see cref="DeleteElement"/> takes, and a CHUNK id rather than an index.</param>
-    /// <param name="oldElement">The current value, which is how the element is located: elements are addressed by value within their chunk, not by position.</param>
+    /// <param name="elementId">
+    /// The chunk holding the element — the same identifier <see cref="DeleteElement"/> takes, and a CHUNK id rather than an index.
+    /// </param>
+    /// <param name="oldElement">
+    /// The current value, which is how the element is located: elements are addressed by value within their chunk, not by position.
+    /// </param>
     /// <param name="newElement">The value to store.</param>
     /// <param name="accessor">Chunk accessor for the buffer pages.</param>
     /// <returns><c>true</c> if the element was found and overwritten; <c>false</c> if the chunk does not hold <paramref name="oldElement"/>.</returns>
@@ -693,10 +697,13 @@ public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentB
     unsafe public bool UpdateElement(int bufferId, int elementId, T oldElement, T newElement, ref ChunkAccessor<TStore> accessor)
     {
         ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
+
+        // The acquire sits OUTSIDE the try, and that placement is the point. LockBuffer THROWS on timeout (LockBufferSlow -> ThrowLockTimeout), so acquiring
+        // inside the try would run the finally's ExitExclusiveAccess for a lock this thread never took — releasing it out from under whoever actually holds it.
+        // DeleteElement has the same shape and the same exposure; it is left alone here rather than changed as a side effect of this work.
+        LockBuffer(ref rh);
         try
         {
-            LockBuffer(ref rh);
-
             // GetChunkAddress can evict rh's slot, exactly as in DeleteElement — nothing below reads rh until the finally re-fetches it.
             var elementChunk = accessor.GetChunkAddress(elementId, true);
             ref var elementChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(elementChunk);
