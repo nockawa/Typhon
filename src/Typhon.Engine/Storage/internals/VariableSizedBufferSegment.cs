@@ -675,6 +675,53 @@ public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentB
         }
     }
 
+    /// <summary>
+    /// Replace one element's value in place, leaving the element count, the buffer's chunk layout and every other element untouched.
+    /// </summary>
+    /// <param name="bufferId">The buffer's root chunk id.</param>
+    /// <param name="elementId">The chunk holding the element — the same identifier <see cref="DeleteElement"/> takes, and a CHUNK id rather than an index.</param>
+    /// <param name="oldElement">The current value, which is how the element is located: elements are addressed by value within their chunk, not by position.</param>
+    /// <param name="newElement">The value to store.</param>
+    /// <param name="accessor">Chunk accessor for the buffer pages.</param>
+    /// <returns><c>true</c> if the element was found and overwritten; <c>false</c> if the chunk does not hold <paramref name="oldElement"/>.</returns>
+    /// <remarks>
+    /// The in-place counterpart to <see cref="DeleteElement"/>, and deliberately missing its two side effects: no swap-with-last and no
+    /// <c>TotalCount</c> decrement. That is what keeps <paramref name="elementId"/> and every sibling's position stable across the update, which is the
+    /// property a caller holding element ids depends on (#872 AC-4.3). A remove-then-append pair would move whichever element happened to be last into the
+    /// vacated slot and hand back a new id.
+    /// </remarks>
+    unsafe public bool UpdateElement(int bufferId, int elementId, T oldElement, T newElement, ref ChunkAccessor<TStore> accessor)
+    {
+        ref var rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
+        try
+        {
+            LockBuffer(ref rh);
+
+            // GetChunkAddress can evict rh's slot, exactly as in DeleteElement — nothing below reads rh until the finally re-fetches it.
+            var elementChunk = accessor.GetChunkAddress(elementId, true);
+            ref var elementChunkHeader = ref Unsafe.AsRef<VariableSizedBufferChunkHeader>(elementChunk);
+            var isRoot = bufferId == elementId;
+            var baseElementAddr = (T*)(elementChunk + (isRoot ? RootHeaderTotalSize : sizeof(VariableSizedBufferChunkHeader)));
+
+            var count = elementChunkHeader.ElementCount;
+            for (var i = 0; i < count; i++)
+            {
+                if (EqualityComparer<T>.Default.Equals(baseElementAddr[i], oldElement))
+                {
+                    baseElementAddr[i] = newElement;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            rh = ref accessor.GetChunk<VariableSizedBufferRootHeader>(bufferId, true);
+            ReleaseLockOnBuffer(ref rh);
+        }
+    }
+
     public VariableSizedBufferAccessor<T, TStore> GetReadOnlyAccessor(int bufferId) => new(this, bufferId);
     public VariableSizedBufferAccessor<T, TStore> GetAccessor(int bufferId, ChangeSet changeSet) => new(this, bufferId, changeSet);
 

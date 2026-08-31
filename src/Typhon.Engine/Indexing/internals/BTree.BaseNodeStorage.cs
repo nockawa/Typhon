@@ -33,6 +33,21 @@ internal abstract partial class BTree<TKey, TStore>
         public abstract void SetNextNode(NodeWrapper node, int nextNodeId, ref ChunkAccessor<TStore> accessor);
         public abstract KeyValueItem GetItem(NodeWrapper node, int index, bool adjust, ref ChunkAccessor<TStore> accessor);
         public abstract void SetItem(NodeWrapper node, int index, KeyValueItem value, bool adjust, ref ChunkAccessor<TStore> accessor);
+
+        /// <summary>
+        /// Overwrite ONLY the value at <paramref name="index"/>, leaving the key, the count, the start offset and every separator untouched.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately not <see cref="SetItem"/> with a rebuilt <c>KeyValueItem</c>. Node chunks are SoA — keys and values are separate arrays — so a
+        /// value-only update is one 4-byte store, and routing it through <c>SetItem</c> would add a redundant write to the key array. That write is
+        /// value-preserving, so nothing observable changes, but it puts a store on a cache line an optimistic READER may be validating, and it makes
+        /// "this operation cannot alter tree structure" an argument about the value written rather than about which bytes were touched (#872 AC-4.2).
+        /// <para>
+        /// The store is a <c>Volatile.Write</c>: release ordering, which is free on x64 and an <c>stlr</c> on arm64. It is what lets a concurrent reader see
+        /// the old value or the new one and never a torn one — and, unlike Remove+Add, never an absent entry.
+        /// </para>
+        /// </remarks>
+        public abstract void SetValueOnly(NodeWrapper node, int index, int value, ref ChunkAccessor<TStore> accessor);
         public abstract int GetCount(NodeWrapper node, ref ChunkAccessor<TStore> accessor);
         public abstract void SetCount(NodeWrapper node, int value, ref ChunkAccessor<TStore> accessor);
         public abstract int GetStart(NodeWrapper node, ref ChunkAccessor<TStore> accessor);
@@ -61,6 +76,16 @@ internal abstract partial class BTree<TKey, TStore>
         public abstract VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId, ref ChunkAccessor<TStore> accessor);
         public abstract VariableSizedBufferAccessor<int, TStore> GetBufferReadOnlyAccessor(int bufferId);
         public abstract int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor<TStore> bufferAccessor);
+
+        /// <summary>
+        /// Replace one element's value inside an AllowMultiple key's buffer, in place. Returns <c>false</c> for a unique index, which has no buffers.
+        /// </summary>
+        /// <remarks>
+        /// Takes <paramref name="oldValue"/> because elements are addressed BY VALUE within their chunk, not by position — the same reason
+        /// <see cref="RemoveFromBuffer"/> takes the value it is removing. Nothing shifts and no count changes, so <paramref name="elementId"/> and every
+        /// sibling's position survive the update (#872 AC-4.3).
+        /// </remarks>
+        public abstract bool UpdateInBuffer(int bufferId, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> bufferAccessor);
         public abstract void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor);
         public abstract NodeWrapper GetLastChild(NodeWrapper node, ref ChunkAccessor<TStore> accessor);
         public abstract NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor<TStore> accessor);

@@ -27,6 +27,7 @@ public class BTreeMicroBenchmarks
     private long _nextInsertKey = PreFillCount + 1;
     private long _deleteKeyToggle;
     private long _moveToggle;
+    private int _updateToggle;
     private long _moveCrossToggle;
     private long[] _randomInsertKeys;
     private int _randomInsertIndex;
@@ -176,6 +177,36 @@ public class BTreeMicroBenchmarks
     /// would find the key occupied, return false immediately, and the benchmark would be timing a rejection.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The pair #872 step 4 replaces: change a value under an UNCHANGED key by removing the entry and adding it back.
+    /// </summary>
+    /// <remarks>
+    /// Two full root-to-leaf descents plus a structural remove and a structural insert, to move four bytes. This is the baseline
+    /// <see cref="UpdateValue_SameKey"/> has to beat by 2x, and pairing them here — same tree, same key, same setup — is what makes the ratio mean
+    /// something. Toggling the value keeps the tree in its initial state every two invocations so neither benchmark drifts.
+    /// </remarks>
+    [Benchmark]
+    [BenchmarkCategory("Regression")]
+    public void RemoveAdd_SameKey()
+    {
+        var accessor = _segment.CreateChunkAccessor();
+        _tree.Remove(5000, out _, ref accessor);
+        _tree.Add(5000, (_updateToggle++ & 1) == 0 ? 50_000 : 50_001, ref accessor);
+        accessor.Dispose();
+    }
+
+    /// <summary>
+    /// In-place value update under an unchanged key — one descent and one 4-byte store (#872 step 4, AC-4.6).
+    /// </summary>
+    [Benchmark]
+    [BenchmarkCategory("Regression")]
+    public void UpdateValue_SameKey()
+    {
+        var accessor = _segment.CreateChunkAccessor();
+        _tree.TryUpdateValue(5000, (_updateToggle++ & 1) == 0 ? 50_000 : 50_001, ref accessor);
+        accessor.Dispose();
+    }
+
     [Benchmark]
     [BenchmarkCategory("Regression")]
     public void Move_SameLeaf()
