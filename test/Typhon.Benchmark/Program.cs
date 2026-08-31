@@ -225,6 +225,18 @@ class Program
                 return;
             }
 
+            if (args.Contains("--rebuild-bench"))
+            {
+                RebuildBench.Run();
+                return;
+            }
+
+            if (args.Contains("--rebuild-matrix"))
+            {
+                RebuildBench.RunMatrix();
+                return;
+            }
+
             if (args.Contains("--indexed-bench"))
             {
                 ArchetypeAccessorBenchmark.RunIndexedBench();

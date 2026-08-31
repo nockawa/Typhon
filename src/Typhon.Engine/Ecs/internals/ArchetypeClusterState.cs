@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine.Internals;
@@ -395,7 +396,7 @@ internal sealed unsafe class ArchetypeClusterState
         // full write rate until the writer stalled and the process died with WalBackPressureTimeout (#817).
         // Disposing a `default` accessor is safe — Dispose returns immediately when _segment is null.
         using var clusterAccessor = hasCluster ? ClusterSegment.CreateChunkAccessor() : default;
-        using var transientAccessor = TransientSegment != null ? TransientSegment.CreateChunkAccessor() : default;
+        using var transientAccessor = TransientSegment?.CreateChunkAccessor() ?? default;
 
         for (int i = 0; i < count; i++)
         {
@@ -681,7 +682,7 @@ internal sealed unsafe class ArchetypeClusterState
         while (true)
         {
             var slots = Volatile.Read(ref ClusterMaxBornTsn);
-            var current = Volatile.Read(ref slots[clusterChunkId]);
+            var current = Volatile.Read(ref slots![clusterChunkId]);
             if (current != VisibilityUnknown && bornTsn <= current)
             {
                 // Even a no-op has to confirm it read the live array — a "already high enough" decision taken against a doomed copy is not a decision.
@@ -783,7 +784,7 @@ internal sealed unsafe class ArchetypeClusterState
         while (true)
         {
             var slots = Volatile.Read(ref ClusterMaxDiedTsn);
-            var current = Volatile.Read(ref slots[clusterChunkId]);
+            var current = Volatile.Read(ref slots![clusterChunkId]);
             if (diedTsn <= current)
             {
                 if (ReferenceEquals(Volatile.Read(ref ClusterMaxDiedTsn), slots))
@@ -1878,7 +1879,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// (<c>DatabaseEngine.InitializeArchetypes</c>) constructs a fresh grid + allocates a fresh per-archetype pool inside <see cref="InitializeSpatial"/>
     /// immediately before this loop, satisfying the precondition.</para>
     /// </remarks>
-    public void RebuildCellState(SpatialGrid grid)
+    internal void RebuildCellState(SpatialGrid grid)
     {
         if (grid == null || !SpatialSlot.HasSpatialIndex || ClusterSegment == null)
         {
@@ -1897,6 +1898,7 @@ internal sealed unsafe class ArchetypeClusterState
         int compStride = Layout.ComponentSize(ss.Slot);
         var fieldType = ss.FieldInfo.FieldType;
 
+        Interlocked.Increment(ref RebuildSegmentPassCount);
         var clusterAccessor = ClusterSegment.CreateChunkAccessor();
         try
         {
@@ -1926,6 +1928,235 @@ internal sealed unsafe class ArchetypeClusterState
             clusterAccessor.Dispose();
         }
     }
+
+    /// <summary>
+    /// Number of logical passes over the cluster segment made by the startup rebuild paths since this object was created. Diagnostic: it exists so a test can
+    /// assert the merged rebuild reads the segment ONCE where the legacy pair read it twice, rather than inferring that from a timing comparison (#872 AC-2.2).
+    /// </summary>
+    /// <remarks>
+    /// Counts <b>passes, not accessors</b>. The parallel map opens one accessor per partition over a disjoint slice of the cluster range, which is still a
+    /// single pass over the data — counting accessor creations instead would report worker count and make the assertion measure scheduling. Incremented once
+    /// per rebuild call, so it is meaningful at every degree of parallelism rather than only at W=1.
+    /// </remarks>
+    internal int RebuildSegmentPassCount;
+
+    /// <summary>
+    /// Per-cluster result of the rebuild map phase. Pure function of one cluster's bytes, so it can be computed on any worker without touching shared state;
+    /// the reduce phase folds these into the grid, the pool and the per-cell index serially.
+    /// </summary>
+    private struct ClusterRebuildMapResult
+    {
+        public int CellKey;
+        public int PopCount;
+        public ClusterSpatialAabb Aabb;
+    }
+
+    /// <summary>
+    /// Derive one cluster's cell key, occupancy and AABB in a single visit to its bytes. The pure half of <see cref="RebuildSpatialStateFromData"/>.
+    /// </summary>
+    /// <remarks>
+    /// The cell key and the AABB are NOT the same read: the key comes from <see cref="SpatialGrid.WorldToCellKeyFromSpatialField"/> on the first occupied slot,
+    /// while the AABB unions <c>SpatialMaintainer.ReadAndValidateBoundsFromPtr</c> over every occupied slot. The first slot is therefore decoded twice, two
+    /// different ways — merging the passes saves the WALK, not that read.
+    /// <para>The asymmetry is deliberate and load-bearing: the AABB union SKIPS a slot whose bounds fail validation, while the cell key uses the first occupied
+    /// slot unconditionally. A cluster whose first slot is degenerate therefore gets a real cell key and an AABB that ignores it — which is exactly what the
+    /// two-pass version did, and what the differential test pins.</para>
+    /// </remarks>
+    private ClusterRebuildMapResult MapClusterForRebuild(int chunkId, SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor)
+    {
+        var result = default(ClusterRebuildMapResult);
+        result.CellKey = -1;
+        result.Aabb = ClusterSpatialAabb.Empty;
+
+        byte* clusterBase = accessor.GetChunkAddress(chunkId);
+        ulong occupancy = *(ulong*)clusterBase;
+        result.PopCount = BitOperations.PopCount(occupancy);
+        if (occupancy == 0)
+        {
+            return result;
+        }
+
+        var ss = SpatialSlot;
+        int firstSlot = BitOperations.TrailingZeroCount(occupancy);
+        byte* firstFieldPtr = clusterBase + Layout.ComponentOffset(ss.Slot) + firstSlot * Layout.ComponentSize(ss.Slot) + ss.FieldOffset;
+        result.CellKey = grid.WorldToCellKeyFromSpatialField(firstFieldPtr, ss.FieldInfo.FieldType);
+
+        // Delegate the union rather than inlining a twin of it. Inlining would save one GetChunkAddress (an MRU-cache hit on a line this method just touched)
+        // and one occupancy load — worth far less than the ~18 % the merge itself buys — at the price of a SECOND copy of a [fatal][silent] CA-01 computation
+        // that could silently diverge from this one. The 3D branch in particular is only covered through RecomputeClusterAabb, so a twin's 3D half would have
+        // had no test at all.
+        result.Aabb = RecomputeClusterAabb(chunkId, ref accessor);
+        return result;
+    }
+
+    /// <summary>
+    /// Startup rebuild of the whole transient spatial layer from persisted cluster data, in ONE walk of the cluster segment. Replaces the back-to-back
+    /// <see cref="RebuildCellState"/> + <see cref="RebuildClusterAabbs"/> pair at the two production call sites (#872 step 2).
+    /// </summary>
+    /// <param name="grid">The spatial grid to populate. Must be fresh or reset — see the precondition below.</param>
+    /// <param name="epochManager">Epoch manager the map workers pin against. Required because the pin is per-thread: see the remarks.</param>
+    /// <param name="maxWorkers">Degree of parallelism for the map phase. <c>1</c> forces the serial path; <c>0</c> or negative means
+    /// <see cref="Environment.ProcessorCount"/>.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>Map in parallel, reduce serially.</b> Deriving a cluster's cell key and AABB is a pure function of that cluster's bytes, so the
+    /// <c>O(entities)</c> half fans out across workers. Folding the results in is NOT pure — <see cref="AddClusterToPerCellIndex"/> grows arrays, lazily
+    /// allocates a <c>PerCellSpatialSlot</c> and assigns index slots by APPEND ORDER — so the reduce runs single-threaded in
+    /// <see cref="ActiveClusterIds"/> order. That ordering is what makes the output bit-identical regardless of worker count; parallelising the reduce would
+    /// make <see cref="ClusterSpatialIndexSlot"/> depend on thread interleaving.
+    /// </para>
+    /// <para>
+    /// <b>Each worker pins its own epoch.</b> <c>EpochManager.EnterScope</c> pins the CALLING thread, so the caller's guard does not cover a worker; each
+    /// takes its own <see cref="EpochGuard"/> alongside its own <c>ChunkAccessor</c>, which is likewise not thread-safe.
+    /// </para>
+    /// <para>
+    /// <b>Precondition — NOT idempotent on a dirty grid</b>, unchanged from <see cref="RebuildCellState"/>. This ADDS to <see cref="CellState.EntityCount"/> /
+    /// <see cref="CellState.ClusterCount"/> and appends to <see cref="CellClusterPool"/>; calling twice without a fresh grid and pool double-counts. Kept as a
+    /// caller obligation rather than absorbed here deliberately (#872 AC-2.3): resetting the grid from inside would let a caller silently discard a
+    /// partially-populated one, and the sole production caller allocates both fresh in <see cref="InitializeSpatial"/> immediately beforehand.
+    /// </para>
+    /// </remarks>
+    public void RebuildSpatialStateFromData(SpatialGrid grid, EpochManager epochManager, int maxWorkers = 0)
+    {
+        if (grid == null || !SpatialSlot.HasSpatialIndex || ClusterSegment == null)
+        {
+            return;
+        }
+        if (ActiveClusterCount == 0)
+        {
+            return;
+        }
+
+        // Union of both legacy passes' capacity preconditions, in their original order.
+        EnsureClusterCellMapCapacity(PrimarySegmentCapacity);
+        Array.Fill(ClusterCellMap, -1);
+        EnsureClusterAabbsCapacity(PrimarySegmentCapacity);
+        EnsureClusterSpatialIndexSlotCapacity(PrimarySegmentCapacity);
+        EnsureClusterWriteBookkeepingCapacity(PrimarySegmentCapacity);
+        if (PerCellIndex != null)
+        {
+            Array.Clear(PerCellIndex);
+        }
+        Array.Fill(ClusterSpatialIndexSlot, -1);
+
+        var count = ActiveClusterCount;
+
+        // The only allocation here that scales with the database: 36 B per cluster (two ints plus a 28 B ClusterSpatialAabb), so ~360 KB at 10 K clusters and
+        // ~56 MB — on the LOH — at 1.5 M. Startup-only and freed immediately, but worth stating because it is the figure that would decide whether a very
+        // large open needs the map streamed in slices instead of materialised whole.
+        var mapped = new ClusterRebuildMapResult[count];
+        var workers = maxWorkers <= 0 ? Environment.ProcessorCount : maxWorkers;
+
+        // ─── Map ───
+        var autoWorkers = maxWorkers <= 0;
+        Interlocked.Increment(ref RebuildSegmentPassCount);
+
+        if (workers <= 1 || epochManager == null || (autoWorkers && count < ParallelRebuildThreshold))
+        {
+            var accessor = ClusterSegment.CreateChunkAccessor();
+            try
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    mapped[i] = MapClusterForRebuild(ActiveClusterIds[i], grid, ref accessor);
+                }
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+        else
+        {
+            // Partition the cluster range by hand rather than using Parallel.For's TLocal overload. Three reasons, each of which bit:
+            //
+            //   1. The TLocal form has no exception guarantee worth relying on. If the initializer throws between EnterScope and CreateChunkAccessor the
+            //      half-built value is discarded and the epoch pin leaks — a ThreadPool thread pinned forever freezes MinActiveEpoch and blocks page
+            //      eviction for the life of the process. And if the BODY throws, the value it would have returned is lost, so the accessor's page-slot
+            //      ref-counts are never released. That path is reachable: a non-finite coordinate in a cluster's first occupied slot throws out of
+            //      WorldToCellKey.
+            //   2. ChunkAccessor is [NoCopy] and ~430 bytes, and the TLocal delegate signature copies it in and out on EVERY iteration.
+            //   3. localInit fires once per TASK, not once per worker, so a per-init counter measures scheduling rather than passes.
+            //
+            // A plain range-per-partition loop gives ordinary try/finally, one accessor per partition held by ref, and a deterministic partition count.
+            var partitions = Math.Min(workers, count);
+            var perPartition = (count + partitions - 1) / partitions;
+            var options = new ParallelOptions { MaxDegreeOfParallelism = workers };
+
+            Parallel.For(0, partitions, options, p =>
+            {
+                var start = p * perPartition;
+                if (start >= count)
+                {
+                    return;
+                }
+                var end = Math.Min(start + perPartition, count);
+
+                // EnterScope pins the CALLING thread, so each partition takes its own pin; the caller's guard does not reach here.
+                var depth = epochManager.EnterScope();
+                try
+                {
+                    var accessor = ClusterSegment.CreateChunkAccessor();
+                    try
+                    {
+                        for (var i = start; i < end; i++)
+                        {
+                            mapped[i] = MapClusterForRebuild(ActiveClusterIds[i], grid, ref accessor);
+                        }
+                    }
+                    finally
+                    {
+                        accessor.Dispose();
+                    }
+                }
+                finally
+                {
+                    epochManager.ExitScope(depth);
+                }
+            });
+        }
+
+        // ─── Reduce ───
+        // Serial, in ActiveClusterIds order, so the append-ordered index slots and pool contents do not depend on how the map was scheduled.
+        for (var i = 0; i < count; i++)
+        {
+            int chunkId = ActiveClusterIds[i];
+            ref var m = ref mapped[i];
+
+            // Written even for an empty cluster: RebuildClusterAabbs stored Empty for those, and bit-identical means bit-identical.
+            ClusterAabbs[chunkId] = m.Aabb;
+
+            if (m.PopCount == 0)
+            {
+                continue;   // RebuildCellState skipped these outright, leaving ClusterCellMap at -1
+            }
+
+            ClusterCellMap[chunkId] = m.CellKey;
+            CellClusterPool.AddCluster(m.CellKey, chunkId);
+            ref var cell = ref grid.GetCell(m.CellKey);
+            cell.ClusterCount++;
+            cell.EntityCount += m.PopCount;
+
+            // No `CellKey < 0` guard: the legacy pair had one because the AABB pass re-read the key out of ClusterCellMap and could see -1 there. Here the key
+            // came from the map phase, and GetCell above would already have thrown on a negative one — a guard after that point is decoration, not defence.
+            if (float.IsPositiveInfinity(m.Aabb.MinX))
+            {
+                continue;   // degenerate — every slot failed validation
+            }
+
+            AddClusterToPerCellIndex(chunkId, m.CellKey, m.Aabb);
+        }
+    }
+
+    /// <summary>
+    /// Below this many active clusters the AUTOMATIC worker choice stays single-threaded.
+    /// <para><b>Not measured.</b> It assumes a full-ish cluster (~64 entities), which makes this roughly 4 000 entities of map work — enough to cover a
+    /// <c>Parallel.For</c> fan-out. A sparse grid gives far fewer entities per cluster (the rebuild benchmark's own fixture averages ~20), so the real
+    /// break-even moves with occupancy. Revisit with a measurement rather than trusting this number.</para>
+    /// <para>It gates only <c>maxWorkers &lt;= 0</c>. An explicit worker count is an explicit request and always fans out — otherwise a determinism test could
+    /// not exercise the parallel path without spawning 4 000 entities, and would silently assert on the serial path instead while appearing to cover W.</para>
+    /// </summary>
+    internal const int ParallelRebuildThreshold = 64;
 
     /// <summary>
     /// Grow <see cref="ClusterCellMap"/> to hold at least <paramref name="requiredLength"/> entries, initializing new slots to <c>-1</c> (unmapped).
@@ -2294,7 +2525,7 @@ internal sealed unsafe class ArchetypeClusterState
     /// Precondition: <see cref="RebuildCellState"/> has already run, so <see cref="ClusterCellMap"/> is populated and every active cluster's cell is known.
     /// </para>
     /// </remarks>
-    public void RebuildClusterAabbs()
+    internal void RebuildClusterAabbs()
     {
         if (!SpatialSlot.HasSpatialIndex || ClusterSegment == null)
         {
@@ -2319,6 +2550,7 @@ internal sealed unsafe class ArchetypeClusterState
         }
         Array.Fill(ClusterSpatialIndexSlot, -1);
 
+        Interlocked.Increment(ref RebuildSegmentPassCount);
         var clusterAccessor = ClusterSegment.CreateChunkAccessor();
         try
         {
@@ -2781,20 +3013,14 @@ internal sealed unsafe class ArchetypeClusterState
         bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
         if (isStatic)
         {
-            if (slot.StaticIndex == null)
-            {
-                slot.StaticIndex = new CellSpatialIndex();
-            }
+            slot.StaticIndex ??= new CellSpatialIndex();
             int indexSlot = slot.StaticIndex.Add(clusterChunkId, aabb);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
             TyphonEvent.EmitSpatialCellIndexAdd(cellKey, indexSlot, clusterChunkId, slot.StaticIndex.Capacity);
         }
         else
         {
-            if (slot.DynamicIndex == null)
-            {
-                slot.DynamicIndex = new CellSpatialIndex();
-            }
+            slot.DynamicIndex ??= new CellSpatialIndex();
             int indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
             TyphonEvent.EmitSpatialCellIndexAdd(cellKey, indexSlot, clusterChunkId, slot.DynamicIndex.Capacity);
@@ -3357,7 +3583,7 @@ internal sealed unsafe class ArchetypeClusterState
 
             if (table.StorageMode == StorageMode.Transient)
             {
-                TransientIndexSlots[transientIdx++] = BuildIndexSlot(table, slot, TransientIndexSegment, TransientIndexSegmentString64, load: false,
+                TransientIndexSlots![transientIdx++] = BuildIndexSlot(table, slot, TransientIndexSegment, TransientIndexSegmentString64, load: false,
                     changeSet: null, ref multiFieldCounter);
                 continue;
             }

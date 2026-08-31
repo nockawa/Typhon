@@ -3680,16 +3680,18 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         if (clusterState.ActiveClusterCount > 0)
                         {
                             using var cellEpoch = EpochGuard.Enter(EpochManager);
-                            var cellStart = Stopwatch.GetTimestamp();
-                            clusterState.RebuildCellState(_spatialGrid);
-                            cellStateTicks += Stopwatch.GetTimestamp() - cellStart;
 
-                            // Issue #230 Phase 1: rebuild per-cluster AABBs and the per-cell dynamic index from the same entity positions.
-                            // Runs AFTER RebuildCellState so ClusterCellMap is populated. Transient state — not persisted, always reconstructed at startup.
-                            // No-op for static-mode archetypes (Phase 1 supports dynamic mode only).
-                            var aabbStart = Stopwatch.GetTimestamp();
-                            clusterState.RebuildClusterAabbs();
-                            clusterAabbTicks += Stopwatch.GetTimestamp() - aabbStart;
+                            // One walk for both halves (#872 step 2). The cluster→cell map and the per-cluster AABBs used to be two back-to-back passes over
+                            // the same clusters, with an ordering constraint between them (the AABB pass read the map the cell pass populated) — a constraint
+                            // that simply dissolves when they are the same loop. The O(entities) half fans out across workers; the fold into the grid, the
+                            // pool and the per-cell index stays serial and ordered, because the index assigns slots by append order.
+                            //
+                            // Both timers still exist and are still reported separately, but they now split one walk rather than two passes: cellStateTicks is
+                            // zero and the whole cost lands in clusterAabbTicks. Kept as two fields rather than collapsed to one so the open-time log line and
+                            // the step-1 telemetry accessors keep their shape.
+                            var rebuildStart = Stopwatch.GetTimestamp();
+                            clusterState.RebuildSpatialStateFromData(_spatialGrid, EpochManager);
+                            clusterAabbTicks += Stopwatch.GetTimestamp() - rebuildStart;
                         }
                     }
                     finally
@@ -4721,9 +4723,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // placed anything, so it would have seen an empty cluster. Redo it here or the archetype reopens with entities present and every spatial query empty.
         if (meta.HasClusterSpatial && _spatialGrid != null && clusterState.ActiveClusterCount > 0)
         {
-            // Same order as InitializeArchetypes: cell state first, because RebuildClusterAabbs reads the ClusterCellMap it populates.
-            clusterState.RebuildCellState(_spatialGrid);
-            clusterState.RebuildClusterAabbs();
+            // One walk, same as InitializeArchetypes — the ordering constraint that used to force cell state first is internal to it now (#872 step 2).
+            clusterState.RebuildSpatialStateFromData(_spatialGrid, EpochManager);
         }
 
         cs.SaveChanges();
