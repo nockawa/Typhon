@@ -59,4 +59,13 @@ internal static class OlcDescentTrace
     /// (e.g., String64) the int casts are nonsensical — wire only for int-keyed test trees.
     /// </summary>
     public static Action<int, int, int, int, int> OnRemoveNotFound;
+
+    // === TEMPORARY #738 probe: geometry at the MovedRightLeafFull bail ===
+
+    /// <summary>
+    /// Called when the pessimistic insert right-walks onto a FULL leaf it cannot split, which the 4-core repro measured as 100% of the Add_Disjoint
+    /// stall. Args: (key, originLeafId, landedLeafId, landedFirstKey, landedLastKey, landedCount, parentId, parentChildIndex).
+    /// </summary>
+    /// <remarks>Int casts, so wire only for int-keyed test trees — same contract as <see cref="OnRemoveNotFound"/>.</remarks>
+    public static Action<int, int, int, int, int, int, int, int> OnMovedRightLeafFull;
 }

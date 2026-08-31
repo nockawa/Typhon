@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Text;
@@ -51,6 +52,9 @@ public class OlcBTreeRaceStressTests
         OlcDescentTrace.RecordStep = DescentTraceRecord;
         OlcDescentTrace.OnInvalidChunkId = DescentTraceOnInvalidChunkId;
         OlcDescentTrace.OnRemoveNotFound = OnRemoveNotFoundCapture;
+        OlcDescentTrace.OnMovedRightLeafFull = OnMovedRightLeafFullCapture;
+        _mrlfCaptured = 0;
+        while (_mrlfSamples.TryTake(out _)) { }
         for (int i = 0; i < _removeNotFoundByBranch.Length; i++) { _removeNotFoundByBranch[i] = 0; }
         _removeNotFoundDetailsCaptured = 0;
         _rdNotRemoved = 0; _rdWrongValue = 0;
@@ -58,94 +62,123 @@ public class OlcBTreeRaceStressTests
         try
         {
 
-        using var stop = new ManualResetEventSlim(false);
-        var noiseTasks = StartNoise(noiseCount, stop);
+            using var stop = new ManualResetEventSlim(false);
+            var noiseTasks = StartNoise(noiseCount, stop);
 
-        var scenarios = new[]
-        {
-            new Scenario("Add_Splits",      AddSplitsBody),
-            new Scenario("Add_Disjoint",    AddDisjointBody),
-            new Scenario("Remove_Disjoint", RemoveDisjointBody),
-            new Scenario("Remove_Merges",   RemoveMergesBody),
-            new Scenario("Remove_Mixed",    RemoveMixedBody),
-        };
+            var scenarios = new[]
+            {
+                new Scenario("Add_Splits",      AddSplitsBody),
+                new Scenario("Add_Disjoint",    AddDisjointBody),
+                new Scenario("Remove_Disjoint", RemoveDisjointBody),
+                new Scenario("Remove_Merges",   RemoveMergesBody),
+                new Scenario("Remove_Mixed",    RemoveMixedBody),
+            };
 
-        var sw = Stopwatch.StartNew();
-        var scenarioTasks = scenarios.Select(s => Task.Factory.StartNew(() => RunScenarioLoop(s, stop), TaskCreationOptions.LongRunning)).ToArray();
+            var sw = Stopwatch.StartNew();
+            var scenarioTasks = scenarios.Select(s => Task.Factory.StartNew(() => RunScenarioLoop(s, stop), TaskCreationOptions.LongRunning)).ToArray();
 
-        Thread.Sleep(deadline);
-        stop.Set();
+            Thread.Sleep(deadline);
+            stop.Set();
 
-        Task.WaitAll(scenarioTasks);
-        Task.WaitAll(noiseTasks);
-        sw.Stop();
+            Task.WaitAll(scenarioTasks);
+            Task.WaitAll(noiseTasks);
+            sw.Stop();
 
-        var report = new StringBuilder();
-        report.AppendLine();
-        report.AppendLine($"=== OLC race stress report — wall {sw.Elapsed.TotalSeconds:F1}s ===");
-        long totalIters = 0, totalFails = 0;
-        foreach (var s in scenarios)
-        {
-            int iters = Volatile.Read(ref s.Iterations);
-            int fails = s.Failures.Count;
-            totalIters += iters;
-            totalFails += fails;
-            report.AppendLine($"  {s.Name,-18} iter={iters,6}  fail={fails,4}  rate={(iters == 0 ? 0 : (double)fails / iters):P2}");
-        }
-        report.AppendLine($"  {"TOTAL",-18} iter={totalIters,6}  fail={totalFails,4}");
-
-        if (totalFails > 0)
-        {
+            var report = new StringBuilder();
             report.AppendLine();
-            report.AppendLine("=== first failure per scenario ===");
+            report.AppendLine($"=== OLC race stress report — wall {sw.Elapsed.TotalSeconds:F1}s ===");
+            long totalIters = 0, totalFails = 0;
             foreach (var s in scenarios)
             {
-                if (s.Failures.IsEmpty)
-                {
-                    continue;
-                }
-                var first = s.Failures.OrderBy(f => f.Iteration).First();
-                report.AppendLine($"--- {s.Name} (iter {first.Iteration}) ---");
-                report.AppendLine(first.Detail);
-                report.AppendLine();
+                int iters = Volatile.Read(ref s.Iterations);
+                int fails = s.Failures.Count;
+                totalIters += iters;
+                totalFails += fails;
+                report.AppendLine($"  {s.Name,-18} iter={iters,6}  fail={fails,4}  rate={(iters == 0 ? 0 : (double)fails / iters):P2}");
             }
-        }
-        // Append Remove NotFound branch summary BEFORE writing report to test context.
-        var rnfTotal = 0L;
-        for (int i = 1; i < _removeNotFoundByBranch.Length; i++) { rnfTotal += _removeNotFoundByBranch[i]; }
-        if (rnfTotal > 0)
-        {
-            report.AppendLine();
-            report.AppendLine("=== Remove NotFound branch counts ===");
-            report.AppendLine($"  begin-fast-path (key < ll.firstKey)    : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchBeginFastPathLessThanFirst]}");
-            report.AppendLine($"  end-fast-path   (key > rll.lastKey)    : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchEndFastPathGreaterThanLast]}");
-            report.AppendLine($"  general path    (descend keyIndex<0)   : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchGeneralKeyIndexNegative]}");
-            report.AppendLine($"  under-lock re-find (concurrent removed): {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchUnderLockReFindNegative]}");
-            report.AppendLine($"  PESS begin-fast-path (key < ll.first)  : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchPessimisticBeginLessThanFirst]}");
-            report.AppendLine($"  PESS end-fast-path   (key > rll.last)  : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchPessimisticEndGreaterThanLast]}");
-            report.AppendLine($"  TOTAL: {rnfTotal}");
-        }
-        if (_rdNotRemoved > 0 || _rdWrongValue > 0)
-        {
-            report.AppendLine();
-            report.AppendLine("=== Remove_Disjoint failure split ===");
-            report.AppendLine($"  not_removed (Remove returned false)    : {_rdNotRemoved}");
-            report.AppendLine($"  wrong_value (Remove returned bad value): {_rdWrongValue}");
-            report.AppendLine($"  Sample failures:");
-            int n = 0;
-            foreach (var sample in _rdSamples) { if (++n > 10) break; report.AppendLine($"    {sample}"); }
-        }
+            report.AppendLine($"  {"TOTAL",-18} iter={totalIters,6}  fail={totalFails,4}");
 
-        TestContext.WriteLine(report.ToString());
+            if (totalFails > 0)
+            {
+                report.AppendLine();
+                report.AppendLine("=== first failure per scenario ===");
+                foreach (var s in scenarios)
+                {
+                    if (s.Failures.IsEmpty)
+                    {
+                        continue;
+                    }
+                    var first = s.Failures.OrderBy(f => f.Iteration).First();
+                    report.AppendLine($"--- {s.Name} (iter {first.Iteration}) ---");
+                    report.AppendLine(first.Detail);
+                    report.AppendLine();
+                }
+            }
+            // Append Remove NotFound branch summary BEFORE writing report to test context.
+            var rnfTotal = 0L;
+            for (int i = 1; i < _removeNotFoundByBranch.Length; i++) { rnfTotal += _removeNotFoundByBranch[i]; }
+            if (rnfTotal > 0)
+            {
+                report.AppendLine();
+                report.AppendLine("=== Remove NotFound branch counts ===");
+                report.AppendLine($"  begin-fast-path (key < ll.firstKey)    : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchBeginFastPathLessThanFirst]}");
+                report.AppendLine($"  end-fast-path   (key > rll.lastKey)    : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchEndFastPathGreaterThanLast]}");
+                report.AppendLine($"  general path    (descend keyIndex<0)   : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchGeneralKeyIndexNegative]}");
+                report.AppendLine($"  under-lock re-find (concurrent removed): {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchUnderLockReFindNegative]}");
+                report.AppendLine($"  PESS begin-fast-path (key < ll.first)  : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchPessimisticBeginLessThanFirst]}");
+                report.AppendLine($"  PESS end-fast-path   (key > rll.last)  : {_removeNotFoundByBranch[OlcDescentTrace.RemoveBranchPessimisticEndGreaterThanLast]}");
+                report.AppendLine($"  TOTAL: {rnfTotal}");
+            }
+            if (_rdNotRemoved > 0 || _rdWrongValue > 0)
+            {
+                report.AppendLine();
+                report.AppendLine("=== Remove_Disjoint failure split ===");
+                report.AppendLine($"  not_removed (Remove returned false)    : {_rdNotRemoved}");
+                report.AppendLine($"  wrong_value (Remove returned bad value): {_rdWrongValue}");
+                report.AppendLine($"  Sample failures:");
+                int n = 0;
+                foreach (var sample in _rdSamples) { if (++n > 10) break; report.AppendLine($"    {sample}"); }
+            }
 
-        Assert.That(totalFails, Is.Zero, () => $"OLC race stress observed {totalFails} failures across {totalIters} iterations.\n{report}");
+            if (!_mrlfSamples.IsEmpty)
+            {
+                report.AppendLine();
+                report.AppendLine("=== MovedRightLeafFull geometry (first 60) ===");
+                foreach (var sample in _mrlfSamples)
+                {
+                    report.AppendLine("  " + sample);
+                }
+            }
+
+            TestContext.WriteLine(report.ToString());
+
+            Assert.That(totalFails, Is.Zero, () => $"OLC race stress observed {totalFails} failures across {totalIters} iterations.\n{report}");
         }
         finally
         {
             OlcDescentTrace.RecordStep = null;
             OlcDescentTrace.OnInvalidChunkId = null;
             OlcDescentTrace.OnRemoveNotFound = null;
+            OlcDescentTrace.OnMovedRightLeafFull = null;
         }
+    }
+
+    // === TEMPORARY #738 probe: MovedRightLeafFull geometry ===
+    private static int _mrlfCaptured;
+    private static readonly ConcurrentBag<string> _mrlfSamples = new();
+
+    private static void OnMovedRightLeafFullCapture(int key, int originLeaf, int landedLeaf, int landedFirst, int landedLast, int landedCount,
+                                                    int descentOnFirstKey, int descentOnOurKey)
+    {
+        if (Interlocked.Increment(ref _mrlfCaptured) > 60)
+        {
+            return;
+        }
+        // Both descents are separator-only (no right-walk). The first asks whether the landed leaf is reachable at all; the second asks where OUR key
+        // is routed. If they disagree, the separators and the leaf chain disagree, which is IXS-05.
+        var verdict = descentOnFirstKey == landedLeaf ? "leafReachable" : $"leafUNREACHABLE(->#{descentOnFirstKey})";
+        verdict += descentOnOurKey == landedLeaf ? " keyRoutedHere" : $" keyRoutedTo#{descentOnOurKey}";
+        _mrlfSamples.Add($"key={key} origin=#{originLeaf} landed=#{landedLeaf}[{landedFirst}..{landedLast}] n={landedCount} " + verdict);
     }
 
     // === Remove NotFound branch capture ===
@@ -247,16 +280,62 @@ public class OlcBTreeRaceStressTests
     /// Every property here reads through <c>Interlocked.Read</c> and touches no ChunkAccessor, which is what makes it legal to call while the iteration being
     /// described is still running and still owns its accessors.
     /// </remarks>
-    private static long[] DescribeCounters(IntSingleBTree<PersistentStore> tree)
-        => [tree.OptimisticRestarts, tree.PessimisticFallbacks, tree.WriteLockFailures, tree.SplitCount, tree.MergeCount, tree.EntryCount];
-
-    private static readonly string[] CounterNames = ["Restarts", "Fallbacks", "WriteLockFails", "Splits", "Merges", "Entries"];
-
-    // Index into the arrays above. Which counter moved is the whole diagnosis, so these are named rather than spelled as literals at the comparison site.
+    // Index into the sampled counter arrays. Which counter moved is the whole diagnosis, so these are named rather than spelled as literals at the
+    // comparison site. Scalars first, then the InsertRetryExit histogram appended, so the deadline sampler's delta machinery covers both without a second
+    // protocol — the histogram is what answers "restarting, but WHERE", which every record before #738's instrumentation left open.
     private const int CtrRestarts = 0;
-    private const int CtrFallbacks = 1;
-    private const int CtrWriteLockFails = 2;
-    private const int CtrEntries = 5;
+    private const int CtrPessRestarts = 1;
+    private const int CtrFallbacks = 2;
+    private const int CtrWriteLockFails = 3;
+    private const int CtrMoveRights = 4;
+    private const int CtrObsoleteRestarts = 5;
+    private const int CtrSplits = 6;
+    private const int CtrMerges = 7;
+    private const int CtrEntries = 8;
+    internal const int ScalarCounterCount = 9;
+
+    /// <summary>First index of the <see cref="InsertRetryExit"/> histogram inside a sampled counter array.</summary>
+    internal const int CtrExitBase = ScalarCounterCount;
+
+    private static long[] DescribeCounters(IntSingleBTree<PersistentStore> tree)
+    {
+        var counters = new long[ScalarCounterCount + InsertRetryExit.Count];
+        counters[CtrRestarts] = tree.OptimisticRestarts;
+        counters[CtrPessRestarts] = tree.PessimisticRestarts;
+        counters[CtrFallbacks] = tree.PessimisticFallbacks;
+        counters[CtrWriteLockFails] = tree.WriteLockFailures;
+        counters[CtrMoveRights] = tree.MoveRightCount;
+        counters[CtrObsoleteRestarts] = tree.ObsoleteRestarts;
+        counters[CtrSplits] = tree.SplitCount;
+        counters[CtrMerges] = tree.MergeCount;
+        counters[CtrEntries] = tree.EntryCount;
+        for (int i = 0; i < InsertRetryExit.Count; i++)
+        {
+            counters[CtrExitBase + i] = tree.InsertRetryExitCount(i);
+        }
+        return counters;
+    }
+
+    private static readonly string[] CounterNames = BuildCounterNames();
+
+    private static string[] BuildCounterNames()
+    {
+        var names = new string[ScalarCounterCount + InsertRetryExit.Count];
+        names[CtrRestarts] = "OptRestarts";
+        names[CtrPessRestarts] = "PessRestarts";
+        names[CtrFallbacks] = "Fallbacks";
+        names[CtrWriteLockFails] = "WriteLockFails";
+        names[CtrMoveRights] = "MoveRights";
+        names[CtrObsoleteRestarts] = "ObsoleteRestarts";
+        names[CtrSplits] = "Splits";
+        names[CtrMerges] = "Merges";
+        names[CtrEntries] = "Entries";
+        for (int i = 0; i < InsertRetryExit.Count; i++)
+        {
+            names[CtrExitBase + i] = "exit:" + InsertRetryExit.Names[i];
+        }
+        return names;
+    }
 
     // ====== Scenario bodies (mirror OlcBTreeTests bodies, allocate fresh segment per iter) ======
 
@@ -935,19 +1014,28 @@ public class OlcBTreeRaceStressTests
             verdict = "not one counter moved in the sample window while the iteration was still running. That is a statement about the COUNTERS, not a diagnosis "
                     + "— read the stacks below for what the threads are actually doing before naming a cause.\n" + CaptureManagedStacks(s.Name, iter);
         }
-        else if (deltas[CtrWriteLockFails] > 0 && deltas[CtrRestarts] == 0 && deltas[CtrFallbacks] == 0 && deltas[CtrEntries] == 0)
+        else if (deltas[CtrWriteLockFails] > 0 && deltas[CtrRestarts] == 0 && deltas[CtrPessRestarts] == 0 && deltas[CtrFallbacks] == 0
+                                               && deltas[CtrEntries] == 0)
         {
             label = "SPINNING";
             verdict = $"only WriteLockFailures moved, by {deltas[CtrWriteLockFails]:N0} in {DeadlineSampleWindow.TotalSeconds}s. The operation is not restarting "
                     + "and not completing: it is inside a write-lock spin that never acquires. That is lock-acquisition livelock, NOT a restart storm — the "
                     + "restart-bound story does not apply and MaxPessimisticRestarts will never fire here.";
         }
-        else if (deltas[CtrRestarts] > 0 || deltas[CtrFallbacks] > 0)
+        else if (deltas[CtrRestarts] > 0 || deltas[CtrPessRestarts] > 0 || deltas[CtrFallbacks] > 0)
         {
             label = "RESTARTING";
-            verdict = $"restarts moved by {deltas[CtrRestarts]:N0} and fallbacks by {deltas[CtrFallbacks]:N0}. The operation keeps re-attempting and losing — a "
-                    + "restart storm. Find what invalidates the version between read and lock; a guard stronger than the invariant it protects does exactly this "
-                    + "(#740).";
+            // WHICH loop is the first fork, and it used to be unanswerable: the pessimistic retry incremented the counter named OptimisticRestarts, so a
+            // record reading "restarts +870, fallbacks +0" was arithmetically impossible from the optimistic loop (capped at 3, then an unconditional
+            // fallback tick) and nothing said so. The two want opposite investigations, so the verdict names the loop before it names a suspect.
+            verdict = $"optimistic restarts moved by {deltas[CtrRestarts]:N0}, PESSIMISTIC restarts by {deltas[CtrPessRestarts]:N0}, fallbacks by "
+                    + $"{deltas[CtrFallbacks]:N0}. The operation keeps re-attempting and losing — a restart storm.";
+            verdict += deltas[CtrPessRestarts] > deltas[CtrRestarts]
+                ? " It is inside AddOrUpdateCorePessimistic's retry loop, heading for the MaxPessimisticRestarts throw (#738); the exit histogram below "
+                  + "names the bail burning the budget, and each of them wants a different fix."
+                : " It is in the OLC fast path, so look for what invalidates the version between read and lock; a guard stronger than the invariant it "
+                  + "protects does exactly this (#740).";
+            verdict += DescribeExitDeltas(first, deltas);
         }
         else
         {
@@ -967,10 +1055,65 @@ public class OlcBTreeRaceStressTests
         sb.Append($"DEADLINE after {IterationDeadline.TotalSeconds}s — {label}: {verdict}\n  total(+delta over {DeadlineSampleWindow.TotalSeconds}s):");
         for (int i = 0; i < deltas.Length; i++)
         {
+            // Every scalar prints, zeros included — a frozen counter is evidence. The exit buckets print only when non-empty, because seventeen mostly-zero
+            // names on one line bury the nine scalars that always carry meaning.
+            if (i >= CtrExitBase && first[i] == 0 && deltas[i] == 0)
+            {
+                continue;
+            }
             sb.Append($" {CounterNames[i]}={first[i]:N0}(+{deltas[i]:N0})");
         }
 
         WriteProgress(s.Name, iter, $"DEADLINE/{label}");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Names the <see cref="InsertRetryExit"/> buckets that moved during the sample window, largest first — the answer to "restarting, but WHERE".
+    /// </summary>
+    /// <remarks>
+    /// Deltas rather than totals, because the totals describe the whole iteration and the question is what the stalled operation is doing NOW. Falls back
+    /// to totals when nothing moved in the window, which is what a stall inside one bail looks like once every thread is parked in it.
+    /// </remarks>
+    // internal, not private: the RESTARTING branch that calls it only renders on a genuine stall, which a 32-core dev box does not produce and CI produces a
+    // few times a month. A formatter that is only exercised by the event it exists to describe is one that throws the first time it matters, so
+    // BTreeRetryExitInstrumentationTests drives it directly with synthetic arrays.
+    internal static string DescribeExitDeltas(long[] first, long[] deltas)
+    {
+        var moved = new List<(string Name, long Count)>();
+        for (int i = 0; i < InsertRetryExit.Count; i++)
+        {
+            if (deltas[CtrExitBase + i] != 0)
+            {
+                moved.Add((InsertRetryExit.Names[i], deltas[CtrExitBase + i]));
+            }
+        }
+        var heading = "\n  retry exits (+delta): ";
+        if (moved.Count == 0)
+        {
+            heading = "\n  retry exits (nothing moved in the window; iteration totals): ";
+            for (int i = 0; i < InsertRetryExit.Count; i++)
+            {
+                if (first[CtrExitBase + i] != 0)
+                {
+                    moved.Add((InsertRetryExit.Names[i], first[CtrExitBase + i]));
+                }
+            }
+        }
+        if (moved.Count == 0)
+        {
+            return "\n  retry exits: none — these restarts did not come from InsertIterative (so: the Remove or Move path).";
+        }
+        moved.Sort((x, y) => y.Count.CompareTo(x.Count));
+        var sb = new StringBuilder(heading);
+        for (int i = 0; i < moved.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(' ');
+            }
+            sb.Append(moved[i].Name).Append('=').Append(moved[i].Count.ToString("N0"));
+        }
         return sb.ToString();
     }
 

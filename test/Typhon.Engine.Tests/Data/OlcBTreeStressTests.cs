@@ -62,9 +62,10 @@ public class OlcBTreeStressTests
     private void LogDiagnostics<TKey>(BTree<TKey, PersistentStore> tree) where TKey : unmanaged
     {
         TestContext.Out.WriteLine(
-            $"Restarts={tree.OptimisticRestarts} Fallbacks={tree.PessimisticFallbacks} " +
+            $"OptRestarts={tree.OptimisticRestarts} PessRestarts={tree.PessimisticRestarts} Fallbacks={tree.PessimisticFallbacks} " +
             $"WriteLockFails={tree.WriteLockFailures} Splits={tree.SplitCount} Merges={tree.MergeCount} " +
-            $"ContentionSplits={tree.ContentionSplitCount} Deferred={tree.DeferredNodeCount}");
+            $"ContentionSplits={tree.ContentionSplitCount} Deferred={tree.DeferredNodeCount} " +
+            $"RetryExits=[{tree.DescribeInsertRetryExits()}]");
     }
 
     /// <summary>
@@ -224,7 +225,9 @@ public class OlcBTreeStressTests
             Task.WaitAll(tasks);
 
             Assert.That(readErrors, Is.EqualTo(0), "Safe-range reads should all be correct");
-            Assert.That(tree.OptimisticRestarts, Is.GreaterThan(0), "Mixed workload should cause restarts");
+            // Both loops count, and the sum is what "the workload caused restarts" has always meant here. Before #738's split the pessimistic retries were
+            // being tallied into OptimisticRestarts, so this assertion could be satisfied by either — keeping it on the sum preserves exactly what it tested.
+            Assert.That(tree.OptimisticRestarts + tree.PessimisticRestarts, Is.GreaterThan(0), "Mixed workload should cause restarts");
 
             CheckConsistency(tree, segment);
             LogDiagnostics(tree);

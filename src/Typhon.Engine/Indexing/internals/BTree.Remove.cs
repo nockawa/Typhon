@@ -459,7 +459,7 @@ internal abstract partial class BTree<TKey, TStore>
             // General remove path with latch-coupled SMO — retry on lock contention
             _hasCachedLastKey = false;
             bool merge;
-            SpinWait spin = default;
+            PureSpin spin = default;
             for (int attempt = 0; ; attempt++)
             {
                 merge = RemoveIterative(ref args, ref accessor, out bool removeCompleted);
@@ -475,7 +475,7 @@ internal abstract partial class BTree<TKey, TStore>
                         $"B+Tree remove made no progress in {MaxPessimisticRestarts} pessimistic retries. The descent keeps reaching a leaf it can neither "
                         + "validate nor modify, which no further retrying resolves. This is a liveness defect in the tree, not contention (see #695).");
                 }
-                spin.SpinOnce();
+                spin.Once();
             }
 
             if (args.Removed)
@@ -533,7 +533,7 @@ internal abstract partial class BTree<TKey, TStore>
         ref var sibAccessor = ref args.SiblingAccessor;
 
         // Phase 1: Descend from root to leaf, recording path + PathVersions for validation. Shared verbatim with InsertIterative — see DescendRecordingPath.
-        if (!DescendRecordingPath(args.Key, args.Comparer, OlcDescentTrace.OpRemove, ref ctx, ref relatives, ref accessor, ref sibAccessor, out var node))
+        if (!DescendRecordingPath(args.Key, args.Comparer, OlcDescentTrace.OpRemove, ref ctx, ref relatives, ref accessor, ref sibAccessor, out var node, out _))
         {
             return false;
         }

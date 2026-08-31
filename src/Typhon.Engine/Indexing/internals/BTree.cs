@@ -12,6 +12,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -549,6 +550,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
 
     // OLC diagnostics counters (always-on, only incremented on slow paths)
     internal long _optimisticRestarts;
+    internal long _pessimisticRestarts;
     internal long _pessimisticFallbacks;
     internal long _writeLockFailures;
     internal long _splitCount;
@@ -558,6 +560,21 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     internal long _obsoleteRestarts;
     internal long _obsoleteSmoSiblingLocks;
     internal long _emptyInitRacesLost;
+
+    /// <summary>
+    /// Histogram of <see cref="InsertRetryExit"/> codes: which of <c>InsertIterative</c>'s sixteen bails burned each pessimistic retry.
+    /// </summary>
+    /// <remarks>
+    /// Written once per retry, by the retry loop rather than by the bail sites, so the instrumentation adds exactly one interlocked operation per no-progress
+    /// pass and none at all on a completing insert. That ordering is #765 S3's lesson applied: the previous <c>_writeLockFailures</c> lived inside the spin
+    /// loop and generated the cross-core traffic it was measuring.
+    /// <para>
+    /// Deliberately unpadded. The counters share a cache line or two, but they are only ever written on a path that is by definition making no
+    /// progress, at the ~10^3/s rate a restart storm produces — padding to 64 B each would cost a kilobyte per tree to remove sharing that no measurement
+    /// can see.
+    /// </para>
+    /// </remarks>
+    internal readonly long[] _insertRetryExits = new long[InsertRetryExit.Count];
 
     internal const int MaxTreeDepth = 32;
     internal const int MaxOptimisticRestarts = 3;
@@ -717,11 +734,64 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     /// <summary>Number of deferred nodes pending reclamation (test visibility).</summary>
     internal int DeferredNodeCount => _deferredNodes.Count;
 
-    /// <summary>Number of OLC optimistic read restarts (version validation failures).</summary>
+    /// <summary>Number of OLC optimistic read restarts (version validation failures). Bounded at <see cref="MaxOptimisticRestarts"/> per operation.</summary>
     public long OptimisticRestarts => Interlocked.Read(ref _optimisticRestarts);
+
+    /// <summary>
+    /// Number of no-progress passes through <c>AddOrUpdateCorePessimistic</c>'s retry loop, bounded at <see cref="MaxPessimisticRestarts"/> per operation.
+    /// </summary>
+    /// <remarks>
+    /// Split out of <see cref="OptimisticRestarts"/>, which it was silently inflating. The two differ by three orders of magnitude in what they mean: an
+    /// optimistic restart is normal contention, capped at three and then converted into a <see cref="PessimisticFallbacks"/> tick, whereas a pessimistic
+    /// restart is the tree failing to converge and, at 10,000, throwing. Sharing one counter made them indistinguishable in exactly the record that had to
+    /// tell them apart — a nightly showing "restarts +870, fallbacks +0" is arithmetically impossible from the optimistic loop, but nothing said so (#738).
+    /// See <see cref="InsertRetryExitCount"/> for WHICH bail burned them.
+    /// </remarks>
+    public long PessimisticRestarts => Interlocked.Read(ref _pessimisticRestarts);
 
     /// <summary>Number of fallbacks from optimistic to pessimistic path.</summary>
     public long PessimisticFallbacks => Interlocked.Read(ref _pessimisticFallbacks);
+
+    /// <summary>
+    /// How many pessimistic retries were burned by one <see cref="InsertRetryExit"/> code. Summed over all codes this equals <see cref="PessimisticRestarts"/>.
+    /// </summary>
+    public long InsertRetryExitCount(int exit) => Interlocked.Read(ref _insertRetryExits[exit]);
+
+    /// <summary>
+    /// The non-zero <see cref="InsertRetryExit"/> tallies as <c>Name=count</c>, descending, for a diagnostic message. Allocates — cold paths only.
+    /// </summary>
+    internal string DescribeInsertRetryExits()
+    {
+        var sb = new StringBuilder();
+        // Selection sort over 13 entries rather than a LINQ OrderByDescending: this runs while a tree is failing, and the point of the message is to be
+        // producible without allocating a sort infrastructure on top of the one string it needs.
+        Span<bool> emitted = stackalloc bool[InsertRetryExit.Count];
+        for (int rank = 0; rank < InsertRetryExit.Count; rank++)
+        {
+            int best = -1;
+            long bestCount = 0;
+            for (int i = 0; i < InsertRetryExit.Count; i++)
+            {
+                long c = Interlocked.Read(ref _insertRetryExits[i]);
+                if (!emitted[i] && c > bestCount)
+                {
+                    best = i;
+                    bestCount = c;
+                }
+            }
+            if (best < 0)
+            {
+                break;
+            }
+            emitted[best] = true;
+            if (sb.Length > 0)
+            {
+                sb.Append(' ');
+            }
+            sb.Append(InsertRetryExit.Names[best]).Append('=').Append(bestCount);
+        }
+        return sb.Length == 0 ? "none" : sb.ToString();
+    }
 
     /// <summary>Number of SpinWriteLock spin iterations (contention on write locks).</summary>
     public long WriteLockFailures => Interlocked.Read(ref _writeLockFailures);
@@ -761,7 +831,12 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     internal void ResetDiagnostics()
     {
         Interlocked.Exchange(ref _optimisticRestarts, 0);
+        Interlocked.Exchange(ref _pessimisticRestarts, 0);
         Interlocked.Exchange(ref _pessimisticFallbacks, 0);
+        for (int i = 0; i < _insertRetryExits.Length; i++)
+        {
+            Interlocked.Exchange(ref _insertRetryExits[i], 0);
+        }
         Interlocked.Exchange(ref _writeLockFailures, 0);
         Interlocked.Exchange(ref _splitCount, 0);
         Interlocked.Exchange(ref _mergeCount, 0);
@@ -2071,7 +2146,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     private Result<int, BTreeLookupStatus> TryGetPessimistic(TKey key, ref ChunkAccessor<TStore> accessor)
     {
         // Unlimited OLC retries — guaranteed to complete as long as writers make progress
-        SpinWait spin = default;
+        PureSpin spin = default;
         while (true)
         {
             var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
@@ -2081,7 +2156,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
                 {
                     return new Result<int, BTreeLookupStatus>(BTreeLookupStatus.NotFound);
                 }
-                spin.SpinOnce();
+                spin.Once();
                 continue;
             }
 
@@ -2121,7 +2196,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             // root — the removal reports success and the value stays visible. Re-descend instead; the retry is unbounded for the same reason
             // TryGetMultiplePessimistic's is: it terminates as long as writers make progress, and each pass sees a tree one merge closer to settled.
             NodeWrapper leaf;
-            SpinWait descentSpin = default;
+            PureSpin descentSpin = default;
             while (true)
             {
                 leaf = FindLeaf(key, out _, ref opAccessor);
@@ -2136,7 +2211,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
                     break;
                 }
                 Interlocked.Increment(ref _obsoleteRestarts);
-                descentSpin.SpinOnce(-1);
+                descentSpin.Once();
             }
 
             if (!leaf.IsValid)
@@ -2238,7 +2313,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     private VariableSizedBufferAccessor<int, TStore> TryGetMultiplePessimistic(TKey key, ref ChunkAccessor<TStore> accessor)
     {
         // Unlimited OLC retries — guaranteed to complete as long as writers make progress
-        SpinWait spin = default;
+        PureSpin spin = default;
         while (true)
         {
             var (leafChunkId, leafVersion, keyIndex) = OptimisticDescendToLeaf(key, ref accessor);
@@ -2248,7 +2323,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
                 {
                     return default;
                 }
-                spin.SpinOnce();
+                spin.Once();
                 continue;
             }
 
@@ -2306,7 +2381,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     /// Two-phase spin policy tuned for OLC latch hold times (~100-500 ns):
     /// Phase 1: Tight PAUSE loop (64 iterations, ~100 ns on Zen / ~2 μs on Skylake+) — covers
     ///          the common case of a leaf insert/remove completing on another core.
-    /// Phase 2: SpinWait with Sleep(1) disabled — escalates to Yield/Sleep(0) for rare splits/merges
+    /// Phase 2: yielding wait, the IOP exception to the no-sleep rule — the holder may be inside page-cache admission. Sleep(1) stays disabled.
     ///          or SMT core-sharing, but never pays the 15 ms Windows timer-tick penalty.
     /// <para>
     /// The obsolete check sits in the spin, not before it, and that placement is the point. A node that is merely LOCKED right now may be locked by the very
@@ -2346,8 +2421,15 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             }
         }
 
-        // Phase 2: yield-capped SpinWait — holder is likely doing a split/merge or sharing our core.
-        // sleep1Threshold: -1 disables Sleep(1) which would stall for ~15 ms (Windows timer tick).
+        // Phase 2: the IOP exception to the no-sleep rule (see PureSpin). Phase 1 above is 64 pure PAUSEs, which covers the whole OLC case — a latch held
+        // across a handful of node writes is released in nanoseconds. Reaching HERE means the holder is doing something that is not that, and the reason
+        // is known and specific: PreDirtyForWrite is page-cache admission (ChunkAccessor.PreDirtyChunk -> GetChunkAddress(id, dirty:true)), it can fault
+        // a page in from the mapped file, and two sites call it while ALREADY holding a latch — the B-link move-right loop admits nextNode under node's
+        // write lock, and Phase 3 admits its spill siblings under the path locks. An IOP lives in a different time dimension from an OLC handoff, and
+        // burning a core spinning through one is exactly the waste PAUSE-only spinning is meant to avoid elsewhere.
+        //
+        // sleep1Threshold -1: yield and Sleep(0) are the right granularity for "let the holder finish its page fault". Sleep(1) is not — on Windows it
+        // costs a full ~15 ms timer tick, three orders of magnitude past any IOP this waits on.
         SpinWait spin = default;
         do
         {
@@ -2393,6 +2475,8 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             acquired = latch.TryWriteLockOnSmoPath(out wasObsolete);
         }
 
+        // Phase 2, same IOP exception as SpinWriteLock — and this is the caller that makes it concrete: Phase 3 calls PreDirtyForWrite on the spill
+        // siblings while the path locks are held, so the thread this waits on may be inside a page fault.
         SpinWait spin = default;
         while (!acquired)
         {
@@ -2509,8 +2593,13 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     /// </para>
     /// </remarks>
     private bool DescendRecordingPath(TKey key, IComparer<TKey> comparer, int traceOp, ref MutationContext ctx, ref NodeRelatives relatives,
-                                      ref ChunkAccessor<TStore> accessor, ref ChunkAccessor<TStore> sibAccessor, out NodeWrapper leaf)
+                                      ref ChunkAccessor<TStore> accessor, ref ChunkAccessor<TStore> sibAccessor, out NodeWrapper leaf, out int descentExit)
     {
+        // Reported in InsertRetryExit codes even though this descent is shared with RemoveIterative, because the insert retry loop is the only caller
+        // that tallies today and a second code set for the same four checks would be two vocabularies for one question. A Remove-side tally reuses
+        // these four unchanged. Its first measurement is why it exists: DescentFailed alone was 92% of the histogram, which is a black box wearing a
+        // name (#738).
+        descentExit = InsertRetryExit.Unknown;
         var node = Root;
         var parent = default(NodeWrapper);
         int parentVersion = 0;
@@ -2525,6 +2614,10 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             if (version == 0)
             {
                 leaf = default;
+                // ReadVersion() collapses LOCKED and OBSOLETE into the same 0, and the two want opposite responses — wait for the holder, versus re-descend
+                // because the node is gone (IXS-03). The descent's answer is the same either way (restart), so this is a diagnostic distinction only, and it
+                // is worth one extra read on a path that is already giving up: without it a version-zero storm cannot be told from an SMO storm.
+                descentExit = latch.IsObsolete ? InsertRetryExit.DescentNodeObsolete : InsertRetryExit.DescentNodeLocked;
                 return false; // node locked or obsolete — restart
             }
 
@@ -2534,6 +2627,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             if (hopped && !parent.GetLatch(ref accessor).ValidateVersion(parentVersion))
             {
                 leaf = default;
+                descentExit = InsertRetryExit.DescentParentRevalidateFailed;
                 return false;
             }
 
@@ -2550,6 +2644,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             if (!latch.ValidateVersion(version))
             {
                 leaf = default;
+                descentExit = InsertRetryExit.DescentNodeVersionChanged;
                 return false; // node modified between version read and data read — restart
             }
 
@@ -2558,6 +2653,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             if (!child.IsValid)
             {
                 leaf = default;
+                descentExit = InsertRetryExit.DescentChildInvalid;
                 return false;
             }
 
