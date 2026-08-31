@@ -23,8 +23,14 @@ workers so it scales the same way the rest of the tick DAG does.
 The fence is split into four chained phases — Prep, Migrate, AabbRefresh, Finalize — each dispatched as a
 chunk-parallel system after the user's tick DAG completes. A per-tick work planner sizes chunks from measured
 per-unit cost, continuously recalibrated from a sliding window of recent ticks, so work is bin-packed evenly
-across workers rather than split by a fixed count. This is entirely internal — application code does not call
-into it; it is configured via `RuntimeOptions`, not invoked.
+across workers rather than split by a fixed count. **The parallel dispatch** is entirely internal — it is
+configured via `RuntimeOptions`, not invoked.
+
+> **`WriteTickFence` itself is public, and calling it is not optional outside the runtime.** Under
+> `TyphonRuntime` the fence is invoked automatically at tick end and application code never touches it. A host
+> embedding the engine **without** the runtime must call `dbe.WriteTickFence(n)` itself, once per tick — see
+> [Embedding without the runtime](../../../guide/embedding-without-the-runtime.md). What is internal is *how* the fence spreads its
+> work across workers, not *whether* the fence runs.
 
 ## 💻 Usage
 

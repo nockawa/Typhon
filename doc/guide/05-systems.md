@@ -10,7 +10,7 @@ Everything so far you drove **by hand**: you opened a transaction, did one thing
 
 This is the chapter where Typhon stops being a database you poke and becomes an engine that runs your world. It's the densest in the guide, and the most important if you're building a server.
 
-> 📌 **The runtime is recommended, but optional.** Everything in chapters 1–4 works without it — if your app is request/response, a batch job, or embeds Typhon inside an existing loop (a game engine's own frame, say), you can keep driving the engine directly through transactions and never declare a single system. The runtime is the *recommended* path when you have continuous, tick-driven logic to run in parallel; it's not a requirement for using Typhon.
+> 📌 **The runtime is recommended, but optional.** Everything in chapters 1–4 works without it — if your app is request/response, a batch job, or embeds Typhon inside an existing loop (a game engine's own frame, say), you can keep driving the engine directly through transactions and never declare a single system. The runtime is the *recommended* path when you have continuous, tick-driven logic to run in parallel; it's not a requirement for using Typhon. **If you go that way, read [Embedding without the runtime](embedding-without-the-runtime.md) first** — driving the engine yourself carries exactly one obligation, and skipping it fails silently.
 
 Two ideas carry the whole chapter:
 

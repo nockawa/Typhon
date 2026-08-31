@@ -14,13 +14,32 @@ namespace Typhon.Engine;
 public partial class DatabaseEngine
 {
     /// <summary>
-    /// Serializes dirty SingleVersion component data to WAL at tick boundary. One TickFence chunk per SV ComponentTable.
-    /// Called by the game loop at each tick boundary.
+    /// Closes a tick: publishes the tick's pending work and establishes the crash-recovery boundary. <b>Must be called once per tick.</b>
     /// </summary>
-    /// <param name="tickNumber">Monotonic tick identifier.</param>
-    /// <param name="changeSet">Caller-supplied ChangeSet for shared dirty-page tracking across the whole tick fence (typically the per-tick UoW's
-    /// shared ChangeSet — see <see cref="UnitOfWork.ChangeSet"/>). When null, a one-shot local ChangeSet is created and committed by this method itself
-    /// (test/admin path: tests that invoke <c>WriteTickFence</c> directly without a UoW retain their original behaviour).</param>
+    /// <remarks>
+    /// <para><b>Four responsibilities</b>, not one:</para>
+    /// <list type="bullet">
+    ///   <item>serializes dirty <c>SingleVersion</c> component data to the WAL — one TickFence chunk per SV ComponentTable;</item>
+    ///   <item>executes the tick's pending <b>cluster migrations</b> (entities that crossed a spatial cell boundary);</item>
+    ///   <item>recomputes <b>cluster spatial AABBs</b> and the per-cell spatial index;</item>
+    ///   <item>drains <b>zone maps</b> and dirty-bit deltas.</item>
+    /// </list>
+    /// <para><b>Under <see cref="TyphonRuntime"/> this is automatic</b> — the runtime calls it from its tick-end callback and
+    /// application code does not. <b>A host that does NOT use the runtime must call it itself, once per tick</b>, after that tick's writes have been
+    /// committed and before the next tick begins. See the embedding guide (<c>doc/guide/embedding-without-the-runtime.md</c>).</para>
+    /// <para><b>What happens if it is never called.</b> Nothing throws and nothing is corrupted — the database silently stops maintaining itself:
+    /// <c>SingleVersion</c> components degrade to <c>Transient</c>-like durability (no crash recovery), queued cluster migrations never execute, and
+    /// spatial AABBs and zone maps go stale, so spatial queries return results computed against old positions.</para>
+    /// <para><b>Threading.</b> The caller must not mutate the database concurrently with this call. Under the runtime that holds by construction — the
+    /// fence runs after every system has completed. A host driving the fence itself is responsible for the same guarantee.</para>
+    /// <para><b>Checkpointing is separate and automatic</b> (timer, dirty-page threshold, back-pressure, graceful shutdown).
+    /// <see cref="ForceCheckpoint"/> is not part of the tick loop.</para>
+    /// </remarks>
+    /// <param name="tickNumber">Monotonic tick identifier. Must increase between calls.</param>
+    /// <param name="changeSet">ChangeSet for dirty-page tracking across the whole fence. Under the runtime this is the per-tick UoW's shared ChangeSet
+    /// (see <see cref="UnitOfWork.ChangeSet"/>), which consolidates the fence's dirty pages with the rest of the tick. <b>Pass <c>null</c> when driving
+    /// the fence from a host without a per-tick UoW</b> — this method then creates and commits a one-shot ChangeSet itself, which is correct but yields
+    /// per-fence rather than per-tick consolidation.</param>
     /// <returns>Highest LSN written, or 0 if nothing was serialized.</returns>
     public long WriteTickFence(long tickNumber, ChangeSet changeSet = null)
     {
