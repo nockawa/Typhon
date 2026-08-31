@@ -481,6 +481,12 @@ public sealed partial class TyphonRuntime : IDisposable
     /// The caller owns the returned Transaction and must Commit + Dispose it.
     /// Side-transactions are NOT visible to the current tick's main Transactions (snapshot isolation).
     /// </summary>
+    /// <remarks>
+    /// <b>Commit and dispose it before the system that created it returns</b> (rule <c>EW-01</c>). This is an ordinary transaction — it can write an indexed
+    /// field and therefore mutate a B+Tree — and nothing joins it to the tick. Held past the system's epilogue and committed later, it can land while the tick
+    /// fence is rewriting those same structures, which is the one path inside the runtime that can violate the fence's exclusivity. Per-system transactions
+    /// carry no such risk: the runtime commits and disposes those itself.
+    /// </remarks>
     public Transaction CreateSideTransaction(DurabilityMode durability = DurabilityMode.Immediate,
         CommitDiscipline discipline = CommitDiscipline.TickFence) => Engine.CreateQuickTransaction(durability, discipline);
 

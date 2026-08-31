@@ -30,8 +30,15 @@ public partial class DatabaseEngine
     /// <para><b>What happens if it is never called.</b> Nothing throws and nothing is corrupted — the database silently stops maintaining itself:
     /// <c>SingleVersion</c> components degrade to <c>Transient</c>-like durability (no crash recovery), queued cluster migrations never execute, and
     /// spatial AABBs and zone maps go stale, so spatial queries return results computed against old positions.</para>
-    /// <para><b>Threading.</b> The caller must not mutate the database concurrently with this call. Under the runtime that holds by construction — the
-    /// fence runs after every system has completed. A host driving the fence itself is responsible for the same guarantee.</para>
+    /// <para><b>Threading — a caller obligation, not an enforced one</b> (rule <c>EW-01</c>). No other thread may mutate the database while this runs: the
+    /// fence rewrites cluster B+Trees, the EntityMap, the per-cell spatial index and the cluster-to-cell map, and a concurrent writer corrupts them silently.
+    /// Under <see cref="TyphonRuntime"/> it holds by construction — the fence runs from the scheduler's tick-end callback, after every system has completed,
+    /// and each system's Transaction is committed and disposed in its own epilogue. A host driving the fence itself owns the same guarantee; trivially
+    /// satisfied single-threaded, unchecked otherwise.</para>
+    /// <para><b>The one trap inside the runtime is a side transaction.</b> <c>TickContext.CreateSideTransaction</c> hands back an ORDINARY transaction, so it
+    /// can write an indexed field and mutate a B+Tree, and the caller owns its <c>Commit</c> and <c>Dispose</c> — nothing joins it to the tick. A side
+    /// transaction held past the end of the system that created it, and committed while the fence runs, is exactly the concurrent mutation this contract
+    /// forbids. Commit and dispose it before the system returns.</para>
     /// <para><b>Checkpointing is separate and automatic</b> (timer, dirty-page threshold, back-pressure, graceful shutdown).
     /// <see cref="ForceCheckpoint"/> is not part of the tick loop.</para>
     /// </remarks>
