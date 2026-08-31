@@ -53,6 +53,10 @@ public class OlcBTreeRaceStressTests
         OlcDescentTrace.OnInvalidChunkId = DescentTraceOnInvalidChunkId;
         OlcDescentTrace.OnRemoveNotFound = OnRemoveNotFoundCapture;
         OlcDescentTrace.OnMovedRightLeafFull = OnMovedRightLeafFullCapture;
+        OlcDescentTrace.OnRootSplit = OnRootSplitCapture;
+        _rootSplitBad = 0;
+        _rootSplitTotal = 0;
+        while (_rootSplitSamples.TryTake(out _)) { }
         _mrlfCaptured = 0;
         while (_mrlfSamples.TryTake(out _)) { }
         for (int i = 0; i < _removeNotFoundByBranch.Length; i++) { _removeNotFoundByBranch[i] = 0; }
@@ -140,6 +144,13 @@ public class OlcBTreeRaceStressTests
                 foreach (var sample in _rdSamples) { if (++n > 10) break; report.AppendLine($"    {sample}"); }
             }
 
+        report.AppendLine();
+        report.AppendLine($"=== root splits: total={Volatile.Read(ref _rootSplitTotal)} LEVEL-MIXING={Volatile.Read(ref _rootSplitBad)} ===");
+        foreach (var sample in _rootSplitSamples)
+        {
+            report.AppendLine("  " + sample);
+        }
+
             if (!_mrlfSamples.IsEmpty)
             {
                 report.AppendLine();
@@ -160,7 +171,32 @@ public class OlcBTreeRaceStressTests
             OlcDescentTrace.OnInvalidChunkId = null;
             OlcDescentTrace.OnRemoveNotFound = null;
             OlcDescentTrace.OnMovedRightLeafFull = null;
+            OlcDescentTrace.OnRootSplit = null;
         }
+    }
+
+    // === #738 probe: root splits that mix levels ===
+    private static int _rootSplitBad;
+    private static int _rootSplitTotal;
+    private static readonly ConcurrentBag<string> _rootSplitSamples = new();
+
+    /// <summary>
+    /// Fires at every Phase 4 root split. A sound one joins two nodes of the SAME level; disagreeing leaf-ness is the level-mixing defect, caught where
+    /// it is made rather than thousands of retries later in a leaf that cannot be routed to.
+    /// </summary>
+    private static void OnRootSplitCapture(int descentDepth, int rootNow, int heldNode, int promoted, bool leftIsLeaf, bool promotedIsLeaf, int height)
+    {
+        Interlocked.Increment(ref _rootSplitTotal);
+        if (leftIsLeaf == promotedIsLeaf && rootNow == heldNode)
+        {
+            return;
+        }
+        if (Interlocked.Increment(ref _rootSplitBad) > 20)
+        {
+            return;
+        }
+        _rootSplitSamples.Add($"descentDepth={descentDepth} Root=#{rootNow}(leaf={leftIsLeaf}) held=#{heldNode} "
+                            + $"promoted=#{promoted}(leaf={promotedIsLeaf}) Height={height} rootMovedUnderUs={rootNow != heldNode}");
     }
 
     // === TEMPORARY #738 probe: MovedRightLeafFull geometry ===
@@ -381,6 +417,10 @@ public class OlcBTreeRaceStressTests
                 }, TaskCreationOptions.LongRunning);
             }
             Task.WaitAll(tasks);
+            if (!exceptions.IsEmpty)
+            {
+                TestContext.WriteLine($"[Add_Splits] {DescribeTreeSoundness(tree, segment)}");
+            }
             ThrowIfAny(exceptions, "Add_Splits workers threw");
 
             int expected = threadCount * keysPerThread;
@@ -518,6 +558,10 @@ public class OlcBTreeRaceStressTests
                 }, TaskCreationOptions.LongRunning);
             }
             Task.WaitAll(tasks);
+            if (!exceptions.IsEmpty)
+            {
+                TestContext.WriteLine($"[Add_Disjoint] {DescribeTreeSoundness(tree, segment)}");
+            }
             ThrowIfAny(exceptions, "Add_Disjoint workers threw");
 
             int expected = threadCount * keysPerThread;
@@ -609,6 +653,10 @@ public class OlcBTreeRaceStressTests
                 }, TaskCreationOptions.LongRunning);
             }
             Task.WaitAll(tasks);
+            if (!exceptions.IsEmpty)
+            {
+                TestContext.WriteLine($"[Remove_Disjoint] {DescribeTreeSoundness(tree, segment)}");
+            }
             ThrowIfAny(exceptions, "Remove_Disjoint workers threw");
             if (errors != 0)
             {
@@ -688,6 +736,10 @@ public class OlcBTreeRaceStressTests
                 }, TaskCreationOptions.LongRunning);
             }
             Task.WaitAll(tasks);
+            if (!exceptions.IsEmpty)
+            {
+                TestContext.WriteLine($"[Remove_Merges] {DescribeTreeSoundness(tree, segment)}");
+            }
             ThrowIfAny(exceptions, "Remove_Merges workers threw");
 
             int expected = totalKeys - threadCount * keysToRemovePerThread;
@@ -791,6 +843,10 @@ public class OlcBTreeRaceStressTests
             }
             startSignal.Set();
             Task.WaitAll(insertTasks.Concat(removeTasks).ToArray());
+            if (!exceptions.IsEmpty)
+            {
+                TestContext.WriteLine($"[Remove_Mixed] {DescribeTreeSoundness(tree, segment)}");
+            }
             ThrowIfAny(exceptions, "Remove_Mixed workers threw");
 
             int expected = initialEntries + writerCount * insertsPerWriter - removerCount * removesPerRemover;
@@ -1277,6 +1333,70 @@ public class OlcBTreeRaceStressTests
     {
         var v = Environment.GetEnvironmentVariable(name);
         return int.TryParse(v, out var n) ? n : fallback;
+    }
+
+    /// <summary>
+    /// Runs <c>CheckConsistency</c> on a tree whose workers have just failed, and returns its verdict as text instead of throwing it.
+    /// </summary>
+    /// <remarks>
+    /// The scenario bodies already end in a CheckConsistency call, and on a failing iteration they never reach it — the worker exception is rethrown
+    /// first. So the one question worth asking about a failure — is the TREE broken, or did a sound tree merely fail to make progress? — went
+    /// unanswered on exactly the runs able to answer it. ValidateDescentAndChainAgree inside CheckConsistency is the IXS-05 test (do the separators
+    /// and the leaf chain reach the same set of leaves?), which is precisely the shape the MovedRightLeafFull geometry probe points at.
+    /// <para>
+    /// Safe here and nowhere earlier: every worker task has been joined, so the tree is quiescent and the check is not reading it mid-SMO.
+    /// </para>
+    /// </remarks>
+    /// <summary>Root-level shape, for a failure record: the numbers that say whether a root split produced a lopsided tree.</summary>
+    private static string DescribeTreeShape(IntSingleBTree<PersistentStore> tree, ref ChunkAccessor<PersistentStore> accessor)
+    {
+        var root = tree.DiagnosticRoot;
+        if (!root.IsValid)
+        {
+            return "shape: root invalid";
+        }
+        bool rootIsLeaf = root.GetIsLeaf(ref accessor);
+        int count = root.GetCount(ref accessor);
+        var sb = new StringBuilder($"shape: Height={tree.Height} root=#{root.ChunkId} rootIsLeaf={rootIsLeaf} rootCount={count} entries={tree.EntryCount}");
+        if (!rootIsLeaf)
+        {
+            var left = root.GetLeft(ref accessor);
+            sb.Append($" left=#{left.ChunkId}{(left.IsValid && left.GetIsLeaf(ref accessor) ? "(LEAF)" : "(node)")}");
+            for (int i = 0; i < count && i < 8; i++)
+            {
+                var child = root.GetChild(i, ref accessor);
+                sb.Append($" [{i}]=#{child.ChunkId}{(child.IsValid && child.GetIsLeaf(ref accessor) ? "(LEAF)" : "(node)")}");
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static string DescribeTreeSoundness(IntSingleBTree<PersistentStore> tree, ChunkBasedSegment<PersistentStore> segment)
+    {
+        var accessor = segment.CreateChunkAccessor();
+        try
+        {
+            var shape = DescribeTreeShape(tree, ref accessor);
+            tree.CheckConsistency(ref accessor);
+            return $"post-failure CheckConsistency: PASSED — sound tree, so this was pure liveness. {shape}";
+        }
+        catch (Exception ex)
+        {
+            string shape;
+            try
+            {
+                shape = DescribeTreeShape(tree, ref accessor);
+            }
+            catch (Exception shapeEx)
+            {
+                shape = "shape unreadable: " + shapeEx.GetType().Name;
+            }
+            return $"post-failure CheckConsistency: FAILED — {ex.Message} || {shape}";
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
     }
 
     private static void ThrowIfAny(ConcurrentBag<Exception> exceptions, string label)

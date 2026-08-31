@@ -68,4 +68,10 @@ internal static class OlcDescentTrace
     /// </summary>
     /// <remarks>Int casts, so wire only for int-keyed test trees — same contract as <see cref="OnRemoveNotFound"/>.</remarks>
     public static Action<int, int, int, int, int, int, int, int> OnMovedRightLeafFull;
+
+    /// <summary>
+    /// Called at every Phase 4 root split, before the new root is published. Args: (descentDepth, rootChunkIdNow, heldNodeChunkId, promotedChunkId,
+    /// leftIsLeaf, promotedIsLeaf, height). A root whose two children disagree on leaf-ness is a level-mixing split (#738).
+    /// </summary>
+    public static Action<int, int, int, int, bool, bool, int> OnRootSplit;
 }

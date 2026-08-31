@@ -1,10 +1,10 @@
 namespace Typhon.Engine.Internals;
 
 /// <summary>
-/// Reason codes for a no-progress return from <c>BTree{TKey,TStore}.InsertIterative</c> — the sixteen places it gives up and asks its caller to re-descend.
+/// Reason codes for a no-progress return from <c>BTree{TKey,TStore}.InsertIterative</c> — the seventeen places it gives up and asks its caller to re-descend.
 /// </summary>
 /// <remarks>
-/// #738 exists because all sixteen collapsed into one counter. <c>AddOrUpdateCorePessimistic</c>'s retry loop increments a single restart tally and bounds
+/// #738 exists because all of them collapsed into one counter. <c>AddOrUpdateCorePessimistic</c>'s retry loop increments a single restart tally and bounds
 /// on <c>MaxPessimisticRestarts</c>, so a nightly record of a restart storm said how MANY times the operation gave up and nothing about WHERE — and the fix
 /// for each of these is different. Two of the sixteen were counted before this table existed, both into <c>ObsoleteRestarts</c>, which the stress harness
 /// did not even sample.
@@ -92,8 +92,20 @@ internal static class InsertRetryExit
     /// <summary>An ancestor's version changed between the descent and the path lock.</summary>
     public const int PathVersionChanged = 16;
 
+    /// <summary>
+    /// The descent recorded no internal path — it saw the root as a leaf — but the tree has since grown a level above that leaf (#738).
+    /// </summary>
+    /// <remarks>
+    /// Restarting here is not contention handling, it is the guard on a structural precondition. With <c>Depth == 0</c> the insert's Phase 4 builds a
+    /// NEW ROOT over the leaf it holds, and that is only correct while the leaf still IS the root. The leaf's own version does not establish that:
+    /// it proves the leaf was not modified, not that no level appeared above it. Without this check Phase 4 runs <c>SetLeft(Root)</c> against a Root
+    /// that is now an internal node while promoting a leaf, producing a root whose two children sit at different levels — measured at 1 in 7,162
+    /// root splits, and every unroutable-leaf stall traced back to one.
+    /// </remarks>
+    public const int RootMovedUnderDescent = 17;
+
     /// <summary>One past the highest code — sizes the counter array without hard-coding the count at each call site.</summary>
-    public const int Count = 17;
+    public const int Count = 18;
 
     /// <summary>Short names, indexed by code, for diagnostic dumps.</summary>
     public static readonly string[] Names =
@@ -115,5 +127,6 @@ internal static class InsertRetryExit
         "LeafNextLockFailed",
         "PathLockFailed",
         "PathVersionChanged",
+        "RootMovedUnderDescent",
     ];
 }

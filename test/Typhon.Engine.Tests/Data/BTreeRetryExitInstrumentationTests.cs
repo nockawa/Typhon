@@ -90,6 +90,7 @@ public class BTreeRetryExitInstrumentationTests
     /// </remarks>
     [Test]
     [CancelAfter(10_000)]
+    [VerifiesRule("IXW-05")]
     public unsafe void InsertRetryExits_ConcurrentDisjointInserts_AccountForEveryPessimisticRestart()
     {
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
@@ -137,6 +138,19 @@ public class BTreeRetryExitInstrumentationTests
 
             Assert.That(tree.EntryCount, Is.EqualTo(threadCount * keysPerThread), "every disjoint key should be present");
             AssertExitsAccountForRestarts(tree);
+
+            // IXW-05. CheckConsistency's ValidateLeafDepths is what catches a level-mixing root split, and ValidateDescentAndChainAgree is what catches the
+            // orphaned leaf that follows from one. Asserted rather than logged: this fixture's whole subject is a defect that reported PASSED for months
+            // because the checker's result was discarded.
+            var checkAccessor = segment.CreateChunkAccessor();
+            try
+            {
+                tree.CheckConsistency(ref checkAccessor);
+            }
+            finally
+            {
+                checkAccessor.Dispose();
+            }
         }
         finally
         {

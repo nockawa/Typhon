@@ -377,6 +377,34 @@ written for the read path; these are the write-path obligations that went unwrit
   verified: BtreeTests.RemoveThenReinsertLeafFirstKey_DoesNotStallInsert (2 m 34 s and failing before, 130 ms and green after)
   requires IXW-01 (its bound is what turns this into a diagnosable throw instead of a hang)
 
+### IXW-05: A writer creates a new root only while it still holds the CURRENT root `[fatal]` `[silent]`
+
+  invariant a writer whose recorded descent path is empty (`ctx.Depth == 0`, i.e. it found the root to be a leaf) re-reads `Root`
+            after taking the leaf's write lock, and restarts unless `Root == the leaf it holds`
+  never building a new root over a node that is no longer the root
+  never treating "the leaf's version did not change" as "no level appeared above the leaf" - they are facts about different objects
+  enforce `InsertIterative` checks `ctx.Depth == 0 && Root.ChunkId != node.ChunkId` immediately after `ValidateVersionLocked`, and
+          bails with `InsertRetryExit.RootMovedUnderDescent`. Checked THERE and not in Phase 4: at Phase 4 the leaf split has already
+          happened, so bailing would leave the new leaf chained and unrouted - the exact orphan this prevents.
+  enforce the bail uses `AbortWriteLock`, not `WriteUnlock` - nothing was modified, so a version bump would only restart other
+          threads for free (IXW-04 states the same discipline).
+  scope: BTree.Insert.cs (`InsertIterative`), InsertRetryExit.cs (`RootMovedUnderDescent`)
+  rationale: with an empty path there is no ancestor to promote into, so the insert's Phase 4 builds a new root over the leaf it
+             holds - `newRoot.SetLeft(Root)` plus `Insert(0, promoted)`. Both halves assume the held leaf IS `Root`. The descent
+             established that, but the descent's answer can be arbitrarily stale: the leaf's own version proves only that the leaf was
+             not modified, and a tree can grow several levels above a leaf without touching it. When it has, `SetLeft` attaches an
+             internal subtree while `promoted` is a leaf, and the new root's two children sit at different levels.
+  on_violation: the tree is permanently unbalanced and `Height` is one too high. Leaves under the promoted side become reachable only
+                through the B-link chain, never by descent, so every writer whose key routes there right-walks onto a full leaf it
+                cannot split - its recorded path belongs to the leaf the descent chose - and restarts until `MaxPessimisticRestarts`
+                throws. That is #738: a liveness symptom whose cause is structural, which is why five hypotheses about lock cycles
+                all missed it.
+  measured: 1 level-mixing root split in 7,162 on a 4-core box (`descentDepth=0 Root=#37(leaf=False) held=#4 promoted=#55(leaf=True)
+            Height=3`), which reddened roughly 40% of 30-second `OlcBTreeRaceStressTests` runs and 3 of 7 nightlies. After the guard:
+            0 in 70,833 root splits across 10 runs, and 0 stalls.
+  verified: BTreeRetryExitInstrumentationTests.InsertRetryExits_ConcurrentDisjointInserts_AccountForEveryPessimisticRestart
+  requires IXS-05 (the orphaned leaf is how this violation becomes visible)
+
 ### IXW-04: A write picks its target leaf with an insert-mode descent, and proves that leaf's authority before mutating `[silent]`
 
   invariant a descent whose result will be WRITTEN to passes `followRightLink: false`, and the leaf it returns is checked against

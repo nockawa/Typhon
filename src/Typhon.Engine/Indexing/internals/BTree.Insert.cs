@@ -735,6 +735,8 @@ internal abstract partial class BTree<TKey, TStore>
             return;
         }
 
+        int descentDepth = ctx.Depth;   // #738 probe: 0 means the descent saw the root AS A LEAF
+
         // Phase 1.5A: Lock leaf with version validation.
         // Between Phase 1 descent and lock acquisition, a concurrent writer may have split/modified this leaf. Snapshot the version before locking,
         // then validate after.
@@ -780,6 +782,22 @@ internal abstract partial class BTree<TKey, TStore>
         {
             leafLatch.AbortWriteLock(); // release without version bump — leaf was modified, not by us
             retryExit = InsertRetryExit.LeafVersionChanged;
+            return;
+        }
+
+        // #738: with Depth == 0 the descent found no internal node, so Phase 4 below will build a NEW ROOT over this leaf. That is correct only while
+        // this leaf still IS the root, and the version check above does not establish it — it proves the leaf was not modified, not that the tree did
+        // not grow a level above it. The two are different facts about different objects, and conflating them is the defect: measured at 1 level-mixing
+        // root split in 7,162, where Phase 4 ran SetLeft against a Root that had become an internal node while promoting a leaf. The result is a root
+        // whose left child is a subtree and whose indexed child is a leaf, Height incremented on top of that, and a leaf reachable only through the
+        // B-link chain — which is what every #738 stall was ultimately spinning against.
+        //
+        // Checked HERE rather than in Phase 4 because here nothing has been mutated yet. By Phase 4 the leaf split has already happened, so bailing
+        // would leave the new leaf chained and unrouted: the very orphan this prevents.
+        if (ctx.Depth == 0 && Root.ChunkId != node.ChunkId)
+        {
+            leafLatch.AbortWriteLock();
+            retryExit = InsertRetryExit.RootMovedUnderDescent;
             return;
         }
 
@@ -1127,6 +1145,14 @@ internal abstract partial class BTree<TKey, TStore>
             var newRootLatch = newRoot.GetLatch(ref accessor);
             var newRootOutcome = SpinWriteLock(newRootLatch);   // freshly allocated — Obsolete unreachable, see the twin in AddOrUpdateCore
             Debug.Assert(newRootOutcome != WriteLockOutcome.Obsolete, "a freshly allocated root cannot be obsolete");
+            if (OlcDescentTrace.OnRootSplit != null)
+            {
+                var curRoot = Root;
+                var promotedNode = _storage.LoadNode(promoted.Value.Value);
+                OlcDescentTrace.OnRootSplit(descentDepth, curRoot.ChunkId, node.ChunkId, promoted.Value.Value,
+                                            curRoot.IsValid && curRoot.GetIsLeaf(ref accessor),
+                                            promotedNode.IsValid && promotedNode.GetIsLeaf(ref accessor), Height);
+            }
             newRoot.SetLeft(Root, ref accessor);
             newRoot.Insert(0, promoted.Value, ref accessor);
             Root = newRoot;
