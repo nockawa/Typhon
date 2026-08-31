@@ -414,3 +414,46 @@ written for the read path; these are the write-path obligations that went unwrit
   verified: BTreeMoveLeafAuthorityTests.MoveEvenToOdd_SingleThreaded_KeepsEverySeparatorRoutingToItsLeaf
             (mutant: BTreeMoveLeafAuthorityTests.Mutant_AKeyMissingFromItsAuthoritativeLeaf_IsReported)
   requires IXW-03 (it is the lower-bound half of this pair)
+
+### IXW-05: A writer creates a new root only while it still holds the CURRENT root `[fatal]` `[silent]`
+
+  invariant a writer re-reads `Root` after taking its leaf's write lock and restarts unless the TOP OF ITS RECORDED PATH is still the
+            root - `node` when `ctx.Depth == 0`, `ctx.PathNodes[0]` otherwise
+  never building a new root over a node that is no longer the root
+  never treating "the recorded node's version did not change" as "no level appeared above it" - facts about different objects
+  never checking only the `Depth == 0` shape: Phase 3 rebinds `node` to `ctx.PathNodes[0]` as it unwinds, so a stale path top reaches
+        Phase 4 at every depth, and the deeper case pairs a whole subtree against a promoted node one level short
+  enforce `InsertIterative` computes `pathTop = ctx.Depth == 0 ? node : ctx.PathNodes[0]` and compares it to `_rootChunkId` (a single
+          volatile read) immediately after `ValidateVersionLocked`, bailing with `InsertRetryExit.RootMovedUnderDescent`. Checked THERE
+          and not in Phase 4: at Phase 4 the leaf split has already happened, so bailing would leave the new leaf chained and unrouted -
+          the exact orphan this prevents.
+  enforce the check pairs with the path-lock version validation and neither alone suffices: this one catches a path that was ALREADY
+          stale when recorded (the growth happened before the descent sampled the version, so the recorded version validates cleanly),
+          that one catches a path that goes stale afterwards.
+  enforce the bail uses `AbortWriteLock`, not `WriteUnlock` - nothing was modified, so a version bump would only restart other
+          threads for free (IXW-04 states the same discipline).
+  scope: BTree.Insert.cs (`InsertIterative`), InsertRetryExit.cs (`RootMovedUnderDescent`)
+  rationale: with an empty path there is no ancestor to promote into, so the insert's Phase 4 builds a new root over the leaf it
+             holds - `newRoot.SetLeft(Root)` plus `Insert(0, promoted)`. Both halves assume the held leaf IS `Root`. The descent
+             established that, but the descent's answer can be arbitrarily stale: the leaf's own version proves only that the leaf was
+             not modified, and a tree can grow several levels above a leaf without touching it. When it has, `SetLeft` attaches an
+             internal subtree while `promoted` is a leaf, and the new root's two children sit at different levels.
+  on_violation: the tree is permanently unbalanced and `Height` is one too high. Leaves under the promoted side become reachable only
+                through the B-link chain, never by descent, so every writer whose key routes there right-walks onto a full leaf it
+                cannot split - its recorded path belongs to the leaf the descent chose - and restarts until `MaxPessimisticRestarts`
+                throws. That is #738: a liveness symptom whose cause is structural, which is why five hypotheses about lock cycles
+                all missed it.
+  measured: 1 level-mixing root split in 7,162 on a 4-core box (`descentDepth=0 Root=#37(leaf=False) held=#4 promoted=#55(leaf=True)
+            Height=3`), which reddened roughly 40% of 30-second `OlcBTreeRaceStressTests` runs and 3 of 7 nightlies. After the guard:
+            0 in 70,833 root splits across 10 runs, and 0 stalls.
+  verified: BTreeRetryExitInstrumentationTests.RootSplitsUnderAParkedWriter_TheParkedWriterRestartsInsteadOfBuildingASecondRoot
+            DETERMINISTIC, and demonstrated to fail. It parks writer A at `OlcDescentTrace.OnDescentComplete` - descent finished, NO lock held, which is the
+            defect's own window - lets writer B split that root leaf and publish a new root, then releases A. A's leaf-version read is now already
+            post-split, so the validation passes on a node that is no longer the root, and only this rule's check catches it. Two ManualResetEventSlim
+            handoffs, no sleeps, 6 ms. MEASURED as a mutant: commenting out the guard turns the assertion on
+            `InsertRetryExitCount(RootMovedUnderDescent)` from >= 1 to 0 and reddens this test in 19 ms.
+            A second test asserting only `CheckConsistency` on the same interleaving was written and DELETED: it passed with the guard disabled too, so it
+            discriminated nothing. Recorded because a test that cannot fail is the exact defect this file's IXS-05 history is about.
+  note: the nightly `OlcBTreeRaceStressTests` tier remains the probabilistic net for the same defect arriving by a real race - ~40% of runs red before the
+        guard, 0 in 70,833 root splits after.
+  requires IXS-05 (the orphaned leaf is how this violation becomes visible)

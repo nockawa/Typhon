@@ -19,6 +19,11 @@ namespace Typhon.Engine.Internals;
 /// </list>
 /// <para>This struct must not be copied after first use — the spin counter tracks
 /// progression state. Pass by <c>ref</c> if shared across methods.</para>
+/// <para>
+/// The ladder above ends in <c>Sleep(1)</c>, which on Windows is a full ~15 ms timer tick. That is the right wait when the holder may be doing
+/// something slow — I/O above all — and the wrong one when it is a few instructions from releasing a latch. For that second case use
+/// <see cref="PureSpin"/>, which never leaves <c>Thread.SpinWait</c>. Picking between the two is a claim about what is being waited FOR.
+/// </para>
 /// </remarks>
 [PublicAPI]
 [StructLayout(LayoutKind.Sequential)]

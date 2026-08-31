@@ -59,4 +59,15 @@ internal static class OlcDescentTrace
     /// (e.g., String64) the int casts are nonsensical — wire only for int-keyed test trees.
     /// </summary>
     public static Action<int, int, int, int, int> OnRemoveNotFound;
+
+    /// <summary>
+    /// Fires in <c>InsertIterative</c> once the descent has completed and BEFORE any lock is taken, with (leafChunkId, ctx.Depth).
+    /// </summary>
+    /// <remarks>
+    /// A seam, and the only one that makes IXW-05 deterministically testable. The window it opens is the defect's own: a completed descent holding NO lock,
+    /// so the tree can grow a level underneath it and the version this writer reads next is already post-growth — which is precisely why the validation that
+    /// follows cannot catch a stale path. Otherwise reachable only by a race measured at 1 in 7,162 root splits, so a test without this hook verifies the
+    /// rule with probability near zero and would stay green if the guard were deleted. Null in production: one null-check per pessimistic descent.
+    /// </remarks>
+    public static Action<int, int> OnDescentComplete;
 }
