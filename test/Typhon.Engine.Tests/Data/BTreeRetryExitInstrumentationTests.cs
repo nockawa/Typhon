@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using System;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -48,11 +49,17 @@ public class BTreeRetryExitInstrumentationTests
     public void TearDown() => (_serviceProvider as IDisposable)?.Dispose();
 
     /// <summary>
-    /// Every pessimistic retry is attributed to exactly one named exit, on a single-threaded workload that drives the split path hard.
+    /// An uncontended workload that splits heavily retries ZERO times — no restart is self-inflicted.
     /// </summary>
+    /// <remarks>
+    /// This replaces an assertion that could not fail. It used to check the accounting invariant (histogram sum == PessimisticRestarts) on a single-threaded
+    /// run, where both sides are 0 and no reachable state makes 0 != 0 — the exact "test that cannot fail" this fixture exists to guard against, reproduced
+    /// inside the guard. The honest property here is stronger and CAN fail: with one thread there is no contention, so every bail in InsertIterative is
+    /// either unreachable or a defect, and any future change that makes an uncontended split restart shows up as a non-zero count naming its own cause.
+    /// </remarks>
     [Test]
     [CancelAfter(5000)]
-    public unsafe void InsertRetryExits_SingleThreadedSplits_AccountForEveryPessimisticRestart()
+    public unsafe void InsertRetryExits_SingleThreadedSplits_NeverRetry()
     {
         using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
         using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
@@ -73,6 +80,10 @@ public class BTreeRetryExitInstrumentationTests
             accessor.Dispose();
 
             AssertExitsAccountForRestarts(tree);
+            Assert.That(
+                tree.PessimisticRestarts,
+                Is.Zero,
+                $"an uncontended insert workload must never retry; exits=[{tree.DescribeInsertRetryExits()}]");
         }
         finally
         {
@@ -119,7 +130,13 @@ public class BTreeRetryExitInstrumentationTests
                     try
                     {
                         var wa = segment.CreateChunkAccessor();
-                        barrier.SignalAndWait();
+                        // Timeout, not the bare overload: a worker that throws before signalling would otherwise park every other participant forever,
+                        // Task.WaitAll would never return, and [CancelAfter] cannot abort a test that takes no CancellationToken — the fixture would hang
+                        // rather than fail.
+                        if (!barrier.SignalAndWait(TimeSpan.FromSeconds(5)))
+                        {
+                            throw new TimeoutException("barrier timed out — a worker failed before reaching it");
+                        }
                         int start = tid * keysPerThread + 1;
                         for (int i = start; i < start + keysPerThread; i++)
                         {
@@ -157,6 +174,201 @@ public class BTreeRetryExitInstrumentationTests
             epochManager.ExitScope(setupDepth);
         }
     }
+
+    // ============================================================================================================================================
+    // IXW-05, driven deterministically. The race it guards is measured at 1 in 7,162 root splits, so a concurrency test verifies it with probability near
+    // zero; these force the exact interleaving with two event handoffs and no sleeps.
+    // ============================================================================================================================================
+
+    /// <summary>
+    /// A writer parked on a validated root-leaf, while another writer root-splits underneath it, restarts instead of building a second root.
+    /// </summary>
+    [Test]
+    [CancelAfter(15_000)]
+    [VerifiesRule("IXW-05")]
+    public unsafe void RootSplitsUnderAParkedWriter_TheParkedWriterRestartsInsteadOfBuildingASecondRoot()
+    {
+        RunStaleRootScenario(out var tree, out var segment, out var exceptions);
+
+        Assert.That(exceptions, Is.Empty, "neither writer should throw");
+        Assert.That(
+            tree.InsertRetryExitCount(InsertRetryExit.RootMovedUnderDescent),
+            Is.GreaterThanOrEqualTo(1),
+            "the parked writer's path top stopped being the root, so IXW-05's guard must have sent it back to re-descend");
+
+        // This assertion is the mutant, not a separate test: disabling the guard in BTree.Insert.cs makes the count above 0 and this test red in 19 ms,
+        // measured. A second test asserting only CheckConsistency was tried and deleted — it passed with the guard disabled too, so it discriminated
+        // nothing, which is the failure mode this whole fixture exists to prevent.
+
+        var accessor = segment.CreateChunkAccessor();
+        try
+        {
+            tree.CheckConsistency(ref accessor);
+        }
+        finally
+        {
+            accessor.Dispose();
+            _serviceProvider.GetRequiredService<EpochManager>().ExitScope(_scenarioScope);
+        }
+    }
+
+    private static void CheckConsistencyOn(IntSingleBTree<PersistentStore> tree, ref ChunkAccessor<PersistentStore> accessor)
+        => tree.CheckConsistency(ref accessor);
+
+    /// <summary>
+    /// The detector: a tree whose root gains a LEAF child while its other children are internal — IXW-05's exact <c>on_violation</c> shape — is reported.
+    /// </summary>
+    /// <remarks>
+    /// The verifier above proves the GUARD fires; this proves the CHECK that would catch a regression can fail. The corrupt shape is built directly rather
+    /// than raced for: re-pointing one of the root's separators at a leaf from two levels down is precisely what Phase 4 does when it runs `SetLeft(Root)`
+    /// against a Root that has become internal while promoting a leaf, and it is what `ValidateLeafDepths` exists to report.
+    /// </remarks>
+    [Test]
+    [CancelAfter(15_000)]
+    [RuleMutant("IXW-05")]
+    public unsafe void Mutant_ARootWithChildrenAtDifferingDepths_IsReported()
+    {
+        using var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var segment = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 400, sizeof(Index32Chunk));
+
+        var depth = epochManager.EnterScope();
+        try
+        {
+            var accessor = segment.CreateChunkAccessor();
+            var tree = new IntSingleBTree<PersistentStore>(segment);
+            for (int i = 1; i <= 3000; i++)
+            {
+                tree.Add(i, i * 10, ref accessor);
+            }
+
+            // Green first — otherwise the mutant proves nothing about the mutation.
+            Assert.That(tree.Height, Is.GreaterThanOrEqualTo(3), "need at least three levels for a leaf to be attachable at the wrong one");
+            Assert.DoesNotThrow(() => CheckConsistencyOn(tree, ref accessor), "the unmutated tree must be clean, or this mutant tests nothing");
+
+            // The mutation: point one of the root's separators at a leaf that lives two levels down, so leaves sit at differing depths.
+            var root = tree.DiagnosticRoot;
+            var midChild = root.GetChild(0, ref accessor);
+            var deepLeaf = midChild.GetChild(0, ref accessor);
+            Assert.That(deepLeaf.GetIsLeaf(ref accessor), Is.True, "expected a leaf two levels below the root");
+
+            var separator = root.GetFirst(ref accessor);
+            root.SetFirst(new IntSingleBTree<PersistentStore>.KeyValueItem(separator.Key, deepLeaf.ChunkId), ref accessor);
+
+            // Reduced to a report string first, matching the IXW-04 mutant: AssertDetects wants the verifier's ASSERTION to fail, and CheckConsistency
+            // signals by throwing.
+            string report = null;
+            try
+            {
+                CheckConsistencyOn(tree, ref accessor);
+            }
+            catch (Exception ex)
+            {
+                report = ex.Message;
+            }
+            accessor.Dispose();
+
+            RuleMutants.AssertDetects("IXW-05", "differing depths", () => Assert.That(report, Is.Null, report));
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    /// <summary>
+    /// Parks writer A on a validated, write-locked ROOT-LEAF, lets writer B split that root and publish a new one, then releases A into the guard.
+    /// </summary>
+    /// <remarks>
+    /// A is held at <c>OnLeafLockedBeforeRootCheck</c>, which fires after A has taken and validated the leaf's write lock and before the IXW-05 check. B
+    /// cannot take that leaf's lock while A holds it, so B is released only once A is parked and B's own insert then drives the root split through the
+    /// pessimistic path. Two <see cref="ManualResetEventSlim"/> handoffs, no sleeps, no dependence on the scheduler.
+    /// </remarks>
+    private unsafe void RunStaleRootScenario(out IntSingleBTree<PersistentStore> tree, out ChunkBasedSegment<PersistentStore> segment,
+                                             out ConcurrentBag<Exception> exceptions)
+    {
+        var mpmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        var epochManager = _serviceProvider.GetRequiredService<EpochManager>();
+        var seg = mpmmf.AllocateChunkBasedSegment(PageBlockType.None, 200, sizeof(Index32Chunk));
+        segment = seg;
+        exceptions = new ConcurrentBag<Exception>();
+        var errors = exceptions;
+
+        var setupDepth = epochManager.EnterScope();
+        var setup = segment.CreateChunkAccessor();
+        var built = new IntSingleBTree<PersistentStore>(segment);
+
+        // Fill the root leaf to exactly capacity so the very next insert must split it, and the tree is still a single leaf: ctx.Depth == 0.
+        for (int i = 1; i <= Index32Chunk.Capacity; i++)
+        {
+            built.Add(i * 10, i, ref setup);
+        }
+        setup.Dispose();
+        tree = built;
+
+        using var aParked = new ManualResetEventSlim(false);
+        using var bDone = new ManualResetEventSlim(false);
+        int hookArmed = 0;
+
+        OlcDescentTrace.OnDescentComplete = (leafChunkId, depth) =>
+        {
+            // Once, and only for a descent that found the root to be a leaf — that is the Depth == 0 shape IXW-05 guards. B must pass through this same hook
+            // freely to perform its split, so the arming is one-shot.
+            if (depth != 0 || Interlocked.CompareExchange(ref hookArmed, 1, 0) != 0)
+            {
+                return;
+            }
+            aParked.Set();
+            bDone.Wait(TimeSpan.FromSeconds(10));
+        };
+
+        try
+        {
+            var a = Task.Factory.StartNew(() =>
+            {
+                var d = epochManager.EnterScope();
+                try
+                {
+                    var wa = seg.CreateChunkAccessor();
+                    built.Add(5, 5, ref wa);   // routes into the root leaf, forcing the split path
+                    wa.CommitChanges();
+                    wa.Dispose();
+                }
+                catch (Exception ex) { errors.Add(ex); }
+                finally { epochManager.ExitScope(d); }
+            }, TaskCreationOptions.LongRunning);
+
+            Assert.That(aParked.Wait(TimeSpan.FromSeconds(10)), Is.True, "writer A never reached the pre-guard seam");
+
+            var b = Task.Factory.StartNew(() =>
+            {
+                var d = epochManager.EnterScope();
+                try
+                {
+                    var wb = seg.CreateChunkAccessor();
+                    for (int i = 1; i <= 6; i++)
+                    {
+                        built.Add(i * 10 + 5, i, ref wb);   // splits the root leaf and publishes a new root
+                    }
+                    wb.CommitChanges();
+                    wb.Dispose();
+                }
+                catch (Exception ex) { errors.Add(ex); }
+                finally { epochManager.ExitScope(d); bDone.Set(); }
+            }, TaskCreationOptions.LongRunning);
+
+            Assert.That(Task.WaitAll([a, b], TimeSpan.FromSeconds(20)), Is.True, "a writer never completed");
+        }
+        finally
+        {
+            OlcDescentTrace.OnDescentComplete = null;
+        }
+
+        // Scope deliberately left OPEN: the caller creates a ChunkAccessor to run CheckConsistency, and that requires one.
+        _scenarioScope = setupDepth;
+    }
+
+    private int _scenarioScope;
 
     // ============================================================================================================================================
     // The nightly's renderer. Driven here with synthetic arrays because the branch that calls it fires only on a real stall — which a 32-core dev box does
@@ -208,6 +420,17 @@ public class BTreeRetryExitInstrumentationTests
     }
 
     private static long[] NewCounters() => new long[OlcBTreeRaceStressTests.ScalarCounterCount + InsertRetryExit.Count];
+
+    /// <summary>
+    /// Every reason code has a name. Without this, adding a code and forgetting its name turns the MaxPessimisticRestarts liveness report into an
+    /// IndexOutOfRangeException raised while building that report's own message — losing the bug report and the bug with it.
+    /// </summary>
+    [Test]
+    public void InsertRetryExit_EveryCodeHasAName()
+    {
+        Assert.That(InsertRetryExit.Names, Has.Length.EqualTo(InsertRetryExit.Count));
+        Assert.That(InsertRetryExit.Names, Has.None.Null.And.None.Empty);
+    }
 
     /// <summary>
     /// The two assertions that make the histogram trustworthy: nothing lands in <see cref="InsertRetryExit.Unknown"/>, and the buckets sum to

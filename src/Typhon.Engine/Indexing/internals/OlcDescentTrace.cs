@@ -60,18 +60,14 @@ internal static class OlcDescentTrace
     /// </summary>
     public static Action<int, int, int, int, int> OnRemoveNotFound;
 
-    // === TEMPORARY #738 probe: geometry at the MovedRightLeafFull bail ===
-
     /// <summary>
-    /// Called when the pessimistic insert right-walks onto a FULL leaf it cannot split, which the 4-core repro measured as 100% of the Add_Disjoint
-    /// stall. Args: (key, originLeafId, landedLeafId, landedFirstKey, landedLastKey, landedCount, parentId, parentChildIndex).
+    /// Fires in <c>InsertIterative</c> once the descent has completed and BEFORE any lock is taken, with (leafChunkId, ctx.Depth).
     /// </summary>
-    /// <remarks>Int casts, so wire only for int-keyed test trees — same contract as <see cref="OnRemoveNotFound"/>.</remarks>
-    public static Action<int, int, int, int, int, int, int, int> OnMovedRightLeafFull;
-
-    /// <summary>
-    /// Called at every Phase 4 root split, before the new root is published. Args: (descentDepth, rootChunkIdNow, heldNodeChunkId, promotedChunkId,
-    /// leftIsLeaf, promotedIsLeaf, height). A root whose two children disagree on leaf-ness is a level-mixing split (#738).
-    /// </summary>
-    public static Action<int, int, int, int, bool, bool, int> OnRootSplit;
+    /// <remarks>
+    /// A seam, and the only one that makes IXW-05 deterministically testable. The window it opens is the defect's own: a completed descent holding NO lock,
+    /// so the tree can grow a level underneath it and the version this writer reads next is already post-growth — which is precisely why the validation that
+    /// follows cannot catch a stale path. Otherwise reachable only by a race measured at 1 in 7,162 root splits, so a test without this hook verifies the
+    /// rule with probability near zero and would stay green if the guard were deleted. Null in production: one null-check per pessimistic descent.
+    /// </remarks>
+    public static Action<int, int> OnDescentComplete;
 }

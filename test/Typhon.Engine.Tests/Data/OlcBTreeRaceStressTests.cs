@@ -48,23 +48,19 @@ public class OlcBTreeRaceStressTests
 
         TestContext.WriteLine($"OLC race stress: duration={seconds}s noiseThreads={noiseCount} cores={Environment.ProcessorCount}");
 
-        // Wire up OLC descent diagnostic capture for the duration of the harness.
-        OlcDescentTrace.RecordStep = DescentTraceRecord;
-        OlcDescentTrace.OnInvalidChunkId = DescentTraceOnInvalidChunkId;
-        OlcDescentTrace.OnRemoveNotFound = OnRemoveNotFoundCapture;
-        OlcDescentTrace.OnMovedRightLeafFull = OnMovedRightLeafFullCapture;
-        OlcDescentTrace.OnRootSplit = OnRootSplitCapture;
-        _rootSplitBad = 0;
-        _rootSplitTotal = 0;
-        while (_rootSplitSamples.TryTake(out _)) { }
-        _mrlfCaptured = 0;
-        while (_mrlfSamples.TryTake(out _)) { }
-        for (int i = 0; i < _removeNotFoundByBranch.Length; i++) { _removeNotFoundByBranch[i] = 0; }
-        _removeNotFoundDetailsCaptured = 0;
-        _rdNotRemoved = 0; _rdWrongValue = 0;
-        while (_rdSamples.TryTake(out _)) { }
         try
         {
+            // Wired INSIDE the try, and before the per-run resets. These are process-wide statics that only this method's finally clears, so an assignment
+            // sitting outside the try leaks all three into whatever fixture runs next if anything between the assignment and the try throws.
+            OlcDescentTrace.RecordStep = DescentTraceRecord;
+            OlcDescentTrace.OnInvalidChunkId = DescentTraceOnInvalidChunkId;
+            OlcDescentTrace.OnRemoveNotFound = OnRemoveNotFoundCapture;
+
+            for (int i = 0; i < _removeNotFoundByBranch.Length; i++) { _removeNotFoundByBranch[i] = 0; }
+            _removeNotFoundDetailsCaptured = 0;
+            _rdNotRemoved = 0;
+            _rdWrongValue = 0;
+            while (_rdSamples.TryTake(out _)) { }
 
             using var stop = new ManualResetEventSlim(false);
             var noiseTasks = StartNoise(noiseCount, stop);
@@ -145,22 +141,6 @@ public class OlcBTreeRaceStressTests
             }
 
         report.AppendLine();
-        report.AppendLine($"=== root splits: total={Volatile.Read(ref _rootSplitTotal)} LEVEL-MIXING={Volatile.Read(ref _rootSplitBad)} ===");
-        foreach (var sample in _rootSplitSamples)
-        {
-            report.AppendLine("  " + sample);
-        }
-
-            if (!_mrlfSamples.IsEmpty)
-            {
-                report.AppendLine();
-                report.AppendLine("=== MovedRightLeafFull geometry (first 60) ===");
-                foreach (var sample in _mrlfSamples)
-                {
-                    report.AppendLine("  " + sample);
-                }
-            }
-
             TestContext.WriteLine(report.ToString());
 
             Assert.That(totalFails, Is.Zero, () => $"OLC race stress observed {totalFails} failures across {totalIters} iterations.\n{report}");
@@ -170,51 +150,7 @@ public class OlcBTreeRaceStressTests
             OlcDescentTrace.RecordStep = null;
             OlcDescentTrace.OnInvalidChunkId = null;
             OlcDescentTrace.OnRemoveNotFound = null;
-            OlcDescentTrace.OnMovedRightLeafFull = null;
-            OlcDescentTrace.OnRootSplit = null;
         }
-    }
-
-    // === #738 probe: root splits that mix levels ===
-    private static int _rootSplitBad;
-    private static int _rootSplitTotal;
-    private static readonly ConcurrentBag<string> _rootSplitSamples = new();
-
-    /// <summary>
-    /// Fires at every Phase 4 root split. A sound one joins two nodes of the SAME level; disagreeing leaf-ness is the level-mixing defect, caught where
-    /// it is made rather than thousands of retries later in a leaf that cannot be routed to.
-    /// </summary>
-    private static void OnRootSplitCapture(int descentDepth, int rootNow, int heldNode, int promoted, bool leftIsLeaf, bool promotedIsLeaf, int height)
-    {
-        Interlocked.Increment(ref _rootSplitTotal);
-        if (leftIsLeaf == promotedIsLeaf && rootNow == heldNode)
-        {
-            return;
-        }
-        if (Interlocked.Increment(ref _rootSplitBad) > 20)
-        {
-            return;
-        }
-        _rootSplitSamples.Add($"descentDepth={descentDepth} Root=#{rootNow}(leaf={leftIsLeaf}) held=#{heldNode} "
-                            + $"promoted=#{promoted}(leaf={promotedIsLeaf}) Height={height} rootMovedUnderUs={rootNow != heldNode}");
-    }
-
-    // === TEMPORARY #738 probe: MovedRightLeafFull geometry ===
-    private static int _mrlfCaptured;
-    private static readonly ConcurrentBag<string> _mrlfSamples = new();
-
-    private static void OnMovedRightLeafFullCapture(int key, int originLeaf, int landedLeaf, int landedFirst, int landedLast, int landedCount,
-                                                    int descentOnFirstKey, int descentOnOurKey)
-    {
-        if (Interlocked.Increment(ref _mrlfCaptured) > 60)
-        {
-            return;
-        }
-        // Both descents are separator-only (no right-walk). The first asks whether the landed leaf is reachable at all; the second asks where OUR key
-        // is routed. If they disagree, the separators and the leaf chain disagree, which is IXS-05.
-        var verdict = descentOnFirstKey == landedLeaf ? "leafReachable" : $"leafUNREACHABLE(->#{descentOnFirstKey})";
-        verdict += descentOnOurKey == landedLeaf ? " keyRoutedHere" : $" keyRoutedTo#{descentOnOurKey}";
-        _mrlfSamples.Add($"key={key} origin=#{originLeaf} landed=#{landedLeaf}[{landedFirst}..{landedLast}] n={landedCount} " + verdict);
     }
 
     // === Remove NotFound branch capture ===

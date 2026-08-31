@@ -108,7 +108,7 @@ internal abstract partial class BTree<TKey, TStore>
 
     /// <summary>Creates the insert value, handling AllowMultiple buffer creation.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int CreateInsertValue(ref InsertArguments args, ref ChunkAccessor<TStore> accessor)
+    private int CreateInsertValue(ref InsertArguments args)
     {
         if (AllowMultiple)
         {
@@ -160,7 +160,7 @@ internal abstract partial class BTree<TKey, TStore>
                 _linkList = newRoot;
                 _reverseLinkList = newRoot;
                 Height++;
-                var value = CreateInsertValue(ref args, ref accessor);
+                var value = CreateInsertValue(ref args);
                 newRoot.PushLast(new KeyValueItem(args.Key, value), ref accessor);
                 IncCount();
                 _cachedLastKey = args.Key;
@@ -278,7 +278,7 @@ internal abstract partial class BTree<TKey, TStore>
                             latch.AbortWriteLock();
                             return OlcInsertResult.Restart;
                         }
-                        var value = CreateInsertValue(ref args, ref accessor);
+                        var value = CreateInsertValue(ref args);
                         rl.PushLast(new KeyValueItem(args.Key, value), ref accessor);
                         _cachedLastKey = args.Key;
                         _hasCachedLastKey = true;
@@ -363,7 +363,7 @@ internal abstract partial class BTree<TKey, TStore>
                             llLatch.AbortWriteLock();
                             return OlcInsertResult.Restart;
                         }
-                        var value = CreateInsertValue(ref args, ref accessor);
+                        var value = CreateInsertValue(ref args);
                         ll.PushFirst(new KeyValueItem(args.Key, value), ref accessor);
                         llLatch.WriteUnlock();
                         IncCount();
@@ -442,7 +442,7 @@ internal abstract partial class BTree<TKey, TStore>
         if (keyIndex < 0)
         {
             keyIndex = ~keyIndex;
-            var value = CreateInsertValue(ref args, ref accessor);
+            var value = CreateInsertValue(ref args);
             leaf.Insert(keyIndex, new KeyValueItem(args.Key, value), ref accessor);
             leafLatch.WriteUnlock();
             IncCount();
@@ -531,7 +531,7 @@ internal abstract partial class BTree<TKey, TStore>
                             // or a concurrent split made this leaf no longer the rightmost (GetNext becomes valid).
                             if (!rl.GetIsFull(ref accessor) && !rl.GetNext(ref accessor).IsValid && args.Compare(args.Key, rl.GetLast(ref accessor).Key) > 0)
                             {
-                                var value = CreateInsertValue(ref args, ref accessor);
+                                var value = CreateInsertValue(ref args);
                                 rl.PushLast(new KeyValueItem(args.Key, value), ref accessor);
                                 _cachedLastKey = args.Key;
                                 _hasCachedLastKey = true;
@@ -604,7 +604,7 @@ internal abstract partial class BTree<TKey, TStore>
                             if (!ll.GetIsFull(ref accessor) && !ll.GetPrevious(ref accessor).IsValid
                                                             && args.Compare(args.Key, ll.GetFirst(ref accessor).Key) < 0)
                             {
-                                var value = CreateInsertValue(ref args, ref accessor);
+                                var value = CreateInsertValue(ref args);
                                 ll.PushFirst(new KeyValueItem(args.Key, value), ref accessor);
                                 llLatch.WriteUnlock();
                                 IncCount();
@@ -653,7 +653,7 @@ internal abstract partial class BTree<TKey, TStore>
                 {
                     break;
                 }
-                // #738: tallied here rather than at each of the sixteen bail sites, so a no-progress pass costs one interlocked op and a completing insert
+                // #738: tallied here rather than at each of the seventeen bail sites, so a no-progress pass costs one interlocked op and a completing insert
                 // costs none. `_optimisticRestarts` used to absorb this, which made a pessimistic restart storm indistinguishable from ordinary optimistic
                 // contention in the only record that ever captures one. See InsertRetryExit for what each code means.
                 Interlocked.Increment(ref _pessimisticRestarts);
@@ -661,7 +661,7 @@ internal abstract partial class BTree<TKey, TStore>
                 if (attempt >= MaxPessimisticRestarts)
                 {
                     // #695: this loop used to be `while (true)`. See MaxPessimisticRestarts for why exhausting it means retrying cannot help.
-                    // The histogram is part of the message because this exception IS the bug report: it names which of InsertIterative's sixteen bails
+                    // The histogram is part of the message because this exception IS the bug report: it names which of InsertIterative's seventeen bails
                     // consumed the budget, which is the first question anybody reading it asks and previously had no way to answer (#738).
                     ThrowHelper.ThrowInvalidOp(
                         $"B+Tree insert made no progress in {MaxPessimisticRestarts} pessimistic retries. The descent keeps reaching a leaf it can neither "
@@ -735,7 +735,10 @@ internal abstract partial class BTree<TKey, TStore>
             return;
         }
 
-        int descentDepth = ctx.Depth;   // #738 probe: 0 means the descent saw the root AS A LEAF
+        // A test seam, and the only one that makes IXW-05 deterministically reachable. It fires with the descent complete and NO lock held, which is exactly
+        // the window the defect needs: the tree can grow a level here, and the leaf version this writer reads afterwards is then already post-growth, so the
+        // validation below passes on a node that is no longer the root. Parking after the lock instead would deadlock the very writer meant to grow the tree.
+        OlcDescentTrace.OnDescentComplete?.Invoke(node.ChunkId, ctx.Depth);
 
         // Phase 1.5A: Lock leaf with version validation.
         // Between Phase 1 descent and lock acquisition, a concurrent writer may have split/modified this leaf. Snapshot the version before locking,
@@ -785,16 +788,21 @@ internal abstract partial class BTree<TKey, TStore>
             return;
         }
 
-        // #738: with Depth == 0 the descent found no internal node, so Phase 4 below will build a NEW ROOT over this leaf. That is correct only while
-        // this leaf still IS the root, and the version check above does not establish it — it proves the leaf was not modified, not that the tree did
-        // not grow a level above it. The two are different facts about different objects, and conflating them is the defect: measured at 1 level-mixing
-        // root split in 7,162, where Phase 4 ran SetLeft against a Root that had become an internal node while promoting a leaf. The result is a root
-        // whose left child is a subtree and whose indexed child is a leaf, Height incremented on top of that, and a leaf reachable only through the
-        // B-link chain — which is what every #738 stall was ultimately spinning against.
+        // #738: Phase 4 below can build a NEW ROOT over the TOP of this descent's recorded path — `SetLeft(Root)` on one side, the promoted node on the
+        // other. Both halves assume the top of the path still IS the root. The descent established that; nothing since rechecks it, and the version checks
+        // cannot: they prove the recorded nodes were not modified, not that no level appeared ABOVE them. A tree can grow several levels above a node
+        // without touching it, and if the growth happened BEFORE this descent sampled that node's version, the recorded version is already post-growth and
+        // validates cleanly.
         //
-        // Checked HERE rather than in Phase 4 because here nothing has been mutated yet. By Phase 4 the leaf split has already happened, so bailing
-        // would leave the new leaf chained and unrouted: the very orphan this prevents.
-        if (ctx.Depth == 0 && Root.ChunkId != node.ChunkId)
+        // Both depths need it and only one of them was measured. With Depth == 0 the top of the path is the leaf itself (1 level-mixing root split in
+        // 7,162, the case that was caught); with Depth > 0 it is PathNodes[0], which Phase 3 rebinds into `node` as it unwinds, and Phase 4 then pairs
+        // against a freshly-read `Root` with no comparison at all. Same defect one level up.
+        //
+        // Checked HERE rather than in Phase 4 because here nothing has been mutated yet. By Phase 4 the leaf split has already happened, so bailing would
+        // leave the new leaf chained and unrouted: the very orphan this prevents. One field read, and the pair with the path-lock version check is what
+        // closes the window — this catches a path that was ALREADY stale when recorded, that catches one that goes stale afterwards.
+        var pathTop = ctx.Depth == 0 ? node : ctx.PathNodes[0];
+        if (pathTop.ChunkId != _rootChunkId)
         {
             leafLatch.AbortWriteLock();
             retryExit = InsertRetryExit.RootMovedUnderDescent;
@@ -819,7 +827,6 @@ internal abstract partial class BTree<TKey, TStore>
         // all movement is strictly rightward with no cycle, and SpinWriteLock waits for busy siblings.
         // move-right
         var movedRight = false;
-        var originLeafChunkId = node.ChunkId;   // TEMPORARY #738 probe: the leaf the descent chose, before any right-walk
         // The loop condition IS the upper-bound half of leaf authority, and this was its fourth longhand copy. The pessimistic path answers it differently from
         // the optimistic one — it walks right until the leaf owns the key, rather than restarting, because mid-SMO it has no restart point — but the QUESTION is
         // the same one, and a question asked in four places is a question that will eventually be asked four different ways (#765 S2).
@@ -922,31 +929,7 @@ internal abstract partial class BTree<TKey, TStore>
             // another perpetually and none converges. Measured as the stress harness's HANG: all workers alive, none blocked on a latch, all sitting at
             // pessAttempt=664 and climbing toward the MaxPessimisticRestarts throw. Releasing without the bump is what the rest of the file already does at
             // every "condition failed — didn't modify node" exit.
-            var probing = OlcDescentTrace.OnMovedRightLeafFull != null && typeof(TKey) == typeof(int);
-            int probeKeyRaw = 0, probeFirstRaw = 0, probeLastRaw = 0, probeLanded = 0, probeCount = 0;
-            TKey probeFirstKey = default;
-            if (probing)
-            {
-                var ak = args.Key;
-                probeFirstKey = node.GetFirst(ref accessor).Key;
-                var lk = node.GetLast(ref accessor).Key;
-                var fk = probeFirstKey;
-                probeKeyRaw = Unsafe.As<TKey, int>(ref ak);
-                probeFirstRaw = Unsafe.As<TKey, int>(ref fk);
-                probeLastRaw = Unsafe.As<TKey, int>(ref lk);
-                probeLanded = node.ChunkId;
-                probeCount = node.GetCount(ref accessor);
-            }
             node.GetLatch(ref accessor).AbortWriteLock();
-            if (probing)
-            {
-                // Unlocked first: the descent below reads versions, and our own write lock would read as 0 and abort the probe.
-                // followRightLink:false — the question is whether the SEPARATORS reach this leaf. With the right-walk on, the probe answers itself.
-                var pure = OptimisticDescendToLeaf(probeFirstKey, ref accessor, followRightLink: false);
-                var keyPure = OptimisticDescendToLeaf(args.Key, ref accessor, followRightLink: false);
-                OlcDescentTrace.OnMovedRightLeafFull(probeKeyRaw, originLeafChunkId, probeLanded, probeFirstRaw, probeLastRaw, probeCount,
-                                                    pure.leafChunkId, keyPure.leafChunkId);
-            }
             retryExit = InsertRetryExit.MovedRightLeafFull;
             return; // completed=false — retry with fresh path from root
         }
@@ -1145,14 +1128,6 @@ internal abstract partial class BTree<TKey, TStore>
             var newRootLatch = newRoot.GetLatch(ref accessor);
             var newRootOutcome = SpinWriteLock(newRootLatch);   // freshly allocated — Obsolete unreachable, see the twin in AddOrUpdateCore
             Debug.Assert(newRootOutcome != WriteLockOutcome.Obsolete, "a freshly allocated root cannot be obsolete");
-            if (OlcDescentTrace.OnRootSplit != null)
-            {
-                var curRoot = Root;
-                var promotedNode = _storage.LoadNode(promoted.Value.Value);
-                OlcDescentTrace.OnRootSplit(descentDepth, curRoot.ChunkId, node.ChunkId, promoted.Value.Value,
-                                            curRoot.IsValid && curRoot.GetIsLeaf(ref accessor),
-                                            promotedNode.IsValid && promotedNode.GetIsLeaf(ref accessor), Height);
-            }
             newRoot.SetLeft(Root, ref accessor);
             newRoot.Insert(0, promoted.Value, ref accessor);
             Root = newRoot;

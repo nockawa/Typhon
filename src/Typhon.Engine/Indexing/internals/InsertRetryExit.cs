@@ -1,12 +1,13 @@
 namespace Typhon.Engine.Internals;
 
 /// <summary>
-/// Reason codes for a no-progress return from <c>BTree{TKey,TStore}.InsertIterative</c> — the seventeen places it gives up and asks its caller to re-descend.
+/// Reason codes for a no-progress return from <c>InsertIterative</c> or <c>RemoveIterative</c> — every place either gives up and asks its caller to
+/// re-descend. One table, because the five descent checks are literally shared code and a second table would let the two drift.
 /// </summary>
 /// <remarks>
-/// #738 exists because all of them collapsed into one counter. <c>AddOrUpdateCorePessimistic</c>'s retry loop increments a single restart tally and bounds
+/// #738 exists because all seventeen collapsed into one counter. <c>AddOrUpdateCorePessimistic</c>'s retry loop increments a single restart tally and bounds
 /// on <c>MaxPessimisticRestarts</c>, so a nightly record of a restart storm said how MANY times the operation gave up and nothing about WHERE — and the fix
-/// for each of these is different. Two of the sixteen were counted before this table existed, both into <c>ObsoleteRestarts</c>, which the stress harness
+/// for each of these is different. Two of the seventeen were counted before this table existed, both into <c>ObsoleteRestarts</c>, which the stress harness
 /// did not even sample.
 /// <para>
 /// The four <c>*LockFailed</c> codes matter most, because they are invisible in every other instrument. <see cref="OlcLatch.TryWriteLock"/> does not spin and
@@ -104,8 +105,46 @@ internal static class InsertRetryExit
     /// </remarks>
     public const int RootMovedUnderDescent = 17;
 
+    // --- The REMOVE path's own bails. The five Descent* codes above are SHARED: DescendRecordingPath serves both write paths and reports the same five
+    // checks to each. Everything below is RemoveIterative's.
+    //
+    // Added because the counter split left Remove behind, and that asymmetry cost real time: after the insert path was instrumented, every stall the 4-core
+    // stress reproduction produced was the REMOVE loop burning its 10,000-retry bound — on the one path with no per-exit histogram, so the record said only
+    // that it had happened. That is exactly the state #738 spent months in.
+
+    /// <summary>The leaf's version read 0 — locked by another writer, or obsolete (IXS-03 keeps those apart; this bail cannot).</summary>
+    public const int RemoveLeafVersionZero = 18;
+
+    /// <summary>The leaf turned obsolete while its write lock was being taken — a merge detached it (IXW-02, #716).</summary>
+    public const int RemoveLeafObsolete = 19;
+
+    /// <summary>The leaf's version changed between the descent and the lock.</summary>
+    public const int RemoveLeafVersionChanged = 20;
+
+    /// <summary>
+    /// The key is at or past this leaf's HighKey: a concurrent split's separator has not propagated, so the descent landed one leaf short (#297).
+    /// </summary>
+    public const int RemoveStaleSeparator = 21;
+
+    /// <summary>The leaf is not authoritative for the key — below its lower bound (IXW-03), or empty but still chained.</summary>
+    public const int RemoveLeafNotAuthoritative = 22;
+
+    /// <summary>
+    /// Could not lock the left leaf neighbour needed for a borrow or merge. <see cref="OlcLatch.TryWriteLock"/>, so invisible in <c>WriteLockFailures</c>.
+    /// </summary>
+    public const int RemoveLeafPrevLockFailed = 23;
+
+    /// <summary>Could not lock the right leaf neighbour. <see cref="OlcLatch.TryWriteLock"/>, so invisible in <c>WriteLockFailures</c>.</summary>
+    public const int RemoveLeafNextLockFailed = 24;
+
+    /// <summary>Could not lock an ancestor on the recorded path. Scales with writer count — every path ends at the same root.</summary>
+    public const int RemovePathLockFailed = 25;
+
+    /// <summary>An ancestor's version changed between the descent and the path lock.</summary>
+    public const int RemovePathVersionChanged = 26;
+
     /// <summary>One past the highest code — sizes the counter array without hard-coding the count at each call site.</summary>
-    public const int Count = 18;
+    public const int Count = 27;
 
     /// <summary>Short names, indexed by code, for diagnostic dumps.</summary>
     public static readonly string[] Names =
@@ -128,5 +167,14 @@ internal static class InsertRetryExit
         "PathLockFailed",
         "PathVersionChanged",
         "RootMovedUnderDescent",
+        "RemoveLeafVersionZero",
+        "RemoveLeafObsolete",
+        "RemoveLeafVersionChanged",
+        "RemoveStaleSeparator",
+        "RemoveLeafNotAuthoritative",
+        "RemoveLeafPrevLockFailed",
+        "RemoveLeafNextLockFailed",
+        "RemovePathLockFailed",
+        "RemovePathVersionChanged",
     ];
 }

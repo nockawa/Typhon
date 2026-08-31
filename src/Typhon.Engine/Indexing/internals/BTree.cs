@@ -562,7 +562,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     internal long _emptyInitRacesLost;
 
     /// <summary>
-    /// Histogram of <see cref="InsertRetryExit"/> codes: which of <c>InsertIterative</c>'s sixteen bails burned each pessimistic retry.
+    /// Histogram of <see cref="InsertRetryExit"/> codes: which of <c>InsertIterative</c>'s seventeen bails burned each pessimistic retry.
     /// </summary>
     /// <remarks>
     /// Written once per retry, by the retry loop rather than by the bail sites, so the instrumentation adds exactly one interlocked operation per no-progress
@@ -575,6 +575,9 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     /// </para>
     /// </remarks>
     internal readonly long[] _insertRetryExits = new long[InsertRetryExit.Count];
+
+    /// <summary>The same histogram for <c>RemoveIterative</c>. Separate allocation for the same cache-line reason as its twin.</summary>
+    internal readonly long[] _removeRetryExits = new long[InsertRetryExit.Count];
 
     internal const int MaxTreeDepth = 32;
     internal const int MaxOptimisticRestarts = 3;
@@ -735,6 +738,10 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     internal int DeferredNodeCount => _deferredNodes.Count;
 
     /// <summary>Number of OLC optimistic read restarts (version validation failures). Bounded at <see cref="MaxOptimisticRestarts"/> per operation.</summary>
+    /// <remarks>
+    /// True on BOTH write paths now that the remove loop tallies into <see cref="PessimisticRestarts"/> as well. It was not true before: a single remove could
+    /// add up to <see cref="MaxPessimisticRestarts"/> here, which is the same conflation that made #738's records unreadable.
+    /// </remarks>
     public long OptimisticRestarts => Interlocked.Read(ref _optimisticRestarts);
 
     /// <summary>
@@ -755,16 +762,24 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     /// <summary>
     /// How many pessimistic retries were burned by one <see cref="InsertRetryExit"/> code. Summed over all codes this equals <see cref="PessimisticRestarts"/>.
     /// </summary>
-    public long InsertRetryExitCount(int exit) => Interlocked.Read(ref _insertRetryExits[exit]);
+    public long InsertRetryExitCount(int exit) => (uint)exit < (uint)_insertRetryExits.Length ? Interlocked.Read(ref _insertRetryExits[exit]) : 0;
+
+    /// <summary>How many pessimistic REMOVE retries were burned by one <see cref="InsertRetryExit"/> code.</summary>
+    public long RemoveRetryExitCount(int exit) => (uint)exit < (uint)_removeRetryExits.Length ? Interlocked.Read(ref _removeRetryExits[exit]) : 0;
 
     /// <summary>
     /// The non-zero <see cref="InsertRetryExit"/> tallies as <c>Name=count</c>, descending, for a diagnostic message. Allocates — cold paths only.
     /// </summary>
-    internal string DescribeInsertRetryExits()
+    internal string DescribeInsertRetryExits() => DescribeRetryExits(_insertRetryExits);
+
+    /// <summary>The same, for the remove path's histogram.</summary>
+    internal string DescribeRemoveRetryExits() => DescribeRetryExits(_removeRetryExits);
+
+    private static string DescribeRetryExits(long[] exits)
     {
         var sb = new StringBuilder();
-        // Selection sort over 13 entries rather than a LINQ OrderByDescending: this runs while a tree is failing, and the point of the message is to be
-        // producible without allocating a sort infrastructure on top of the one string it needs.
+        // Selection sort over the (currently 18) entries rather than a LINQ OrderByDescending: this runs while a tree is failing, and the point of the message
+        // is to be producible without allocating a sort infrastructure on top of the one string it needs.
         Span<bool> emitted = stackalloc bool[InsertRetryExit.Count];
         for (int rank = 0; rank < InsertRetryExit.Count; rank++)
         {
@@ -772,7 +787,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
             long bestCount = 0;
             for (int i = 0; i < InsertRetryExit.Count; i++)
             {
-                long c = Interlocked.Read(ref _insertRetryExits[i]);
+                long c = Interlocked.Read(ref exits[i]);
                 if (!emitted[i] && c > bestCount)
                 {
                     best = i;
@@ -830,13 +845,18 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
 
     internal void ResetDiagnostics()
     {
-        Interlocked.Exchange(ref _optimisticRestarts, 0);
-        Interlocked.Exchange(ref _pessimisticRestarts, 0);
-        Interlocked.Exchange(ref _pessimisticFallbacks, 0);
+        // Histogram first, scalar second, and the order is load-bearing: the retry loop increments the scalar BEFORE the bucket, so clearing in this
+        // order can only ever leave the histogram ahead of the scalar, never behind. `sum == PessimisticRestarts` is asserted by
+        // BTreeRetryExitInstrumentationTests, and a reset interleaved with a live retry would otherwise break it for a reason unrelated to the tree.
+        // This is not a full fix — the two counters cannot be cleared atomically — so the contract is: reset only on a quiescent tree.
         for (int i = 0; i < _insertRetryExits.Length; i++)
         {
             Interlocked.Exchange(ref _insertRetryExits[i], 0);
+            Interlocked.Exchange(ref _removeRetryExits[i], 0);
         }
+        Interlocked.Exchange(ref _pessimisticRestarts, 0);
+        Interlocked.Exchange(ref _optimisticRestarts, 0);
+        Interlocked.Exchange(ref _pessimisticFallbacks, 0);
         Interlocked.Exchange(ref _writeLockFailures, 0);
         Interlocked.Exchange(ref _splitCount, 0);
         Interlocked.Exchange(ref _mergeCount, 0);
@@ -2404,7 +2424,10 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
         // already fighting over. The published total is unchanged — still spin iterations, not distinct acquisitions — so the numbers stay comparable.
         int spins = 0;
 
-        // Phase 1: tight PAUSE spin — stays on-core, covers typical latch hold time + cross-core coherence
+        // Phase 1: tight PAUSE spin — stays on-core, covers typical latch hold time + cross-core coherence.
+        // 64 iterations is 2.6 us MEASURED on a 7950X, not the ~100 ns an earlier comment claimed: Thread.SpinWait normalises each iteration to a fixed
+        // wall-clock target (~37 ns), so its cost is set by the runtime rather than by this CPU's PAUSE latency. That is ~5x the top of the 100-500 ns
+        // latch-hold window documented above, so reaching phase 2 really is exceptional — the constant is right, the old arithmetic behind it was not.
         for (int i = 0; i < 64; i++)
         {
             if (latch.IsObsolete)

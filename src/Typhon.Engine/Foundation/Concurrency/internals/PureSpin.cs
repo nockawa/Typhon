@@ -24,10 +24,16 @@ namespace Typhon.Engine.Internals;
 /// </para>
 /// <para>
 /// The exception is a wait that may be queued behind an <b>IOP</b>, which lives in a different dimension entirely — a page fault is microseconds to
-/// milliseconds, and spinning through one burns a core for nothing. Those waits are allowed to yield. In this subsystem that means exactly the two
-/// latch-acquisition helpers, <c>SpinWriteLock</c> and <c>SpinWriteLockOnSmoPath</c>: <c>PreDirtyForWrite</c> is page-cache admission and two sites call
-/// it while already holding a latch — the B-link move-right loop, and Phase 3's spill siblings — so the holder those two wait on can be inside a fault.
-/// Both still spin purely for 64 iterations first, which covers the ordinary OLC case; only past that do they yield. Neither enables <c>Sleep(1)</c>.
+/// milliseconds, and spinning through one burns a core for nothing. Those waits yield: the two latch-acquisition helpers, <c>SpinWriteLock</c> and
+/// <c>SpinWriteLockOnSmoPath</c>. <c>PreDirtyForWrite</c> is page-cache admission and several sites call it while ALREADY holding a latch — the B-link
+/// move-right loop, Phase 3's spill siblings, the remove path's neighbour acquisition — so the holder those two wait on can be inside a fault. Both still
+/// spin purely for 64 iterations first, covering the ordinary OLC case; only past that do they yield, and neither enables <c>Sleep(1)</c>.
+/// <para>
+/// <b>Everything else uses this type, including the unbounded lookup re-descent loops, and that placement is empirical.</b> The tidier-sounding rule —
+/// "every UNBOUNDED wait yields, because a pure spinner holding a core against the thread it waits for is a livelock risk" — was tried and measured worse:
+/// moving <c>TryGetPessimistic</c>, <c>TryGetMultiplePessimistic</c> and the remove path's obsolete re-descent to the yielding tier took the 4-core stress
+/// harness from 0 problem runs in 34 to 1 in 6. The argument is still reasonable; it is simply not what the machine does. Re-measure before acting on it.
+/// </para>
 /// </para>
 /// <para>
 /// <b>Why <see cref="SpinWait"/> is not used for the OLC waits.</b> <c>SpinOnce()</c> escalates through <c>Yield</c> to <c>Sleep(0)</c> and
@@ -47,7 +53,33 @@ internal struct PureSpin
 {
     private int _count;
 
-    /// <summary>Doubling ceiling. 2^10 PAUSEs is roughly a microsecond on current x64 — long enough to matter, short enough to stay responsive.</summary>
+    /// <summary>Doubling ceiling: 2^10 iterations, MEASURED at 38.2 us per saturated step. Empirical — every attempt to lower it regressed.</summary>
+    /// <remarks>
+    /// This originally read "2^10 PAUSEs is roughly a microsecond", which was a guess and wrong by a factor of ~38. `Thread.SpinWait(n)` does not issue n raw
+    /// `pause` instructions: CoreCLR routes it through `YieldProcessorNormalized`, which issues however many raw PAUSEs the CPU needs to hit a fixed
+    /// wall-clock target. Measured on a 7950X at 37.4 ns per iteration, dead flat from n=1 to n=4096 — and that flatness is the proof of normalisation, since
+    /// a raw PAUSE loop on Zen 4 would measure ~13-16 ns and would differ on Intel. So 2^10 is 38.2 us per saturated step.
+    /// <para>
+    /// <b>By argument that is indefensible, and the argument is wrong.</b> The reasoning says the cap should be a small multiple of what is being waited for
+    /// — OLC latch holds are documented at 100-500 ns, making 2^10 a 76x overshoot in a subsystem with microsecond latency targets. Both lower values that
+    /// reasoning recommends were tried, on a 4-core reproduction of the CI runner, against `OlcBTreeRaceStressTests`:
+    /// </para>
+    /// <para>
+    /// 2^10: <b>0 problem runs in 8</b>. 2^6: 2 in 6. 2^5: <b>5 in 8</b>. Every failure is the same signature — the REMOVE pessimistic loop burning its full
+    /// 10,000-retry bound, never a deadline, never the insert path.
+    /// </para>
+    /// <para>
+    /// The mechanism is the uncomfortable part, and it is worth stating rather than hiding behind the number. These retry loops are not waiting on a latch
+    /// they can acquire; they are waiting for ANOTHER thread to finish a structural modification. A shorter backoff does not reduce the retries needed to
+    /// converge — it spends the bounded budget in less wall-clock time, and on a box with more runnable threads than cores the thread being waited on may not
+    /// be scheduled within it. 10,000 x 1.2 us is 12 ms and loses; 10,000 x 38 us is 380 ms and wins. The cap is therefore doing the job a yield would
+    /// otherwise do, which is precisely what this type exists not to do. That tension is real and unresolved: the honest fix is forward progress in the
+    /// remove path, not backoff tuning. Until then the number stays where the measurements put it.
+    /// </para>
+    /// <para>
+    /// If you change it, re-run that harness pinned to 4 CPUs first. This constant has now defeated two correct-sounding arguments.
+    /// </para>
+    /// </remarks>
     private const int MaxShift = 10;
 
     /// <summary>One backoff step: PAUSE for 2^n iterations, n growing to <see cref="MaxShift"/> and then holding.</summary>
