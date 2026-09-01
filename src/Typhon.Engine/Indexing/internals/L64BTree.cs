@@ -372,6 +372,31 @@ internal abstract class L64BTree<TKey, TStore> : BTree<TKey, TStore> where TStor
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int Wrap(int index) => index >= Index64Chunk.Capacity ? index - Index64Chunk.Capacity : index;
 
+        public override bool TryFindValueInLeaf(NodeWrapper node, TKey key, IComparer<TKey> comparer, out int value, ref ChunkAccessor<TStore> accessor)
+        {
+            if (typeof(TKey) != typeof(long))
+            {
+                return base.TryFindValueInLeaf(node, key, comparer, out value, ref accessor);
+            }
+
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
+            var start = chunk.Start;
+            int index;
+            fixed (long* keys = chunk.Keys)
+            {
+                index = SimdSearch(keys, start, chunk.Count, *(long*)&key);
+            }
+
+            if (index < 0)
+            {
+                value = 0;
+                return false;
+            }
+
+            value = chunk.Values[Index64Chunk.Adjust(start + index)];
+            return true;
+        }
+
         public override void ReadNodeHeader(NodeWrapper node, out bool isLeaf, out int count, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index64Chunk>(node.ChunkId);
@@ -1050,6 +1075,7 @@ internal class L64MultipleBTree<TKey, TStore> : L64BTree<TKey, TStore> where TSt
             => _valueStore.DeleteElement(bufferId, elementId, value, ref bufferAccessor);
         public override bool UpdateInBuffer(int bufferId, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> bufferAccessor)
             => _valueStore.UpdateElement(bufferId, elementId, oldValue, newValue, ref bufferAccessor);
+
         public override void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) => _valueStore.DeleteBuffer(bufferId, ref bufferAccessor);
     }
 }

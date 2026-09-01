@@ -270,6 +270,33 @@ internal abstract class L32BTree<TKey, TStore> : BTree<TKey, TStore> where TStor
             Volatile.Write(ref chunk.Values[Index32Chunk.Adjust(chunk.Start + index)], value);
         }
 
+        public override bool TryFindValueInLeaf(NodeWrapper node, TKey key, IComparer<TKey> comparer, out int value, ref ChunkAccessor<TStore> accessor)
+        {
+            if (typeof(TKey) != typeof(int) && typeof(TKey) != typeof(uint))
+            {
+                return base.TryFindValueInLeaf(node, key, comparer, out value, ref accessor);
+            }
+
+            ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
+            var start = chunk.Start;
+            int index;
+            fixed (int* keys = chunk.Keys)
+            {
+                index = typeof(TKey) == typeof(int)
+                    ? SimdSearch(keys, start, chunk.Count, *(int*)&key)
+                    : SimdSearchUnsigned((uint*)keys, start, chunk.Count, *(uint*)&key);
+            }
+
+            if (index < 0)
+            {
+                value = 0;
+                return false;
+            }
+
+            value = chunk.Values[Index32Chunk.Adjust(start + index)];
+            return true;
+        }
+
         public override void ReadNodeHeader(NodeWrapper node, out bool isLeaf, out int count, ref ChunkAccessor<TStore> accessor)
         {
             ref readonly var chunk = ref accessor.GetChunkReadOnly<Index32Chunk>(node.ChunkId);
@@ -1155,6 +1182,7 @@ internal class L32MultipleBTree<TKey, TStore> : L32BTree<TKey, TStore> where TSt
             => _valueStore.DeleteElement(bufferId, elementId, value, ref bufferAccessor);
         public override bool UpdateInBuffer(int bufferId, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> bufferAccessor)
             => _valueStore.UpdateElement(bufferId, elementId, oldValue, newValue, ref bufferAccessor);
+
         public override void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) => _valueStore.DeleteBuffer(bufferId, ref bufferAccessor);
     }
 }

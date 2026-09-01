@@ -65,6 +65,7 @@ internal struct BulkUpdateStats
 
     /// <summary>Entries whose key was found and whose value was written.</summary>
     public int Applied;
+
 }
 
 internal abstract partial class BTree<TKey, TStore>
@@ -93,7 +94,7 @@ internal abstract partial class BTree<TKey, TStore>
         /// so a per-entry interface forces two resolutions per update no matter how good the descent above it is.
         /// </remarks>
         int ApplyLeaf(BTree<TKey, TStore> tree, NodeWrapper leaf, ReadOnlySpan<TEntry> batch, ref ChunkAccessor<TStore> accessor,
-            ref ChunkAccessor<TStore> bufferAccessor);
+            ref ChunkAccessor<TStore> bufferAccessor, ref BulkUpdateStats stats);
     }
 
     private readonly struct UniqueApplier : ILeafApplier<BTreeValueUpdate<TKey>>
@@ -101,7 +102,7 @@ internal abstract partial class BTree<TKey, TStore>
         public TKey KeyOf(in BTreeValueUpdate<TKey> entry) => entry.Key;
 
         public int ApplyLeaf(BTree<TKey, TStore> tree, NodeWrapper leaf, ReadOnlySpan<BTreeValueUpdate<TKey>> batch, ref ChunkAccessor<TStore> accessor,
-            ref ChunkAccessor<TStore> bufferAccessor) => tree._storage.ApplyValuesInLeaf(leaf, batch, tree.Comparer, ref accessor);
+            ref ChunkAccessor<TStore> bufferAccessor, ref BulkUpdateStats stats) => tree._storage.ApplyValuesInLeaf(leaf, batch, tree.Comparer, ref accessor);
     }
 
     private readonly struct MultiApplier : ILeafApplier<BTreeMultiValueUpdate<TKey>>
@@ -109,7 +110,7 @@ internal abstract partial class BTree<TKey, TStore>
         public TKey KeyOf(in BTreeMultiValueUpdate<TKey> entry) => entry.Key;
 
         public int ApplyLeaf(BTree<TKey, TStore> tree, NodeWrapper leaf, ReadOnlySpan<BTreeMultiValueUpdate<TKey>> batch, ref ChunkAccessor<TStore> accessor,
-            ref ChunkAccessor<TStore> bufferAccessor)
+            ref ChunkAccessor<TStore> bufferAccessor, ref BulkUpdateStats stats)
         {
             var applied = 0;
             var i = 0;
@@ -118,7 +119,7 @@ internal abstract partial class BTree<TKey, TStore>
                 // Entries are sorted, so those sharing a key are adjacent: find the leaf slot and read the bufferId ONCE for the whole run rather than once
                 // per element. A key with many elements is the normal case for a non-unique spatial index, which is what makes this worth doing.
                 var key = batch[i].Key;
-                var index = leaf.Find(key, tree.Comparer, ref accessor);
+                var found = tree._storage.TryFindValueInLeaf(leaf, key, tree.Comparer, out var bufferId, ref accessor);
 
                 var end = i + 1;
                 while (end < batch.Length && CompareKeys(batch[end].Key, key, tree.Comparer) == 0)
@@ -126,9 +127,13 @@ internal abstract partial class BTree<TKey, TStore>
                     end++;
                 }
 
-                if (index >= 0)
+                if (found)
                 {
-                    var bufferId = leaf.GetItem(index, ref accessor).Value;
+                    // TryFindValueInLeaf resolves the leaf chunk ONCE for this key, where Find followed by GetItem resolved the same id twice. That is the
+                    // only amortisation this path keeps: a batched form that also hoisted the BUFFER lock out of the per-element loop was built, measured and
+                    // removed. It cut lock acquisitions 200-fold on the widest shape (10 000 to 50 for a 10 000-entry batch) and moved the wall clock by
+                    // 685.2 us to 683.7 us at the same row position, so buffer locks are simply not a material cost here and a ref struct holding a lock
+                    // across a scope is not worth carrying for it.
                     for (var e = i; e < end; e++)
                     {
                         if (tree._storage.UpdateInBuffer(bufferId, batch[e].ElementId, batch[e].OldValue, batch[e].NewValue, ref bufferAccessor))
@@ -306,7 +311,7 @@ internal abstract partial class BTree<TKey, TStore>
         if (isLeaf)
         {
             stats.LeavesTouched++;
-            var appliedHere = applier.ApplyLeaf(this, node, batch, ref accessor, ref bufferAccessor);
+            var appliedHere = applier.ApplyLeaf(this, node, batch, ref accessor, ref bufferAccessor, ref stats);
             stats.Applied += appliedHere;
             return appliedHere;
         }

@@ -104,6 +104,26 @@ internal abstract partial class BTree<TKey, TStore>
             return index < 0 ? GetLeftNode(node, ref accessor) : new NodeWrapper(this, GetItem(node, index, true, ref accessor).Value);
         }
 
+        /// <summary>
+        /// Finds <paramref name="key"/> in a leaf and returns the value stored against it — a bufferId, on an <c>AllowMultiple</c> index — in one resolution.
+        /// </summary>
+        /// <remarks>
+        /// The <c>AllowMultiple</c> counterpart of the search half of <see cref="ApplyValuesInLeaf"/>. Reaching the same fact through
+        /// <see cref="BinarySearch"/> and then <see cref="GetItem"/> resolves the SAME chunk id twice, once per distinct key in the batch.
+        /// </remarks>
+        public virtual bool TryFindValueInLeaf(NodeWrapper node, TKey key, IComparer<TKey> comparer, out int value, ref ChunkAccessor<TStore> accessor)
+        {
+            var index = BinarySearch(node, key, comparer, ref accessor);
+            if (index < 0)
+            {
+                value = 0;
+                return false;
+            }
+
+            value = GetItem(node, index, true, ref accessor).Value;
+            return true;
+        }
+
         /// <summary>Reads a node's leaf flag and item count together. Overridden per chunk width to do it in one chunk resolution instead of two.</summary>
         public virtual void ReadNodeHeader(NodeWrapper node, out bool isLeaf, out int count, ref ChunkAccessor<TStore> accessor)
         {
