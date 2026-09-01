@@ -54,22 +54,24 @@ internal static class FenceIndexPhaseBench
     private const float WorldMax = 10_000f;
     private const float CellSize = 100f;
 
-    public static void Run(int entityCount = 400_000, int migrantsPerTick = 100_000)
+    public static void Run(int entityCount = 400_000, int migrantsPerTick = 100_000, float bulkMinPerBucket = 0f)
     {
         Console.WriteLine();
-        Console.WriteLine($"#872 step 6 — IndexMassUpdate phase under the scheduler ({entityCount:N0} entities, {migrantsPerTick:N0} migrants/tick)");
+        Console.WriteLine($"#872 — IndexMassUpdate + EntityMapUpdate phases under the scheduler ({entityCount:N0} entities, "
+            + $"{migrantsPerTick:N0} migrants/tick, bulkMin={bulkMinPerBucket})");
         Console.WriteLine();
 
         // Discarded: tiered compilation is process-wide, and without it the first W row measures the runtime warming up rather than the phase.
-        Measure(entityCount, migrantsPerTick, workerCount: 4, ticks: 6);
+        Measure(entityCount, migrantsPerTick, workerCount: 4, ticks: 6, bulkMinPerBucket);
 
-        Console.WriteLine($"{"W",3} {"chunks",7} {"applied",9} {"span us",10} {"cpu us",10} {"span x",8} {"eff",6} {"ns/update",10}");
-        Console.WriteLine(new string('-', 78));
+        Console.WriteLine($"{"W",3} {"chunks",7} {"applied",9} {"span us",10} {"cpu us",10} {"span x",8} {"eff",6} {"ns/update",10} "
+            + $"{"map us",9} {"map cpu",9} {"mig cpu",9} {"em ns/e",9}");
+        Console.WriteLine(new string('-', 100));
 
         double phaseAtOne = 0;
         foreach (var w in new[] { 1, 2, 4, 8, 16 })
         {
-            var r = Measure(entityCount, migrantsPerTick, w, ticks: 12);
+            var r = Measure(entityCount, migrantsPerTick, w, ticks: 12, bulkMinPerBucket);
             if (w == 1)
             {
                 phaseAtOne = r.SpanUs;
@@ -78,13 +80,15 @@ internal static class FenceIndexPhaseBench
             var speedup = phaseAtOne / r.SpanUs;
             Console.WriteLine(
                 $"{w,3} {r.Chunks,7} {r.Applied,9:N0} {r.SpanUs,10:F1} {r.CpuUs,10:F1} {speedup,7:F2}x {100.0 * speedup / w,5:F0}% "
-                + $"{r.SpanUs * 1000.0 / Math.Max(1, r.Applied),10:F1}");
+                + $"{r.SpanUs * 1000.0 / Math.Max(1, r.Applied),10:F1} {r.MapSpanUs,9:F1} {r.MapCpuUs,9:F1} {r.MigCpuUs,9:F1} "
+                + $"{(r.MapCpuUs + r.MigCpuUs) * 1000.0 / Math.Max(1, r.Applied),9:F1}");
         }
 
         Console.WriteLine();
         Console.WriteLine("  span us = WALL CLOCK from the start of the phase's Prepare (merge + sort + leaf-snap) to the last chunk finishing.");
         Console.WriteLine("  cpu us  = summed per-chunk wall time. Shown only to make the difference visible; it is CPU consumed, not time taken.");
         Console.WriteLine("  chunks  = what the planner chose from the cost model, NOT W: ceil(totalCost / 200us), capped at the item count.");
+        Console.WriteLine("  map us  = the EntityMapUpdate phase's own span on the same tick (#872 step 7), Prepare included; map ns/e is per migrant.");
     }
 
     private readonly struct Result
@@ -93,13 +97,21 @@ internal static class FenceIndexPhaseBench
         public readonly long Applied;
         public readonly double SpanUs;
         public readonly double CpuUs;
+        public readonly double MapSpanUs;
+        public readonly double MapCpuUs;
+        public readonly double MigCpuUs;
+        public readonly long MapApplied;
 
-        public Result(int chunks, long applied, double spanUs, double cpuUs)
+        public Result(int chunks, long applied, double spanUs, double cpuUs, double mapSpanUs, double mapCpuUs, double migCpuUs, long mapApplied)
         {
             Chunks = chunks;
             Applied = applied;
             SpanUs = spanUs;
             CpuUs = cpuUs;
+            MapSpanUs = mapSpanUs;
+            MapCpuUs = mapCpuUs;
+            MigCpuUs = migCpuUs;
+            MapApplied = mapApplied;
         }
     }
 
@@ -112,7 +124,7 @@ internal static class FenceIndexPhaseBench
     /// sampled from inside the next tick rather than timed from outside. Best-of across ticks, so a tick the timer coalesced or that landed on a GC pause
     /// cannot set the reported figure.
     /// </remarks>
-    private static Result Measure(int entityCount, int migrants, int workerCount, int ticks)
+    private static Result Measure(int entityCount, int migrants, int workerCount, int ticks, float bulkMinPerBucket)
     {
         var services = new ServiceCollection();
         services
@@ -162,7 +174,7 @@ internal static class FenceIndexPhaseBench
         }
 
         var cursor = 0;
-        var samples = new List<(double SpanUs, double CpuUs, long Units, int Chunks)>();
+        var samples = new List<(double SpanUs, double CpuUs, long Units, int Chunks, double MapSpanUs, double MapCpuUs, double MigCpuUs, long MapUnits)>();
         var ticksObserved = 0;
 
         TyphonRuntime runtime = null;
@@ -174,11 +186,13 @@ internal static class FenceIndexPhaseBench
             // no system can observe its own tick's fence — sampling here is the earliest a value can be read at all.
             dag.CallbackSystem("Sample", _ =>
             {
+                var (mapSpanTicks, mapCpuTicks, mapUnits, _) = runtime.LastEntityMapUpdateStats;
+                var (_, migCpuTicks, _, _) = runtime.LastMigrateStats;
                 var (spanTicks, cpuTicks, units, chunks) = runtime.LastIndexMassUpdateStats;
                 if (units > 0 && spanTicks > 0)
                 {
                     var toUs = 1_000_000.0 / Stopwatch.Frequency;
-                    samples.Add((spanTicks * toUs, cpuTicks * toUs, units, chunks));
+                    samples.Add((spanTicks * toUs, cpuTicks * toUs, units, chunks, mapSpanTicks * toUs, mapCpuTicks * toUs, migCpuTicks * toUs, mapUnits));
                 }
 
                 Interlocked.Increment(ref ticksObserved);
@@ -204,7 +218,11 @@ internal static class FenceIndexPhaseBench
 
                 cursor += migrants;
             }, after: "Sample");
-        }, new RuntimeOptions { WorkerCount = workerCount, BaseTickRate = 200, AdaptiveFenceCost = false });
+        }, new RuntimeOptions
+        {
+            WorkerCount = workerCount, BaseTickRate = 200, AdaptiveFenceCost = false,
+            EntityMapBulkMinEntriesPerBucket = bulkMinPerBucket,
+        });
 
         using var runtimeScope = runtime;
         runtime.Start();
@@ -215,6 +233,10 @@ internal static class FenceIndexPhaseBench
         var cpuUs = 0.0;
         var chunks = 0;
         long applied = 0;
+        var mapSpanUs = 0.0;
+        var mapCpuUs = 0.0;
+        var migCpuUs = 0.0;
+        long mapApplied = 0;
 
         // Best of the samples, and the first two are discarded: the first tick spawns nothing to migrate yet, and the second is the first to run the phase
         // at all, so it carries the page faults for every index chunk the batch touches.
@@ -224,6 +246,10 @@ internal static class FenceIndexPhaseBench
             {
                 bestSpan = samples[i].SpanUs;
                 cpuUs = samples[i].CpuUs;
+                mapSpanUs = samples[i].MapSpanUs;
+                mapCpuUs = samples[i].MapCpuUs;
+                migCpuUs = samples[i].MigCpuUs;
+                mapApplied = samples[i].MapUnits;
                 chunks = samples[i].Chunks;
                 applied = samples[i].Units;
             }
@@ -236,6 +262,6 @@ internal static class FenceIndexPhaseBench
                 + "The workload must actually move entities across cell boundaries on an archetype with an indexed field.");
         }
 
-        return new Result(chunks, applied, bestSpan, cpuUs);
+        return new Result(chunks, applied, bestSpan, cpuUs, mapSpanUs, mapCpuUs, migCpuUs, mapApplied);
     }
 }

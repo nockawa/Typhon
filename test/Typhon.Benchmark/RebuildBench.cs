@@ -5,8 +5,6 @@ using System.Numerics;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Typhon.Engine;
-using Typhon.Engine.Internals;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Benchmark;

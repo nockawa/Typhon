@@ -1665,6 +1665,173 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         return result;
     }
 
+    /// <summary>Where the EntityMap says an entity lives — the (clusterChunkId, slotIndex) pair its ClusterEntityRecord carries.</summary>
+    private static unsafe (int ChunkId, int Slot) ReadEntityMapLocation(DatabaseEngine dbe, ushort archetypeId, EntityId id)
+    {
+        var state = dbe._archetypeStates[archetypeId];
+        var buffer = stackalloc byte[512];
+        using var epoch = EpochGuard.Enter(dbe.EpochManager);
+        var accessor = state.EntityMap.Segment.CreateChunkAccessor();
+        try
+        {
+            return state.EntityMap.TryGet(id.EntityKey, buffer, ref accessor)
+                ? (ClusterEntityRecordAccessor.GetClusterChunkId(buffer), ClusterEntityRecordAccessor.GetSlotIndex(buffer))
+                : (-1, -1);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void EntityMap_MigrationUnderTheParallelFence_InlinePath_RepointsEveryMigrantsRecord()
+    {
+        // The OTHER arm. RuntimeOptions.EntityMapBulkMinEntriesPerBucket picks between staging the location patches for the bulk phase and applying them
+        // inline, and a batch below the threshold takes the inline path — which is what the shipped default does for every batch this size. Two paths mean
+        // two tests: covering only the one the default does not take is how a fallback rots.
+        RunParallelFenceMigrationAndAssertEntityMap(bulkMinEntriesPerBucket: float.MaxValue, tag: 6271, expectBulk: false);
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void EntityMap_MigrationUnderTheParallelFence_RepointsEveryMigrantsRecord()
+        => RunParallelFenceMigrationAndAssertEntityMap(bulkMinEntriesPerBucket: 0f, tag: 6270, expectBulk: true);
+
+    /// <summary>Drives a live runtime tick that migrates half a spawn set, then asserts the EntityMap against cluster occupancy.</summary>
+    private void RunParallelFenceMigrationAndAssertEntityMap(float bulkMinEntriesPerBucket, int tag, bool expectBulk)
+    {
+        // The step-6 gap, reproduced exactly on the EntityMap side and caught before review this time. Ablating FenceEntityMapUpdateExecSystem.DispatchItem
+        // left all 5 692 tests green, because every migration fixture drives WriteTickFence — the SERIAL drain — so nothing exercised the phase that a live
+        // runtime actually runs. Ablating the serial drain, by contrast, reddens
+        // Migration_ThenSubsequentSpawn_ReclaimingSourceSlot_DoesNotCorruptMigratedEntity immediately.
+        //
+        // The assertion is the EntityMap's own record against cluster occupancy: a stale record is what makes a migrated entity resolve to the slot it left,
+        // and once a later spawn reclaims that slot it resolves to an unrelated entity's bytes.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+
+        var ids = new EntityId[24];
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < ids.Length; i++)
+            {
+                var cell = i / 6;
+                ids[i] = tx.Spawn<ClMigUnit>(
+                    ClMigUnit.Pos.Set(PointAt(50f + cell * CellSize + i % 6, 50f, tag: tag)),
+                    ClMigUnit.Scratch.Set(ScratchOf(i, 0f)));
+            }
+
+            tx.Commit();
+        }
+
+        var before = new (int ChunkId, int Slot)[ids.Length];
+        for (var i = 0; i < ids.Length; i++)
+        {
+            before[i] = ReadEntityMapLocation(dbe, meta.ArchetypeId, ids[i]);
+            Assert.That(before[i].ChunkId, Is.GreaterThanOrEqualTo(0), $"sanity: entity {i} must be in the map before anything migrates");
+        }
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < ids.Length; i += 2)
+            {
+                ref var pos = ref tx.OpenMut(ids[i]).Write(ClMigUnit.Pos);
+                pos.Bounds = new AABB2F { MinX = 550f + i, MinY = 750f, MaxX = 550f + i, MaxY = 750f };
+            }
+
+            tx.Commit();
+        }
+
+        // Sampled EVERY tick from inside the tick, not once after Shutdown. Read afterwards it carries the LAST tick's decision — taken with zero pending
+        // migrations — rather than the migrating tick's, and passes only because the two sentinel thresholds happen to be migration-count-independent. Any
+        // mid-range threshold would have made it assert something other than what it claims.
+        var ticks = 0;
+        var bulkObservations = new System.Collections.Concurrent.ConcurrentBag<bool>();
+        bool[] observedPaths = [];
+        using (var runtime = TyphonRuntime.Create(dbe, schedule =>
+               {
+                   schedule.PublicTrack.DeclareDag("Test").CallbackSystem("Tick", _ =>
+                   {
+                       // From tick 2 onward. This callback is on the PUBLIC track and the fence is Engine-Post, so tick 1 samples the flag before any fence
+                       // has run and reads its initial `false` — a stale value that says nothing about which path migration took.
+                       if (Interlocked.Increment(ref ticks) > 1)
+                       {
+                           bulkObservations.Add(dbe._archetypeStates[meta.ArchetypeId].ClusterState.UseBulkEntityMapUpdate);
+                       }
+                   });
+               }, new RuntimeOptions
+               {
+                   WorkerCount = 4,
+                   BaseTickRate = 1000,
+                   EnableParallelFence = true,
+
+                   // FORCED to one arm. The shipped default sends a batch this small down the inline path, so without this the bulk arm would go green while
+                   // exercising none of the phase it exists to cover — the exact vacuity the step-6 review caught.
+                   EntityMapBulkMinEntriesPerBucket = bulkMinEntriesPerBucket,
+               }))
+        {
+            Exception unhandled = null;
+            runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) => Interlocked.CompareExchange(ref unhandled, ex, null);
+
+            runtime.Start();
+            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6, TimeSpan.FromSeconds(5));
+
+            // Snapshotted BEFORE Shutdown, and that is not tidiness. Disposing the engine drives a final SERIAL WriteTickFence, which picks its path from
+            // EntityMapUpdateStaging.DefaultMinEntriesPerBucket rather than from RuntimeOptions — a runtime-less fence has no options object — so the flag
+            // flips to the default's answer on the way down. Asserting over samples taken after that would be asserting about shutdown, not about the ticks
+            // that migrated.
+            observedPaths = bulkObservations.ToArray();
+            runtime.Shutdown();
+
+            // `unhandled` alone is NOT enough, and believing it was is the defect this replaces. UnhandledExceptionCallback fires from the tick driver and
+            // the system-execute path only (DagScheduler.cs:433, :1310); the scheduler's PREPARE catch calls RecordSystemFailure instead, so anything a fence
+            // phase throws while merging, partitioning or leaf-snapping — the subtlest code in the phase — never reaches this callback. Proven by injecting a
+            // throw into a phase's Prepare: `unhandled` stayed null. CurrentTickNumber is the observable that does move, because a failed system aborts its
+            // tick and the clock stops advancing.
+            Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while applying the staged EntityMap batch. Got: {unhandled}");
+            Assert.That(ticks, Is.GreaterThanOrEqualTo(6), "the runtime must actually have ticked, or nothing was measured");
+            Assert.That(runtime.CurrentTickNumber, Is.GreaterThanOrEqualTo(6),
+                "the runtime clock must have advanced — a phase that throws in Prepare is invisible to UnhandledExceptionCallback but aborts its tick");
+        }
+
+        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+
+        // Which path ran, asserted rather than assumed. Both paths are correct, so without this the two tests pass whichever one the threshold selects —
+        // inverting the decision in DecideEntityMapPath reddened NOTHING before this line existed, which means a future change routing every batch inline
+        // would leave the bulk phase dead and the suite green.
+        Assert.That(observedPaths, Is.Not.Empty, "no tick sampled the path decision, so the assertion below would prove nothing");
+        Assert.That(observedPaths, Is.All.EqualTo(expectBulk),
+            expectBulk
+                ? "every tick of this arm must take the BULK path, or it is not covering the phase it exists for"
+                : "every tick of this arm must take the INLINE path, or the fallback is untested");
+
+        // Readable at all only because ReportOrphanedMigrant is a counter rather than a Debug.Fail: Fail terminates the host uncatchably, so in Debug — the
+        // configuration this suite runs in — this assertion could never have executed.
+        Assert.That(cs.OrphanedMigrantCount, Is.Zero,
+            $"no migrant may go missing from the EntityMap inside the fence — that requires a mutation EW-01 forbids. "
+            + $"First was key {cs.FirstOrphanedMigrantKey} at dst {cs.FirstOrphanedMigrantDst >> 8}/{cs.FirstOrphanedMigrantDst & 0xFF}.");
+
+        var occupancy = new HashSet<int>(ActualClusterLocationsForTag(dbe, meta.ArchetypeId, tag));
+        var moved = 0;
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var now = ReadEntityMapLocation(dbe, meta.ArchetypeId, ids[i]);
+            Assert.That(now.ChunkId, Is.GreaterThanOrEqualTo(0), $"entity {i} vanished from the EntityMap");
+            Assert.That(occupancy, Does.Contain(now.ChunkId * 64 + now.Slot),
+                $"entity {i}: the EntityMap points at cluster slot {now.ChunkId}/{now.Slot}, which no entity of this tag occupies");
+
+            if (now != before[i])
+            {
+                moved++;
+            }
+        }
+
+        // Without this the assertion above is satisfied by a tick in which nothing migrated at all: every record would still name a slot that is occupied.
+        Assert.That(moved, Is.GreaterThan(0), "no record moved, so the run proved nothing about repointing");
+    }
+
     [Test]
     [CancelAfter(15_000)]
     public void ClusterIndex_MigrationUnderTheParallelFence_RepointsEveryMigrantsIndexValue()
@@ -1725,8 +1892,15 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6, TimeSpan.FromSeconds(5));
             runtime.Shutdown();
 
+            // `unhandled` alone is NOT enough, and believing it was is the defect this replaces. UnhandledExceptionCallback fires from the tick driver and
+            // the system-execute path only (DagScheduler.cs:433, :1310); the scheduler's PREPARE catch calls RecordSystemFailure instead, so anything a fence
+            // phase throws while merging, partitioning or leaf-snapping — the subtlest code in the phase — never reaches this callback. Proven by injecting a
+            // throw into a phase's Prepare: `unhandled` stayed null. CurrentTickNumber is the observable that does move, because a failed system aborts its
+            // tick and the clock stops advancing.
             Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while applying the staged index batch. Got: {unhandled}");
             Assert.That(ticks, Is.GreaterThanOrEqualTo(6), "the runtime must actually have ticked, or nothing was measured");
+            Assert.That(runtime.CurrentTickNumber, Is.GreaterThanOrEqualTo(6),
+                "the runtime clock must have advanced — a phase that throws in Prepare is invisible to UnhandledExceptionCallback but aborts its tick");
         }
 
         var expected = ActualClusterLocationsForTag(dbe, meta.ArchetypeId, Tag);

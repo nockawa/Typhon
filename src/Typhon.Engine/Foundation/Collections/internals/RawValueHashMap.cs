@@ -31,7 +31,7 @@ internal unsafe interface IRawValueUpdater
     void Update(byte* valueBytes);
 }
 
-unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TStore : struct, IPageStore
+unsafe partial class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TStore : struct, IPageStore
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Layout fields (computed once at construction)
@@ -201,6 +201,22 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     }
 
     internal static uint ComputeHashForTest(TKey key) => ComputeHash(key);
+
+    /// <summary>The overflow chunk id linked from <paramref name="chunkId"/>, or -1 when the chain ends there. Tests only.</summary>
+    /// <remarks>Lets <c>AC-7.6</c> CONSTRUCT its overflow-chain case and fail loudly when the map has none, instead of hoping one exists.</remarks>
+    internal static int BucketOverflowChunkIdForTest(int chunkId, ref ChunkAccessor<TStore> accessor) 
+        => GetHeader(accessor.GetChunkAddress(chunkId)).OverflowChunkId;
+
+    /// <summary>Raw hint-slot contents for <paramref name="key"/>: packed <c>((chunkId &lt;&lt; 8) | index) + 1</c>, or 0 when unset. Tests only.</summary>
+    /// <remarks>
+    /// Exposed for <c>AC-7.2</c>. Comparing <c>TryGetWithHint</c> against <c>TryGet</c> proves the two AGREE, which a cache that was silently cleared would
+    /// also satisfy; reading the slot is what distinguishes "the hint survived" from "the hint was thrown away and the fallback covered for it".
+    /// </remarks>
+    internal long HintSlotForTest(TKey key)
+    {
+        var hints = _locationHints;
+        return hints == null ? 0 : hints[HintSlot(key, hints.Length)];
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Bucket initialization

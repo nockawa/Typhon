@@ -231,6 +231,22 @@ class Program
                 return;
             }
 
+            if (args.Contains("--entitymap-bulk"))
+            {
+                var mapSize = 400_000;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--map=", StringComparison.Ordinal) && !int.TryParse(a["--map=".Length..], out mapSize))
+                    {
+                        Console.WriteLine($"--map: '{a["--map=".Length..]}' is not a number.");
+                        return;
+                    }
+                }
+
+                EntityMapBulkBench.Run(mapSize);
+                return;
+            }
+
             if (args.Contains("--fence-phase"))
             {
                 var migrants = 10_000;
@@ -242,7 +258,20 @@ class Program
                     }
                 }
 
-                FenceIndexPhaseBench.Run(migrantsPerTick: migrants);
+                var bulkMin = 0f;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--bulk-min=", StringComparison.Ordinal)
+                        && !float.TryParse(a["--bulk-min=".Length..], System.Globalization.CultureInfo.InvariantCulture, out bulkMin))
+                    {
+                        // Discarding the result would leave bulkMin at 0, which FORCES the bulk path — so a typo would silently measure the wrong arm and
+                        // report it under the other arm's label.
+                        Console.WriteLine($"--bulk-min: '{a["--bulk-min=".Length..]}' is not a number.");
+                        return;
+                    }
+                }
+
+                FenceIndexPhaseBench.Run(migrantsPerTick: migrants, bulkMinPerBucket: bulkMin);
                 return;
             }
 

@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Runtime.InteropServices;
 using Typhon.Schema.Definition;
 

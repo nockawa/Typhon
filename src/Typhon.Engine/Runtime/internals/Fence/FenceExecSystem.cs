@@ -326,6 +326,8 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
             for (int aid = 0; aid < states.Length; aid++)
             {
                 states[aid]?.ClusterState?.IndexUpdates?.BeginTick(chunkCount);
+                states[aid]?.ClusterState?.EntityMapUpdates?.BeginTick(chunkCount);
+                DecideEntityMapPath(states[aid], ctx.EntityMapBulkMinEntriesPerBucket);
             }
         }
 
@@ -395,6 +397,49 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
         }
     }
 
+    /// <summary>
+    /// Chooses, once per tick per archetype, between staging this tick's EntityMap patches for the bulk phase and applying them inline.
+    /// </summary>
+    /// <remarks>
+    /// <b>The bulk path's gain is entries that share a bucket, and a small batch has none.</b> Expected entries per touched bucket is
+    /// <c>migrants / bucketCount</c>; below the configured minimum the batch produces runs of one, amortises nothing, and still pays the staging, the sort,
+    /// the merge, the partition and a phase barrier. Measured at both ends on <c>--fence-phase</c> — see
+    /// <c>RuntimeOptions.EntityMapBulkMinEntriesPerBucket</c>, which carries the numbers.
+    /// </remarks>
+    private static void DecideEntityMapPath(ArchetypeEngineState state, float minEntriesPerBucket)
+    {
+        var clusterState = state?.ClusterState;
+        if (clusterState == null)
+        {
+            return;
+        }
+
+        var buckets = state.EntityMap?.LiveBucketCount ?? 0;
+        clusterState.UseBulkEntityMapUpdate = buckets <= 0 || clusterState.PendingMigrationCount >= (long)(minEntriesPerBucket * buckets);
+    }
+
+    /// <summary>
+    /// Sorts this chunk's staged EntityMap patches by bucket, on the worker that produced them, before it leaves the chunk.
+    /// </summary>
+    /// <remarks>
+    /// The twin of <see cref="SortStagedIndexRuns"/> and it exists for the same measured reason: sorting the whole batch in the consuming phase's
+    /// <c>Prepare</c> is serial work that Amdahl caps the phase at, whereas each chunk's buffer is owned exclusively by this worker and can be sorted here
+    /// with no synchronisation, inside a parallel region that is already open. The phase is then left with a merge of already-sorted runs.
+    /// </remarks>
+    private void SortStagedEntityMapRuns(int chunkIndex)
+    {
+        var states = Engine._archetypeStates;
+        if (states == null)
+        {
+            return;
+        }
+
+        for (var aid = 0; aid < states.Length; aid++)
+        {
+            states[aid]?.ClusterState?.EntityMapUpdates?.SortChunk(chunkIndex);
+        }
+    }
+
     // Per-chunk worker-local accumulator for dirty-bit deltas. Pooled across ticks — never reallocated per system execution. List<T>.Clear() preserves
     // capacity, so steady-state allocates zero. Indexed by chunkIndex so workers running concurrent chunks never share a buffer.
     private System.Collections.Generic.List<DirtyBitDelta>[] _chunkDirtyBuffers
@@ -443,6 +488,7 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
     protected override void OnAfterChunk(int chunkIndex)
     {
         SortStagedIndexRuns(chunkIndex);
+        SortStagedEntityMapRuns(chunkIndex);
 
         var bucket = _chunkDirtyBuffers.Length > chunkIndex ? _chunkDirtyBuffers[chunkIndex] : null;
         if (bucket == null || bucket.Count == 0)
@@ -473,6 +519,142 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 }
 
 /// <summary>
+/// Applies one archetype's staged EntityMap location patches, one bucket-range slice per worker (#872 step 7, §5.4/§5.5).
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Its own phase, between IndexMassUpdate and AabbRefresh.</b> §5.5 gives the EntityMap "the same treatment, different axis": the index side partitions by
+/// KEY range snapped to leaf edges, this one by BUCKET range. Neither partition can be expressed in the other's terms, and mixing two work kinds into one
+/// plan would leave the planner unable to cost them apart.
+/// </para>
+/// <para>
+/// <b>The H1 fold and the orphan rollback happen here, not in Migrate.</b> Migration used to branch on <c>TryUpdateInPlace</c>'s return value; staging the
+/// patch means the verdict arrives one phase later. <c>NoteClusterBorn</c>/<c>NoteClusterDied</c> are CAS-based, so folding from a bucket-partitioned worker
+/// is safe, and the rollback is three <c>Interlocked.And</c>s plus one store to a destination slot the migrant owns exclusively — it never needed Migrate's
+/// cell-disjointness. What the deferral does change is documented at the staging call site in <c>ExecuteMigrations</c>.
+/// </para>
+/// </remarks>
+internal sealed class FenceEntityMapUpdateExecSystem : FencePhaseExecSystemBase
+{
+    public const string SystemName = "FenceEntityMapUpdate";
+
+    public FenceEntityMapUpdateExecSystem(DatabaseEngine engine) : base(engine) { }
+
+    protected override FencePhase Phase => FencePhase.EntityMapUpdate;
+
+    protected override void Configure(SystemBuilder<FenceContext> b) => b
+        .Name(SystemName)
+        .ChunkedParallel(1)
+        .After(FenceIndexMassUpdateExecSystem.SystemName);
+
+    protected override ChangeSet CreateChunkChangeSet() => Engine.MMF.RentChangeSet();
+
+    /// <summary>Merges each archetype's per-chunk runs and partitions the result by bucket range.</summary>
+    /// <remarks>
+    /// Single-threaded by construction: only the worker that decrements the last IndexMassUpdate dependency to zero reaches a phase's Prepare.
+    /// </remarks>
+    protected override int Prepare(FenceContext ctx)
+    {
+        // Before the merge and partition below, so the phase's span covers the serial work rather than reporting a phase several times faster than it is.
+        PendingPhaseStart = Stopwatch.GetTimestamp();
+
+        var states = Engine._archetypeStates;
+        if (states != null)
+        {
+            for (var aid = 0; aid < states.Length; aid++)
+            {
+                var state = states[aid];
+                var staging = state?.ClusterState?.EntityMapUpdates;
+                if (staging == null)
+                {
+                    continue;
+                }
+
+                staging.ClearPrepared();
+                var count = staging.MergeAndPartition(Math.Max(1, ctx.WorkerCount));
+                if (count == 0)
+                {
+                    continue;
+                }
+
+                var parts = state.EntityMap.PartitionByBucketRuns<EntityLocationUpdate, ClusterLocationBulkUpdater>(
+                    staging.Prepared.AsSpan(0, count), Math.Max(1, ctx.WorkerCount), staging.Boundaries);
+                staging.SetPartCount(parts);
+            }
+        }
+
+        return base.Prepare(ctx);
+    }
+
+    protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet)
+    {
+        if (item.Kind != FenceWorkKind.EntityMapUpdateSlice)
+        {
+            return 0;
+        }
+
+        var state = Engine._archetypeStates[item.TargetId];
+        var clusterState = state?.ClusterState;
+        var staging = clusterState?.EntityMapUpdates;
+        if (staging == null || staging.PreparedCount == 0)
+        {
+            return 0;
+        }
+
+        var slice = staging.Prepared.AsSpan(item.SliceStart, item.SliceCount);
+        var accessor = state.EntityMap.Segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            // This slice's buckets belong to it alone — the partition advances every cut to a bucket change — so no two workers are ever inside one bucket
+            // chunk, which is what makes the per-bucket latch uncontended rather than merely correct.
+            state.EntityMap.UpdateValuesBulk<EntityLocationUpdate, ClusterLocationBulkUpdater>(slice, ref accessor);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        ApplyVisibilityAndOrphans(clusterState, slice, changeSet);
+        return 0;
+    }
+
+    /// <summary>
+    /// Folds each applied migrant's TSNs into its destination cluster, and rolls back the destination slot of any migrant the map no longer holds.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>H1.</b> A migration moves an entity between clusters of one archetype without changing its <c>BornTSN</c>, so the destination cluster's visibility
+    /// summary has to absorb it — otherwise a cluster that was "clean" silently acquires an entity younger than a live reader's snapshot and the scan skips
+    /// the probe that would have hidden it. The DIED side has no pre-fold at all: a migrated entity carrying a tombstone is only discovered here, and
+    /// <c>VisibilityUnknown</c> is what restores the sticky deny for a cluster holding a set occupancy bit for a dead entity.
+    /// </para>
+    /// <para>
+    /// <b>The orphan case should be unreachable, and is reported loudly rather than assumed away.</b> It means the entity left the EntityMap between the
+    /// Migrate phase's occupancy check and this phase — which inside the tick fence requires a mutation <c>EW-01</c> forbids and <c>ExclusiveWindow</c> now
+    /// throws on. The destination slot is still rolled back, because leaving it set would keep a ghost visible to spatial queries.
+    /// </para>
+    /// </remarks>
+    private void ApplyVisibilityAndOrphans(ArchetypeClusterState clusterState, Span<EntityLocationUpdate> slice, ChangeSet changeSet)
+    {
+        for (var i = 0; i < slice.Length; i++)
+        {
+            ref var entry = ref slice[i];
+            if (!entry.Found)
+            {
+                clusterState.RollbackOrphanedDestinationSlot(entry.DstChunkId, entry.DstSlot, entry.EntityKey, changeSet);
+                continue;
+            }
+
+            clusterState.NoteClusterBorn(entry.DstChunkId, entry.ObservedBornTsn);
+            if (entry.ObservedDiedTsn != 0)
+            {
+                clusterState.NoteClusterDied(entry.DstChunkId, ArchetypeClusterState.VisibilityUnknown);
+            }
+        }
+    }
+}
+
+/// <summary>
 /// Phase 3 — applies a contiguous slice of one archetype's AABB recompute per <see cref="FenceWorkKind.AabbRefreshSlice"/> item. Multiple slices per fat
 /// archetype enable per-archetype parallel AABB refresh. No ChangeSet needed: the recompute writes to managed per-cluster arrays (<c>ClusterAabbs</c>) and
 /// per-cell index SoA slots (<c>CellSpatialIndex.UpdateAt</c>) — neither is page-backed. The rare outlier-guard path (<c>FlagOutliersForMigration →
@@ -486,10 +668,16 @@ internal sealed class FenceAabbRefreshExecSystem : FencePhaseExecSystemBase
 
     protected override FencePhase Phase => FencePhase.AabbRefresh;
 
+    /// <remarks>
+    /// <b>The <c>.After(EntityMapUpdate)</c> edge is load-bearing, not a chain reorder.</b> #872 step 7 deferred the H1 DIED-side fold into that phase, so
+    /// between Migrate and EntityMapUpdate a destination cluster holds a SET occupancy bit for a tombstoned migrant with no <c>VisibilityUnknown</c>
+    /// recorded against it. The born side has no such gap — the claim folds <c>NextFreeId</c>, an upper bound, before publishing the bit. Nothing inside the
+    /// fence reads visibility today, and this edge is what keeps that true; moving AabbRefresh earlier would make the gap observable.
+    /// </remarks>
     protected override void Configure(SystemBuilder<FenceContext> b) => b
         .Name(SystemName)
         .ChunkedParallel(1)
-        .After(FenceIndexMassUpdateExecSystem.SystemName);
+        .After(FenceEntityMapUpdateExecSystem.SystemName);
 
     protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet)
     {

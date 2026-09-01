@@ -34,6 +34,11 @@ internal enum FenceWorkKind : byte
     /// no B-link right-walk (EW-01, #872 §5.5). Runs AFTER every <see cref="MigrationApply"/> — the migrations are what stage the entries.</summary>
     IndexUpdateSlice = 7,
 
+    /// <summary>Phase 2.6 — apply one BUCKET-range slice of one archetype's staged EntityMap location patches (#872 step 7, §5.4). Parts own disjoint
+    /// buckets, so no two workers are ever inside one bucket chunk. Runs AFTER every <see cref="MigrationApply"/> — the migrations are what stage the
+    /// entries.</summary>
+    EntityMapUpdateSlice = 8,
+
     /// <summary>Phase 4 — per-archetype Finalize work: bookkeeping clear, dormancy sweep, dirty-ring archive, WAL emit. One item per cluster-eligible archetype.
     /// Must run AFTER all <see cref="AabbRefreshSlice"/> slices for the same archetype have completed.</summary>
     ArchetypeFinalize = 5,

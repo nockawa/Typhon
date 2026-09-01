@@ -38,6 +38,7 @@ public sealed partial class TyphonRuntime : IDisposable
     private readonly FencePrepExecSystem _fencePrepExec;
     private readonly FenceMigrateExecSystem _fenceMigrateExec;
     private readonly FenceIndexMassUpdateExecSystem _fenceIndexMassUpdateExec;
+    private readonly FenceEntityMapUpdateExecSystem _fenceEntityMapUpdateExec;
     private readonly FenceAabbRefreshExecSystem _fenceAabbRefreshExec;
     private readonly FenceFinalizeExecSystem _fenceFinalizeExec;
     private readonly LiveFenceCostModel _liveFenceCost;
@@ -241,6 +242,7 @@ public sealed partial class TyphonRuntime : IDisposable
             _fencePrepExec = fenceBundle.Value.Prep;
             _fenceMigrateExec = fenceBundle.Value.Migrate;
             _fenceIndexMassUpdateExec = fenceBundle.Value.IndexMassUpdate;
+            _fenceEntityMapUpdateExec = fenceBundle.Value.EntityMapUpdate;
             _fenceAabbRefreshExec = fenceBundle.Value.AabbRefresh;
             _fenceFinalizeExec = fenceBundle.Value.Finalize;
             _liveFenceCost = new LiveFenceCostModel(options.FenceCostModel);
@@ -2162,7 +2164,8 @@ public sealed partial class TyphonRuntime : IDisposable
         // telemetry. Pre-#354 the marker wrapped `DispatchDeferredTracks` too, so `writeTickFenceUs` double-counted the Fence systems' wall-time.
         InspectorPhase(TickPhase.WriteTickFence, () =>
         {
-            ctx.Reset(scheduler.CurrentTickNumber, _currentUow?.ChangeSet, scheduler.WorkerCount, Options.FenceChunkOversubscription, _liveFenceCost);
+            ctx.Reset(scheduler.CurrentTickNumber, _currentUow?.ChangeSet, scheduler.WorkerCount, Options.FenceChunkOversubscription, _liveFenceCost,
+                Options.EntityMapBulkMinEntriesPerBucket);
 
             // Drain dormancy wake requests globally on TickDriver (single-threaded contract from issue #233).
             DormancyReporter.DrainAll(Engine._archetypeStates);
@@ -2208,9 +2211,26 @@ public sealed partial class TyphonRuntime : IDisposable
         {
             _liveFenceCost.UpdatePhase(FencePhase.Migrate, _fenceMigrateExec.TotalWallTicks, _fenceMigrateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.IndexMassUpdate, _fenceIndexMassUpdateExec.TotalWallTicks, _fenceIndexMassUpdateExec.TotalUnitCount);
+            _liveFenceCost.UpdatePhase(FencePhase.EntityMapUpdate, _fenceEntityMapUpdateExec.TotalWallTicks, _fenceEntityMapUpdateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.AabbRefresh, _fenceAabbRefreshExec.TotalWallTicks, _fenceAabbRefreshExec.TotalUnitCount);
         }
     }
+
+    /// <summary>Last tick's Migrate phase, in the same shape. Needed to compare the inline EntityMap path against the staged one: the inline path's cost
+    /// lands here, the staged path's in <see cref="LastEntityMapUpdateStats"/>.</summary>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastMigrateStats
+        => _fenceMigrateExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceMigrateExec.PhaseSpanTicks, _fenceMigrateExec.TotalWallTicks, _fenceMigrateExec.TotalUnitCount, _fenceMigrateExec.PlanForTest.ChunkCount);
+
+    /// <summary>Last tick's EntityMapUpdate phase, in the same shape as <see cref="LastIndexMassUpdateStats"/> (#872 step 7).</summary>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastEntityMapUpdateStats
+        => _fenceEntityMapUpdateExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceEntityMapUpdateExec.PhaseSpanTicks,
+               _fenceEntityMapUpdateExec.TotalWallTicks,
+               _fenceEntityMapUpdateExec.TotalUnitCount,
+               _fenceEntityMapUpdateExec.PlanForTest.ChunkCount);
 
     /// <summary>
     /// Last tick's IndexMassUpdate phase: summed per-chunk wall time in <see cref="Stopwatch"/> ticks, entries applied, and chunks dispatched.

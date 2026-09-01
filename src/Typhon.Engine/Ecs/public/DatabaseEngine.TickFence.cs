@@ -457,12 +457,22 @@ public partial class DatabaseEngine
         if (clusterState.PendingMigrationCount > 0)
         {
             clusterState.IndexUpdates?.BeginTick(1);
+            clusterState.EntityMapUpdates?.BeginTick(1);
+
+            // The serial path has no FenceContext to carry RuntimeOptions, so it applies the same rule against the SAME CONSTANT the option defaults to —
+            // not a copy of the value. Without this decision the flag keeps its `false` initial value, every serial migration takes the inline path, and
+            // ApplyStagedEntityMapUpdates below becomes dead code no test would reach. The gain is real even at one worker: 402 vs 691 ns/migrant at ~1.8
+            // entries per bucket. A runtime-less host cannot override the threshold; that is a documented limitation, not a drifted duplicate.
+            var emBuckets = _archetypeStates[meta.ArchetypeId].EntityMap?.LiveBucketCount ?? 0;
+            clusterState.UseBulkEntityMapUpdate = emBuckets <= 0
+                || clusterState.PendingMigrationCount >= (long)(EntityMapUpdateStaging.DefaultMinEntriesPerBucket * emBuckets);
             ExecuteMigrationsSlice(meta, 0, clusterState.PendingMigrationCount, changeSet);
 
             // The serial path has no IndexMassUpdate phase to drain the staging, so it drains it here, on one part. Leaving this out is not a slow path but a
             // WRONG one: migration now STAGES its index value updates instead of applying them, so without a drain every migrated entity's index entry keeps
             // pointing at the cluster location it just left, and a query answers with a stale one.
             ApplyStagedIndexUpdates(clusterState, changeSet);
+            ApplyStagedEntityMapUpdates(meta, clusterState, changeSet);
         }
         // AABB recompute: mirrors the parallel AabbRefresh phase. The wrapper handles bookkeeping clear at its tail —
         // FinalizeArchetypeFence's redundant ClearAabbRefreshBookkeeping then iterates an already-empty bitmap (cheap).
@@ -471,6 +481,63 @@ public partial class DatabaseEngine
             RecomputeArchetypeAabbs(meta);
         }
         return FinalizeArchetypeFence(meta, tickNumber, changeSet);
+    }
+
+    /// <summary>
+    /// Applies one archetype's staged EntityMap location patches, single-threaded, then folds visibility and rolls back any orphan (#872 step 7).
+    /// </summary>
+    /// <remarks>
+    /// The serial fence's counterpart to <c>FenceEntityMapUpdateExecSystem</c>, and it is not an optimisation but a correctness requirement: migration now
+    /// STAGES its location patches instead of applying them, so without this drain every migrated entity's EntityMap record keeps pointing at the cluster slot
+    /// it just left — and once a later spawn reclaims that slot, the stale record resolves to an unrelated entity's bytes.
+    /// <para>
+    /// One part, no bucket partition: with a single worker there is nothing to keep apart, and the partition exists only so concurrent workers never share a
+    /// bucket chunk. The batch still has to be SORTED, because that is what the run amortisation reads.
+    /// </para>
+    /// </remarks>
+    internal void ApplyStagedEntityMapUpdates(ArchetypeMetadata meta, ArchetypeClusterState clusterState, ChangeSet changeSet)
+    {
+        var staging = clusterState?.EntityMapUpdates;
+        if (staging == null)
+        {
+            return;
+        }
+
+        staging.ClearPrepared();
+        staging.SortChunk(0);
+        var count = staging.MergeAndPartition(1);
+        if (count == 0)
+        {
+            return;
+        }
+
+        var state = _archetypeStates[meta.ArchetypeId];
+        var slice = staging.Prepared.AsSpan(0, count);
+        var accessor = state.EntityMap.Segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            state.EntityMap.UpdateValuesBulk<EntityLocationUpdate, ClusterLocationBulkUpdater>(slice, ref accessor);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        for (var i = 0; i < slice.Length; i++)
+        {
+            ref var entry = ref slice[i];
+            if (!entry.Found)
+            {
+                clusterState.RollbackOrphanedDestinationSlot(entry.DstChunkId, entry.DstSlot, entry.EntityKey, changeSet);
+                continue;
+            }
+
+            clusterState.NoteClusterBorn(entry.DstChunkId, entry.ObservedBornTsn);
+            if (entry.ObservedDiedTsn != 0)
+            {
+                clusterState.NoteClusterDied(entry.DstChunkId, ArchetypeClusterState.VisibilityUnknown);
+            }
+        }
     }
 
     /// <summary>

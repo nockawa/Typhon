@@ -637,6 +637,90 @@ internal sealed unsafe class ArchetypeClusterState
     internal const string FreshClusterStaysUnknown = "see the remarks on this field";
 
     /// <summary>
+    /// Clears a destination slot whose entity turned out to be gone from the EntityMap: occupancy bit, entity id, and every component's enabled bit.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Safe from any thread, which is what lets it run in a bucket-partitioned phase.</b> The occupancy and enabled-bit clears are <c>Interlocked.And</c>
+    /// against words shared with other slots; the entity-id store is a plain write to a slot this migrant claimed exclusively. None of it needs the Migrate
+    /// phase's cell-disjointness, so moving it out of <c>ExecuteMigrations</c> (#872 step 7) costs no synchronisation.
+    /// </para>
+    /// <para>
+    /// <b>Reaching this at all should be impossible.</b> The entity can only have left the map through a destroy, and a destroy inside the tick fence is an
+    /// <c>EW-01</c> violation that <c>ExclusiveWindow</c> throws on. The slot is cleared regardless — leaving it set would keep a ghost visible to spatial
+    /// queries until a later spawn reclaimed it — and the event is reported rather than absorbed.
+    /// </para>
+    /// </remarks>
+    internal void RollbackOrphanedDestinationSlot(int dstChunkId, int dstSlot, long entityKey, ChangeSet changeSet)
+    {
+        if (ClusterSegment != null)
+        {
+            var accessor = ClusterSegment.CreateChunkAccessor(changeSet);
+            try
+            {
+                ClearSlotBits(accessor.GetChunkAddress(dstChunkId, true), dstSlot);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+        else if (TransientSegment != null)
+        {
+            var accessor = TransientSegment.CreateChunkAccessor();
+            try
+            {
+                ClearSlotBits(accessor.GetChunkAddress(dstChunkId, true), dstSlot);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+
+        ReportOrphanedMigrant(entityKey, dstChunkId, dstSlot);
+    }
+
+    private void ClearSlotBits(byte* clusterBase, int dstSlot)
+    {
+        Interlocked.And(ref *(long*)clusterBase, ~(1L << dstSlot));
+        *(long*)(clusterBase + Layout.EntityIdsOffset + dstSlot * 8) = 0;
+        for (var s = 0; s < Layout.ComponentCount; s++)
+        {
+            Interlocked.And(ref *(long*)(clusterBase + Layout.EnabledBitsOffset(s)), ~(1L << dstSlot));
+        }
+    }
+
+    /// <summary>
+    /// Migrants found missing from the EntityMap at the moment their location patch was applied. Must stay zero.
+    /// </summary>
+    /// <remarks>
+    /// <b>A counter, and NEITHER a <c>Console.WriteLine</c> NOR a <c>Debug.Fail</c>.</b> The whole argument for deferring the EntityMap write out of
+    /// <c>ExecuteMigrations</c> (#872 step 7) is that this case cannot happen inside the fence — a destroy would be an <c>EW-01</c> violation that
+    /// <c>ExclusiveWindow</c> throws on. That argument is only worth anything if a violation would be NOTICED, and the two obvious ways to be loud both fail
+    /// at exactly that: a line printed to stdout from a worker thread in Release surfaces nowhere, and <c>Debug.Fail</c> terminates the process
+    /// uncatchably — so in Debug, the configuration the whole suite runs in, it would abort the test host and lose every fixture with no attribution, while
+    /// being compiled out of Release entirely. <c>TickContext.cs</c> records that same conclusion for the same reason. A counter is readable from a host and
+    /// is the thing a test can actually assert on.
+    /// </remarks>
+    internal long OrphanedMigrantCount;
+
+    /// <summary>EntityKey of the first orphaned migrant, for diagnosing one if it ever appears. Zero when there has been none.</summary>
+    internal long FirstOrphanedMigrantKey;
+
+    /// <summary>
+    /// Packed <c>(chunkId &lt;&lt; 8) | slot</c> of the first orphaned migrant's destination, so the counter alone is not the whole diagnosis.
+    /// </summary>
+    internal long FirstOrphanedMigrantDst;
+
+    private void ReportOrphanedMigrant(long entityKey, int dstChunkId, int dstSlot)
+    {
+        FirstOrphanedMigrantDst = ((long)dstChunkId << 8) | (uint)(dstSlot & 0xFF);
+        Interlocked.CompareExchange(ref FirstOrphanedMigrantKey, entityKey, 0);
+        Interlocked.Increment(ref OrphanedMigrantCount);
+    }
+
+    /// <summary>
     /// Record that an entity whose <c>BornTSN</c> is <paramref name="bornTsn"/> now occupies <paramref name="clusterChunkId"/>. Called by EVERY site that
     /// associates an entity with a cluster — spawn commit, WAL replay, chain rebuild, and spatial cluster migration — because the summary is only sound if it
     /// bounds every entity actually present.
@@ -967,6 +1051,25 @@ internal sealed unsafe class ArchetypeClusterState
     /// reads them from (#872 step 6). Null until <c>InitializeIndexes</c> has run; empty for an archetype with no indexed field.
     /// </summary>
     internal IndexUpdateStaging IndexUpdates;
+
+    /// <summary>
+    /// Where the tick fence's Migrate phase stages each migrant's EntityMap location patch, and where the EntityMapUpdate phase reads them (#872 step 7).
+    /// </summary>
+    /// <remarks>
+    /// Constructed unconditionally, unlike <see cref="IndexUpdates"/>, which is built inside <c>InitializeIndexes</c> and is therefore absent for an archetype
+    /// with no indexed field. Every migrant needs its EntityMap entry repointed, indexed or not.
+    /// </remarks>
+    internal readonly EntityMapUpdateStaging EntityMapUpdates = new();
+
+    /// <summary>
+    /// Whether this tick's migrations stage their EntityMap patches for the bulk phase, or apply them inline as they always did.
+    /// </summary>
+    /// <remarks>
+    /// Decided once per tick in the Migrate phase's <c>Prepare</c> from <c>PendingMigrationCount / EntityMap.LiveBucketCount</c> against
+    /// <c>RuntimeOptions.EntityMapBulkMinEntriesPerBucket</c> — see that option for the measurement. A batch far smaller than the bucket count has no runs to
+    /// amortise over, so the bulk path is pure overhead there.
+    /// </remarks>
+    internal bool UseBulkEntityMapUpdate;
 
     /// <summary>
     /// The same, for <see cref="StorageMode.Transient"/> component slots. Null when the archetype has no indexed Transient field.

@@ -10,6 +10,38 @@ namespace Typhon.Engine;
 public class RuntimeOptions
 {
     /// <summary>
+    /// Minimum expected entries per bucket (<c>migrants / bucketCount</c>) before migration stages its EntityMap patches for the bulk phase instead of
+    /// applying them inline. Below it, the inline per-entity path runs and the phase emits nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The bulk path's entire gain comes from entries sharing a bucket, and a small batch has none to share.</b> Measured A/B on <c>--fence-phase</c>
+    /// against a 400 000-entity archetype whose map holds ~57 000 buckets, comparing <c>Migrate CPU + EntityMapUpdate CPU</c> per migrant:
+    /// </para>
+    /// <list type="table">
+    ///   <item><description>100 000 migrants (~1.8 per bucket): bulk <b>402 / 511 / 558</b> ns at W = 1 / 4 / 8 against inline <b>691 / 849 / 758</b>. Bulk
+    ///   wins at every worker count.</description></item>
+    ///   <item><description>10 000 migrants (~0.17 per bucket): bulk <b>1287 / 1240 / 1350</b> ns against inline <b>1571 / 1022 / 1066</b>. Inline wins at
+    ///   W ≥ 2, and the spread within a single arm is wide enough that the two are not separable — the EntityMap term is a small part of a noisy Migrate
+    ///   phase at that batch size.</description></item>
+    /// </list>
+    /// <para>
+    /// <b>The default is set from the mechanism, not from a resolved crossover.</b> Runs shorter than one entry amortise nothing by construction, so
+    /// <c>1.0</c> is where the bulk path's advantage begins to exist at all; the crossover is somewhere below it and the benchmark could not resolve where.
+    /// Treat the value as provisional and re-measure when step 10's re-clustering produces a realistic migration rate — that is the workload this should be
+    /// tuned against, not the synthetic churn above.
+    /// </para>
+    /// <para>
+    /// Set to <c>0</c> to force the bulk path always, and <see cref="float.MaxValue"/> to force the inline path for any archetype whose map has buckets;
+    /// both arms of the measurement above used exactly that, via <c>--fence-phase --bulk-min=</c>. The <see cref="float.MaxValue"/> sentinel relies on
+    /// .NET Core 3.0+ SATURATING float-to-integer conversion — <c>(long)(float.MaxValue * bucketCount)</c> overflows to infinity and saturates to
+    /// <see cref="long.MaxValue"/>, which no migrant count reaches. Under the older unspecified conversion the same expression could yield
+    /// <see cref="long.MinValue"/> and force the BULK path instead, silently inverting the sentinel.
+    /// </para>
+    /// </remarks>
+    public float EntityMapBulkMinEntriesPerBucket { get; init; } = EntityMapUpdateStaging.DefaultMinEntriesPerBucket;
+
+    /// <summary>
     /// Target tick rate in Hz. Default: 60.
     /// The scheduler uses metronome-style tick advancement to prevent drift.
     /// </summary>
@@ -124,6 +156,12 @@ public sealed record FenceCostModel(float MigrationCost, float AabbCost, float S
     /// </para>
     /// </remarks>
     public float IndexUpdateCost { get; init; } = 0.06f;
+
+    /// <summary>
+    /// Cost per staged EntityMap location patch, in the planner's arbitrary units. Seeded from step 7's measurement — ~40 ns/entity for the serial apply,
+    /// against ~11 ns for an index update — and refined at runtime by <see cref="LiveFenceCostModel"/> like every other coefficient.
+    /// </summary>
+    public float EntityMapUpdateCost { get; init; } = 0.04f;
 
     /// <summary>
     /// Default coefficients, calibrated against AntHill traces: migration ≈ 33.3 µs/entity, AABB recompute ≈ 2.4 µs/cluster.

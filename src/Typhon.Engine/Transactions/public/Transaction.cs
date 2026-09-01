@@ -2084,7 +2084,7 @@ public unsafe partial class Transaction : EntityAccessor
     /// body is contractually throw-free (see its PROFILING-SPAN-NO-THROW markers).
     /// </para>
     /// </remarks>
-    internal static unsafe void RejectUniqueIndexCollision<TStore>(ref ClusterIndexField<TStore> field, byte* newKeyPtr, int clusterLocation,
+    internal static void RejectUniqueIndexCollision<TStore>(ref ClusterIndexField<TStore> field, byte* newKeyPtr, int clusterLocation,
         ref ChunkAccessor<TStore> idxAccessor)
         where TStore : struct, IPageStore
     {

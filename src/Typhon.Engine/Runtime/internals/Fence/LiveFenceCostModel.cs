@@ -29,6 +29,9 @@ internal sealed class LiveFenceCostModel
     /// wall-time and unit counts.</summary>
     public float IndexUpdateCost;
 
+    /// <summary>µs per staged EntityMap location patch, calibrated from the EntityMapUpdate phase's own chunk wall time and unit counts.</summary>
+    public float EntityMapUpdateCost;
+
     public readonly float ShadowCost;
     public readonly float SpatialCost;
 
@@ -50,12 +53,19 @@ internal sealed class LiveFenceCostModel
     private long _idxSumWall;
     private long _idxSumUnits;
 
+    private readonly long[] _emWall = new long[WindowSize];
+    private readonly long[] _emUnits = new long[WindowSize];
+    private int _emCursor;
+    private long _emSumWall;
+    private long _emSumUnits;
+
     public LiveFenceCostModel(FenceCostModel seed)
     {
         ArgumentNullException.ThrowIfNull(seed);
         MigrationCost = seed.MigrationCost;
         AabbCost = seed.AabbCost;
         IndexUpdateCost = seed.IndexUpdateCost;
+        EntityMapUpdateCost = seed.EntityMapUpdateCost;
         ShadowCost = seed.ShadowCost;
         SpatialCost = seed.SpatialCost;
     }
@@ -104,6 +114,20 @@ internal sealed class LiveFenceCostModel
                 if (_idxSumUnits > 0)
                 {
                     IndexUpdateCost = (float)((_idxSumWall * TicksToMicros) / _idxSumUnits);
+                }
+                break;
+
+            case FencePhase.EntityMapUpdate:
+                _emSumWall  -= _emWall[_emCursor];
+                _emSumUnits -= _emUnits[_emCursor];
+                _emWall[_emCursor]  = wallTicks;
+                _emUnits[_emCursor] = unitCount;
+                _emSumWall  += wallTicks;
+                _emSumUnits += unitCount;
+                _emCursor = (_emCursor + 1) & WindowMask;
+                if (_emSumUnits > 0)
+                {
+                    EntityMapUpdateCost = (float)((_emSumWall * TicksToMicros) / _emSumUnits);
                 }
                 break;
         }

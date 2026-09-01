@@ -398,30 +398,25 @@ public partial class DatabaseEngine
     }
 
     /// <summary>
-    /// In-place ClusterEntityRecord field updater consumed by <see cref="RawValuePagedHashMap{TKey,TStore}.TryUpdateInPlace"/>
-    /// during migration. Patches the 4-byte ClusterChunkId and 1-byte SlotIndex fields without rewriting the rest of the record.
-    /// Struct (not ref struct) so it can sit on the stack as a local in <see cref="ExecuteMigrations"/> and pass through `ref`. NOT <c>readonly</c>: it also
-    /// carries the record's own BornTSN/DiedTSN back out, read under the same bucket write lock that performs the patch (H1).
+    /// The inline per-entity location updater, used when the batch is too small for bucket runs to exist.
     /// </summary>
-    private unsafe struct ClusterLocationUpdater : IRawValueUpdater
+    /// <remarks>
+    /// Reads the record's own BornTSN/DiedTSN back out under the same bucket write lock that performs the patch, exactly as
+    /// <see cref="ClusterLocationBulkUpdater"/> does for the staged path — the H1 fold needs them at that instant, not from a later lookup.
+    /// </remarks>
+    private unsafe struct ClusterLocationInlineUpdater : IRawValueUpdater
     {
         private readonly int _chunkId;
         private readonly byte _slotIndex;
 
-        public ClusterLocationUpdater(int chunkId, byte slotIndex)
+        public ClusterLocationInlineUpdater(int chunkId, byte slotIndex)
         {
             _chunkId = chunkId;
             _slotIndex = slotIndex;
         }
 
-        /// <summary>
-        /// The migrated entity's own BornTSN, captured while the record is under the bucket's write lock. A migration moves an entity BETWEEN clusters of one
-        /// archetype without changing its BornTSN, so the destination cluster's H1 visibility summary has to absorb it — otherwise a cluster that was "clean"
-        /// silently acquires an entity younger than a live reader's snapshot, and the scan skips the probe that would have hidden it.
-        /// </summary>
         public long ObservedBornTsn;
 
-        /// <summary>The migrated entity's DiedTSN (0 = alive). Non-zero forces the destination cluster back onto the per-entity probe.</summary>
         public long ObservedDiedTsn;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -749,73 +744,61 @@ public partial class DatabaseEngine
                     }
                 }
 
-                // 9. Update EntityMap ClusterEntityRecord with the new (clusterChunkId, slotIndex).
-                //    CRITICAL: EntityMap is keyed by EntityKey (the 52-bit top half of RawValue), NOT by the full RawValue stored in cluster slots.
-                //    Passing RawValue here would silently miss every lookup — the map would never get updated, and the entity would remain resolvable via
-                //    its stale (srcChunkId, srcSlot) pointer until a subsequent spawn reclaimed that slot, at which point the stale EntityMap entry would
-                //    resolve to the unrelated new entity's bytes. Unpack explicitly (unsigned shift to avoid sign extension on the top bit).
+                // 9. Stage this migrant's EntityMap location patch instead of applying it (#872 step 7, §5.4).
+                //    CRITICAL: EntityMap is keyed by EntityKey (the 52-bit top half of RawValue), NOT by the full RawValue stored in cluster slots. Passing
+                //    RawValue here would silently miss every lookup — the map would never get updated, and the entity would remain resolvable via its stale
+                //    (srcChunkId, srcSlot) pointer until a subsequent spawn reclaimed that slot, at which point the stale EntityMap entry would resolve to the
+                //    unrelated new entity's bytes. Unpack explicitly.
                 //    Regression test: Migration_ThenSubsequentSpawn_ReclaimingSourceSlot_DoesNotCorruptMigratedEntity.
-                //    In-place primitive (TryUpdateInPlace) — single hash → bucket → chain scan, mutate the 5 bytes that change
-                //    (4-byte ChunkId + 1-byte SlotIndex) under the bucket's OLC write lock. Halves the EntityMap stage cost vs the
-                //    pre-#TBD TryGet+Upsert pair which did two chain scans + a full-record stack copy + double OLC traversal.
-                //    Returns false if the entity is already gone (destroy race precondition from Q9 says the occupancy pre-mask
-                //    should have filtered this out, but the no-op return preserves the same forgiving semantics as before).
+                //
+                //    What staging buys: TryUpdateInPlace already wrote only the 5 bytes that change, so the cost it could not shed was the hash, the
+                //    PackedMeta read, the ResolveBucket, the directory lookup, the dirty-mark and the OLC lock/unlock pair — all per entity. Sorting the batch
+                //    by bucket amortises every one of those across the entries sharing a bucket. The bucket index is computed HERE, on the worker, because the
+                //    batch has to be sorted by it and recomputing it in the apply would put one of the two hashes back.
                 var entityKey = EntityId.FromRaw(entityPK).EntityKey;
-                var clusterLocationUpdater = new ClusterLocationUpdater(dstChunkId, (byte)dstSlot);
-                var updated = engineState.EntityMap.TryUpdateInPlace(entityKey, ref clusterLocationUpdater, ref emAccessor);
-                if (updated)
+                if (clusterState.UseBulkEntityMapUpdate)
                 {
-                    // H1: the destination cluster now holds this entity, so its visibility summary must bound the entity's own TSNs. The born side is already
-                    // bounded by the NextFreeId fold inside the claim (step 2) and this fold only ever raises, so it is a no-op confirmation kept for the day
-                    // that bound is tightened. The DIED side has no such pre-fold: a migrated entity carrying a tombstone is only discovered here, and folding
-                    // it AFTER the record update is what keeps the summary from being relaxed on the strength of a move that did not happen.
-                    clusterState.NoteClusterBorn(dstChunkId, clusterLocationUpdater.ObservedBornTsn);
-                    if (clusterLocationUpdater.ObservedDiedTsn != 0)
+                    clusterState.EntityMapUpdates.Add(chunkIndex, new EntityLocationUpdate
                     {
-                        // A tombstoned entity that keeps an occupancy bit breaks the premise the whole died watermark rests on — "ReleaseSlot clears the bit at
-                        // destroy commit", so a reader past the last death sees a word that already reflects it. Here it does not: the dst bit was set at claim
-                        // and only the SRC slot is released below, so this cluster holds a set bit for a dead entity. Under the pre-#722 sticky flag that
-                        // closed the gate forever and the per-entity probe caught it; a plain watermark would let every reader past ObservedDiedTsn through,
-                        // and TryCountViaOccupancy popcounts on that vouch with nothing to catch it. VisibilityUnknown restores the sticky behaviour for
-                        // exactly this case and nothing else: permanent deny for this cluster, no change to any cluster that drains normally.
-                        clusterState.NoteClusterDied(dstChunkId, ArchetypeClusterState.VisibilityUnknown);
-                    }
+                        EntityKey = entityKey,
+                        Bucket = engineState.EntityMap.BucketIndexOf(entityKey),
+                        DstChunkId = dstChunkId,
+                        DstSlot = dstSlot,
+                    });
                 }
-                if (!updated)
+                else
                 {
-                    // EntityMap doesn't have this entity — was committed-destroyed before fence ran. We've already copied data to (dstChunkId, dstSlot), so the
-                    // destination cluster now contains an orphan entity's bytes that nothing references. Roll back the destination side: clear the slot's
-                    // occupancy + entityId so spatial queries don't keep returning this ghost. The source side gets cleared by the ReleaseSlot below as usual.
-                    // Log so we can root-cause the underlying WriteSpatial-flagged-but-then-destroyed race.
-                    Console.WriteLine($"[Migrate-Orphan] archId={archetypeId} entityKey={entityKey} "
-                        + $"srcChunk={srcChunkId} srcSlot={srcSlot} dstChunk={dstChunkId} dstSlot={dstSlot} — "
-                        + "TryUpdateInPlace returned false (entity gone). Rolling back dst slot.");
-                    if (hasClusterAccessor)
+                    // The inline path, kept for batches too small to produce bucket runs. It differs from the staged one ONLY in where the map write happens:
+                    // the same fold, the same rollback, and the same conservative treatment of steps 10 and 11 below, so the two arms are comparable and the
+                    // engine has one set of semantics rather than two.
+                    var entry = new EntityLocationUpdate { EntityKey = entityKey, DstChunkId = dstChunkId, DstSlot = dstSlot };
+                    var updater = new ClusterLocationInlineUpdater(dstChunkId, (byte)dstSlot);
+                    if (engineState.EntityMap.TryUpdateInPlace(entityKey, ref updater, ref emAccessor))
                     {
-                        var dstRollbackBase = clusterAccessor.GetChunkAddress(dstChunkId, true);
-                        Interlocked.And(ref *(long*)dstRollbackBase, ~(1L << dstSlot));
-                        *(long*)(dstRollbackBase + layout.EntityIdsOffset + dstSlot * 8) = 0;
-                        for (var s = 0; s < componentCount; s++)
+                        clusterState.NoteClusterBorn(dstChunkId, updater.ObservedBornTsn);
+                        if (updater.ObservedDiedTsn != 0)
                         {
-                            var ebOff = layout.EnabledBitsOffset(s);
-                            Interlocked.And(ref *(long*)(dstRollbackBase + ebOff), ~(1L << dstSlot));
+                            clusterState.NoteClusterDied(dstChunkId, ArchetypeClusterState.VisibilityUnknown);
                         }
                     }
-                    else if (hasTransientClusterAccessor)
+                    else
                     {
-                        var dstRollbackBase = transientClusterAccessor.GetChunkAddress(dstChunkId, true);
-                        Interlocked.And(ref *(long*)dstRollbackBase, ~(1L << dstSlot));
-                        *(long*)(dstRollbackBase + layout.EntityIdsOffset + dstSlot * 8) = 0;
-                        for (var s = 0; s < componentCount; s++)
-                        {
-                            var ebOff = layout.EnabledBitsOffset(s);
-                            Interlocked.And(ref *(long*)(dstRollbackBase + ebOff), ~(1L << dstSlot));
-                        }
+                        clusterState.RollbackOrphanedDestinationSlot(entry.DstChunkId, entry.DstSlot, entry.EntityKey, changeSet);
                     }
-                    // Don't proceed to ReleaseSlot src — the original entity is already gone (its slot was cleared at destroy commit). Don't bump dirtyBits —
-                    // the migration was a no-op.
-                    continue;
                 }
+
+                // The H1 visibility fold and the destroyed-in-flight rollback that used to live here now run in the EntityMapUpdate phase, which is where the
+                // "was the entity still in the map" verdict becomes known. Steps 10 and 11 below are therefore no longer gated on that verdict, and both
+                // resulting differences are CONSERVATIVE:
+                //
+                //   * An orphan's source slot is now released. ReleaseSlot derives `wasOccupied` from ClearSlotMetadata's return and gates the cell-count
+                //     decrement and the drain check on it, so releasing a slot a destroy already cleared is a no-op — and a destroy clearing that slot is the
+                //     only way the entity left the map. Had it somehow not, releasing is the correct action regardless.
+                //   * An orphan now records a dirty-bit delta for a migration that gets rolled back. That marks slots dirty which need not be, never the
+                //     reverse.
+                //
+                // Neither is reachable unless the orphan case fires at all, which step 0's occupancy pre-check and step 1b's entityPK guard are supposed to
+                // have filtered out, and which is additionally an EW-01 violation that ExclusiveWindow now throws on rather than absorbing silently.
 
                 // 10. Release the source slot. Clears occupancy, EnabledBits, EntityId, decrements cell.EntityCount. If the cluster becomes empty, the
                 // finalize-and-free is DEFERRED to FinalizeArchetypeFence (review C-1) — freeing here would race with a concurrent ClaimSlotInCell that may

@@ -106,6 +106,9 @@ internal sealed class FenceWorkPlan
             case FencePhase.IndexMassUpdate:
                 EmitIndexUpdateSliceItems(engine, costModel);
                 break;
+            case FencePhase.EntityMapUpdate:
+                EmitEntityMapUpdateSliceItems(engine, costModel);
+                break;
         }
 
         if (ItemCount == 0)
@@ -177,6 +180,56 @@ internal sealed class FenceWorkPlan
                         UnitCount = count,
                     });
                 }
+            }
+        }
+    }
+
+    // ─── Phase EntityMapUpdate: one item per (archetype × bucket range) ─────────────────
+
+    /// <summary>
+    /// Turns each archetype's bucket-range partition into work items.
+    /// </summary>
+    /// <remarks>
+    /// One item per part, exactly as the index phase does — but the axis is the BUCKET, not the key (§5.5, "EntityMap — same treatment, different axis").
+    /// The partition itself was computed in <see cref="FenceEntityMapUpdateExecSystem.Prepare"/>, which has the map and can resolve buckets; all that is left
+    /// here is to name the ranges.
+    /// </remarks>
+    private void EmitEntityMapUpdateSliceItems(DatabaseEngine engine, LiveFenceCostModel costModel)
+    {
+        var states = engine._archetypeStates;
+        if (states == null)
+        {
+            return;
+        }
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!meta.IsClusterEligible || meta.ArchetypeId >= states.Length)
+            {
+                continue;
+            }
+
+            var staging = states[meta.ArchetypeId]?.ClusterState?.EntityMapUpdates;
+            var parts = staging?.PartCount ?? 0;
+            if (parts <= 0)
+            {
+                continue;   // nothing migrated for this archetype: no item, so the phase is skipped rather than dispatched empty
+            }
+
+            var boundaries = staging.Boundaries;
+            for (var p = 0; p < parts; p++)
+            {
+                var start = boundaries[p];
+                var count = boundaries[p + 1] - start;
+                AppendItem(new FenceWorkItem
+                {
+                    Kind = FenceWorkKind.EntityMapUpdateSlice,
+                    TargetId = meta.ArchetypeId,
+                    Cost = costModel.EntityMapUpdateCost * count,
+                    SliceStart = start,
+                    SliceCount = count,
+                    UnitCount = count,
+                });
             }
         }
     }
@@ -653,4 +706,5 @@ internal enum FencePhase : byte
     AabbRefresh = 2,
     Finalize = 3,
     IndexMassUpdate = 4,
+    EntityMapUpdate = 5,
 }
