@@ -459,23 +459,27 @@ internal abstract partial class BTree<TKey, TStore>
             // General remove path with latch-coupled SMO — retry on lock contention
             _hasCachedLastKey = false;
             bool merge;
-            SpinWait spin = default;
+            PureSpin spin = default;
             for (int attempt = 0; ; attempt++)
             {
-                merge = RemoveIterative(ref args, ref accessor, out bool removeCompleted);
+                merge = RemoveIterative(ref args, ref accessor, out bool removeCompleted, out int retryExit);
                 if (removeCompleted)
                 {
                     break;
                 }
-                Interlocked.Increment(ref _optimisticRestarts);
+                // Tallied here, not at the bails, for the same reason as the insert twin: one interlocked pair per no-progress pass, none on a completing
+                // remove. This used to increment _optimisticRestarts, which made a remove-side restart storm indistinguishable from ordinary OLC contention.
+                Interlocked.Increment(ref _pessimisticRestarts);
+                Interlocked.Increment(ref _removeRetryExits[retryExit]);
                 if (attempt >= MaxPessimisticRestarts)
                 {
                     // #695: this loop used to be `while (true)`, same as the insert twin.
                     ThrowHelper.ThrowInvalidOp(
                         $"B+Tree remove made no progress in {MaxPessimisticRestarts} pessimistic retries. The descent keeps reaching a leaf it can neither "
-                        + "validate nor modify, which no further retrying resolves. This is a liveness defect in the tree, not contention (see #695).");
+                        + "validate nor modify, which no further retrying resolves. This is a liveness defect in the tree, not contention (see #695). "
+                        + $"Retry exits (tree-wide): {DescribeRemoveRetryExits()}");
                 }
-                spin.SpinOnce();
+                spin.Once();
             }
 
             if (args.Removed)
@@ -525,16 +529,22 @@ internal abstract partial class BTree<TKey, TStore>
     /// Slow path (leaf underflows): locks leaf + neighbors + path nodes with version validation.
     /// Sets <paramref name="completed"/> to false when lock acquisition fails and caller must retry.
     /// </summary>
-    private bool RemoveIterative(ref RemoveArguments args, ref ChunkAccessor<TStore> accessor, out bool completed)
+    private bool RemoveIterative(ref RemoveArguments args, ref ChunkAccessor<TStore> accessor, out bool completed, out int retryExit)
     {
         completed = false;
+        // Unknown until a bail names itself; the retry loop tallies it. A non-zero Unknown means a bail was added without a code.
+        retryExit = InsertRetryExit.Unknown;
         MutationContext ctx = default;
         var relatives = new NodeRelatives();
         ref var sibAccessor = ref args.SiblingAccessor;
 
         // Phase 1: Descend from root to leaf, recording path + PathVersions for validation. Shared verbatim with InsertIterative — see DescendRecordingPath.
-        if (!DescendRecordingPath(args.Key, args.Comparer, OlcDescentTrace.OpRemove, ref ctx, ref relatives, ref accessor, ref sibAccessor, out var node))
+        if (!DescendRecordingPath(args.Key, args.Comparer, OlcDescentTrace.OpRemove, ref ctx, ref relatives, ref accessor, ref sibAccessor,
+                                  out var node, out var descentExit))
         {
+            retryExit = descentExit;
+            retryExit = InsertRetryExit.RemoveLeafObsolete;
+            retryExit = InsertRetryExit.RemoveLeafVersionChanged;
             return false;
         }
 
@@ -548,12 +558,20 @@ internal abstract partial class BTree<TKey, TStore>
         {
             // LOCKED and OBSOLETE both read 0 and need opposite treatment — see the twin in BTree.Insert.cs and IXS-03. Waiting on an obsolete node is
             // waiting for something that will never happen, and locking it writes into a detached node (#716).
-            if (!leafLatch.IsObsolete)
+            // One read, classified, then acted on — asking IsObsolete twice lets the answer change between the classification and the branch, and the
+            // counter would then name a state the code did not take. Same shape as the insert twin.
+            bool alreadyObsolete = leafLatch.IsObsolete;
+            retryExit = alreadyObsolete ? InsertRetryExit.RemoveLeafObsolete : InsertRetryExit.RemoveLeafVersionZero;
+            if (!alreadyObsolete)
             {
                 // It can turn obsolete between that test and this acquisition — the current holder may be the merge itself. Nothing to abort if so.
                 if (SpinWriteLock(leafLatch) != WriteLockOutcome.Obsolete)
                 {
                     leafLatch.AbortWriteLock();
+                }
+                else
+                {
+                    retryExit = InsertRetryExit.RemoveLeafObsolete;
                 }
             }
             return false;
@@ -579,6 +597,7 @@ internal abstract partial class BTree<TKey, TStore>
         if (node.GetNext(ref accessor).IsValid && args.Compare(args.Key, node.GetHighKey(ref accessor)) >= 0)
         {
             leafLatch.AbortWriteLock(); // we held the lock without modifying the node
+            retryExit = InsertRetryExit.RemoveStaleSeparator;
             return false; // restart — parent separator hasn't propagated; descent landed at wrong leaf
         }
 
@@ -601,6 +620,7 @@ internal abstract partial class BTree<TKey, TStore>
         if (leftOfLeaf || emptyAndLinked)
         {
             leafLatch.AbortWriteLock();
+            retryExit = InsertRetryExit.RemoveLeafNotAuthoritative;
             return false; // restart — this leaf is not authoritative for the key
         }
 
@@ -639,6 +659,7 @@ internal abstract partial class BTree<TKey, TStore>
         if (leafPrev.IsValid && !leafPrev.GetLatch(ref sibAccessor).TryWriteLock())
         {
             node.GetLatch(ref accessor).AbortWriteLock();
+            retryExit = InsertRetryExit.RemoveLeafPrevLockFailed;
             return false; // restart
         }
         if (leafNext.IsValid)
@@ -652,6 +673,7 @@ internal abstract partial class BTree<TKey, TStore>
                 leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
             }
             node.GetLatch(ref accessor).AbortWriteLock();
+            retryExit = InsertRetryExit.RemoveLeafNextLockFailed;
             return false; // restart
         }
 
@@ -677,6 +699,7 @@ internal abstract partial class BTree<TKey, TStore>
                     leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 node.GetLatch(ref accessor).AbortWriteLock();
+                retryExit = InsertRetryExit.RemovePathLockFailed;
                 return false; // restart
             }
             if (!pathLatch.ValidateVersionLocked(ctx.PathVersions[i]))
@@ -695,6 +718,7 @@ internal abstract partial class BTree<TKey, TStore>
                     leafPrev.GetLatch(ref sibAccessor).AbortWriteLock();
                 }
                 node.GetLatch(ref accessor).AbortWriteLock();
+                retryExit = InsertRetryExit.RemovePathVersionChanged;
                 return false; // restart
             }
         }

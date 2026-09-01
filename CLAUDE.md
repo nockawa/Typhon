@@ -150,6 +150,20 @@ bash scripts/pre-push.sh --policy   # policy checks only (seconds; covers the ni
 Each line names the gate job it corresponds to, so a local failure is the same failure CI would have reported. It is
 **not** installed as a git hook — symlink it into `.git/hooks/pre-push` if you want it automatic.
 
+> **First run on a machine needs the Workbench SPA built, or two tests fail for a reason that has nothing to do with your
+> change.** `dotnet build` does not run Vite, so `tools/Typhon.Workbench/wwwroot/index.html` does not exist on a fresh
+> clone or a fresh worktree, and `WorkbenchHostStaticFilesTests` (`Root_ServesSpaIndexHtml`,
+> `UnknownClientRoute_FallsBackToIndexHtml`) assert against the real built file. CI builds the ClientApp; no local
+> machine does until told to:
+>
+> ```bash
+> cd tools/Typhon.Workbench/ClientApp && npm ci && npm run build   # ~12 s after the install; writes ../wwwroot
+> ```
+>
+> Worth stating because the failure reads as an environment limitation rather than a missing build step. It cost a
+> session's confidence in an otherwise-green branch, and the conclusion drawn was "`pre-push.sh` cannot go green
+> locally" — which is wrong.
+
 **What it deliberately does NOT reproduce:** the 8-way sharding and the serial `Sensitive` pass. Those change
 CONTENTION, which is a real source of gate-only failures. If a test reddens the gate but passes here, that is the first
 suspect, and `bench/aws/shard.py run` is the tool for it.
