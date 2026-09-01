@@ -29,6 +29,7 @@ public class BTreeMicroBenchmarks
     private long _deleteKeyToggle;
     private long _moveToggle;
     private int _updateToggle;
+    private readonly BTreeValueUpdate<long>[] _singleEntryBatch = new BTreeValueUpdate<long>[1];
     private long _moveCrossToggle;
     private long[] _randomInsertKeys;
     private int _randomInsertIndex;
@@ -97,7 +98,11 @@ public class BTreeMicroBenchmarks
         _pmmf?.Dispose();
         _serviceProvider?.Dispose();
 
-        try { File.Delete($"{_databaseName}.bin"); } catch { }
+        try { File.Delete($"{_databaseName}.bin"); }
+        catch
+        {
+            // ignored
+        }
     }
 
     /// <summary>
@@ -200,6 +205,28 @@ public class BTreeMicroBenchmarks
         if (!_tree.TryUpdateValue(5000, (_updateToggle++ & 1) == 0 ? 50_000 : 50_001, ref accessor))
         {
             ThrowBenchmarkDidNoWork(nameof(UpdateValue_SameKey));
+        }
+
+        accessor.Dispose();
+    }
+
+    /// <summary>
+    /// #872 step 5, AC-5.6 — the BULK entry point at N = 1, which must not be slower than the single-entry path it generalises.
+    /// </summary>
+    /// <remarks>
+    /// The pairing with <c>UpdateValue_SameKey</c> is the whole point: a batch of one walks the same nodes, so any difference is the bulk path's own overhead
+    /// — the span setup, the generic applier, and the extra indirection through the partition loop. It should be at or below the single-entry cost, because it
+    /// also skips that path's OLC version reads and validations.
+    /// </remarks>
+    [Benchmark]
+    [BenchmarkCategory("Regression")]
+    public void UpdateValues_SingleEntry()
+    {
+        var accessor = _segment.CreateChunkAccessor();
+        _singleEntryBatch[0] = new BTreeValueUpdate<long>(5000, (_updateToggle++ & 1) == 0 ? 50_000 : 50_001);
+        if (_tree.UpdateValues(_singleEntryBatch, ref accessor, out _) != 1)
+        {
+            ThrowBenchmarkDidNoWork(nameof(UpdateValues_SingleEntry));
         }
 
         accessor.Dispose();

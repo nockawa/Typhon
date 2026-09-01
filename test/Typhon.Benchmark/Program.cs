@@ -225,6 +225,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--bulk-visits"))
+            {
+                BulkUpdateBench.Run();
+                return;
+            }
+
             if (args.Contains("--rebuild-bench"))
             {
                 RebuildBench.Run();

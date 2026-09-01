@@ -1,5 +1,6 @@
 ﻿// unset
 
+using System;
 using System.Collections.Generic;
 
 namespace Typhon.Engine.Internals;
@@ -102,6 +103,65 @@ internal abstract partial class BTree<TKey, TStore>
             // access the child after they validate the parent's version. Issue #297.
             return index < 0 ? GetLeftNode(node, ref accessor) : new NodeWrapper(this, GetItem(node, index, true, ref accessor).Value);
         }
+
+        /// <summary>Reads a node's leaf flag and item count together. Overridden per chunk width to do it in one chunk resolution instead of two.</summary>
+        public virtual void ReadNodeHeader(NodeWrapper node, out bool isLeaf, out int count, ref ChunkAccessor<TStore> accessor)
+        {
+            isLeaf = (GetNodeStates(node, ref accessor) & NodeStates.IsLeaf) != 0;
+            count = GetCount(node, ref accessor);
+        }
+
+        /// <summary>
+        /// Locates the child owning <paramref name="key"/> and, in the same chunk resolution, the separator that bounds that child on the right.
+        /// </summary>
+        /// <returns>The child index, in <see cref="GetChild"/>'s numbering where −1 is the left node.</returns>
+        /// <remarks>
+        /// The two belong together because the bulk partition needs both for every child it descends into, and asking for them separately costs two
+        /// resolutions of the same chunk id — per child, at every level, on every batch.
+        /// </remarks>
+        public virtual int FindChildAndBound(NodeWrapper node, TKey key, int count, IComparer<TKey> comparer, out int childChunkId, out TKey rightBound,
+            out bool hasRightBound, ref ChunkAccessor<TStore> accessor)
+        {
+            var childIndex = BinarySearch(node, key, comparer, ref accessor);
+            if (childIndex < 0)
+            {
+                childIndex = ~childIndex - 1;
+            }
+
+            childChunkId = GetChild(node, childIndex, ref accessor).ChunkId;
+            hasRightBound = childIndex + 1 < count;
+            rightBound = hasRightBound ? GetItem(node, childIndex + 1, true, ref accessor).Key : default;
+            return childIndex;
+        }
+
+        /// <summary>
+        /// Applies a whole leaf's worth of unique-index value updates. Overridden per chunk width to resolve the chunk ONCE for the entire sub-batch.
+        /// </summary>
+        /// <remarks>
+        /// The default is the obvious per-entry loop and is correct everywhere; it exists so a storage type without an override stays right rather than fast.
+        /// It also documents what the overrides are for: every one of <see cref="BinarySearch"/> and <see cref="SetValueOnly"/> resolves the chunk id to an
+        /// address on its own, so the default pays TWO resolutions per entry. On a batch whose keys cluster into few leaves — which is exactly what
+        /// re-clustering produces — that per-entry overhead is the dominant cost once the partitioning descent has removed the node visits (#872 AC-5.5).
+        /// </remarks>
+        public virtual int ApplyValuesInLeaf(NodeWrapper node, ReadOnlySpan<BTreeValueUpdate<TKey>> batch, IComparer<TKey> comparer,
+            ref ChunkAccessor<TStore> accessor)
+        {
+            var applied = 0;
+            for (var i = 0; i < batch.Length; i++)
+            {
+                var index = BinarySearch(node, batch[i].Key, comparer, ref accessor);
+                if (index < 0)
+                {
+                    continue;
+                }
+
+                SetValueOnly(node, index, batch[i].NewValue, ref accessor);
+                applied++;
+            }
+
+            return applied;
+        }
+
         public abstract void IncrementStart(NodeWrapper node, ref ChunkAccessor<TStore> accessor);
         public abstract void DecrementStart(NodeWrapper node, ref ChunkAccessor<TStore> accessor);
         public abstract bool IsRotated(NodeWrapper node, ref ChunkAccessor<TStore> accessor);

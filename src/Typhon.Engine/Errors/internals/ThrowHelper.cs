@@ -74,6 +74,20 @@ internal static class ThrowHelper
     public static void ThrowUpdateValueAtOnUnique() =>
         throw new InvalidOperationException("TryUpdateValueAt cannot be used on a unique index, which has no element buffers. Use TryUpdateValue instead.");
 
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowBulkUpdateValuesOnAllowMultiple() =>
+        throw new InvalidOperationException(
+            "The unique-index UpdateValues overload cannot be used on an AllowMultiple index: the leaf slot holds a bufferId there, not a value. Use the "
+            + "UpdateValues overload taking BTreeMultiValueUpdate entries.");
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void ThrowBulkUpdateValuesOnUnique() =>
+        throw new InvalidOperationException(
+            "The AllowMultiple UpdateValues overload cannot be used on a unique index, which has no element buffers. Use the UpdateValues overload taking "
+            + "BTreeValueUpdate entries.");
+
     // --- Storage ---
 
     [DoesNotReturn]
