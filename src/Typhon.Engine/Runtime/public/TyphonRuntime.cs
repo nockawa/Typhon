@@ -37,6 +37,7 @@ public sealed partial class TyphonRuntime : IDisposable
     // OnTickEndInternal then falls back to the legacy single-threaded WriteTickFence path. Each phase has its own FenceWorkPlan instance (rebuilt every tick).
     private readonly FencePrepExecSystem _fencePrepExec;
     private readonly FenceMigrateExecSystem _fenceMigrateExec;
+    private readonly FenceIndexMassUpdateExecSystem _fenceIndexMassUpdateExec;
     private readonly FenceAabbRefreshExecSystem _fenceAabbRefreshExec;
     private readonly FenceFinalizeExecSystem _fenceFinalizeExec;
     private readonly LiveFenceCostModel _liveFenceCost;
@@ -239,6 +240,7 @@ public sealed partial class TyphonRuntime : IDisposable
         {
             _fencePrepExec = fenceBundle.Value.Prep;
             _fenceMigrateExec = fenceBundle.Value.Migrate;
+            _fenceIndexMassUpdateExec = fenceBundle.Value.IndexMassUpdate;
             _fenceAabbRefreshExec = fenceBundle.Value.AabbRefresh;
             _fenceFinalizeExec = fenceBundle.Value.Finalize;
             _liveFenceCost = new LiveFenceCostModel(options.FenceCostModel);
@@ -2151,6 +2153,10 @@ public sealed partial class TyphonRuntime : IDisposable
         // OnTickEndInternal).
         var ctx = Engine.FenceContext;
 
+        // EW-01's window covers the WHOLE phase — the serial prep AND the Fence DAG dispatched below — because both mutate the structures the rule names.
+        // Opening it enrols the TickDriver thread; each fence worker enrols itself in FencePhaseExecSystemBase.Execute.
+        using var window = Engine.EpochManager.FenceWindow.Open();
+
         // `TickPhase.WriteTickFence` brackets ONLY the serial prep — context reset, dormancy drain, and the serial component-table fences. This is the sole
         // genuinely-serial post-tick fence cost; the Fence DAG dispatched below is four chained systems on the Engine-Post track, each with its own per-system
         // telemetry. Pre-#354 the marker wrapped `DispatchDeferredTracks` too, so `writeTickFenceUs` double-counted the Fence systems' wall-time.
@@ -2201,9 +2207,26 @@ public sealed partial class TyphonRuntime : IDisposable
         if (Options.AdaptiveFenceCost)
         {
             _liveFenceCost.UpdatePhase(FencePhase.Migrate, _fenceMigrateExec.TotalWallTicks, _fenceMigrateExec.TotalUnitCount);
+            _liveFenceCost.UpdatePhase(FencePhase.IndexMassUpdate, _fenceIndexMassUpdateExec.TotalWallTicks, _fenceIndexMassUpdateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.AabbRefresh, _fenceAabbRefreshExec.TotalWallTicks, _fenceAabbRefreshExec.TotalUnitCount);
         }
     }
+
+    /// <summary>
+    /// Last tick's IndexMassUpdate phase: summed per-chunk wall time in <see cref="Stopwatch"/> ticks, entries applied, and chunks dispatched.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so <c>AC-6.5</c> can be measured on the PHASE rather than on the primitive underneath it. Hand-rolling W threads around
+    /// <c>BTree.UpdateValues</c> measures the descent's scaling and misses everything the phase actually pays for: the planner choosing its own chunk count
+    /// from the cost model, bin-packing, dependency resolution, the per-chunk ChangeSet and EpochGuard, and the barriers either side.
+    /// </remarks>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastIndexMassUpdateStats
+        => _fenceIndexMassUpdateExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceIndexMassUpdateExec.PhaseSpanTicks,
+               _fenceIndexMassUpdateExec.TotalWallTicks,
+               _fenceIndexMassUpdateExec.TotalUnitCount,
+               _fenceIndexMassUpdateExec.PlanForTest.ChunkCount);
 
     /// <summary>
     /// Wraps a tick phase with paired profiler boundary events. When <see cref="TelemetryConfig.ProfilerActive"/> is false the JIT folds both Emit calls to

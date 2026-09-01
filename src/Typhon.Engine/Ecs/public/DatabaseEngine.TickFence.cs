@@ -62,6 +62,9 @@ public partial class DatabaseEngine
         long highestLSN;
         try
         {
+            // EW-01's window, opened where the rule's scope says it opens. It enrols this thread, so the fence's own serial writes pass; a mutation of a
+            // fence-owned structure from any other thread while this runs throws at the mutation site instead of corrupting it silently.
+            using var window = EpochManager.FenceWindow.Open();
             highestLSN = WriteTickFenceCore(tickNumber, changeSet);
         }
         finally
@@ -453,7 +456,13 @@ public partial class DatabaseEngine
         var clusterState = _archetypeStates[meta.ArchetypeId].ClusterState;
         if (clusterState.PendingMigrationCount > 0)
         {
+            clusterState.IndexUpdates?.BeginTick(1);
             ExecuteMigrationsSlice(meta, 0, clusterState.PendingMigrationCount, changeSet);
+
+            // The serial path has no IndexMassUpdate phase to drain the staging, so it drains it here, on one part. Leaving this out is not a slow path but a
+            // WRONG one: migration now STAGES its index value updates instead of applying them, so without a drain every migrated entity's index entry keeps
+            // pointing at the cluster location it just left, and a query answers with a stale one.
+            ApplyStagedIndexUpdates(clusterState, changeSet);
         }
         // AABB recompute: mirrors the parallel AabbRefresh phase. The wrapper handles bookkeeping clear at its tail —
         // FinalizeArchetypeFence's redundant ClearAabbRefreshBookkeeping then iterates an already-empty bitmap (cheap).
@@ -462,6 +471,56 @@ public partial class DatabaseEngine
             RecomputeArchetypeAabbs(meta);
         }
         return FinalizeArchetypeFence(meta, tickNumber, changeSet);
+    }
+
+    /// <summary>
+    /// Applies every indexed field's staged value updates for one archetype, single-threaded, in one partitioning descent per field (#872 step 6).
+    /// </summary>
+    /// <remarks>
+    /// The serial fence's counterpart to <c>FenceIndexMassUpdateExecSystem</c>. It takes the same sort but skips the leaf-snapped partition entirely: with
+    /// one worker there is nothing to keep apart, and the snap exists only so that concurrent workers never share a leaf.
+    /// </remarks>
+    internal void ApplyStagedIndexUpdates(ArchetypeClusterState clusterState, ChangeSet changeSet)
+    {
+        var staging = clusterState?.IndexUpdates;
+        if (staging == null || staging.FieldCount == 0 || clusterState.IndexSlots == null)
+        {
+            return;
+        }
+
+        for (var fieldId = 0; fieldId < staging.FieldCount; fieldId++)
+        {
+            if (staging.StagedBytes(fieldId) == 0)
+            {
+                continue;
+            }
+
+            var fieldRef = staging.Field(fieldId);
+            ref var field = ref clusterState.IndexSlots[fieldRef.SlotIndex].Fields[fieldRef.FieldIndex];
+            var multi = field.AllowMultiple;
+
+            // The parallel path's Migrate workers sort their own chunk before leaving it; this path has no workers, so it sorts its single run here. The
+            // merge below then sees one sorted run and copies it, which is the degenerate case it already handles.
+            field.Index.SortBulkEntries(staging.ChunkSpan(0, fieldId), multi);
+
+            var merged = staging.MergeSortedRuns(fieldId, field.Index.BulkEntryStride(multi), field.Index, multi, out var byteCount);
+            if (byteCount == 0)
+            {
+                continue;
+            }
+
+            var accessor = field.Index.Segment.CreateChunkAccessor(changeSet);
+            try
+            {
+                field.Index.ApplyBulkEntries(merged.AsSpan(0, byteCount), multi, ref accessor, out _);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+
+        staging.BeginTick(1);   // consume: the entries have been applied and must not be applied again next tick
     }
 
     /// <summary>
@@ -837,7 +896,8 @@ public partial class DatabaseEngine
     /// <c>PrimarySegmentCapacity + PendingMigrationCount</c> entries by TickDriver before any Migrate-phase worker runs (eliminates parallel
     /// <c>Array.Resize</c>), and (b) the slice <c>[sliceStart, sliceStart+sliceCount)</c> is disjoint from every other worker's slice.
     /// </remarks>
-    internal void ExecuteMigrationsSlice(ArchetypeMetadata meta, int sliceStart, int sliceCount, ChangeSet changeSet, List<DirtyBitDelta> dirtyBuffer = null)
+    internal void ExecuteMigrationsSlice(ArchetypeMetadata meta, int sliceStart, int sliceCount, ChangeSet changeSet, List<DirtyBitDelta> dirtyBuffer = null,
+        int chunkIndex = 0)
     {
         if (sliceCount <= 0)
         {
@@ -851,7 +911,7 @@ public partial class DatabaseEngine
             return;
         }
 
-        ExecuteMigrations(clusterState, engineState, meta.ArchetypeId, sliceStart, sliceCount, changeSet, dirtyBuffer);
+        ExecuteMigrations(clusterState, engineState, meta.ArchetypeId, sliceStart, sliceCount, changeSet, dirtyBuffer, chunkIndex);
     }
 
     /// <summary>

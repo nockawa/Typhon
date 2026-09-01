@@ -470,7 +470,7 @@ public partial class DatabaseEngine
     /// destination slot bit survives the subsequent WAL publish.</para>
     /// </remarks>
     private unsafe void ExecuteMigrations(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ushort archetypeId, int sliceStart, 
-        int sliceCount, ChangeSet changeSet, List<DirtyBitDelta> dirtyBuffer = null)
+        int sliceCount, ChangeSet changeSet, List<DirtyBitDelta> dirtyBuffer = null, int chunkIndex = 0)
     {
         var totalPending = clusterState.PendingMigrationCount;
         if (sliceCount <= 0 || sliceStart >= totalPending)
@@ -510,11 +510,9 @@ public partial class DatabaseEngine
         var hasTransientClusterAccessor = clusterState.TransientSegment != null;
         var transientClusterAccessor = hasTransientClusterAccessor ? clusterState.TransientSegment.CreateChunkAccessor() : default;
 
-        var hasIdxAccessor = clusterState.IndexSegment != null;
-        var idxAccessor = hasIdxAccessor ? clusterState.IndexSegment.CreateChunkAccessor(changeSet) : default;
-        // A field's nodes live in whichever segment its stride requires; String64 fields use the archetype's second segment (#658).
-        var hasIdxAccessorS64 = clusterState.IndexSegmentString64 != null;
-        var idxAccessorS64 = hasIdxAccessorS64 ? clusterState.IndexSegmentString64.CreateChunkAccessor(changeSet) : default;
+        // No index accessor is rented here anymore. Step 6 replaced this loop's Remove(key) + Add(key, newLoc) with an append to IndexUpdateStaging, and
+        // staging touches no B+Tree page — the IndexMassUpdate phase rents its own accessors when it applies the batch. The pair that used to be rented (the
+        // archetype's index segment and, for String64 fields, its second segment — #658) were created and disposed with nothing in between.
 
         var emAccessor = engineState.EntityMap.Segment.CreateChunkAccessor(changeSet);
 
@@ -644,60 +642,52 @@ public partial class DatabaseEngine
                 var oldClusterLocation = srcChunkId * 64 + srcSlot;
                 var newClusterLocation = dstChunkId * 64 + dstSlot;
 
-                // 7. Update per-archetype B+Tree index entries. Key is unchanged (data was just copied); value
-                //    (clusterLocation) changes. Follow the destroy+spawn primitive pattern: Remove(key) + Add(key, newLoc).
-                if (hasIdxAccessor && clusterState.IndexSlots != null)
+                // 7. Stage this migrant's index value updates instead of applying them (#872 step 6). The KEY is unchanged — the component copy in step 4
+                //    already moved the entity's bytes, so the destination holds the same indexed value it had — and only the VALUE (clusterLocation) moves.
+                //    That is precisely the shape the bulk partitioning descent exists for, so what used to be Remove(key) + Add(key, newLoc) per migrant per
+                //    field, two root-to-leaf descents to change four bytes, becomes one appended record. The IndexMassUpdate phase then applies every
+                //    archetype's whole batch in one descent per leaf-snapped key range.
+                // Gated on IndexSlots alone. The obvious-looking `IndexSegment != null` would be wrong: a field's nodes live in whichever segment its
+                // stride requires, so an archetype indexed ONLY on String64 fields keeps them all in IndexSegmentString64 (#658) and would skip staging
+                // entirely — its index would simply never be updated after a migration. IndexSlots is the list of fields that need updating, which is the
+                // actual precondition.
+                if (clusterState.IndexSlots != null)
                 {
                     var ixSlots = clusterState.IndexSlots;
+                    var staging = clusterState.IndexUpdates;
+                    var fieldId = 0;
                     for (var ixs = 0; ixs < ixSlots.Length; ixs++)
                     {
                         ref var ixSlot = ref ixSlots[ixs];
                         var ixCompSize = layout.ComponentSize(ixSlot.Slot);
                         var dstCompBase = dstBase + layout.ComponentOffset(ixSlot.Slot) + dstSlot * ixCompSize;
-                        for (var fi = 0; fi < ixSlot.Fields.Length; fi++)
+                        for (var fi = 0; fi < ixSlot.Fields.Length; fi++, fieldId++)
                         {
                             ref var field = ref ixSlot.Fields[fi];
+                            // fieldPtr already holds the key: the component copy in step 4 is src -> dst, so the destination bytes are the entity's current
+                            // value. Passed straight through as a raw address rather than copied into a local first — building a KeyBytes8 here memcpy'd
+                            // FieldSize bytes into an 8-byte struct (64 for a String64 field), smashing the stack and crashing the host. Same defect and
+                            // same fix as the destroy twin (Transaction.ECS.cs:1393).
                             var fieldPtr = dstCompBase + field.FieldOffset;
-                            // The B+Tree takes the key by raw pointer, so pass fieldPtr straight through. Building a KeyBytes8 first (an 8-byte struct) and
-                            // taking its address memcpy'd FieldSize bytes into it — 64 for a String64 indexed field — smashing 56 bytes of stack over the
-                            // ChunkAccessor locals sitting next to it, and crashing the host. Same defect and same fix as the destroy twin
-                            // (Transaction.ECS.cs:1393). fieldPtr already holds the key: the component copy in step 4 is src -> dst, so the destination bytes
-                            // are the entity's current value, which is exactly the key being removed from the tree before the re-add.
-                            // For non-unique (AllowMultiple) cluster indexes, read the srcBase elementId from the
-                            // source cluster's tail and call RemoveValue — Remove(key) would wipe the entire buffer
-                            // at the key and corrupt siblings. srcBase is still the source cluster's bytes (the
-                            // component COPY done in step 4 is src→dst, so the source tail is intact). Issue #229 Phase 3.
-                            // Regression test: ClusterIndex_NonUniqueField_MigrateOneEntity_PreservesSiblingsInIndex.
+                            var stride = field.Index.BulkEntryStride(field.AllowMultiple);
+                            var dest = staging.Reserve(chunkIndex, fieldId, stride);
+
                             if (field.AllowMultiple)
                             {
+                                // The elementId does NOT change, and that is the quiet simplification the conversion buys. Remove+Add relocated the entity's
+                                // element into a new buffer and had to write the new id into the destination tail; a value-only update leaves the element
+                                // exactly where it is, so the destination inherits the source's id and one VSBS allocation per migrant per field disappears.
+                                // srcBase still holds the source cluster's bytes — step 4's copy is src -> dst and does not touch the elementId tail.
                                 var elementId = *(int*)(srcBase + layout.IndexElementIdOffset(field.MultiFieldIndex, srcSlot));
-                                var useS64 = hasIdxAccessorS64 && ReferenceEquals(field.Index.Segment, clusterState.IndexSegmentString64);
-                                int newElementId;
-                                if (useS64)
-                                {
-                                    field.Index.RemoveValue(fieldPtr, elementId, oldClusterLocation, ref idxAccessorS64);
-                                    newElementId = field.Index.Add(fieldPtr, newClusterLocation, ref idxAccessorS64);
-                                }
-                                else
-                                {
-                                    field.Index.RemoveValue(fieldPtr, elementId, oldClusterLocation, ref idxAccessor);
-                                    newElementId = field.Index.Add(fieldPtr, newClusterLocation, ref idxAccessor);
-                                }
-                                *(int*)(dstBase + layout.IndexElementIdOffset(field.MultiFieldIndex, dstSlot)) = newElementId;
+                                field.Index.WriteBulkMultiEntry(dest, fieldPtr, elementId, oldClusterLocation, newClusterLocation);
+                                *(int*)(dstBase + layout.IndexElementIdOffset(field.MultiFieldIndex, dstSlot)) = elementId;
                             }
                             else
                             {
-                                if (hasIdxAccessorS64 && ReferenceEquals(field.Index.Segment, clusterState.IndexSegmentString64))
-                                {
-                                    field.Index.Remove(fieldPtr, out _, ref idxAccessorS64);
-                                    field.Index.Add(fieldPtr, newClusterLocation, ref idxAccessorS64);
-                                }
-                                else
-                                {
-                                    field.Index.Remove(fieldPtr, out _, ref idxAccessor);
-                                    field.Index.Add(fieldPtr, newClusterLocation, ref idxAccessor);
-                                }
+                                field.Index.WriteBulkEntry(dest, fieldPtr, newClusterLocation);
                             }
+
+                            // The zone map is not an index and has no ordering dependency on the tree, so it stays inline.
                             field.ZoneMap?.Widen(dstChunkId, fieldPtr);
                         }
                     }
@@ -872,15 +862,6 @@ public partial class DatabaseEngine
         finally
         {
             emAccessor.Dispose();
-            if (hasIdxAccessor)
-            {
-                idxAccessor.Dispose();
-            }
-
-            if (hasIdxAccessorS64)
-            {
-                idxAccessorS64.Dispose();
-            }
             if (hasTransientClusterAccessor)
             {
                 transientClusterAccessor.Dispose();

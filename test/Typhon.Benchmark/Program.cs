@@ -231,6 +231,36 @@ class Program
                 return;
             }
 
+            if (args.Contains("--fence-phase"))
+            {
+                var migrants = 10_000;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--migrants=", StringComparison.Ordinal))
+                    {
+                        migrants = int.Parse(a.AsSpan(11));
+                    }
+                }
+
+                FenceIndexPhaseBench.Run(migrantsPerTick: migrants);
+                return;
+            }
+
+            if (args.Contains("--fence-parallel"))
+            {
+                var batch = 10_000;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--n=", StringComparison.Ordinal))
+                    {
+                        batch = int.Parse(a.AsSpan(4));
+                    }
+                }
+
+                FenceParallelBench.Run(n: batch);
+                return;
+            }
+
             if (args.Contains("--rebuild-bench"))
             {
                 RebuildBench.Run();

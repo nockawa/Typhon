@@ -183,6 +183,7 @@ internal abstract partial class BTree<TKey, TStore>
     /// <param name="stats">Node visits, leaves touched and entries applied — the measurement §5.3's model is checked against.</param>
     public int UpdateValues(ReadOnlySpan<BTreeValueUpdate<TKey>> sortedByKey, ref ChunkAccessor<TStore> accessor, out BulkUpdateStats stats)
     {
+        _fenceWindow?.NoteMutation("BTree.UpdateValues");
         // Same guard, same reason as TryUpdateValue: on an AllowMultiple tree the leaf slot is a bufferId, and SetValueOnly would overwrite it with a value.
         if (AllowMultiple)
         {
@@ -213,6 +214,7 @@ internal abstract partial class BTree<TKey, TStore>
     /// <param name="stats">Node visits, leaves touched and entries applied.</param>
     public int UpdateValues(ReadOnlySpan<BTreeMultiValueUpdate<TKey>> sortedByKey, ref ChunkAccessor<TStore> accessor, out BulkUpdateStats stats)
     {
+        _fenceWindow?.NoteMutation("BTree.UpdateValues(multi)");
         if (!AllowMultiple)
         {
             ThrowHelper.ThrowBulkUpdateValuesOnUnique();

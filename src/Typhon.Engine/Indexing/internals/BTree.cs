@@ -1196,12 +1196,19 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
 
     #region Public API
     
+    /// <summary>This tree's engine-scoped <c>EW-01</c> guard, or <c>null</c> for a segment with no epoch manager.</summary>
+    private readonly ExclusiveWindow _fenceWindow;
+
     public override ChunkBasedSegment<TStore> Segment => _segment;
 
     protected BTree(ChunkBasedSegment<TStore> segment, bool load, BTreeStableKey key = default, ChangeSet changeSet = null)
     {
         Comparer = Comparer<TKey>.Default;
         _segment = segment;
+
+        // Resolved once here rather than per mutation: the lookup walks segment -> store -> EpochManager, and the guard has to be free enough on the closed
+        // path that nobody is tempted to compile it out of Release (see ExclusiveWindow).
+        _fenceWindow = segment?.FenceWindow;
 
         // ReSharper disable once VirtualMemberCallInConstructor
         _storage = GetStorage();
@@ -1411,6 +1418,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
 
     public int Add(TKey key, int value, ref ChunkAccessor<TStore> accessor, out int bufferRootId)
     {
+        _fenceWindow?.NoteMutation("BTree.Add");
         // The outer `using var` was adding a second EH region on a per-key hot path; we keep the inner try/finally for accessor return and rely on the body
         // being throw-free in practice.
         var scope = TyphonEvent.BeginBTreeInsert();
@@ -1442,6 +1450,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
 
     public bool Remove(TKey key, out int value, ref ChunkAccessor<TStore> accessor)
     {
+        _fenceWindow?.NoteMutation("BTree.Remove");
         var scope = TyphonEvent.BeginBTreeDelete();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)
@@ -2201,6 +2210,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
 
     public bool RemoveValue(TKey key, int elementId, int value, ref ChunkAccessor<TStore> accessor)
     {
+        _fenceWindow?.NoteMutation("BTree.RemoveValue");
         var scope = TyphonEvent.BeginBTreeDelete();
 
         // Per-operation accessor for thread safety under OLC (thread-local warm cache)

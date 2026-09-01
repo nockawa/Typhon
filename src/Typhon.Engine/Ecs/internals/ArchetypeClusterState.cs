@@ -963,6 +963,12 @@ internal sealed unsafe class ArchetypeClusterState
     public ClusterIndexSlot<PersistentStore>[] IndexSlots;
 
     /// <summary>
+    /// Where the tick fence's Migrate phase stages <c>(key, oldValue, newValue)</c> for this archetype's indexed fields, and where the IndexMassUpdate phase
+    /// reads them from (#872 step 6). Null until <c>InitializeIndexes</c> has run; empty for an archetype with no indexed field.
+    /// </summary>
+    internal IndexUpdateStaging IndexUpdates;
+
+    /// <summary>
     /// The same, for <see cref="StorageMode.Transient"/> component slots. Null when the archetype has no indexed Transient field.
     /// </summary>
     /// <remarks>
@@ -3597,6 +3603,27 @@ internal sealed unsafe class ArchetypeClusterState
             $"Cluster elementId tail: InitializeIndexes counted {multiFieldCounter} AllowMultiple fields but Layout reserves {Layout.MultipleIndexedFieldCount}");
 
         ClusterShadowBitmap = new DirtyBitmap(Math.Max(64, PrimarySegmentCapacity * 64));
+
+        // The flattened (slot, field) map the tick fence's IndexMassUpdate phase stages against. Persistent slots only: the migration path that produces the
+        // staged entries writes IndexSlots and nothing else (DatabaseEngine.ClusterMigration.cs, the `hasIdxAccessor && IndexSlots != null` block).
+        var fieldCount = 0;
+        for (var s = 0; s < IndexSlots.Length; s++)
+        {
+            fieldCount += IndexSlots[s].Fields?.Length ?? 0;
+        }
+
+        var fieldRefs = new IndexUpdateStaging.FieldRef[fieldCount];
+        var fid = 0;
+        for (var s = 0; s < IndexSlots.Length; s++)
+        {
+            var fields = IndexSlots[s].Fields;
+            for (var f = 0; f < (fields?.Length ?? 0); f++)
+            {
+                fieldRefs[fid++] = new IndexUpdateStaging.FieldRef(s, f);
+            }
+        }
+
+        IndexUpdates = new IndexUpdateStaging(fieldRefs);
     }
 
     /// <summary>

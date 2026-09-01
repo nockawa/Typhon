@@ -1,5 +1,6 @@
 // unset
 
+using System;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine.Internals;
@@ -41,6 +42,62 @@ internal abstract class BTreeBase<TStore> : IBTreeIndex where TStore : struct, I
     /// </summary>
     public abstract unsafe int MoveValue(void* oldKeyAddr, void* newKeyAddr, int elementId, int value, ref ChunkAccessor<TStore>accessor, 
         out int oldHeadBufferId, out int newHeadBufferId);
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // Bulk value update — the key-erased surface the tick fence's IndexMassUpdate phase drives K heterogeneous trees through (#872 step 6, §5.5).
+    //
+    // Same erasure discipline as Add / Remove above: the phase holds a BTreeBase<TStore> and cannot name TKey, so keys cross the boundary as raw addresses
+    // and batches as raw buffers of a stride the tree itself reports. Nothing here interprets the bytes — the concrete BTree<TKey, TStore> casts once and
+    // everything downstream of that is typed.
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Bytes per staged entry, which is <c>sizeof</c> of the tree's own entry struct including its alignment padding.</summary>
+    /// <remarks>
+    /// Reported by the tree rather than derived from the indexed field's size, because the entry is a struct: a 4-byte key packs to 8 bytes with its value
+    /// while an 8-byte key pads to 16. A producer computing the stride itself would be right for <c>int</c> and silently wrong for <c>long</c>.
+    /// </remarks>
+    /// <param name="multi"><c>true</c> for the <c>AllowMultiple</c> entry shape, which also carries an element id and the value being replaced.</param>
+    public abstract int BulkEntryStride(bool multi);
+
+    /// <summary>Writes one unique-index staged entry into <paramref name="dest"/>, which must be exactly <see cref="BulkEntryStride"/> bytes.</summary>
+    /// <remarks>
+    /// The destination is a span, not a pointer: it addresses a managed staging array that grows, and a pointer taken before a grow would address the old
+    /// one. The KEY stays a raw address because it comes from cluster memory the caller already holds.
+    /// </remarks>
+    public abstract unsafe void WriteBulkEntry(Span<byte> dest, void* keyAddr, int newValue);
+
+    /// <summary>Writes one <c>AllowMultiple</c> staged entry at <paramref name="dest"/>.</summary>
+    /// <remarks>
+    /// <paramref name="oldValue"/> is not redundant with <paramref name="elementId"/>: the id names the CHUNK holding the element and elements are addressed
+    /// by value within it, so replacing one requires the value being replaced. Migration has it — the old ClusterLocation is exactly what is overwritten.
+    /// </remarks>
+    public abstract unsafe void WriteBulkMultiEntry(Span<byte> dest, void* keyAddr, int elementId, int oldValue, int newValue);
+
+    /// <summary>Sorts a staged buffer ascending by key, in place. The partitioning descent requires it and asserts it in Debug.</summary>
+    public abstract void SortBulkEntries(Span<byte> entries, bool multi);
+
+    /// <summary>
+    /// Merges two key-sorted staged runs into <paramref name="dest"/>, which must hold exactly their combined length.
+    /// </summary>
+    /// <remarks>
+    /// <b>One erased call per merge pass, not one per comparison.</b> The alternative — an erased "compare these two entries" primitive with the merge loop
+    /// written in the caller — would put a virtual call on every one of the ~n log W comparisons. Doing the whole two-way merge behind one call lets the
+    /// typed side run monomorphised, which is the same reason <c>ILeafApplier</c> is a struct type parameter rather than an interface.
+    /// </remarks>
+    public abstract void MergeBulkRuns(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, Span<byte> dest, bool multi);
+
+    /// <summary>
+    /// Splits a sorted staged buffer into at most <paramref name="desiredParts"/> contiguous parts whose leaves are disjoint, so the parts can be applied
+    /// concurrently with no latch. See <c>BTree.PartitionByLeafBoundaries</c>.
+    /// </summary>
+    public abstract int PartitionBulkEntries(ReadOnlySpan<byte> entries, bool multi, int desiredParts, Span<int> boundaries,
+        ref ChunkAccessor<TStore> accessor);
+
+    /// <summary>
+    /// <b>Callable only inside the exclusive tick-fence window</b> (<c>EW-01</c>). Applies one contiguous run of staged entries in a single partitioning
+    /// descent, visiting every internal node at most once for the whole run.
+    /// </summary>
+    public abstract int ApplyBulkEntries(ReadOnlySpan<byte> entries, bool multi, ref ChunkAccessor<TStore> accessor, out BulkUpdateStats stats);
 
     public abstract void CheckConsistency(ref ChunkAccessor<TStore>accessor);
 

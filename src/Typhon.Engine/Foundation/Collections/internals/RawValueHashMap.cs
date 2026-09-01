@@ -46,11 +46,16 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// <summary>This map's engine-scoped <c>EW-01</c> guard. The EntityMap is one of the structures the tick fence rewrites, so a mutation from
+    /// outside the fence while it is open is the same defect as one on a cluster B+Tree.</summary>
+    private readonly ExclusiveWindow _fenceWindow;
+
     private RawValuePagedHashMap(ChunkBasedSegment<TStore> segment, int n0, int valueSize) : base(segment, n0)
     {
+        _fenceWindow = segment?.FenceWindow;
         Debug.Assert(valueSize > 0, "Value size must be positive");
         _valueSize = valueSize;
-        _bucketCapacity = (segment.Stride - sizeof(PagedHashMapBucketHeader)) / (sizeof(TKey) + valueSize);
+        _bucketCapacity = (segment!.Stride - sizeof(PagedHashMapBucketHeader)) / (sizeof(TKey) + valueSize);
         Debug.Assert(_bucketCapacity >= 1, $"Stride {segment.Stride} too small for entry size {sizeof(TKey) + valueSize}");
         _keysOffset = sizeof(PagedHashMapBucketHeader);
         _valuesOffset = sizeof(PagedHashMapBucketHeader) + _bucketCapacity * sizeof(TKey);
@@ -649,6 +654,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public bool Insert(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.Insert");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -697,6 +703,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public void InsertNew(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.InsertNew");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -736,6 +743,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public bool Upsert(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.Upsert");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -788,6 +796,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// <see cref="IRawValueUpdater.Update"/> call so the callback inlines into this loop.</typeparam>
     public bool TryUpdateInPlace<TUpdater>(TKey key, ref TUpdater updater, ref ChunkAccessor<TStore> accessor) where TUpdater : struct, IRawValueUpdater
     {
+        _fenceWindow?.NoteMutation("EntityMap.TryUpdateInPlace");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -825,6 +834,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public bool Remove(TKey key, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.Remove");
         uint hash = ComputeHash(key);
 
         while (true)

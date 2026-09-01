@@ -1,9 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using Typhon.Engine.Internals;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine.Tests;
@@ -870,6 +873,101 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         }
     }
 
+    /// <summary>
+    /// The VALUES in the cluster B+Tree buffer at a given key — the ClusterLocations the index resolves that key to.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReadIndexBufferCount"/> is not enough and the difference is the point. A count is invariant under a value-only update, so it says nothing
+    /// about whether a migrated entity's entry was repointed at the cluster it moved to. The whole suite passed with migration's index maintenance ablated
+    /// away, because the only assertions on this buffer were counts.
+    /// </remarks>
+    private static unsafe List<int> ReadIndexBufferValues(DatabaseEngine dbe, ushort archetypeId, int tagKey)
+    {
+        var cs = dbe._archetypeStates[archetypeId].ClusterState;
+        ref var ixSlot = ref cs.IndexSlots[0];
+        ref var field = ref ixSlot.Fields[0];
+        var values = new List<int>();
+        using var epoch = EpochGuard.Enter(dbe.EpochManager);
+        var idxAccessor = cs.IndexSegment.CreateChunkAccessor();
+        try
+        {
+            using var buf = field.Index.TryGetMultiple(&tagKey, ref idxAccessor);
+            if (!buf.IsValid)
+            {
+                return values;
+            }
+
+            do
+            {
+                foreach (var v in buf.ReadOnlyElements)
+                {
+                    values.Add(v);
+                }
+            }
+            while (buf.NextChunk());
+        }
+        finally
+        {
+            idxAccessor.Dispose();
+        }
+
+        return values;
+    }
+
+    [Test]
+    public void ClusterIndex_MigrateOneEntity_RepointsItsIndexValueAtTheNewClusterLocation()
+    {
+        // The gap #872 step 6 found: every existing assertion on this buffer is a COUNT, and a count cannot tell a repointed entry from an untouched one.
+        // With the tick fence's index maintenance ablated entirely, all 5 675 tests stayed green — a migrated entity kept an index entry pointing at the
+        // cluster slot it had left, and nothing noticed. This asserts the thing that actually has to be true.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+
+        EntityId[] ids = new EntityId[3];
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                ids[i] = tx.Spawn<ClMigUnit>(
+                    ClMigUnit.Pos.Set(PointAt(50f + i, 50f, tag: 4242)),
+                    ClMigUnit.Scratch.Set(ScratchOf(i, 0f)));
+            }
+            tx.Commit();
+        }
+
+        var before = ReadIndexBufferValues(dbe, meta.ArchetypeId, 4242);
+        Assert.That(before, Has.Count.EqualTo(3), "sanity: three (Tag=4242, clusterLocation) entries before migration");
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var eref = tx.OpenMut(ids[0]);
+            ref var pos = ref eref.Write(ClMigUnit.Pos);
+            pos.Bounds = new AABB2F { MinX = 550f, MinY = 750f, MaxX = 550f, MaxY = 750f };
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+
+        var after = ReadIndexBufferValues(dbe, meta.ArchetypeId, 4242);
+        Assert.That(after, Has.Count.EqualTo(3), "the buffer must still hold three entries — the migrant is repointed, not removed");
+
+        // The migrant crossed into another cell and therefore another cluster, so its ClusterLocation must have changed; the two siblings did not move, so
+        // theirs must not have. Exactly one value gone, exactly one value new.
+        var beforeSet = new HashSet<int>(before);
+        var afterSet = new HashSet<int>(after);
+
+        var departed = new HashSet<int>(beforeSet);
+        departed.ExceptWith(afterSet);
+        var arrived = new HashSet<int>(afterSet);
+        arrived.ExceptWith(beforeSet);
+
+        var trace = $"before={string.Join(",", before)} after={string.Join(",", after)}";
+        Assert.That(departed, Has.Count.EqualTo(1),
+            $"exactly one cluster location must have left the index (the migrant's old slot); {trace}");
+        Assert.That(arrived, Has.Count.EqualTo(1),
+            $"exactly one cluster location must have entered the index (the migrant's new slot); {trace}");
+    }
+
     [Test]
     public void ClusterIndex_NonUniqueField_DestroyOneEntity_PreservesSiblingsInIndex()
     {
@@ -1520,5 +1618,197 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             "every ActiveChunkWriters registration taken during migration and cluster finalisation must be released "
             + "(CP-13). A non-zero count here means the checkpoint coverage gate will skip those pages forever and "
             + "the WAL will never be reclaimed — see #817.");
+    }
+
+    /// <summary>
+    /// Ground truth for "where does each entity carrying <paramref name="tagKey"/> actually live", read straight from cluster occupancy.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT derived from the index — comparing the index against itself is how the count-only assertions this fixture used to rely on managed to
+    /// stay green with index maintenance ablated entirely.
+    /// </remarks>
+    private static unsafe List<int> ActualClusterLocationsForTag(DatabaseEngine dbe, ushort archetypeId, int tagKey)
+    {
+        var cs = dbe._archetypeStates[archetypeId].ClusterState;
+        ref var ixSlot = ref cs.IndexSlots[0];
+        ref var field = ref ixSlot.Fields[0];
+        var compOffset = cs.Layout.ComponentOffset(ixSlot.Slot);
+        var compSize = cs.Layout.ComponentSize(ixSlot.Slot);
+        var fieldOffset = field.FieldOffset;
+
+        var result = new List<int>();
+        using var epoch = EpochGuard.Enter(dbe.EpochManager);
+        var accessor = cs.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            for (var i = 0; i < cs.ActiveClusterCount; i++)
+            {
+                var cid = cs.ActiveClusterIds[i];
+                var clusterBase = accessor.GetChunkAddress(cid);
+                var occupancy = *(ulong*)clusterBase;
+                while (occupancy != 0)
+                {
+                    var slot = BitOperations.TrailingZeroCount(occupancy);
+                    occupancy &= occupancy - 1;
+                    if (*(int*)(clusterBase + compOffset + slot * compSize + fieldOffset) == tagKey)
+                    {
+                        result.Add(cid * 64 + slot);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        return result;
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void ClusterIndex_MigrationUnderTheParallelFence_RepointsEveryMigrantsIndexValue()
+    {
+        // The gap this closes, stated plainly: every other migration test in this fixture calls WriteTickFence, which is the SERIAL drain. The phase #872
+        // step 6 actually adds — FenceIndexMassUpdateExecSystem, its plan emission and its chunked apply — is reached only from RunParallelFence, i.e. only
+        // from a live TyphonRuntime tick. Ablating FenceWorkPlan.EmitIndexUpdateSliceItems to an early return left all 54 tests of the reviewed set green,
+        // which is exactly what "the deliverable has no test" looks like.
+        //
+        // The assertion is against cluster occupancy, not against a count: the index's value set must equal the set of slots the entities are really in.
+        // A stale entry (migrant repointed nowhere) and a lost entry (migrant dropped) both fail it, and neither would move a count.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+        const int Tag = 5150;
+
+        var ids = new EntityId[24];
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            // Four source cells, six entities each, so the batch spans several clusters rather than one.
+            for (var i = 0; i < ids.Length; i++)
+            {
+                var cell = i / 6;
+                ids[i] = tx.Spawn<ClMigUnit>(
+                    ClMigUnit.Pos.Set(PointAt(50f + cell * CellSize + i % 6, 50f, tag: Tag)),
+                    ClMigUnit.Scratch.Set(ScratchOf(i, 0f)));
+            }
+
+            tx.Commit();
+        }
+
+        Assert.That(ReadIndexBufferValues(dbe, meta.ArchetypeId, Tag), Has.Count.EqualTo(ids.Length),
+            "sanity: one (Tag, clusterLocation) entry per spawned entity before anything migrates");
+
+        // Half of them cross a cell boundary — enough that a phase which silently applied nothing cannot pass by luck.
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < ids.Length; i += 2)
+            {
+                ref var pos = ref tx.OpenMut(ids[i]).Write(ClMigUnit.Pos);
+                pos.Bounds = new AABB2F { MinX = 550f + i, MinY = 750f, MaxX = 550f + i, MaxY = 750f };
+            }
+
+            tx.Commit();
+        }
+
+        // No WriteTickFence anywhere in this test, and that is the point.
+        var ticks = 0;
+        using (var runtime = TyphonRuntime.Create(dbe, schedule =>
+               {
+                   schedule.PublicTrack.DeclareDag("Test").CallbackSystem("Tick", _ => Interlocked.Increment(ref ticks));
+               }, new RuntimeOptions { WorkerCount = 4, BaseTickRate = 1000, EnableParallelFence = true }))
+        {
+            Exception unhandled = null;
+            runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) => Interlocked.CompareExchange(ref unhandled, ex, null);
+
+            runtime.Start();
+            // Migration executes on the fence of one tick and the emptied source clusters are drained on later ones, so give it several.
+            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6, TimeSpan.FromSeconds(5));
+            runtime.Shutdown();
+
+            Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while applying the staged index batch. Got: {unhandled}");
+            Assert.That(ticks, Is.GreaterThanOrEqualTo(6), "the runtime must actually have ticked, or nothing was measured");
+        }
+
+        var expected = ActualClusterLocationsForTag(dbe, meta.ArchetypeId, Tag);
+        var actual = ReadIndexBufferValues(dbe, meta.ArchetypeId, Tag);
+        expected.Sort();
+        actual.Sort();
+
+        Assert.That(expected, Has.Count.EqualTo(ids.Length), "sanity: every entity must still be somewhere after migrating");
+        Assert.That(actual, Is.EqualTo(expected),
+            $"after the parallel fence the index must name exactly the cluster slots the entities occupy. "
+            + $"index=[{string.Join(",", actual)}] occupancy=[{string.Join(",", expected)}]");
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public unsafe void IndexUpdateStaging_MergeSortedRuns_ProducesOneSortedRunFromMany()
+    {
+        // MergeSortedRuns is the phase's remaining serial step and has no other unit seam: reaching it through a tick exercises it with ONE run, because the
+        // planner sizes Migrate chunks by cost and a unit-test-sized batch fits in one. Its interesting behaviour — the pairwise passes, the odd-run carry,
+        // the ping-pong buffer swap — starts at run three. Driven directly here, with five runs, over the same tree the migration path uses.
+        //
+        // Lives in this fixture rather than IndexMassUpdatePhaseTests because ClMigPos.Tag is the AllowMultiple int index the staging path actually writes;
+        // constructing a second clustered indexed archetype elsewhere would register a duplicate for no gain.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+        var tree = cs.IndexSlots[0].Fields[0].Index;
+
+        const int Runs = 5;
+        const int PerRun = 7;
+        var staging = new IndexUpdateStaging([new IndexUpdateStaging.FieldRef(0, 0)]);
+        staging.BeginTick(Runs);
+
+        var stride = tree.BulkEntryStride(true);
+        var expected = new List<(int Key, int NewValue)>();
+        for (var run = 0; run < Runs; run++)
+        {
+            for (var i = 0; i < PerRun; i++)
+            {
+                // Interleaved keys so no run is a prefix of the merged result and a merge that simply concatenated would be caught.
+                var key = i * Runs + run;
+                var newValue = run * 1000 + i;
+                tree.WriteBulkMultiEntry(staging.Reserve(run, 0, stride), &key, elementId: i, oldValue: -1, newValue: newValue);
+                expected.Add((key, newValue));
+            }
+
+            // What the Migrate worker does before it leaves its chunk. MergeSortedRuns' whole contract is that its inputs arrive sorted.
+            tree.SortBulkEntries(staging.ChunkSpan(run, 0), true);
+        }
+
+        var merged = staging.MergeSortedRuns(0, stride, tree, true, out var byteCount);
+        var entries = MemoryMarshal.Cast<byte, BTreeMultiValueUpdate<int>>(merged.AsSpan(0, byteCount));
+
+        Assert.That(entries.Length, Is.EqualTo(Runs * PerRun), "the merge must neither drop nor duplicate an entry");
+
+        var seen = new List<(int Key, int NewValue)>();
+        for (var i = 0; i < entries.Length; i++)
+        {
+            if (i > 0)
+            {
+                Assert.That(entries[i].Key, Is.GreaterThanOrEqualTo(entries[i - 1].Key),
+                    $"the merged batch must be non-decreasing by key — the partitioning descent asserts sortedness and applies to the wrong leaf without "
+                    + $"it. Broke at index {i}.");
+            }
+
+            seen.Add((entries[i].Key, entries[i].NewValue));
+        }
+
+        expected.Sort((a, b) => a.Key != b.Key ? a.Key.CompareTo(b.Key) : a.NewValue.CompareTo(b.NewValue));
+        var seenSorted = new List<(int Key, int NewValue)>(seen);
+        seenSorted.Sort((a, b) => a.Key != b.Key ? a.Key.CompareTo(b.Key) : a.NewValue.CompareTo(b.NewValue));
+        Assert.That(seenSorted, Is.EqualTo(expected), "every staged entry must survive the merge unchanged");
+
+        // Stability, which AC-6.4 leans on: entries sharing a key must stay in run order, so the merged bytes are a pure function of the runs and not of how
+        // the pairwise passes happened to pair them. NewValue encodes run * 1000 + i, so within a key the run index must ascend.
+        for (var i = 1; i < seen.Count; i++)
+        {
+            if (seen[i].Key == seen[i - 1].Key)
+            {
+                Assert.That(seen[i].NewValue / 1000, Is.GreaterThan(seen[i - 1].NewValue / 1000),
+                    $"equal keys must keep the order their runs were gathered in; broke at index {i}");
+            }
+        }
     }
 }

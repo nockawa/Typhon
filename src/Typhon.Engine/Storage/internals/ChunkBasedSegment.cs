@@ -83,6 +83,9 @@ public class ChunkBasedSegment<TStore> : LogicalSegment<TStore> where TStore : s
     // Total chunk capacity (updated on Grow under _growLock)
     private int _capacity;
 
+    /// <summary>This segment's engine-scoped <c>EW-01</c> tick-fence guard, cached by the structures built over it.</summary>
+    internal ExclusiveWindow FenceWindow => Store.EpochManager?.FenceWindow;
+
     internal ChunkBasedSegment(EpochManager epochManager, TStore store, int stride) : base(store)
     {
         if (stride < sizeof(long))

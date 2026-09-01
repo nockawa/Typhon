@@ -103,6 +103,9 @@ internal sealed class FenceWorkPlan
             case FencePhase.Finalize:
                 EmitArchetypeFinalizeItems(engine, costModel);
                 break;
+            case FencePhase.IndexMassUpdate:
+                EmitIndexUpdateSliceItems(engine, costModel);
+                break;
         }
 
         if (ItemCount == 0)
@@ -111,6 +114,71 @@ internal sealed class FenceWorkPlan
         }
 
         ComputeChunkCountAndPack(workerCount, chunkOversubscription);
+    }
+
+    // ─── Phase IndexMassUpdate: one item per (indexed field × leaf-snapped key range) ─────────────────
+
+    /// <summary>
+    /// Emits the <c>K × W</c> work items §5.5 calls for: one per (indexed field, key range) pair, never one per tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The partition itself is NOT computed here — <see cref="FenceIndexMassUpdateExecSystem.Prepare"/> has already merged, sorted and leaf-snapped each
+    /// field's staged batch, because that needs a chunk accessor and an epoch scope and this method has neither. All that is left is to turn the recorded
+    /// part boundaries into items.
+    /// </para>
+    /// <para>
+    /// <b>Partitioning by tree instead would cap parallelism at K</b>, which is 1 for most archetypes — the whole reason the work item names a key range as
+    /// well as a field.
+    /// </para>
+    /// </remarks>
+    private void EmitIndexUpdateSliceItems(DatabaseEngine engine, LiveFenceCostModel costModel)
+    {
+        var states = engine._archetypeStates;
+        if (states == null)
+        {
+            return;
+        }
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!meta.IsClusterEligible || meta.ArchetypeId >= states.Length)
+            {
+                continue;
+            }
+
+            var staging = states[meta.ArchetypeId]?.ClusterState?.IndexUpdates;
+            if (staging == null)
+            {
+                continue;
+            }
+
+            for (var fieldId = 0; fieldId < staging.FieldCount; fieldId++)
+            {
+                var parts = staging.PartCount(fieldId);
+                if (parts <= 0)
+                {
+                    continue;   // nothing staged for this field: the phase is skipped rather than dispatched empty (AC-6.7)
+                }
+
+                var boundaries = staging.Boundaries(fieldId);
+                for (var p = 0; p < parts; p++)
+                {
+                    var start = boundaries[p];
+                    var count = boundaries[p + 1] - start;
+                    AppendItem(new FenceWorkItem
+                    {
+                        Kind = FenceWorkKind.IndexUpdateSlice,
+                        TargetId = meta.ArchetypeId,
+                        FieldId = fieldId,
+                        Cost = costModel.IndexUpdateCost * count,
+                        SliceStart = start,
+                        SliceCount = count,
+                        UnitCount = count,
+                    });
+                }
+            }
+        }
     }
 
     // ─── Phase Prep: one item per cluster-eligible archetype ─────────────────
@@ -584,4 +652,5 @@ internal enum FencePhase : byte
     Migrate = 1,
     AabbRefresh = 2,
     Finalize = 3,
+    IndexMassUpdate = 4,
 }

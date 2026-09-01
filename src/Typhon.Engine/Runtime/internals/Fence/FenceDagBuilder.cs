@@ -8,13 +8,16 @@ internal readonly struct FenceExecBundle
 {
     public readonly FencePrepExecSystem Prep;
     public readonly FenceMigrateExecSystem Migrate;
+    public readonly FenceIndexMassUpdateExecSystem IndexMassUpdate;
     public readonly FenceAabbRefreshExecSystem AabbRefresh;
     public readonly FenceFinalizeExecSystem Finalize;
 
-    public FenceExecBundle(FencePrepExecSystem prep, FenceMigrateExecSystem migrate, FenceAabbRefreshExecSystem aabbRefresh, FenceFinalizeExecSystem finalize)
+    public FenceExecBundle(FencePrepExecSystem prep, FenceMigrateExecSystem migrate, FenceIndexMassUpdateExecSystem indexMassUpdate,
+        FenceAabbRefreshExecSystem aabbRefresh, FenceFinalizeExecSystem finalize)
     {
         Prep = prep;
         Migrate = migrate;
+        IndexMassUpdate = indexMassUpdate;
         AabbRefresh = aabbRefresh;
         Finalize = finalize;
     }
@@ -37,15 +40,17 @@ internal static class FenceDagBuilder
     {
         var prep = new FencePrepExecSystem(engine);
         var migrate = new FenceMigrateExecSystem(engine);
+        var indexMassUpdate = new FenceIndexMassUpdateExecSystem(engine);
         var aabbRefresh = new FenceAabbRefreshExecSystem(engine);
         var finalize = new FenceFinalizeExecSystem(engine);
 
         var dag = schedule.EnginePostTrack.DeclareDag(DagName);
         dag.Add(prep);
         dag.Add(migrate);
+        dag.Add(indexMassUpdate);
         dag.Add(aabbRefresh);
         dag.Add(finalize);
 
-        return new FenceExecBundle(prep, migrate, aabbRefresh, finalize);
+        return new FenceExecBundle(prep, migrate, indexMassUpdate, aabbRefresh, finalize);
     }
 }

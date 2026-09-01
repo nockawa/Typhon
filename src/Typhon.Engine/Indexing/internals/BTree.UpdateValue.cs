@@ -35,6 +35,7 @@ internal abstract partial class BTree<TKey, TStore>
     /// </remarks>
     public bool TryUpdateValue(TKey key, int newValue, ref ChunkAccessor<TStore> accessor)
     {
+        _fenceWindow?.NoteMutation("BTree.TryUpdateValue");
         // On an AllowMultiple tree the leaf slot holds a bufferId, not a value (see CreateInsertValue in BTree.Insert.cs), so SetValueOnly below would
         // overwrite it with a ClusterLocation: the buffer is orphaned and every later read of that key dereferences an arbitrary chunk id as a buffer root.
         // That is silent index corruption from a caller using the wrong overload, which is why this throws rather than returning false — `false` is the
@@ -202,6 +203,8 @@ internal abstract partial class BTree<TKey, TStore>
     /// </remarks>
     public bool TryUpdateValueAt(TKey key, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> accessor)
     {
+        _fenceWindow?.NoteMutation("BTree.TryUpdateValueAt");
+
         // Symmetric with TryUpdateValue's guard, and for the same reason: a unique index has no element buffers at all, so there is nothing this could
         // address. Returning false would report it as "the element is not there", which is a different and recoverable condition.
         if (!AllowMultiple)
@@ -293,7 +296,11 @@ internal abstract partial class BTree<TKey, TStore>
                     return updated;
                 }
 
-                return false;
+                // Same lie as TryUpdateValue's, and refused for the same reason (see the note at the end of that loop): `false` here means "no such element"
+                // to every caller, and contention is not a fact about the data. This one is the AllowMultiple twin and it was the one left behind — every
+                // sibling operation in this tree has a pessimistic fallback, TryUpdateValue included.
+                Interlocked.Increment(ref _pessimisticFallbacks);
+                return TryUpdateValueAtPessimistic(key, elementId, oldValue, newValue, ref opAccessor, ref sibAccessor);
             }
             finally
             {
@@ -303,6 +310,69 @@ internal abstract partial class BTree<TKey, TStore>
         finally
         {
             _segment.ReturnWarmAccessor();
+        }
+    }
+
+    /// <summary>
+    /// The fallback for <see cref="TryUpdateValueAt"/> when the optimistic budget is exhausted: pessimistic descent, spin for the leaf's write lock, one
+    /// buffer write.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Modelled on <see cref="TryUpdateValuePessimistic"/>, and it keeps the optimistic path's leaf-lock discipline rather than
+    /// <c>MoveValuePessimistic</c>'s: the leaf write lock is held across the <c>bufferId</c> read because a concurrent structural change would otherwise
+    /// hand back a stale one, and the buffer write itself is serialised by the buffer's own lock inside <c>UpdateInBuffer</c>. The re-descent on an obsolete
+    /// latch is unbounded for the reason #716 records — a merge can detach the leaf between finding it and locking it, and each pass sees a tree one merge
+    /// closer to settled.
+    /// </para>
+    /// <para>
+    /// <b>Internal rather than private so it can be tested directly.</b> <c>MaxOptimisticRestarts</c> is a <c>const</c>, so no test can shrink the budget to
+    /// force the optimistic path into here without turning six hot loops into field reads. The contention test proves the ROUTING (the operation never
+    /// answers <c>false</c> for a key that exists, and <c>PessimisticFallbacks</c> moves); calling this directly proves the BODY.
+    /// </para>
+    /// </remarks>
+    internal bool TryUpdateValueAtPessimistic(TKey key, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> opAccessor,
+        ref ChunkAccessor<TStore> sibAccessor)
+    {
+        NodeWrapper leaf;
+        PureSpin descentSpin = default;
+        while (true)
+        {
+            leaf = FindLeaf(key, out _, ref opAccessor);
+            if (!leaf.IsValid)
+            {
+                return false;
+            }
+
+            leaf.PreDirtyForWrite(ref opAccessor);
+            if (SpinWriteLock(leaf.GetLatch(ref opAccessor)) != WriteLockOutcome.Obsolete)
+            {
+                break;
+            }
+
+            Interlocked.Increment(ref _obsoleteRestarts);
+            descentSpin.Once();
+        }
+
+        // Re-find under the lock, and re-resolve the latch through the node id on every use: GetLatch hands out a reference into the chunk's page and the
+        // reads in between can evict that page and reuse the slot.
+        var index = leaf.Find(key, Comparer, ref opAccessor);
+        if (index < 0)
+        {
+            leaf.GetLatch(ref opAccessor).AbortWriteLock();
+            return false;
+        }
+
+        var bufferId = leaf.GetItem(index, ref opAccessor).Value;
+        try
+        {
+            return _storage.UpdateInBuffer(bufferId, elementId, oldValue, newValue, ref sibAccessor);
+        }
+        finally
+        {
+            // WriteUnlock even when the element was not found, and even when UpdateInBuffer threw — the optimistic path's `finally` carries the full
+            // argument; without it a LockBuffer timeout leaves the leaf write-locked for the life of the process.
+            leaf.GetLatch(ref opAccessor).WriteUnlock();
         }
     }
 }

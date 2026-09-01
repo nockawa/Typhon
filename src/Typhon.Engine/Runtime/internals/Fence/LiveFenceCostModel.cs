@@ -24,6 +24,11 @@ internal sealed class LiveFenceCostModel
 
     public float MigrationCost;
     public float AabbCost;
+
+    /// <summary>µs per staged index value update. Calibrated exactly like <see cref="MigrationCost"/>, from the IndexMassUpdate phase's own chunk
+    /// wall-time and unit counts.</summary>
+    public float IndexUpdateCost;
+
     public readonly float ShadowCost;
     public readonly float SpatialCost;
 
@@ -39,11 +44,18 @@ internal sealed class LiveFenceCostModel
     private long _aabbSumWall;
     private long _aabbSumUnits;
 
+    private readonly long[] _idxWall = new long[WindowSize];
+    private readonly long[] _idxUnits = new long[WindowSize];
+    private int _idxCursor;
+    private long _idxSumWall;
+    private long _idxSumUnits;
+
     public LiveFenceCostModel(FenceCostModel seed)
     {
         ArgumentNullException.ThrowIfNull(seed);
         MigrationCost = seed.MigrationCost;
         AabbCost = seed.AabbCost;
+        IndexUpdateCost = seed.IndexUpdateCost;
         ShadowCost = seed.ShadowCost;
         SpatialCost = seed.SpatialCost;
     }
@@ -78,6 +90,20 @@ internal sealed class LiveFenceCostModel
                 if (_aabbSumUnits > 0)
                 {
                     AabbCost = (float)((_aabbSumWall * TicksToMicros) / _aabbSumUnits);
+                }
+                break;
+
+            case FencePhase.IndexMassUpdate:
+                _idxSumWall  -= _idxWall[_idxCursor];
+                _idxSumUnits -= _idxUnits[_idxCursor];
+                _idxWall[_idxCursor]  = wallTicks;
+                _idxUnits[_idxCursor] = unitCount;
+                _idxSumWall  += wallTicks;
+                _idxSumUnits += unitCount;
+                _idxCursor = (_idxCursor + 1) & WindowMask;
+                if (_idxSumUnits > 0)
+                {
+                    IndexUpdateCost = (float)((_idxSumWall * TicksToMicros) / _idxSumUnits);
                 }
                 break;
         }

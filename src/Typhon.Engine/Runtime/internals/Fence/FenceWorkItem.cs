@@ -29,6 +29,11 @@ internal enum FenceWorkKind : byte
     /// </summary>
     AabbRefreshSlice = 6,
 
+    /// <summary>Phase 2.5 — apply one key-range slice of one indexed field's staged value updates, in a single partitioning descent. Slices are snapped to
+    /// LEAF boundaries rather than split by count alone, so two workers never write the same node and the descent can run with no latch, no OLC validation and
+    /// no B-link right-walk (EW-01, #872 §5.5). Runs AFTER every <see cref="MigrationApply"/> — the migrations are what stage the entries.</summary>
+    IndexUpdateSlice = 7,
+
     /// <summary>Phase 4 — per-archetype Finalize work: bookkeeping clear, dormancy sweep, dirty-ring archive, WAL emit. One item per cluster-eligible archetype.
     /// Must run AFTER all <see cref="AabbRefreshSlice"/> slices for the same archetype have completed.</summary>
     ArchetypeFinalize = 5,
@@ -62,4 +67,5 @@ internal struct FenceWorkItem
     public int SliceStart;     // PendingMigrations index where this slice begins (MigrationApply only)
     public int SliceCount;     // number of migrations in this slice (MigrationApply only)
     public int UnitCount;      // cost-attribution unit count: entities for MigrationApply, clusters for AabbRefreshSlice; 0 otherwise
+    public int FieldId;        // flattened (slot, field) index into the archetype's IndexUpdateStaging (IndexUpdateSlice only)
 }

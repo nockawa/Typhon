@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 
 namespace Typhon.Engine.Internals;
 
@@ -34,6 +35,33 @@ internal abstract class FencePhaseExecSystemBase : ChunkedCallbackSystem<FenceCo
     /// <summary>The per-phase work plan owned by this system, rebuilt every tick inside <see cref="Prepare"/>.</summary>
     private readonly FenceWorkPlan _plan = new();
 
+    // The phase's wall-clock SPAN: when Prepare began, and when the last chunk to finish did.
+    private long _phaseStartTicks;
+    private long _phaseEndTicks;
+
+    /// <summary>
+    /// Set by a derived <see cref="Prepare"/> BEFORE its own serial work, so the span covers that work too. Zero means "start the span in
+    /// <see cref="Prepare"/>".
+    /// </summary>
+    /// <remarks>
+    /// Needed because a derived Prepare does its serial step FIRST and calls <c>base.Prepare</c> last — the Migrate phase sorts pending migrations, the
+    /// IndexMassUpdate phase merges, sorts and leaf-snaps every staged batch. Starting the clock in the base would leave all of that outside the measurement,
+    /// and for IndexMassUpdate that is the majority of the phase.
+    /// </remarks>
+    protected long PendingPhaseStart;
+
+    /// <summary>
+    /// Wall-clock <see cref="Stopwatch"/> ticks from the start of <see cref="Prepare"/> to the moment the last chunk finished — how long the phase actually
+    /// took, not how much CPU it consumed.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="TotalWallTicks"/>, and the distinction matters. That one SUMS per-chunk wall time because
+    /// <see cref="LiveFenceCostModel"/> wants CPU per unit for its cost coefficients; a sum cannot express a speedup, and reading one as a latency gives
+    /// nonsense in both directions — it falls with more chunks on a memory-stall-bound batch and rises with more chunks once per-chunk setup dominates.
+    /// This is the number to quote for "how long did the phase take".
+    /// </remarks>
+    internal long PhaseSpanTicks => _phaseEndTicks > _phaseStartTicks ? _phaseEndTicks - _phaseStartTicks : 0;
+
     /// <summary>Test/diagnostic accessor for the last plan built by this system.</summary>
     internal FenceWorkPlan PlanForTest => _plan;
 
@@ -52,6 +80,10 @@ internal abstract class FencePhaseExecSystemBase : ChunkedCallbackSystem<FenceCo
     /// </summary>
     protected override int Prepare(FenceContext ctx)
     {
+        _phaseStartTicks = PendingPhaseStart != 0 ? PendingPhaseStart : Stopwatch.GetTimestamp();
+        PendingPhaseStart = 0;
+        _phaseEndTicks = 0;
+
         _plan.Build(Phase, Engine, ctx.CostModel, ctx.WorkerCount, ctx.ChunkOversubscription);
         EnsureChunkArrays(_plan.ChunkCount);
         return _plan.ChunkCount;
@@ -160,6 +192,9 @@ internal abstract class FencePhaseExecSystemBase : ChunkedCallbackSystem<FenceCo
         long t0 = Stopwatch.GetTimestamp();
         try
         {
+            // The worker is part of the fence, so its writes are the legal ones. Without this every chunk's first index mutation would trip EW-01's guard,
+            // which is the correct default: a thread is foreign until the fence says otherwise.
+            using (Engine.EpochManager.FenceWindow.EnterWorker())
             using (EpochGuard.Enter(Engine.EpochManager))
             {
                 OnBeforeChunk(k);
@@ -187,9 +222,23 @@ internal abstract class FencePhaseExecSystemBase : ChunkedCallbackSystem<FenceCo
                 Engine.MMF.ReturnChangeSet(chunkCs); // pool reuse — saves ~thousands of allocations/sec at 60 Hz
             }
         }
-        _chunkWallTicks[k] = Stopwatch.GetTimestamp() - t0;
+        var t1 = Stopwatch.GetTimestamp();
+        _chunkWallTicks[k] = t1 - t0;
         _chunkUnitCount[k] = unitsInChunk;
         SetChunkLsn(k, localHighest);
+
+        // The phase ends when its LAST chunk does, whichever that turns out to be. CAS rather than a plain store: chunks finish concurrently and a plain
+        // max-then-store would let a later finisher lose to an earlier one.
+        long prevEnd;
+        do
+        {
+            prevEnd = Volatile.Read(ref _phaseEndTicks);
+            if (t1 <= prevEnd)
+            {
+                break;
+            }
+        }
+        while (Interlocked.CompareExchange(ref _phaseEndTicks, t1, prevEnd) != prevEnd);
     }
 
     protected abstract long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet);
@@ -248,6 +297,8 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
     protected override int Prepare(FenceContext ctx)
     {
+        PendingPhaseStart = Stopwatch.GetTimestamp();
+
         // Inter-phase serial step (was in RunParallelFence): sort each archetype's pending migrations by destCellKey so the slice planner can carve
         // cell-disjoint ranges. Runs single-threaded by construction (only one worker decrements the last predecessor dep to zero and reaches this Prepare).
         var states = Engine._archetypeStates;
@@ -267,6 +318,17 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
         var chunkCount = base.Prepare(ctx);
         EnsureChunkDirtyBuffers(chunkCount);
+
+        // Size and clear this tick's index-update staging for the same reason the dirty buffers are sized here: a worker that had to grow a shared array
+        // would race every other worker doing the same, and that is exactly the bug the dirty-buffer comment above records.
+        if (states != null)
+        {
+            for (int aid = 0; aid < states.Length; aid++)
+            {
+                states[aid]?.ClusterState?.IndexUpdates?.BeginTick(chunkCount);
+            }
+        }
+
         return chunkCount;
     }
 
@@ -281,8 +343,56 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
         // Each migration's dirty-bit clear/set goes into this chunk's local buffer (review false-sharing fix).
         // OnAfterChunk flushes the buffer under each touched archetype's _finalizeLock.
         var buffer = GetChunkDirtyBuffer(chunkIndex);
-        Engine.ExecuteMigrationsSlice(meta, item.SliceStart, item.SliceCount, changeSet, buffer);
+        Engine.ExecuteMigrationsSlice(meta, item.SliceStart, item.SliceCount, changeSet, buffer, chunkIndex);
         return 0;
+    }
+
+    /// <summary>
+    /// Sorts this chunk's staged index-update runs, on the worker that produced them, before it leaves the chunk.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is where the IndexMassUpdate phase's sort now happens, and moving it here is the difference between a phase that scales and one that does
+    /// not.</b> Sorting the whole batch in that phase's <c>Prepare</c> is <c>O(n log n)</c> on one thread: measured at 100 000 migrants it was ~6.3 ms
+    /// against ~0.5 ms of parallel apply, an 88 % serial fraction that Amdahl capped at ~1.15x however many workers the phase was given. Each chunk's buffer
+    /// is owned exclusively by the worker running it, so sorting it here needs no synchronisation and rides a parallel region that was already open; the
+    /// phase is then left with an <c>O(n log W)</c> merge of W sorted runs.
+    /// </para>
+    /// <para>
+    /// Chunks that staged nothing cost a bounds check per field. The archetype scan is over every cluster-eligible archetype rather than only the ones this
+    /// chunk touched, because a chunk's work items may span several and the dirty-delta bucket beside it is grouped by archetype only after the fact.
+    /// </para>
+    /// </remarks>
+    private void SortStagedIndexRuns(int chunkIndex)
+    {
+        var states = Engine._archetypeStates;
+        if (states == null)
+        {
+            return;
+        }
+
+        for (var aid = 0; aid < states.Length; aid++)
+        {
+            var clusterState = states[aid]?.ClusterState;
+            var staging = clusterState?.IndexUpdates;
+            if (staging == null || staging.FieldCount == 0 || clusterState.IndexSlots == null)
+            {
+                continue;
+            }
+
+            for (var fieldId = 0; fieldId < staging.FieldCount; fieldId++)
+            {
+                var run = staging.ChunkSpan(chunkIndex, fieldId);
+                if (run.Length == 0)
+                {
+                    continue;
+                }
+
+                var fieldRef = staging.Field(fieldId);
+                ref var field = ref clusterState.IndexSlots[fieldRef.SlotIndex].Fields[fieldRef.FieldIndex];
+                field.Index.SortBulkEntries(run, field.AllowMultiple);
+            }
+        }
     }
 
     // Per-chunk worker-local accumulator for dirty-bit deltas. Pooled across ticks — never reallocated per system execution. List<T>.Clear() preserves
@@ -332,6 +442,8 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
     protected override void OnAfterChunk(int chunkIndex)
     {
+        SortStagedIndexRuns(chunkIndex);
+
         var bucket = _chunkDirtyBuffers.Length > chunkIndex ? _chunkDirtyBuffers[chunkIndex] : null;
         if (bucket == null || bucket.Count == 0)
         {
@@ -377,7 +489,7 @@ internal sealed class FenceAabbRefreshExecSystem : FencePhaseExecSystemBase
     protected override void Configure(SystemBuilder<FenceContext> b) => b
         .Name(SystemName)
         .ChunkedParallel(1)
-        .After(FenceMigrateExecSystem.SystemName);
+        .After(FenceIndexMassUpdateExecSystem.SystemName);
 
     protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet)
     {
@@ -419,5 +531,154 @@ internal sealed class FenceFinalizeExecSystem : FencePhaseExecSystemBase
 
         var meta = ArchetypeRegistry.GetMetadata((ushort)item.TargetId);
         return Engine.FinalizeArchetypeFence(meta, Context.TickNumber, null); // Finalize doesn't touch ChangeSet
+    }
+}
+
+/// <summary>
+/// Phase 2.5 — applies every indexed field's staged value updates, one partitioning descent per leaf-snapped key range (#872 step 6, §5.5).
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>It sits between Migrate and AabbRefresh, with a barrier either side, and both barriers matter.</b> Migrate is what stages the entries, so this cannot
+/// start before Migrate has finished; and until this has finished, every migrated entity's index entry still points at its OLD cluster location, so nothing
+/// downstream may read the index.
+/// </para>
+/// <para>
+/// <b>The serial half lives in <see cref="Prepare"/>, and only because it has to.</b> Merging the per-chunk staging buffers, sorting each field's batch by
+/// key and snapping the part boundaries to leaf edges all need a chunk accessor and an epoch scope, and <c>FenceWorkPlan.Build</c> has neither. The sort is
+/// the part to watch: the staged batch arrives in destination-cell order, not key order, so this adds an O(n log n) pass the design assumed away ("the batch
+/// is already sorted by key"). It is measured as its own line rather than folded into the phase total.
+/// </para>
+/// <para>
+/// <b>No ChangeSet override is needed for the leaf writes themselves</b> — the descent dirties the index pages through the accessor this system opens per
+/// work item, which carries the chunk's local ChangeSet exactly as Prep and Migrate do.
+/// </para>
+/// </remarks>
+internal sealed class FenceIndexMassUpdateExecSystem : FencePhaseExecSystemBase
+{
+    public const string SystemName = "FenceIndexMassUpdate";
+
+    public FenceIndexMassUpdateExecSystem(DatabaseEngine engine) : base(engine) { }
+
+    protected override FencePhase Phase => FencePhase.IndexMassUpdate;
+
+    protected override void Configure(SystemBuilder<FenceContext> b) => b
+        .Name(SystemName)
+        .ChunkedParallel(1)
+        .After(FenceMigrateExecSystem.SystemName);
+
+    protected override ChangeSet CreateChunkChangeSet() => Engine.MMF.RentChangeSet();
+
+    /// <summary>
+    /// Merge, sort and leaf-snap each field's staged batch, then let the base class turn the resulting parts into work items.
+    /// </summary>
+    /// <remarks>
+    /// Single-threaded by construction: only the worker that decrements the last Migrate dependency to zero reaches a phase's Prepare. That is also what makes
+    /// it safe to write the staging's prepared state here without synchronisation.
+    /// </remarks>
+    protected override int Prepare(FenceContext ctx)
+    {
+        // Before the merge / sort / leaf-snap below, not after: that serial work is the majority of this phase and leaving it outside the span would report
+        // a phase several times faster than it is.
+        PendingPhaseStart = Stopwatch.GetTimestamp();
+
+        var states = Engine._archetypeStates;
+        if (states != null)
+        {
+            using (EpochGuard.Enter(Engine.EpochManager))
+            {
+                for (var aid = 0; aid < states.Length; aid++)
+                {
+                    var clusterState = states[aid]?.ClusterState;
+                    var staging = clusterState?.IndexUpdates;
+                    if (staging == null || staging.FieldCount == 0)
+                    {
+                        continue;
+                    }
+
+                    PrepareArchetype(clusterState, staging, ctx.WorkerCount);
+                }
+            }
+        }
+
+        return base.Prepare(ctx);
+    }
+
+    private static void PrepareArchetype(ArchetypeClusterState clusterState, IndexUpdateStaging staging, int workerCount)
+    {
+        staging.ClearPrepared();
+
+        for (var fieldId = 0; fieldId < staging.FieldCount; fieldId++)
+        {
+            var stagedBytes = staging.StagedBytes(fieldId);
+            if (stagedBytes == 0)
+            {
+                continue;
+            }
+
+            var fieldRef = staging.Field(fieldId);
+            ref var field = ref clusterState.IndexSlots[fieldRef.SlotIndex].Fields[fieldRef.FieldIndex];
+            var tree = field.Index;
+            var multi = field.AllowMultiple;
+            var stride = tree.BulkEntryStride(multi);
+
+            // The runs arrived sorted from the Migrate workers, so this is an O(n log W) merge rather than an O(n log n) sort.
+            var merged = staging.MergeSortedRuns(fieldId, stride, tree, multi, out var byteCount);
+            var entryCount = byteCount / stride;
+            if (entryCount == 0)
+            {
+                continue;
+            }
+
+            var desiredParts = Math.Max(1, workerCount);
+            var boundaries = staging.RentBoundaries(fieldId, desiredParts);
+
+            var accessor = tree.Segment.CreateChunkAccessor();
+            try
+            {
+                var parts = tree.PartitionBulkEntries(merged.AsSpan(0, byteCount), multi, desiredParts, boundaries, ref accessor);
+                staging.SetPrepared(fieldId, byteCount, stride, boundaries, parts);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+    }
+
+    protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet)
+    {
+        if (item.Kind != FenceWorkKind.IndexUpdateSlice)
+        {
+            return 0;
+        }
+
+        var clusterState = Engine._archetypeStates[item.TargetId]?.ClusterState;
+        var staging = clusterState?.IndexUpdates;
+        if (staging == null)
+        {
+            return 0;
+        }
+
+        var fieldRef = staging.Field(item.FieldId);
+        ref var field = ref clusterState.IndexSlots[fieldRef.SlotIndex].Fields[fieldRef.FieldIndex];
+        var tree = field.Index;
+        var multi = field.AllowMultiple;
+        var stride = staging.Stride(item.FieldId);
+        var buffer = staging.Prepared(item.FieldId);
+
+        var accessor = tree.Segment.CreateChunkAccessor(changeSet);
+        try
+        {
+            // The slice is this worker's alone: the boundaries were snapped forward to leaf edges in Prepare, so no two slices of the same tree can reach the
+            // same leaf, which is what lets the descent below run with no latch and no version validation.
+            tree.ApplyBulkEntries(buffer.AsSpan(item.SliceStart * stride, item.SliceCount * stride), multi, ref accessor, out _);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        return 0;
     }
 }

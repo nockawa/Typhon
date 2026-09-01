@@ -110,6 +110,22 @@ public class RuntimeOptions
 public sealed record FenceCostModel(float MigrationCost, float AabbCost, float ShadowCost, float SpatialCost)
 {
     /// <summary>
+    /// µs per staged index value update, for the IndexMassUpdate phase (#872 step 6).
+    /// </summary>
+    /// <remarks>
+    /// <b>Three orders of magnitude below <see cref="MigrationCost"/>, which is exactly why it needs its own coefficient.</b> The phase's first
+    /// implementation reused <c>MigrationCost</c> — ≈33 µs, the cost of MOVING an entity — to price an operation measured at 0.055-0.077 µs. Nothing
+    /// mis-computes, but every index batch then looks enormously expensive to the planner, so <c>ComputeMaxChunks</c>'s
+    /// <c>floor(totalCost / MinChunkCostUs)</c> term saturates at its <c>2 × workerCount × oversubscription</c> cap for any batch at all, and the phase
+    /// splits into the smallest chunks it is allowed to — precisely the regime the 200 µs floor exists to avoid.
+    /// <para>
+    /// Seeded at 0.06 from #872 step 6's <c>--fence-parallel</c> measurement: 10 000 uniform updates on a 1 M-entry tree at 55-77 ns each, depending on how
+    /// many leaves the batch touches. Calibrated live from the phase's own wall time when <see cref="RuntimeOptions.AdaptiveFenceCost"/> is on.
+    /// </para>
+    /// </remarks>
+    public float IndexUpdateCost { get; init; } = 0.06f;
+
+    /// <summary>
     /// Default coefficients, calibrated against AntHill traces: migration ≈ 33.3 µs/entity, AABB recompute ≈ 2.4 µs/cluster.
     /// Shadow and Spatial coefficients are placeholders (1.0) pending measurement — override them for shadow-heavy or spatial workloads.
     /// </summary>

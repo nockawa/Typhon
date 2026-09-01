@@ -396,13 +396,21 @@ descends from this one property.
   on_violation: silent. A concurrent writer racing a fence that has taken the licences above corrupts index
     structure with no exception at the point of damage — the B+Tree's own validators find it later, or a query
     returns a wrong answer and nothing finds it at all.
-  verified: NOT COVERED — the honest detector is an assertion at the MUTATION SITES (a writer-counter checked while
-            the window is open), which arrives with step 6 of the spatial partitioning design. Two cheaper proxies
-            were tried and rejected: TransactionChain.ActiveCount counts handles that exist rather than threads that
-            are mutating, and reddens 21 tests that legitimately hold a committed-or-idle transaction across the
-            fence — `using var tx = ...; tx.Commit();` before the scope ends, and the long-lived read transaction
-            that owns a pull View. Asserting "no system runs concurrently" verifies the half that was never in
-            doubt. A rule whose verifier cannot fail is worse than a rule with no verifier.
+  verified: ExclusiveWindowTests.LiveWorkload_TheFenceNeverSeesAForeignWriter — a spawn / destroy / indexed-field
+            rewrite workload over 6+ ticks asserting zero foreign writers, and asserting ObservedFenceMutation too
+            so a fence that wrote no guarded structure fails as loudly as one that was raced. Mutant:
+            ForeignThreadMutatingAnIndexInsideTheWindow_IsCaught.
+            The detector is ExclusiveWindow, an assertion at the MUTATION SITES: armed on the seven typed B+Tree
+            mutators and the EntityMap's five, ALWAYS COMPILED (the merge gate runs Release, so a
+            [Conditional("DEBUG")] guard is one the gate never executes), and scoped PER ENGINE off EpochManager
+            rather than to a process-wide static — under the parallel fixtures a global would let one engine's
+            fence indict another engine's legal write.
+            Two cheaper proxies were tried in step 3 and rejected: TransactionChain.ActiveCount counts handles that
+            exist rather than threads that are mutating, and reddens 21 tests that legitimately hold a
+            committed-or-idle transaction across the fence — `using var tx = ...; tx.Commit();` before the scope
+            ends, and the long-lived read transaction that owns a pull View. Asserting "no system runs
+            concurrently" verifies the half that was never in doubt. A rule whose verifier cannot fail is worse
+            than a rule with no verifier.
 
 ## Module: API Contract Stability
 
