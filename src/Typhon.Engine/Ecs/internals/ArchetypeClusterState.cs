@@ -1983,8 +1983,8 @@ internal sealed unsafe class ArchetypeClusterState
     /// survive restart.</para>
     /// <para><b>Precondition — NOT idempotent on a dirty grid.</b> This method ADDS to <see cref="CellState.EntityCount"/> /
     /// <see cref="CellState.ClusterCount"/> and appends cluster IDs to this archetype's <see cref="CellClusterPool"/>. Callers MUST pass either a
-    /// fresh <see cref="SpatialGrid"/> or one that has been reset via <see cref="SpatialGrid.ResetCellState"/> (and the per-archetype pools must also be
-    /// reset) — calling twice without a reset double-counts entities and duplicates cluster IDs in the pool. The single caller today
+    /// fresh <see cref="SpatialGrid"/> or one that has been reset via <see cref="SpatialGrid.ResetCellState"/> (and a freshly ALLOCATED per-archetype pool;
+    /// the pool has no reset of its own) — calling twice without that double-counts entities and duplicates cluster IDs in the pool. The single caller today
     /// (<c>DatabaseEngine.InitializeArchetypes</c>) constructs a fresh grid + allocates a fresh per-archetype pool inside <see cref="InitializeSpatial"/>
     /// immediately before this loop, satisfying the precondition.</para>
     /// </remarks>
@@ -2055,7 +2055,13 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     private struct ClusterRebuildMapResult
     {
-        public int CellKey;
+        /// <summary>
+        /// The cluster's cell as COORDINATES, not a key. Resolving to a key means creating the cell, and creating cells from the parallel map phase would
+        /// make every pool-slot index a function of the worker count — which the reduce's serial ordering exists to prevent (#872 step 8).
+        /// </summary>
+        public int CellX;
+        public int CellY;
+        public int CellZ;
         public int PopCount;
         public ClusterSpatialAabb Aabb;
     }
@@ -2064,17 +2070,17 @@ internal sealed unsafe class ArchetypeClusterState
     /// Derive one cluster's cell key, occupancy and AABB in a single visit to its bytes. The pure half of <see cref="RebuildSpatialStateFromData"/>.
     /// </summary>
     /// <remarks>
-    /// The cell key and the AABB are NOT the same read: the key comes from <see cref="SpatialGrid.WorldToCellKeyFromSpatialField"/> on the first occupied slot,
-    /// while the AABB unions <c>SpatialMaintainer.ReadAndValidateBoundsFromPtr</c> over every occupied slot. The first slot is therefore decoded twice, two
-    /// different ways — merging the passes saves the WALK, not that read.
-    /// <para>The asymmetry is deliberate and load-bearing: the AABB union SKIPS a slot whose bounds fail validation, while the cell key uses the first occupied
-    /// slot unconditionally. A cluster whose first slot is degenerate therefore gets a real cell key and an AABB that ignores it — which is exactly what the
+    /// The cell coordinates and the AABB are NOT the same read: the coordinates come from
+    /// <see cref="SpatialGrid.ReadCellCoordsFromSpatialField"/> on the first occupied slot, while the AABB unions
+    /// <c>SpatialMaintainer.ReadAndValidateBoundsFromPtr</c> over every occupied slot. The first slot is therefore decoded twice, two different ways —
+    /// merging the passes saves the WALK, not that read.
+    /// <para>The asymmetry is deliberate and load-bearing: the AABB union SKIPS a slot whose bounds fail validation, while the cell uses the first occupied
+    /// slot unconditionally. A cluster whose first slot is degenerate therefore gets a real cell and an AABB that ignores it — which is exactly what the
     /// two-pass version did, and what the differential test pins.</para>
     /// </remarks>
     private ClusterRebuildMapResult MapClusterForRebuild(int chunkId, SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor)
     {
         var result = default(ClusterRebuildMapResult);
-        result.CellKey = -1;
         result.Aabb = ClusterSpatialAabb.Empty;
 
         byte* clusterBase = accessor.GetChunkAddress(chunkId);
@@ -2088,7 +2094,7 @@ internal sealed unsafe class ArchetypeClusterState
         var ss = SpatialSlot;
         int firstSlot = BitOperations.TrailingZeroCount(occupancy);
         byte* firstFieldPtr = clusterBase + Layout.ComponentOffset(ss.Slot) + firstSlot * Layout.ComponentSize(ss.Slot) + ss.FieldOffset;
-        result.CellKey = grid.WorldToCellKeyFromSpatialField(firstFieldPtr, ss.FieldInfo.FieldType);
+        grid.ReadCellCoordsFromSpatialField(firstFieldPtr, ss.FieldInfo.FieldType, out result.CellX, out result.CellY, out result.CellZ);
 
         // Delegate the union rather than inlining a twin of it. Inlining would save one GetChunkAddress (an MRU-cache hit on a line this method just touched)
         // and one occupancy load — worth far less than the ~18 % the merge itself buys — at the price of a SECOND copy of a [fatal][silent] CA-01 computation
@@ -2240,20 +2246,23 @@ internal sealed unsafe class ArchetypeClusterState
                 continue;   // RebuildCellState skipped these outright, leaving ClusterCellMap at -1
             }
 
-            ClusterCellMap[chunkId] = m.CellKey;
-            CellClusterPool.AddCluster(m.CellKey, chunkId);
-            ref var cell = ref grid.GetCell(m.CellKey);
+            // The cell is CREATED here, in the serial reduce, from the coordinates the parallel map produced. Creation order is therefore ActiveClusterIds
+            // order — the same ordering that already makes ClusterSpatialIndexSlot independent of the worker count, and what keeps the whole rebuild's output
+            // bit-identical across W (see the map/reduce rationale above).
+            int cellKey = grid.ComputeCellKey(m.CellX, m.CellY, m.CellZ);
+
+            ClusterCellMap[chunkId] = cellKey;
+            CellClusterPool.AddCluster(cellKey, chunkId);
+            ref var cell = ref grid.GetCell(cellKey);
             cell.ClusterCount++;
             cell.EntityCount += m.PopCount;
 
-            // No `CellKey < 0` guard: the legacy pair had one because the AABB pass re-read the key out of ClusterCellMap and could see -1 there. Here the key
-            // came from the map phase, and GetCell above would already have thrown on a negative one — a guard after that point is decoration, not defence.
             if (float.IsPositiveInfinity(m.Aabb.MinX))
             {
                 continue;   // degenerate — every slot failed validation
             }
 
-            AddClusterToPerCellIndex(chunkId, m.CellKey, m.Aabb);
+            AddClusterToPerCellIndex(chunkId, cellKey, m.Aabb);
         }
     }
 
@@ -2911,7 +2920,14 @@ internal sealed unsafe class ArchetypeClusterState
                     aabbsChanged++;
                     TyphonEvent.EmitSpatialCellIndexUpdate(cellKey, indexSlot);
 
-                    if (outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent || (fresh.MaxY - fresh.MinY) > maxExtent))
+                    // The Z term matters because FlagOutliersForMigration tests all three axes: without it a cluster that drifts purely on Z never
+                    // reaches the check that would notice, and the Z half of that method is dead in exactly the case it was written for. It is
+                    // UNREACHABLE today — WriteSpatial supports AABB2F only, so no cluster AABB grows on Z at write time, and a 2D union leaves
+                    // MinZ/MaxZ at the ±Infinity sentinel whose difference is -Infinity. It goes in now rather than being discovered missing when 3D
+                    // write support lands (steps 9-10).
+                    if (outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent || 
+                                               (fresh.MaxY - fresh.MinY) > maxExtent || 
+                                               (fresh.MaxZ - fresh.MinZ) > maxExtent))
                     {
                         outlierGuardFires++;
                         FlagOutliersForMigration(chunkId, cellKey, grid, ref accessor, outlierBuffer);
@@ -2974,7 +2990,14 @@ internal sealed unsafe class ArchetypeClusterState
                 aabbsChanged++;
                 TyphonEvent.EmitSpatialCellIndexUpdate(cellKey, indexSlot);
 
-                if (outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent || (fresh.MaxY - fresh.MinY) > maxExtent))
+                // The Z term matters because FlagOutliersForMigration tests all three axes: without it a cluster that drifts purely on Z never
+                // reaches the check that would notice, and the Z half of that method is dead in exactly the case it was written for. It is
+                // UNREACHABLE today — WriteSpatial supports AABB2F only, so no cluster AABB grows on Z at write time, and a 2D union leaves
+                // MinZ/MaxZ at the ±Infinity sentinel whose difference is -Infinity. It goes in now rather than being discovered missing when 3D
+                // write support lands (steps 9-10).
+                if (outlierGuardActive &&    ((fresh.MaxX - fresh.MinX) > maxExtent
+                                           || (fresh.MaxY - fresh.MinY) > maxExtent
+                                           || (fresh.MaxZ - fresh.MinZ) > maxExtent))
                 {
                     outlierGuardFires++;
                     FlagOutliersForMigration(chunkId, cellKey, grid, ref accessor, outlierBuffer);
@@ -3066,12 +3089,14 @@ internal sealed unsafe class ArchetypeClusterState
         int compOffset = Layout.ComponentOffset(ss.Slot);
         int compStride = Layout.ComponentSize(ss.Slot);
 
-        var (cellX, cellY) = grid.CellKeyToCoords(cellKey);
+        var (cellX, cellY, cellZ) = grid.CellKeyToCoords(cellKey);
         ref readonly var cfg = ref grid.Config;
         float cellMinX = cfg.WorldMin.X + cellX * cfg.CellSize;
         float cellMinY = cfg.WorldMin.Y + cellY * cfg.CellSize;
+        float cellMinZ = cfg.WorldMin.Z + cellZ * cfg.CellSize;
         float cellMaxX = cellMinX + cfg.CellSize;
         float cellMaxY = cellMinY + cfg.CellSize;
+        float cellMaxZ = cellMinZ + cfg.CellSize;
 
         ulong bits = occupancy;
         while (bits != 0)
@@ -3080,17 +3105,18 @@ internal sealed unsafe class ArchetypeClusterState
             bits &= bits - 1;
 
             byte* fieldPtr = clusterBase + compOffset + slotIndex * compStride + ss.FieldOffset;
-            SpatialGrid.ReadSpatialCenter2D(fieldPtr, ss.FieldInfo.FieldType, out float posX, out float posY);
+            SpatialGrid.ReadSpatialCenter3D(fieldPtr, ss.FieldInfo.FieldType, out float posX, out float posY, out float posZ);
 
-            if (!float.IsFinite(posX) || !float.IsFinite(posY))
+            if (!float.IsFinite(posX) || !float.IsFinite(posY) || !float.IsFinite(posZ))
             {
                 continue; // defensive — non-finite positions should have been rejected upstream
             }
 
-            // Raw cell boundary (no hysteresis) — force migrate anything outside.
-            if (posX < cellMinX || posX > cellMaxX || posY < cellMinY || posY > cellMaxY)
+            // Raw cell boundary (no hysteresis) — force migrate anything outside. A 2D field reports posZ = 0 and the grid is one cell deep there, so the Z
+            // pair is always false for a flat world: the third axis costs two comparisons and changes no flat-world outcome.
+            if (posX < cellMinX || posX > cellMaxX || posY < cellMinY || posY > cellMaxY || posZ < cellMinZ || posZ > cellMaxZ)
             {
-                int newCellKey = grid.WorldToCellKey(posX, posY);
+                int newCellKey = grid.WorldToCellKey(posX, posY, posZ);
                 if (newCellKey != cellKey)
                 {
                     // Worker-local buffer: caller bulk-appends under _finalizeLock once at slice end. Avoids per-entity lock acquisition (review D-2).
@@ -3426,7 +3452,7 @@ internal sealed unsafe class ArchetypeClusterState
         if (wasOccupied)
         {
             // resetCursor: !deferFinalize — serial releases reset the cursor for immediate reuse; parallel-migration releases skip it (see the method doc).
-            DecrementCellEntityCountOnRelease(grid, clusterChunkId, resetCursor: !deferFinalize);
+            DecrementCellEntityCountOnRelease(grid, clusterChunkId, !deferFinalize);
         }
 
         if (clusterDrained)
@@ -3469,7 +3495,7 @@ internal sealed unsafe class ArchetypeClusterState
         if (wasOccupied)
         {
             // resetCursor: !deferFinalize — serial releases reset the cursor for immediate reuse; parallel-migration releases skip it (see the method doc).
-            DecrementCellEntityCountOnRelease(grid, clusterChunkId, resetCursor: !deferFinalize);
+            DecrementCellEntityCountOnRelease(grid, clusterChunkId, !deferFinalize);
         }
 
         if (clusterDrained)
@@ -3692,8 +3718,8 @@ internal sealed unsafe class ArchetypeClusterState
 
             if (table.StorageMode == StorageMode.Transient)
             {
-                TransientIndexSlots![transientIdx++] = BuildIndexSlot(table, slot, TransientIndexSegment, TransientIndexSegmentString64, load: false,
-                    changeSet: null, ref multiFieldCounter);
+                TransientIndexSlots![transientIdx++] = BuildIndexSlot(table, slot, TransientIndexSegment, TransientIndexSegmentString64, false,
+                    null, ref multiFieldCounter);
                 continue;
             }
 

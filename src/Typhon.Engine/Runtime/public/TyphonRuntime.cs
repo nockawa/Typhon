@@ -1697,7 +1697,7 @@ public sealed partial class TyphonRuntime : IDisposable
 
     /// <summary>
     /// Split the filtered cluster list for a checkerboard system into Red and Black sets based on cell coordinates (issue #234).
-    /// Red = clusters in cells where <c>(cellX + cellY) % 2 == 0</c>, Black = the rest. Reads <see cref="_systemTierClusterIds"/>
+    /// Red = clusters in cells where <c>(cellX + cellY + cellZ) % 2 == 0</c>, Black = the rest. Reads <see cref="_systemTierClusterIds"/>
     /// + <see cref="_systemTierClusterCount"/> as input, writes to the per-system Red/Black buffers.
     /// </summary>
     private void SplitCheckerboardClusters(int sysIdx)
@@ -1742,8 +1742,10 @@ public sealed partial class TyphonRuntime : IDisposable
                 redBuf[redCount++] = chunkId;
                 continue;
             }
-            var (x, y) = grid.CellKeyToCoords(cellKey);
-            if ((x + y) % 2 == 0)
+            // (x + y + z) % 2 — the three-dimensional 2-colouring. Still exhaustive and disjoint, and still gives no two 6-neighbour-adjacent cells the same
+            // colour, which is the property CB-01 actually depends on. A flat world has z = 0 throughout, so its Red/Black split is unchanged.
+            var (x, y, z) = grid.CellKeyToCoords(cellKey);
+            if ((x + y + z) % 2 == 0)
             {
                 redBuf[redCount++] = chunkId;
             }

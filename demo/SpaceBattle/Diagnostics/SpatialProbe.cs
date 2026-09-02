@@ -77,7 +77,7 @@ internal sealed class SpatialProbe
         {
             for (var cx = cx0; cx <= cx1; cx++)
             {
-                touched.Add(host.Grid.ComputeCellKey(cx, cy));
+                touched.Add(host.Grid.ComputeCellKey(cx, cy, 0));
             }
         }
         CellsTouched = touched.Count;

@@ -66,7 +66,7 @@ public sealed class SwgLightFeatureTests
         _engine.RegisterComponentFromAccessor<Intent>();
 
         // Bounds is SingleVersion + spatial ⇒ Character is cluster-eligible ⇒ a grid is required before init (#230 Option B).
-        _engine.ConfigureSpatialGrid(new SpatialGridConfig(new Vector2(0f, 0f), new Vector2(WorldSize, WorldSize), cellSize: 100f));
+        _engine.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0f, 0f), new Vector2(WorldSize, WorldSize), cellSize: 100f));
         _engine.InitializeArchetypes();
     }
 

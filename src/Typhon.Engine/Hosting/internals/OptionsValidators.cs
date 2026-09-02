@@ -15,7 +15,7 @@ namespace Typhon.Engine.internals;
 internal sealed class PagedMMFOptionsValidator<TO> : IValidateOptions<TO> where TO : PagedMMFOptions
 {
     public ValidateOptionsResult Validate(string name, TO options) =>
-        options.Validate(silent: true, out var message) ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(message);
+        options.Validate(true, out var message) ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(message);
 }
 
 /// <summary>

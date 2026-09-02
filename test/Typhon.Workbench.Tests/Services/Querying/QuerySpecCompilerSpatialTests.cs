@@ -96,7 +96,7 @@ public sealed class QuerySpecCompilerSpatialTests
 
         _engine.RegisterComponentFromAccessor<SpatPos>();
         _engine.RegisterComponentFromAccessor<SpatMeta>();
-        _engine.ConfigureSpatialGrid(new SpatialGridConfig(new Vector2(0f, 0f), new Vector2(WorldSize, WorldSize), cellSize: 100f));
+        _engine.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0f, 0f), new Vector2(WorldSize, WorldSize), cellSize: 100f));
         _engine.InitializeArchetypes();
 
         using var tx = _engine.CreateQuickTransaction();

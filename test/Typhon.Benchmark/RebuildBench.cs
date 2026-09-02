@@ -49,7 +49,7 @@ internal static class RebuildBench
 
         var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClQBenchPos>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(WorldMax, WorldMax),
             cellSize: cellSize));

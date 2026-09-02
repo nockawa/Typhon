@@ -27,7 +27,7 @@ class DormancyTests : TestBase<DormancyTests>
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<TierPos>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(100, 100),
             cellSize: 10f));
@@ -46,7 +46,7 @@ class DormancyTests : TestBase<DormancyTests>
             tx.Commit();
         }
         var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        int cellKey = dbe.SpatialGrid.WorldToCellKey(x, y);
+        int cellKey = dbe.SpatialGrid.WorldToCellKey(x, y, 0f);
         dbe.SpatialGrid.SetCellTier(cellKey, tier);
 
         // Find the chunkId for this entity
@@ -120,8 +120,8 @@ class DormancyTests : TestBase<DormancyTests>
         using var dbe = SetupEngineWithGrid();
 
         // Spawn two entities in two different Tier0 cells
-        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f);
-        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f);
+        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f, 0f);
+        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f, 0f);
 
         using (var tx = dbe.CreateQuickTransaction())
         {
@@ -399,11 +399,11 @@ class DormancyTests : TestBase<DormancyTests>
         }
 
         var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        dbe.SpatialGrid.SetCellTier(dbe.SpatialGrid.WorldToCellKey(5f, 5f), SimTier.Tier0);
-        dbe.SpatialGrid.SetCellTier(dbe.SpatialGrid.WorldToCellKey(15f, 5f), SimTier.Tier0);
+        dbe.SpatialGrid.SetCellTier(dbe.SpatialGrid.WorldToCellKey(5f, 5f, 0f), SimTier.Tier0);
+        dbe.SpatialGrid.SetCellTier(dbe.SpatialGrid.WorldToCellKey(15f, 5f, 0f), SimTier.Tier0);
 
-        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f);
-        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f);
+        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f, 0f);
+        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f, 0f);
         int chunkA = FindChunkIdForCell(cs, cellA);
         int chunkB = FindChunkIdForCell(cs, cellB);
 
@@ -431,9 +431,9 @@ class DormancyTests : TestBase<DormancyTests>
         using var dbe = SetupEngineWithGrid();
 
         // Spawn two entities in Tier0, one in Tier1
-        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f);
-        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f);
-        var cellC = dbe.SpatialGrid.WorldToCellKey(25f, 5f);
+        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f, 0f);
+        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f, 0f);
+        var cellC = dbe.SpatialGrid.WorldToCellKey(25f, 5f, 0f);
 
         using (var tx = dbe.CreateQuickTransaction())
         {
@@ -564,8 +564,8 @@ class DormancyTests : TestBase<DormancyTests>
     {
         using var dbe = SetupEngineWithGrid();
 
-        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f);
-        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f);
+        var cellA = dbe.SpatialGrid.WorldToCellKey(5f, 5f, 0f);
+        var cellB = dbe.SpatialGrid.WorldToCellKey(15f, 5f, 0f);
 
         using (var tx = dbe.CreateQuickTransaction())
         {

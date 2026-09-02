@@ -39,7 +39,7 @@ class ClusterRebuildMergeTests : TestBase<ClusterRebuildMergeTests>
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<RbmPos>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(WorldMax, WorldMax),
             cellSize: CellSize));
@@ -380,7 +380,7 @@ class ClusterRebuildMergeTests : TestBase<ClusterRebuildMergeTests>
         cs.RebuildSpatialStateFromData(dbe.SpatialGrid, dbe.EpochManager, maxWorkers: 1);   // deliberately no reset
         var twice = Capture(dbe);
 
-        var cellKey = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+        var cellKey = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
         Assert.Multiple(() =>
         {
             Assert.That(twice.Cells[cellKey].EntityCount, Is.EqualTo(once.Cells[cellKey].EntityCount * 2),

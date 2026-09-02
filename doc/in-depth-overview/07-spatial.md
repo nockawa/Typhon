@@ -50,15 +50,19 @@ Immutable, validated at construction:
 
 | Field | Meaning |
 |---|---|
-| `WorldMin` / `WorldMax` | `Vector2` world-space bounds. Max strictly > Min on both axes. |
+| `WorldMin` / `WorldMax` | `Vector3` world-space bounds. Max strictly > Min on all three axes. |
 | `CellSize` | World units per cell. Must be > 0. |
 | `MigrationHysteresisRatio` | Fraction of cell size used as dead zone for cluster migration (default 0.05). |
-| `GridWidth` / `GridHeight` | Derived. `ceil((Max - Min) / CellSize)`. |
-| `KeySpaceDim` | Derived. Padded to next power of two when Morton keys are enabled. |
-| `CellCount` | Derived. `KeySpaceDim²` for Morton, `GridWidth × GridHeight` otherwise. |
+| `GridWidth` / `GridHeight` / `GridDepth` | Derived per axis. `ceil((Max - Min) / CellSize)`. `GridDepth` is `1` for a flat world. |
+| — | (`KeySpaceDim` is gone: it existed only to pad the key space for the 2D Morton encoding.) |
+| `CellCount` | Derived. `GridWidth × GridHeight × GridDepth`; must fit a 32-bit key. |
 | `InverseCellSize` | Precomputed `1 / CellSize`. |
 
-Cell keys are encoded via [`MortonKeys`](https://github.com/Log2n-io/Typhon/blob/main/src/Typhon.Engine/Spatial/internals/MortonKeys.cs) (Z-order curve) when `SpatialConfig.UseMortonCellKeys` is true — that's the production default. Morton interleaves 16 bits per axis into a 32-bit key, capping each axis at 32 768; the constructor throws if you exceed that. The fallback row-major form (`cellY * GridWidth + cellX`) is kept behind a const-bool flag for diagnostics.
+Cell keys are **pool slots** in a sparse structure: a root hash map from packed block coordinates to a block, a dense per-block `int[]` of cell-slot indices, and a chunked pool holding one 64-byte `CellState` per *occupied* cell. A cell exists only once something occupies it; an empty region costs one absent hash entry rather than a descriptor per cell. Keys are handed out in creation order, so they renumber across a rebuild and must not be cached across one.
+
+The block extent is derived per axis as `clamp(nextPow2(extentInCells), 1, 16)`, so a flat world's blocks are `16 × 16 × 1` and a cubic world's are `16³`. Within a block a neighbour is index arithmetic; only a step across a block face costs a root lookup.
+
+Before #872 step 8 the grid was dense and its keys were row-major `(cellZ * GridHeight + cellY) * GridWidth + cellX`. The grid used a 2D Morton (Z-order) encoding until #872 step 8 gave it a third axis; a 32-bit **3D** Morton key holds only 10 bits per axis (1 024 cells, down from 32 768), and the power-of-two key-space padding it required would have made the descriptor count `KeySpaceDim³` — over a billion cells for a 1024 × 1024 × 1 world. Row-major costs the Z-order locality and buys back both. At `cellZ == 0` the key is exactly the row-major 2D key, which is what makes a flat world behave identically to the pre-#872 grid.
 
 ### `SpatialGrid` and `CellState`
 

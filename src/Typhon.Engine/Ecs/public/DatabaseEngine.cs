@@ -403,6 +403,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal const string BK_SysSchemaHistory       = "sys.SchemaHistory";
     internal const string BK_SysAssemblyR1          = "sys.AssemblyR1";
     internal const string BK_SpatialGridConfig      = "spatial.GridConfig";
+
+    /// <summary>
+    /// Values in the persisted <see cref="SpatialGridConfig"/> record: <c>WorldMin.xyz</c>, <c>WorldMax.xyz</c>, cell size, hysteresis ratio.
+    /// </summary>
+    /// <remarks>
+    /// Six before #872 step 8 gave the grid a Z axis. A record of any other width is from another format and is rejected, never reinterpreted.
+    /// </remarks>
+    internal const int SpatialGridConfigIntCount = 8;
     internal const string BK_NextFreeTSN            = "NextFreeTSN";
     internal const string BK_UowRegistrySPI         = "UowRegistrySPI";
     internal const string BK_CollectionFieldR1      = "collection.FieldR1";
@@ -1556,19 +1564,29 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
-    /// Persists the engine-wide <see cref="SpatialGridConfig"/> (world bounds, cell size, hysteresis — the 6 source floats; the rest is derived) so a generic
+    /// Persists the engine-wide <see cref="SpatialGridConfig"/> (world bounds, cell size, hysteresis — the 8 source floats; the rest is derived) so a generic
     /// opener that never calls <see cref="ConfigureSpatialGrid"/> can reconstruct the grid and fully initialize cluster-spatial archetypes. Floats are stored as
-    /// their raw bit patterns in an Int6 bootstrap value.
+    /// their raw bit patterns in an Int8 bootstrap value.
     /// </summary>
+    /// <remarks>
+    /// Six floats before #872 step 8, when the grid gained a Z axis and outgrew <c>BootstrapDictionary.ValueType.Int6</c> — which is why <c>Int7</c> and
+    /// <c>Int8</c> exist. The widening is a clean break, not a migration: a database written by an older build has a six-int value under this key and
+    /// <see cref="TryLoadSpatialGridConfig"/> rejects it rather than guessing a Z extent.
+    /// </remarks>
     private void SaveSpatialGridConfig(SpatialGridConfig config)
     {
-        MMF.Bootstrap.Set(BK_SpatialGridConfig, BootstrapDictionary.Value.FromInt6(
+        Span<int> bits =
+        [
             BitConverter.SingleToInt32Bits(config.WorldMin.X),
             BitConverter.SingleToInt32Bits(config.WorldMin.Y),
+            BitConverter.SingleToInt32Bits(config.WorldMin.Z),
             BitConverter.SingleToInt32Bits(config.WorldMax.X),
             BitConverter.SingleToInt32Bits(config.WorldMax.Y),
+            BitConverter.SingleToInt32Bits(config.WorldMax.Z),
             BitConverter.SingleToInt32Bits(config.CellSize),
-            BitConverter.SingleToInt32Bits(config.MigrationHysteresisRatio)));
+            BitConverter.SingleToInt32Bits(config.MigrationHysteresisRatio),
+        ];
+        MMF.Bootstrap.Set(BK_SpatialGridConfig, BootstrapDictionary.Value.FromInts(bits));
         MMF.SaveBootstrap();
     }
 
@@ -1580,11 +1598,27 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             return false;
         }
+
+        if (v.IntCount != SpatialGridConfigIntCount)
+        {
+            // A pre-#872 six-float record. Reconstructing it would mean inventing a Z extent, and the grid built from that invention would file every cluster
+            // into a cell the writer never chose — a silent misplacement on reopen, which is exactly the failure C13 exists to prevent.
+            throw new InvalidOperationException(
+                $"The persisted spatial grid configuration holds {v.IntCount} values, not the 8 a three-dimensional grid needs. " +
+                $"This database was written before the grid gained a Z axis (#872 step 8) and cannot be opened by this build.");
+        }
+
         config = new SpatialGridConfig(
-            new Vector2(BitConverter.Int32BitsToSingle(v.GetInt()), BitConverter.Int32BitsToSingle(v.GetInt(1))),
-            new Vector2(BitConverter.Int32BitsToSingle(v.GetInt(2)), BitConverter.Int32BitsToSingle(v.GetInt(3))),
-            BitConverter.Int32BitsToSingle(v.GetInt(4)),
-            BitConverter.Int32BitsToSingle(v.GetInt(5)));
+            new Vector3(
+                BitConverter.Int32BitsToSingle(v.GetInt()),
+                BitConverter.Int32BitsToSingle(v.GetInt(1)),
+                BitConverter.Int32BitsToSingle(v.GetInt(2))),
+            new Vector3(
+                BitConverter.Int32BitsToSingle(v.GetInt(3)),
+                BitConverter.Int32BitsToSingle(v.GetInt(4)),
+                BitConverter.Int32BitsToSingle(v.GetInt(5))),
+            BitConverter.Int32BitsToSingle(v.GetInt(6)),
+            BitConverter.Int32BitsToSingle(v.GetInt(7)));
         return true;
     }
 
@@ -1795,7 +1829,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// because the generated registrar lives in the consumer's own assembly and cannot reach engine internals.
     /// </summary>
     /// <param name="archetypeType">The <c>[Archetype]</c> class type to finalize.</param>
-    public static void RegisterArchetype(Type archetypeType) => ArchetypeRegistry.EnsureFinalized(archetypeType, fromBarrier: true);
+    public static void RegisterArchetype(Type archetypeType) => ArchetypeRegistry.EnsureFinalized(archetypeType, true);
 
     internal VariableSizedBufferSegment<T, PersistentStore> GetComponentCollectionVSBS<T>() where T : unmanaged => GetComponentCollectionVSBS<T>(null);
 
@@ -3145,7 +3179,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             var gridConfig = _pendingGridConfig.Value;
             _spatialGrid = new SpatialGrid(gridConfig);
             _pendingGridConfig = null;
-            if (!MMF.Bootstrap.ContainsKey(BK_SpatialGridConfig))
+
+            // Rewrite whenever the stored record is absent OR the wrong width. A pre-#872 database holds a six-value record; an app that calls
+            // ConfigureSpatialGrid itself opens fine either way, so a plain ContainsKey check would leave that record in place forever and let the loud
+            // rejection in TryLoadSpatialGridConfig land later on some OTHER tool — the Workbench, or `typhon check` — which did nothing wrong. The break
+            // belongs at the first open by a build that understands the new shape.
+            if (!MMF.Bootstrap.TryGet(BK_SpatialGridConfig, out var stored) || stored.IntCount != SpatialGridConfigIntCount)
             {
                 SaveSpatialGridConfig(gridConfig);
             }
@@ -4075,15 +4114,15 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     /// <summary>Any non-Transient indexed <see cref="String64"/> field ⇒ the archetype needs the wider-stride persisted index segment (#658).</summary>
     private static bool ArchetypeHasIndexedString64Field(ComponentTable[] slotToTable)
-        => ArchetypeIndexesField(slotToTable, transient: false, FieldType.String64);
+        => ArchetypeIndexesField(slotToTable, false, FieldType.String64);
 
     /// <summary>Any indexed field on a Transient slot ⇒ the archetype needs its heap-backed index segment (#655).</summary>
     private static bool ArchetypeHasIndexedTransientField(ComponentTable[] slotToTable)
-        => ArchetypeIndexesField(slotToTable, transient: true, null);
+        => ArchetypeIndexesField(slotToTable, true, null);
 
     /// <summary>Any indexed <see cref="String64"/> field on a Transient slot ⇒ it also needs the wider-stride heap-backed segment.</summary>
     private static bool ArchetypeHasIndexedTransientString64Field(ComponentTable[] slotToTable)
-        => ArchetypeIndexesField(slotToTable, transient: true, FieldType.String64);
+        => ArchetypeIndexesField(slotToTable, true, FieldType.String64);
 
     internal static bool IsDerivedSegmentKind(StorageSegmentKind kind)
         => kind is StorageSegmentKind.Index or StorageSegmentKind.Spatial or StorageSegmentKind.Occupancy;
@@ -4249,7 +4288,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             // Flat (legacy / non-cluster) chain-head rebuild, shared with the crash-path rebuild (RebuildEntityMapOnCrash) so the two never drift — the only
             // difference is the insert primitive (plain Insert here vs InsertDuringRebuild after a ClearForRebuild on the crash path).
-            BuildFlatEntityMapEntries(meta, state, mapCs, duringRebuild: false);
+            BuildFlatEntityMapEntries(meta, state, mapCs, false);
         }
     }
 
@@ -4502,7 +4541,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     // tolerateTorn: true unconditionally, not gated on WalFilesPresentAtOpen like every other load in this file. Those loads gate on it because
                     // they go on to READ the segment and a torn one must not be trusted; this one wants nothing but the page list, and a segment we are about
                     // to delete has no content left to be wrong about.
-                    if (MMF.TryLoadChunkBasedSegment(rootPageIndex, stride, out _, tolerateTornForRebuild: true))
+                    if (MMF.TryLoadChunkBasedSegment(rootPageIndex, stride, out _, true))
                     {
                         MMF.DeleteSegment(rootPageIndex, cs);
                     }
@@ -5020,7 +5059,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
             else
             {
-                BuildFlatEntityMapEntries(meta, state, cs, duringRebuild: true, enabledSnapshot);
+                BuildFlatEntityMapEntries(meta, state, cs, true, enabledSnapshot);
             }
 
             _crashRebuiltEntityMapSegments.Add(state.EntityMap.Segment.RootPageIndex);

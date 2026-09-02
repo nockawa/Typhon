@@ -181,7 +181,7 @@ public class TyphonSetupTests
         {
             options
                 .Register<SetupSpatialBox>()
-                .ConfigureSpatialGrid(new SpatialGridConfig(Vector2.Zero, new Vector2(1000f, 1000f), cellSize: 50f));
+                .ConfigureSpatialGrid(SpatialGridConfig.Flat(Vector2.Zero, new Vector2(1000f, 1000f), cellSize: 50f));
             ConfigureWalForTest(options);
         });
 

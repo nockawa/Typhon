@@ -301,12 +301,13 @@ public partial class DatabaseEngine
     /// O(archetypes), no page I/O.
     /// </summary>
     internal bool TryGetClusterSpatialInfo(int clusterSegmentRootPage, out bool isSpatial, out float cellSize, out int gridWidth, out int gridHeight,
-        out string spatialMode)
+        out int gridDepth, out string spatialMode)
     {
         isSpatial = false;
         cellSize = 0;
         gridWidth = 0;
         gridHeight = 0;
+        gridDepth = 0;
         spatialMode = "";
 
         var states = _archetypeStates;
@@ -330,6 +331,7 @@ public partial class DatabaseEngine
                 cellSize = cfg.CellSize;
                 gridWidth = cfg.GridWidth;
                 gridHeight = cfg.GridHeight;
+                gridDepth = cfg.GridDepth;
                 spatialMode = cluster.SpatialSlot.FieldInfo.Mode.ToString();
             }
             return true;
@@ -340,24 +342,29 @@ public partial class DatabaseEngine
 
     /// <summary>
     /// Per-cluster spatial-cell context for the cluster chunk <paramref name="clusterChunkId"/> of the segment whose root page is
-    /// <paramref name="clusterSegmentRootPage"/> — the grid cell the cluster is attached to (key + 2D coords), the cell's live entity / cluster counts (global sums
-    /// across every cluster-spatial archetype sharing the grid), and the cluster's tight 2D AABB. This is the per-chunk "why is this cluster mostly empty" answer:
+    /// <paramref name="clusterSegmentRootPage"/> — the grid cell the cluster is attached to (key + cell coords), the cell's live entity / cluster counts
+    /// (global sums across every cluster-spatial archetype sharing the grid), and the cluster's tight AABB. This is the per-chunk "why is this cluster mostly
+    /// empty" answer:
     /// it is the only cluster in a cell that holds just a handful of entities. Returns <see langword="false"/> when no grid is configured, the owning archetype is
     /// non-spatial, the chunk is unmapped (not attached to a cell), or the id is out of range. Read-only, O(archetypes), no page I/O — all reads hit in-memory
     /// transient spatial state.
     /// </summary>
-    internal bool TryGetClusterChunkSpatialInfo(int clusterSegmentRootPage, int clusterChunkId, out int cellKey, out int cellX, out int cellY,
-        out int entitiesInCell, out int clustersInCell, out float aabbMinX, out float aabbMinY, out float aabbMaxX, out float aabbMaxY)
+    internal bool TryGetClusterChunkSpatialInfo(int clusterSegmentRootPage, int clusterChunkId, out int cellKey, out int cellX, out int cellY, out int cellZ,
+        out int entitiesInCell, out int clustersInCell, out float aabbMinX, out float aabbMinY, out float aabbMinZ, out float aabbMaxX, out float aabbMaxY, 
+        out float aabbMaxZ)
     {
         cellKey = -1;
         cellX = 0;
         cellY = 0;
+        cellZ = 0;
         entitiesInCell = 0;
         clustersInCell = 0;
         aabbMinX = 0;
         aabbMinY = 0;
+        aabbMinZ = 0;
         aabbMaxX = 0;
         aabbMaxY = 0;
+        aabbMaxZ = 0;
 
         var grid = _spatialGrid;
         if (grid == null)
@@ -395,7 +402,7 @@ public partial class DatabaseEngine
                 return false; // cluster not attached to a cell (unmapped)
             }
 
-            (cellX, cellY) = grid.CellKeyToCoords(cellKey);
+            (cellX, cellY, cellZ) = grid.CellKeyToCoords(cellKey);
             ref var cell = ref grid.GetCell(cellKey);
             entitiesInCell = cell.EntityCount;
             clustersInCell = cell.ClusterCount;
@@ -406,8 +413,10 @@ public partial class DatabaseEngine
                 ref var box = ref aabbs[clusterChunkId];
                 aabbMinX = box.MinX;
                 aabbMinY = box.MinY;
+                aabbMinZ = box.MinZ;
                 aabbMaxX = box.MaxX;
                 aabbMaxY = box.MaxY;
+                aabbMaxZ = box.MaxZ;
             }
             return true;
         }

@@ -729,7 +729,7 @@ public static class AxisArchetypes
                 break;
         }
 
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(-WorldExtent, -WorldExtent),
             worldMax: new Vector2(WorldExtent, WorldExtent),
             cellSize: 100f));

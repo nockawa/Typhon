@@ -47,7 +47,7 @@ public partial class Ant : Archetype<Ant>
 }
 
 // Opt in once, before InitializeArchetypes (see Spatial Grid Configuration).
-dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
     worldMin: new Vector2(0, 0), worldMax: new Vector2(1000, 1000), cellSize: 100f));
 dbe.InitializeArchetypes();
 

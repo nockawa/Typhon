@@ -96,7 +96,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClSpatialPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(-10_000, -10_000),
             worldMax: new Vector2(10_000, 10_000),
             cellSize: 100f));
@@ -109,7 +109,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClSpatialStaticPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(-10_000, -10_000),
             worldMax: new Vector2(10_000, 10_000),
             cellSize: 100f));
@@ -694,7 +694,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         var dbe = sp.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClSpatialPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(-10_000, -10_000),
             worldMax: new Vector2(10_000, 10_000),
             cellSize: 100f));

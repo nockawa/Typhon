@@ -220,18 +220,80 @@
 
 ---
 
+## Module: VDB Cell Grid (Issue #872 step 8)
+
+### VG-01: A cell key names a live cell, or nothing `[fatal][silent]`
+  invariant a cell key is a POOL SLOT in SpatialGrid's CellState pool, not a coordinate:
+    ∀ key k handed out by ComputeCellKey / WorldToCellKey / TryGetCellKey: k ∈ [0, SpatialGrid.CellCount)
+    ∀ such k: CellKeyToCoords(k) == the (x, y, z) the key was resolved from
+  invariant a coordinate with no cell resolves to ABSENT, never to another cell's key:
+    TryGetCellKey(x, y, z, out k) == false → k < 0
+    TryGetNeighbourCellKey over a block that has not been created → false, and true once it is
+  invariant cell keys are NOT stable across a rebuild or a ResetCellState — slots are handed out in
+    creation order, so nothing may cache a key across either
+  invariant creation is monotonic: a cell, once created, is never removed or renumbered while the grid
+    lives (step 8 ships no destruction path; §3.5's windowed sweep is deferred)
+  scope: SpatialGrid.ComputeCellKey, SpatialGrid.TryGetCellKey, SpatialGrid.TryGetNeighbourCellKey,
+    SpatialGrid.CellKeyToCoords, SpatialGrid.ResetCellState, VdbBlockKey.Pack
+  verified: VdbSpatialGridTests (AC82_NeighbourAcrossAnAbsentBlockBoundary_IsAbsentThenAppears carries the
+    attribute; ResetCellState_InvalidatesTheBlockCacheOnEveryThread and AC84_RebuildFromTheSamePopulation
+    cover the stability and monotonicity clauses). VdbBlockKeyTests covers the packing clause but carries no
+    attribute of its own — the packing is reached through every one of these.
+  on_violation:
+    a remembered "absent" that later has a cell → query misses every cluster in it → SQ-01 false negative
+    a block key that truncates an axis → two regions alias one block → each query returns the other's clusters
+    a cached key surviving a rebuild → counters read against a cell that now belongs to a different position
+
+### VG-02: Read paths never create cells `[perf][fatal]`
+  invariant only a path that must PLACE something resolves with create — entity spawn, migration
+    destination, and the rebuild's serial reduce. Everything else uses TryGetCellKey:
+    query broadphase (AabbClusterEnumerator), tier assignment (SetTierInAABB, the accessor's
+    coordinate-keyed setters), and every diagnostic or demo sweep
+  invariant the rebuild's PARALLEL map phase resolves to COORDINATES only (ReadCellCoordsFromSpatialField).
+    Creating from the map would make each pool slot a function of the worker count, which
+    RebuildSpatialStateFromData's serial reduce exists to prevent
+  invariant SpatialGridAccessor.GetCell(x, y, z) is the ONE coordinate-keyed accessor that DOES create, and
+    exists for tests and diagnostics that need a cell to write into. Game code reading grid state must not use it
+  note the determinism guarantee is REBUILD-ONLY. Migration destinations are created from fence workers, so a
+    pool slot's index depends on worker interleaving there; only RebuildSpatialStateFromData promises a
+    worker-count-independent numbering, and it does so by creating in its serial reduce
+  scope: AabbClusterEnumerator.MoveNext, SpatialGrid.SetTierInAABB, SpatialGridAccessor.SetCellTier,
+    SpatialGridAccessor.SetCellTierMin, SpatialGridAccessor.ComputeCellKey, SpatialGridAccessor.WorldToCell,
+    SpatialGridAccessor.GetCell, ArchetypeClusterState.MapClusterForRebuild
+  verified: VdbSpatialGridTests (ReadPaths_DoNotCreateCells carries the attribute and covers
+    SpatialGrid.TryGetCellKey / TryGetCellKeyAt / SetTierInAABB). The accessor surface, the query broadphase and
+    the parallel map phase are NOT directly verified — they are covered only indirectly, by the suite staying
+    green with sparse memory
+  on_violation:
+    a read path resolving with create → one cell per swept coordinate → the grid silently becomes dense
+      again, with correct answers and the memory C2 exists to avoid. Nothing fails; ResidentBytes is the
+      only observable
+    creating from the parallel map → pool slots depend on thread interleaving → rebuild output stops being
+      bit-identical across worker counts
+
+---
+
 ## Module: ClusterCellMap (Issue #229)
 
 ### CC-01: ClusterCellMap validity `[fatal]`
   invariant ∀ active cluster C:
     ClusterCellMap == null ∨ C.chunkId ≥ ClusterCellMap.Length ∨
-    ClusterCellMap[C.chunkId] ∈ [-1, CellCount)
+    ClusterCellMap[C.chunkId] ∈ [-1, SpatialGrid.CellCount)
   invariant ClusterCellMap[chunkId] ≥ 0 → cluster is assigned to a valid cell
   invariant ClusterCellMap[chunkId] < 0 → cluster is unassigned (skipped by TierClusterIndex)
-  scope: ArchetypeClusterState.ClaimSlotInCell, RebuildCellState, TierClusterIndex.Rebuild
+  note the bound moved in #872 step 8. CellCount was the whole world's cell count, fixed at config time;
+    it is now the number of cells that EXIST, which grows as cells are first touched. The invariant is
+    unchanged in FORM but WEAKER as a detector: against a world-sized bound a stale or corrupted key was
+    usually out of range and threw, whereas a small growing bound accepts it silently. A key is meaningful
+    only against the grid instance that issued it, and only until a rebuild (VG-01)
+  note transiently false between ResetCellState and the rebuild that follows it — the map still holds the
+    old keys while the grid holds no cells. RebuildSpatialStateFromData refills both; nothing may read
+    ClusterCellMap in between
+  scope: ArchetypeClusterState.ClaimSlotInCell, RebuildCellState, RebuildSpatialStateFromData, TierClusterIndex.Rebuild
   on_violation:
     cellKey ≥ CellCount → IndexOutOfRangeException in SpatialGrid.GetCell
     cellKey corrupted → cluster bucketed into wrong cell → wrong tier assignment, wrong query results
+    cellKey held across a rebuild → names a different position's cell → silently wrong counters and tiers
 
 ---
 
@@ -347,14 +409,19 @@
     share cache lines → catastrophic ping-pong on every CAS even under no logical contention
   prefer AoS (cluster all per-element state into one padded struct) over SoA + parallel
     padded arrays when padding is required — same memory cost, fewer cache-line fetches
-  note CellState is [StructLayout(Explicit, Size = 64)] with 12 bytes of fields + 52 reserved
-    (corrected 2026-07-27: previously stated 16 bytes of fields, which does not sum to 64)
-  canonical example: CellState (16 bytes of fields, [StructLayout(Explicit, Size=64)],
-    52 bytes reserved tail) — Tier, Flags, EntityCount, ClusterCount all on one line per cell
+  note CellState is [StructLayout(Explicit, Size = 64)] with 24 bytes of fields + 40 reserved
+    (corrected 2026-07-27 from a stated 16; corrected again 2026-09-02 when #872 step 8 added
+     CellX/CellY/CellZ at offsets 12/16/20 — a cell key became a pool slot and carries no position,
+     so the cell has to hold its own coordinates)
+  canonical example: CellState (24 bytes of fields, [StructLayout(Explicit, Size=64)],
+    40 bytes reserved tail) — Tier, Flags, EntityCount, ClusterCount, CellX/Y/Z all on one line per cell
   applies to: CellState array, ArchetypeClusterState._finalizeLock (PaddedFinalizeLock 64B
     struct), any future per-cell or per-cluster latch arrays
-  scope: SpatialGrid._cells, ArchetypeClusterState._finalizeLock, any new per-element
+  scope: SpatialGrid.GetCell, ArchetypeClusterState._finalizeLock, any new per-element
     Interlocked-mutated array
+  note the dense CellState[] became a CHUNKED pool in #872 step 8. The 64-byte layout is unchanged, and
+    the chunking is what keeps the `ref CellState` a stable interior pointer while the pool grows — a
+    resize would hand a concurrent worker a doomed array, which is MD-02's concern rather than this one
   on_violation:
     bit-packed latches → 8× ping-pong amplification, parallel speedup collapses
     16-byte cell descriptors in flat array → 4-cell ping-pong per migration
@@ -407,8 +474,11 @@
 ### CB-01: Exhaustive disjoint partition `[fatal]`
   invariant ∀ filtered cluster set S for a checkerboard system:
     Red ∪ Black == S ∧ Red ∩ Black == ∅
-  invariant Red = { C ∈ S : (cellX + cellY) % 2 == 0 } where (cellX, cellY) = grid.CellKeyToCoords(ClusterCellMap[C])
-  invariant Black = { C ∈ S : (cellX + cellY) % 2 == 1 }
+  invariant Red = { C ∈ S : (cellX + cellY + cellZ) % 2 == 0 } where (cellX, cellY, cellZ) = grid.CellKeyToCoords(ClusterCellMap[C])
+  invariant Black = { C ∈ S : (cellX + cellY + cellZ) % 2 == 1 }
+  note the grid gained a Z axis in #872 step 8; a flat world has cellZ == 0 throughout, so its partition is unchanged.
+    The three-dimensional parity is still a proper 2-colouring for 6-neighbour adjacency, which is the property the
+    two-phase dispatch actually relies on.
   invariant fallback: ClusterCellMap == null ∨ grid == null → Red = S, Black = ∅
     (non-spatial archetype degenerates to single-phase dispatch)
   invariant unmapped cluster (cellKey < 0) → assigned to Red (fallback)

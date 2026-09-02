@@ -20,7 +20,7 @@ class ClusterSpatialAabbRecomputeTests : TestBase<ClusterSpatialAabbRecomputeTes
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClCohPos>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(worldMax, worldMax),
             cellSize: cellSize));
@@ -425,7 +425,7 @@ class ClusterSpatialAabbRecomputeTests : TestBase<ClusterSpatialAabbRecomputeTes
 
         // Sanity: two clusters (A and B), cell B's stored AABB is the wide union of m1 and m2.
         Assert.That(cs.ActiveClusterCount, Is.EqualTo(2));
-        int cellB = dbe.SpatialGrid.WorldToCellKey(110f, 10f);
+        int cellB = dbe.SpatialGrid.WorldToCellKey(110f, 10f, 0f);
         int cbChunkId = -1;
         for (int i = 0; i < cs.ActiveClusterCount; i++)
         {

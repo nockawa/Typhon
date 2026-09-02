@@ -821,9 +821,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         // Single AND branch
         var evaluators = QueryResolverHelper.ResolveEvaluators(branches[0], ct, 0);
         var plan = PlanBuilder.Instance.BuildPlanAttributed(evaluators, ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, null,
-            queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-            definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-            executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+            1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
 
         var view = new EcsView<TArchetype>(this, evaluators, ct, _whereFieldReader, plan, bufferCapacity, _tx.TSN, callerFile, callerLine, callerMethod);
 
@@ -849,9 +847,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         {
             branchEvaluators[b] = QueryResolverHelper.ResolveEvaluators(branches[b], ct, 0, (byte)b);
             plans[b] = PlanBuilder.Instance.BuildPlanAttributed(branchEvaluators[b], ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, null,
-                queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-                definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-                executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+                1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
         }
 
         var view = new EcsView<TArchetype>(this, branchEvaluators, plans, ct, _whereFieldReader, bufferCapacity, _tx.TSN, callerFile, callerLine, callerMethod);
@@ -964,9 +960,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var ct = _whereComponentTable;
         var evaluators = QueryResolverHelper.ResolveEvaluators(SingleBranchOrThrow("ExecuteOrdered()"), ct, 0);
         var plan = PlanBuilder.Instance.BuildPlanAttributed(evaluators, ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, _orderBy.Value,
-            queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-            definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-            executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+            1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
 
         // Every archetype whose where-component owns a per-archetype tree can be K-way merged; anything else falls back to scan-then-sort. The third case this
         // used to have — a PipelineExecutor ordered scan over the shared ComponentTable tree — is gone with that tree (#629). It could only ever have returned
@@ -1325,9 +1319,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
         var evaluators = QueryResolverHelper.ResolveEvaluators(SingleBranchOrThrow("One-shot execution"), ct, 0);
         var plan = PlanBuilder.Instance.BuildPlanAttributed(evaluators, ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, null,
-            queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-            definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-            executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+            1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
 
         // Scan for matching entities across all matching archetypes.
         var result = new HashSet<EntityId>(_take > 0 ? _take : 64);

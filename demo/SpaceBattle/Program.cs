@@ -216,7 +216,7 @@ public static class Program
                 MinX = a.MinX, MinY = a.MinY, MaxX = a.MaxX, MaxY = a.MaxY,
                 LiveCount = cluster.LiveCount,
                 HomeCellKey = home,
-                CentreCellKey = host.Grid.WorldToCellKey(0.5f * (a.MinX + a.MaxX), 0.5f * (a.MinY + a.MaxY)),
+                CentreCellKey = host.Grid.WorldToCellKey(0.5f * (a.MinX + a.MaxX), 0.5f * (a.MinY + a.MaxY), 0f),
             });
         }
         return list;

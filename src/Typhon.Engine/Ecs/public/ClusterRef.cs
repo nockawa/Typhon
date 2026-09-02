@@ -317,7 +317,10 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         var aabbChanged = MaybeGrowAndFlagShrink(ref stored, oldMinX, oldMinY, oldMaxX, oldMaxY, newMinX, newMinY, newMaxX, newMaxY);
 
         // Step 6: migration check.
-        var migrationFlagged = MaybeFlagMigration(slotIndex, newMinX, newMinY, newMaxX, newMaxY);
+        // centerZ is 0 because this specialization handles AABB2F and WriteSpatial supports nothing else yet. It matches ReadSpatialCenter3D, which reports
+        // posZ = 0 for both 2D field types — so a write-time check and a fence-time check place the same entity in the same Z plane. When AABB3F lands here,
+        // this must pass the real centre or the two will disagree.
+        var migrationFlagged = MaybeFlagMigration(slotIndex, newMinX, newMinY, newMaxX, newMaxY, 0f);
 
         // Step 6b: bump the fence work-planner's migration cost hint. Non-atomic: an order-of-magnitude approximation is enough for chunk bucketing; lost
         // increments under contention are tolerable.
@@ -457,7 +460,7 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
 
     /// <summary>Migration cell-boundary check. Returns true when a migration was flagged.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool MaybeFlagMigration(int slotIndex, float newMinX, float newMinY, float newMaxX, float newMaxY)
+    private bool MaybeFlagMigration(int slotIndex, float newMinX, float newMinY, float newMaxX, float newMaxY, float centerZ)
     {
         var grid = _state.Grid;
         if (grid == null)
@@ -485,13 +488,17 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         ref readonly var cfg = ref grid.Config;
         var cellSize = cfg.CellSize;
         var hyster = cellSize * cfg.MigrationHysteresisRatio;
-        var (cx, cy) = grid.CellKeyToCoords(currentCellKey);
+        var (cx, cy, cz) = grid.CellKeyToCoords(currentCellKey);
         var cellMinX = cfg.WorldMin.X + cx * cellSize;
         var cellMinY = cfg.WorldMin.Y + cy * cellSize;
+        var cellMinZ = cfg.WorldMin.Z + cz * cellSize;
         var cellMaxX = cellMinX + cellSize;
         var cellMaxY = cellMinY + cellSize;
+        var cellMaxZ = cellMinZ + cellSize;
 
-        var exited = centerX < cellMinX - hyster || centerX > cellMaxX + hyster || centerY < cellMinY - hyster || centerY > cellMaxY + hyster;
+        var exited = centerX < cellMinX - hyster || centerX > cellMaxX + hyster
+                     || centerY < cellMinY - hyster || centerY > cellMaxY + hyster
+                     || centerZ < cellMinZ - hyster || centerZ > cellMaxZ + hyster;
         if (!exited)
         {
             // Count the crossings the margin swallowed (#872). Without this the SpatialBarrierOnly path reports zero absorbed crossings forever:
@@ -507,7 +514,9 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
             // Interlocked, unlike MigrationHint's plain ++ below: this value is PUBLISHED as an exact count through
             // SpatialMigrationTelemetry, where MigrationHint is documented as an order-of-magnitude work estimate. The atomic is affordable precisely because
             // it is rare — it fires only for a write that lands inside the margin band, not on every spatial write.
-            var rawExited = centerX < cellMinX || centerX > cellMaxX || centerY < cellMinY || centerY > cellMaxY;
+            var rawExited = centerX < cellMinX || centerX > cellMaxX
+                            || centerY < cellMinY || centerY > cellMaxY
+                            || centerZ < cellMinZ || centerZ > cellMaxZ;
             if (rawExited)
             {
                 Interlocked.Increment(ref _state.HysteresisAbsorbedLive);
@@ -516,7 +525,7 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
             return false;
         }
 
-        var newCellKey = grid.WorldToCellKey(centerX, centerY);
+        var newCellKey = grid.WorldToCellKey(centerX, centerY, centerZ);
         if (newCellKey == currentCellKey)
         {
             return false;

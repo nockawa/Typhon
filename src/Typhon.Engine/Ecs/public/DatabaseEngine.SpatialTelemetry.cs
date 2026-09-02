@@ -37,6 +37,43 @@ public partial class DatabaseEngine
     public double OpenClusterAabbRebuildMs => _openClusterAabbRebuildMs;
 
     /// <summary>
+    /// The spatial grid's occupancy and memory, or an all-zero snapshot when no grid is configured (#872 step 8, AC-8.5 and AC-8.7).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>What each figure answers.</b> <c>BlockCount</c> and <c>OccupiedCellCount</c> against <c>BlockCellCapacity</c> give <c>IntraBlockFill</c>,
+    /// which is Q3's measurement: a low fill argues for replacing the dense per-block <c>int[]</c> with a bitmask plus compaction (P2), a high one says the
+    /// dense array is right. <c>ResidentBytes</c> against <c>DenseEquivalentBytes</c> is C2's argument made observable — the dense predecessor allocated a
+    /// 64-byte descriptor for every cell the world bounds implied, occupied or not.</para>
+    /// <para><b>It is also the guard on the one discipline the sparse grid depends on.</b> A read path that resolves a cell WITH creation — a query
+    /// broadphase, a tier sweep — materialises a cell per coordinate it touches. Every answer stays correct and nothing fails; the only symptom is
+    /// <c>ResidentBytes</c> climbing toward <c>DenseEquivalentBytes</c>. See rule <c>VG-02</c>.</para>
+    /// <para>Read without a lock, so a snapshot taken during a tick can mix values from either side of a cell creation. These are diagnostic counters.</para>
+    /// </remarks>
+    [PublicAPI]
+    public SpatialGridOccupancy GetSpatialGridOccupancy()
+    {
+        var grid = _spatialGrid;
+        if (grid == null)
+        {
+            return default;
+        }
+
+        var (bx, by, bz) = grid.BlockDimensions;
+        return new SpatialGridOccupancy
+        {
+            BlockCount = grid.BlockCount,
+            OccupiedCellCount = grid.CellCount,
+            BlockCellCapacity = grid.BlockCellCapacity,
+            BlockDimX = bx,
+            BlockDimY = by,
+            BlockDimZ = bz,
+            IntraBlockFill = grid.IntraBlockFill,
+            ResidentBytes = grid.ResidentBytes,
+            DenseEquivalentBytes = grid.DenseEquivalentBytes,
+        };
+    }
+
+    /// <summary>
     /// Reads one archetype's spatial-partitioning counters. Allocation-free; never throws.
     /// </summary>
     /// <param name="archetypeId">The archetype's runtime id. Out of range, or an archetype with no cluster state, yields an all-zero snapshot.</param>

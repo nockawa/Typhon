@@ -89,7 +89,7 @@ internal sealed class TyphonHost : IDisposable
         DBE.RegisterComponentFromAccessor<Asteroid>();
         DBE.RegisterComponentFromAccessor<PickupInfo>();
 
-        GridConfig = new SpatialGridConfig(
+        GridConfig = SpatialGridConfig.Flat(
             worldMin: Vector2.Zero,
             worldMax: new Vector2(_cfg.WorldSize, _cfg.WorldSize),
             cellSize: _cfg.CellSize,
@@ -359,7 +359,7 @@ internal sealed class TyphonHost : IDisposable
         {
             for (var cx = cx0; cx <= cx1; cx++)
             {
-                total += CellEntityCount(Grid.ComputeCellKey(cx, cy));
+                total += CellEntityCount(Grid.ComputeCellKey(cx, cy, 0));
             }
         }
         return total;

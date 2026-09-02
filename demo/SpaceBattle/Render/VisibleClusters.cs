@@ -70,7 +70,7 @@ internal sealed class VisibleClusters
             for (var cx = cx0; cx <= cx1; cx++)
             {
                 CellsVisited++;
-                var key = host.Grid.ComputeCellKey(cx, cy);
+                var key = host.Grid.ComputeCellKey(cx, cy, 0);
                 if (key < 0 || key >= perCell.Length)
                 {
                     continue;

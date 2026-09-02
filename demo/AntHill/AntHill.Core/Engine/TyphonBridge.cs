@@ -401,7 +401,7 @@ public sealed class TyphonBridge : IDisposable
         DBE.RegisterComponentFromAccessor<NestInfo>();
         DBE.RegisterComponentFromAccessor<Obstacle>();
 
-        DBE.ConfigureSpatialGrid(new SpatialGridConfig(
+        DBE.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: Vector2.Zero,
             worldMax: new Vector2(WorldSize, WorldSize),
             cellSize: CellSize,
@@ -584,7 +584,7 @@ public sealed class TyphonBridge : IDisposable
                     continue;
                 }
 
-                grid.SetCellTier(cx, cy, tier);
+                grid.SetCellTier(cx, cy, 0, tier);
                 _tierMirror[cy * GridCells + cx] = (byte)BitOperations.TrailingZeroCount((uint)(byte)tier);
             }
         }
@@ -612,7 +612,7 @@ public sealed class TyphonBridge : IDisposable
                         var mi = cy * GridCells + cx;
                         if (_tierMirror[mi] > 0)   // worse than T0
                         {
-                            grid.SetCellTier(cx, cy, SimTier.Tier0);
+                            grid.SetCellTier(cx, cy, 0, SimTier.Tier0);
                             _tierMirror[mi] = 0;
                         }
                     }

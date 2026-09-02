@@ -21,9 +21,16 @@ Large worlds can't afford to simulate every entity at full frequency every tick 
 
 ```csharp
 // Once, before InitializeArchetypes:
-dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+// A flat (2D) world — one cell deep on Z:
+dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
     worldMin: new Vector2(-1000f, -1000f),
     worldMax: new Vector2( 1000f,  1000f),
+    cellSize: 32f));
+
+// A volumetric world uses the constructor directly:
+dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+    worldMin: new Vector3(-1000f, -1000f, -1000f),
+    worldMax: new Vector3( 1000f,  1000f,  1000f),
     cellSize: 32f));
 
 // Every tick, a high-priority callback system assigns tiers:
@@ -36,17 +43,17 @@ schedule.CallbackSystem("TierAssignment", ctx =>
 
     foreach (var observer in connectedPlayers)
     {
-        grid.SetTierInAABB(observer.Tier0MinX, observer.Tier0MinY,
-                            observer.Tier0MaxX, observer.Tier0MaxY, SimTier.Tier0);
-        grid.SetTierInAABB(observer.Tier1MinX, observer.Tier1MinY,
-                            observer.Tier1MaxX, observer.Tier1MaxY, SimTier.Tier1);
+        grid.SetTierInAABB(observer.Tier0MinX, observer.Tier0MinY, 0f,
+                            observer.Tier0MaxX, observer.Tier0MaxY, 0f, SimTier.Tier0);
+        grid.SetTierInAABB(observer.Tier1MinX, observer.Tier1MinY, 0f,
+                            observer.Tier1MaxX, observer.Tier1MaxY, 0f, SimTier.Tier1);
     }
 }, priority: SystemPriority.High);
 ```
 
 | Config field | Meaning | Notes |
 |---|---|---|
-| `WorldMin` / `WorldMax` | World-space extent | `WorldMax` is exclusive on both axes |
+| `WorldMin` / `WorldMax` | World-space extent, `Vector3` | `WorldMax` is exclusive on all three axes |
 | `CellSize` | Side length of one cell, world units | Must be `> 0`; one size for the whole grid |
 | `MigrationHysteresisRatio` | Dead-zone fraction for migration | Default `0.05`; reserved, currently passive |
 
@@ -54,7 +61,9 @@ schedule.CallbackSystem("TierAssignment", ctx =>
 
 - **Set once, immutable after** — `ConfigureSpatialGrid` throws `InvalidOperationException` if called twice or after `InitializeArchetypes`.
 - **One grid, one cell size, for every spatial archetype** — no per-archetype grid sizing; entity scale should be roughly uniform across archetypes sharing the grid.
-- **`KeySpaceDim` capped at 32,768 per axis** — a consequence of 32-bit Morton cell-key encoding; oversized world/cell-size combinations throw `ArgumentOutOfRangeException` at config time.
+- **The grid is sparse: a cell exists only once something occupies it.** A cell key is a pool slot, not a coordinate — so `SpatialGridAccessor.ComputeCellKey` / `WorldToCell` return **`-1` for an empty region**, `CellCount` counts *occupied* cells rather than the whole world, and a key must not be cached across a reopen or a rebuild (slots are handed out in creation order and renumber). Reading grid state never creates a cell; only spawning, migrating or rebuilding does. An empty region costs one absent hash entry instead of 64 bytes per cell per archetype.
+- **The grid is three-dimensional; a 2D world is a grid one cell deep.** `SpatialGridConfig.Flat(Vector2, Vector2, float)` builds that shape in one call, and its cell keys are numerically identical to the ones the old two-dimensional grid produced. There is deliberately no `Vector2` overload set on the query methods — a 2D/3D pair is a call site where a `Z` gets dropped silently, which surfaces as a missing query result rather than an error.
+- **Cell count must fit a 32-bit key** — `GridWidth × GridHeight × GridDepth ≤ int.MaxValue`; oversized world/cell-size combinations throw `ArgumentOutOfRangeException` at config time. (Before the grid gained a Z axis this limit was stated as a 32 768-per-axis Morton cap; Morton cell keys are gone and keys are plain row-major.)
 - **`SetCellTier` requires a single-bit `SimTier` flag** — passing a combined flag (e.g. `Tier0 | Tier1`) is rejected; use the `Min` variants or per-call assignment for unions.
 - **`SetCellTierMin` / `SetTierInAABB` are promote-only** — they never demote a cell already holding a higher-priority (lower-valued) tier, which is what makes the multi-observer "union of zones" pattern correct without per-observer bookkeeping.
 - **All accessor methods throw `InvalidOperationException` when no grid is configured** — check `SpatialGridAccessor.IsValid` first, especially in non-spatial engines or during shutdown.
@@ -63,7 +72,8 @@ schedule.CallbackSystem("TierAssignment", ctx =>
 
 ## 🧪 Tests
 
-- [SpatialGridTests](https://github.com/Log2n-io/Typhon/blob/main/test/Typhon.Engine.Tests/Data/SpatialGrid/SpatialGridTests.cs) — grid dimension derivation, `WorldToCellKey`/`CellKeyToCoords` round-trips, `SetCellTier` single-bit validation, `KeySpaceDim` overflow throws
+- [SpatialGridTests](https://github.com/Log2n-io/Typhon/blob/main/test/Typhon.Engine.Tests/Data/SpatialGrid/SpatialGridTests.cs) — grid dimension derivation, `WorldToCellKey`/`CellKeyToCoords` round-trips, `SetCellTier` single-bit validation, cell-count overflow throws, flat-vs-cubic Z behaviour
+- [VdbSpatialGridTests](https://github.com/Log2n-io/Typhon/blob/main/test/Typhon.Engine.Tests/Data/SpatialGrid/VdbSpatialGridTests.cs) — differential against a dense reference oracle, neighbour lookups across absent blocks, concurrent cell creation, memory at 80 % empty, intra-block fill
 - [CheckerboardTests](https://github.com/Log2n-io/Typhon/blob/main/test/Typhon.Engine.Tests/Runtime/CheckerboardTests.cs) — `SetCellTierMin_OnlyPromotes`, `ResetAllTiers_BulkSetsAllCells`, `SetTierInAABB_MinSemantics`, `SpatialGridAccessor_AccessibleFromTickContext`/`_MultiObserver_Union` (promote-only tiering, multi-observer union)
 
 ## 🔗 Related

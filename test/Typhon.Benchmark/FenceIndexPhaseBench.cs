@@ -148,7 +148,7 @@ internal static class FenceIndexPhaseBench
 
         var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<FpBenchPos>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize));
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize));
         dbe.InitializeArchetypes();
 
         var ids = new List<EntityId>(entityCount);

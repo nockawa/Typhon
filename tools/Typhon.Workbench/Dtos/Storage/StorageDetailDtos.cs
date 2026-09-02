@@ -198,6 +198,8 @@ public record StorageSegmentSummaryDto(
     int ClusterGridWidth = 0,
     /// <summary>Spatial grid height in cells (0 unless a spatial cluster with a configured grid).</summary>
     int ClusterGridHeight = 0,
+    /// <summary>Spatial grid depth in cells (0 unless a spatial cluster with a configured grid; 1 for a flat world).</summary>
+    int ClusterGridDepth = 0,
     /// <summary>Spatial mode of the cluster's spatial component — <c>Dynamic</c> / <c>Static</c> (empty unless a spatial cluster).</summary>
     string ClusterSpatialMode = "");
 
@@ -238,19 +240,22 @@ public record StorageChunkDto(
     StorageClusterCellDto ClusterCell = null);
 
 /// <summary>
-/// The spatial-grid cell a cluster chunk is bucketed into, plus the cell's live totals and the cluster's tight 2D AABB (Module 15 L5, file-map §10 Q4 override).
+/// The spatial-grid cell a cluster chunk is bucketed into, plus the cell's live totals and the cluster's tight AABB (Module 15 L5, file-map §10 Q4 override).
 /// The entity / cluster counts are global sums across every cluster-spatial archetype sharing the grid.
 /// </summary>
 public record StorageClusterCellDto(
     int CellKey,
     int CellX,
     int CellY,
+    int CellZ,
     int EntitiesInCell,
     int ClustersInCell,
     float AabbMinX,
     float AabbMinY,
+    float AabbMinZ,
     float AabbMaxX,
-    float AabbMaxY);
+    float AabbMaxY,
+    float AabbMaxZ);
 
 /// <summary>
 /// One decoded content cell — a component field, a directory entry, or a generic byte run. <c>ColorKey</c> is a

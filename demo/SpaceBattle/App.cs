@@ -981,7 +981,10 @@ internal sealed class App : IDisposable
         lines.Add((RenderLine(), _renderer.Lod.Tier == LodTier.Density ? new Color(255, 220, 140) : white));
         lines.Add((CullLine(), _renderer.CullActive ? dim : warn));
         lines.Add(("", dim));
-        lines.Add(($"LEVEL 1  grid {g.GridWidth}x{g.GridHeight}  cell {g.CellSize:F0}m  cellCount {g.CellCount}  (Morton-padded)", dim));
+        // `occupied` rather than `cellCount`: the grid became sparse in #872 step 8, so CellCount is the number of cells that EXIST, not the number the
+        // world bounds imply. The old label said "Morton-padded", which is now doubly wrong — there is no Morton encoding and no padding.
+        var totalCells = g.GridWidth * g.GridHeight * g.GridDepth;
+        lines.Add(($"LEVEL 1  grid {g.GridWidth}x{g.GridHeight}x{g.GridDepth}  cell {g.CellSize:F0}m  occupied {g.CellCount} of {totalCells}", dim));
         lines.Add(($"LEVEL 2  clusters {mc.ActiveClusters}  drawn {_renderer.DrawnClusters}   " +
                    $"singletons {_renderer.SingletonClusters} (zero-area AABB, drawn at minimum size)",
                    _renderer.SingletonClusters * 2 > _renderer.DrawnClusters ? warn : dim));
@@ -1265,7 +1268,7 @@ internal sealed class App : IDisposable
         var home = _host.ClusterHomeCell(_sel.ArchetypeId, _sel.ChunkId);
         if (home >= 0)
         {
-            var (cx, cy) = _host.Grid.CellKeyToCoords(home);
+            var (cx, cy, _) = _host.Grid.CellKeyToCoords(home);
             yield return $"  home cell key {home} = ({cx},{cy})   entities in cell {_host.CellEntityCount(home)}   clusters in cell {_host.CellClusterCount(home)}";
         }
         else

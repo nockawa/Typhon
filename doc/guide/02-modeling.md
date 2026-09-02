@@ -258,7 +258,7 @@ Configure the grid as part of the one-line setup — add `ConfigureSpatialGrid` 
 ```csharp
 using var dbe = DatabaseEngine.Open("world-shard.typhon", o => o
     .Register<Transform>().Register<Bounds>()
-    .ConfigureSpatialGrid(new SpatialGridConfig(
+    .ConfigureSpatialGrid(SpatialGridConfig.Flat(
         worldMin: Vector2.Zero, worldMax: new Vector2(1000f, 1000f), cellSize: 50f)));
 ```
 

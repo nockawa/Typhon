@@ -123,7 +123,7 @@ public class EcsAccessPathBenchmarks : IDisposable
 
         _dbe.RegisterComponentFromAccessor<ApBenchPos>();
         _dbe.RegisterComponentFromAccessor<ApBenchPayload>();
-        _dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        _dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(WorldSize, WorldSize),
             cellSize: CellSize));
@@ -191,7 +191,7 @@ public class EcsAccessPathBenchmarks : IDisposable
         {
             float baseX = c % CellsPerSide * CellSize + CellSize * 0.5f;
             float baseY = c / CellsPerSide * CellSize + CellSize * 0.5f;
-            _cellKeys[c] = grid.WorldToCellKey(baseX, baseY);
+            _cellKeys[c] = grid.WorldToCellKey(baseX, baseY, 0f);
         }
 
         ValidateRoutesAgree();

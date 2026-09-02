@@ -26,7 +26,7 @@ class ClusterSpatial3DTests : TestBase<ClusterSpatial3DTests>
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClSpatialPos>();
         dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(-10_000, -10_000),
             worldMax: new Vector2(10_000, 10_000),
             cellSize: 100f));
@@ -536,6 +536,90 @@ class ClusterSpatial3DTests : TestBase<ClusterSpatial3DTests>
             using var tx = dbe.CreateQuickTransaction();
             var resultsMid = tx.Query<ClSpatialUnit>().WhereInAABB<ClSpatialPos>(0, 0, 80, 100, 100, 120).Execute();
             Assert.That(resultsMid, Does.Not.Contain(idMid), "Destroyed mid-Z entity should not be queryable");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // A grid that is genuinely three-dimensional (#872 step 8)
+    //
+    // Every fixture above configures a FLAT grid, which is what the engine had before step 8: entities differing only in Z shared a cell and were separated
+    // by the narrowphase alone. Those tests still pass unchanged — that is the equivalence the step rests on — but they cannot see the new capability, so
+    // they would go on passing if the Z axis were dropped again. These two can not.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private DatabaseEngine SetupCubicGridEngine()
+    {
+        var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
+        dbe.RegisterComponentFromAccessor<ClSpatialPos>();
+        dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            worldMin: new Vector3(-10_000, -10_000, -10_000),
+            worldMax: new Vector3(10_000, 10_000, 10_000),
+            cellSize: 100f));
+        dbe.InitializeArchetypes();
+        return dbe;
+    }
+
+    [Test]
+    public void CubicGrid_EntitiesDifferingOnlyInZ_BucketIntoDifferentCells()
+    {
+        using var dbe = SetupCubicGridEngine();
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var met = new ClSpatialMeta { Tag = 1 };
+            var low = MakePos(50, 50, 50);
+            var high = MakePos(50, 50, 950);
+            tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in low), ClSpatialUnit.Meta.Set(in met));
+            met.Tag = 2;
+            tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in high), ClSpatialUnit.Meta.Set(in met));
+            tx.Commit();
+        }
+
+        var grid = dbe.SpatialGrid;
+        int lowCell = grid.WorldToCellKey(50f, 50f, 50f);
+        int highCell = grid.WorldToCellKey(50f, 50f, 950f);
+        Assert.That(lowCell, Is.Not.EqualTo(highCell), "9 cells apart on Z must not be the same cell in a cubic grid");
+        Assert.That(grid.GetCell(lowCell).EntityCount, Is.EqualTo(1), "the low entity is alone in its cell");
+        Assert.That(grid.GetCell(highCell).EntityCount, Is.EqualTo(1), "the high entity is alone in its cell");
+    }
+
+    [Test]
+    public void CubicGrid_QuerySpanningSeveralZCells_ReturnsEntitiesFromAllOfThem()
+    {
+        // The broadphase half, and an SQ-01 guard on the enumerator's NEW Z loop. The two entities sit nine Z cells apart, so a query covering both is the
+        // one shape that requires `while (_currentCellZ <= _cellMaxZ)` to actually iterate: without it the walk visits only the query's first Z plane and
+        // the far entity is a silent false negative. Asserting exclusion instead would prove nothing — the narrowphase rejects a far entity either way.
+        using var dbe = SetupCubicGridEngine();
+
+        EntityId idLow, idHigh;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var met = new ClSpatialMeta { Tag = 1 };
+            var low = MakePos(50, 50, 50);
+            idLow = tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in low), ClSpatialUnit.Meta.Set(in met));
+            met.Tag = 2;
+            var high = MakePos(50, 50, 950);
+            idHigh = tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in high), ClSpatialUnit.Meta.Set(in met));
+            tx.Commit();
+        }
+
+        var grid = dbe.SpatialGrid;
+        grid.WorldToCellRange(0f, 0f, 0f, 100f, 100f, 1000f, out _, out _, out var minZ, out _, out _, out var maxZ);
+        Assert.That(maxZ - minZ, Is.GreaterThanOrEqualTo(9), "the query must genuinely span several Z cells, or the loop below is never exercised");
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var spanning = tx.Query<ClSpatialUnit>().WhereInAABB<ClSpatialPos>(0, 0, 0, 100, 100, 1000).Execute();
+            Assert.That(spanning, Does.Contain(idLow));
+            Assert.That(spanning, Does.Contain(idHigh), "an entity nine Z cells away is only reachable if the enumerator walks Z");
+        }
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var narrow = tx.Query<ClSpatialUnit>().WhereInAABB<ClSpatialPos>(0, 0, 0, 100, 100, 100).Execute();
+            Assert.That(narrow, Does.Contain(idLow));
+            Assert.That(narrow, Does.Not.Contain(idHigh));
         }
     }
 }

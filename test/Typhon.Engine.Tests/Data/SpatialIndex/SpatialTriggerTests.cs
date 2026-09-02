@@ -32,7 +32,7 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<SpatialShip>();
         dbe.RegisterComponentFromAccessor<SpatialName>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new System.Numerics.Vector2(-1000f, -1000f),
             worldMax: new System.Numerics.Vector2(1000f, 1000f),
             cellSize: 100f));
@@ -49,7 +49,7 @@ class SpatialTriggerTests : TestBase<SpatialTriggerTests>
     {
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<SpatialTerrain>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new System.Numerics.Vector2(-1000f, -1000f),
             worldMax: new System.Numerics.Vector2(1000f, 1000f),
             cellSize: 100f));

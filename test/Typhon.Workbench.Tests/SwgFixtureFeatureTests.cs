@@ -83,7 +83,7 @@ public sealed class SwgFixtureFeatureTests
         _engine.RegisterComponentFromAccessor<DepositPosition>();
         _engine.RegisterComponentFromAccessor<StructurePosition>();
 
-        _engine.ConfigureSpatialGrid(new SpatialGridConfig(new Vector2(0f, 0f), new Vector2(WorldSize, WorldSize), cellSize: 100f));
+        _engine.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0f, 0f), new Vector2(WorldSize, WorldSize), cellSize: 100f));
         _engine.InitializeArchetypes();
     }
 

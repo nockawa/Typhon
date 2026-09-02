@@ -181,7 +181,7 @@ public partial class DatabaseEngine
     /// (<c>ClusterCellMap != null</c>, implying a configured <see cref="SpatialGrid"/>). The detection is
     /// cluster-coherent: all entities in a cluster share the same cell (Phase 1+2 invariant), so the current
     /// cell's world bounds and the hysteresis margin are hoisted out of the inner per-slot loop. The per-entity
-    /// check is an exit-by-margin axis-aligned bounds test (4 comparisons, early-exit), only falling back to
+    /// check is an exit-by-margin axis-aligned bounds test (6 comparisons, early-exit), only falling back to
     /// <see cref="SpatialGrid.WorldToCellKey"/> when the margin is actually exceeded. The hysteresis formulation
     /// is semantically equivalent to <c>claude/design/Spatial/SpatialTiers/01-spatial-clusters.md</c> §"Migration
     /// Hysteresis" but reorganized for a fast common-case "entity stayed inside" path.</para>
@@ -307,6 +307,7 @@ public partial class DatabaseEngine
             var cellSize = cfg.CellSize;
             var worldMinX = cfg.WorldMin.X;
             var worldMinY = cfg.WorldMin.Y;
+            var worldMinZ = cfg.WorldMin.Z;
             var hysteresisMargin = cellSize * cfg.MigrationHysteresisRatio;
 
             for (var wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
@@ -333,11 +334,13 @@ public partial class DatabaseEngine
                     continue;
                 }
 
-                var (cx, cy) = grid.CellKeyToCoords(currentCellKey);
+                var (cx, cy, cz) = grid.CellKeyToCoords(currentCellKey);
                 var curCellMinX = worldMinX + cx * cellSize;
                 var curCellMinY = worldMinY + cy * cellSize;
+                var curCellMinZ = worldMinZ + cz * cellSize;
                 var curCellMaxX = curCellMinX + cellSize;
                 var curCellMaxY = curCellMinY + cellSize;
+                var curCellMaxZ = curCellMinZ + cellSize;
                 clustersTouched++;
 
                 var remaining = effective;
@@ -347,19 +350,22 @@ public partial class DatabaseEngine
                     remaining &= remaining - 1;
                     var entityPK = *(long*)(clusterBase + layout.EntityIdsOffset + slotIndex * 8);
                     var fieldPtr = clusterBase + compOffset + slotIndex * compSize + ss.FieldOffset;
-                    SpatialGrid.ReadSpatialCenter2D(fieldPtr, fieldType, out var posX, out var posY);
-                    if (!float.IsFinite(posX) || !float.IsFinite(posY))
+                    SpatialGrid.ReadSpatialCenter3D(fieldPtr, fieldType, out var posX, out var posY, out var posZ);
+                    if (!float.IsFinite(posX) || !float.IsFinite(posY) || !float.IsFinite(posZ))
                     {
                         throw new InvalidOperationException(
-                            $"Non-finite position on spatial entity: entityId=0x{entityPK:X16}, clusterChunkId={clusterChunkId}, slotIndex={slotIndex}, position=({posX}, {posY}).");
+                            $"Non-finite position on spatial entity: entityId=0x{entityPK:X16}, clusterChunkId={clusterChunkId}, slotIndex={slotIndex}, "
+                            + $"position=({posX}, {posY}, {posZ}).");
                     }
                     var exited = posX < curCellMinX - hysteresisMargin
                                  || posX > curCellMaxX + hysteresisMargin
                                  || posY < curCellMinY - hysteresisMargin
-                                 || posY > curCellMaxY + hysteresisMargin;
+                                 || posY > curCellMaxY + hysteresisMargin
+                                 || posZ < curCellMinZ - hysteresisMargin
+                                 || posZ > curCellMaxZ + hysteresisMargin;
                     if (exited)
                     {
-                        var newCellKey = grid.WorldToCellKey(posX, posY);
+                        var newCellKey = grid.WorldToCellKey(posX, posY, posZ);
                         if (newCellKey != currentCellKey)
                         {
                             migrationsQueuedCount++;
@@ -368,14 +374,17 @@ public partial class DatabaseEngine
                             TyphonEvent.EmitSpatialClusterMigrationQueue(archetypeId, clusterChunkId, (ushort)Math.Min(clusterState.PendingMigrationCount, ushort.MaxValue));
                         }
                     }
-                    else if (posX < curCellMinX || posX > curCellMaxX || posY < curCellMinY || posY > curCellMaxY)
+                    else if (   posX < curCellMinX || posX > curCellMaxX
+                             || posY < curCellMinY || posY > curCellMaxY
+                             || posZ < curCellMinZ || posZ > curCellMaxZ)
                     {
                         hysteresisAbsorbedCount++;
                         if (TelemetryConfig.SpatialClusterMigrationHysteresisActive)
                         {
                             var ex = posX < curCellMinX ? (curCellMinX - posX) : (posX > curCellMaxX ? (posX - curCellMaxX) : 0f);
                             var ey = posY < curCellMinY ? (curCellMinY - posY) : (posY > curCellMaxY ? (posY - curCellMaxY) : 0f);
-                            TyphonEvent.EmitSpatialClusterMigrationHysteresis(archetypeId, clusterChunkId, ex * ex + ey * ey);
+                            var ez = posZ < curCellMinZ ? (curCellMinZ - posZ) : (posZ > curCellMaxZ ? (posZ - curCellMaxZ) : 0f);
+                            TyphonEvent.EmitSpatialClusterMigrationHysteresis(archetypeId, clusterChunkId, (ex * ex) + (ey * ey) + (ez * ez));
                         }
                     }
                 }
@@ -805,11 +814,11 @@ public partial class DatabaseEngine
                 // have just CAS-claimed a slot.
                 if (hasClusterAccessor)
                 {
-                    clusterState.ReleaseSlot(ref clusterAccessor, srcChunkId, srcSlot, changeSet, grid, deferFinalize: true);
+                    clusterState.ReleaseSlot(ref clusterAccessor, srcChunkId, srcSlot, changeSet, grid, true);
                 }
                 else
                 {
-                    clusterState.ReleaseSlot(ref transientClusterAccessor, srcChunkId, srcSlot, grid, deferFinalize: true);
+                    clusterState.ReleaseSlot(ref transientClusterAccessor, srcChunkId, srcSlot, grid, true);
                 }
 
                 // 11. Record dirty-bit deltas to a worker-local buffer instead of writing FenceDirtyBits directly. False-sharing on adjacent chunkIds

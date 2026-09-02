@@ -49,12 +49,14 @@ public unsafe ref struct AabbClusterEnumerator
     private readonly float _queryMaxZ;
     private readonly uint _categoryMask;
 
-    // Cell range the query AABB covers, inclusive. Clamped to the grid extent by SpatialGrid. The grid itself is 2D (XY) — Z is never used for cell
-    // bucketing; 3D archetypes still bucket into the same XY cells and distinguish by Z at the narrowphase only.
+    // Cell range the query AABB covers, inclusive. Clamped to the grid extent by SpatialGrid. A 2D archetype's query passes ±Infinity on Z, which
+    // WorldToCellRange saturates to the full depth range — one cell for a flat world, so the Z loop below runs exactly once and costs nothing.
     private readonly int _cellMinX;
     private readonly int _cellMinY;
+    private readonly int _cellMinZ;
     private readonly int _cellMaxX;
     private readonly int _cellMaxY;
+    private readonly int _cellMaxZ;
 
     // Cluster-SoA field offset for the spatial field within each cluster, precomputed.
     private readonly int _spatialCompOffset;
@@ -83,6 +85,7 @@ public unsafe ref struct AabbClusterEnumerator
     // Iteration state.
     private int _currentCellX;
     private int _currentCellY;
+    private int _currentCellZ;
     private CellSpatialIndex _currentCellIndex;    // null when we need to advance to the next cell
     private int _currentBroadphaseSlot;            // next index into _currentCellIndex.ClusterIds to scan
     private ulong _currentOccupancyBits;           // remaining occupied slots in the current cluster (bits cleared as we iterate)
@@ -115,9 +118,9 @@ public unsafe ref struct AabbClusterEnumerator
         _radiusCenterY = radiusCenterY;
         _radiusCenterZ = radiusCenterZ;
 
-        // Expand query AABB to the overlapping cell range. The grid is 2D (XY) — Z coordinates never participate in cell bucketing. Each overlapping cell's
-        // per-archetype spatial slot may or may not exist — the iteration handles null slots gracefully.
-        grid.WorldToCellRange(minX, minY, maxX, maxY, out _cellMinX, out _cellMinY, out _cellMaxX, out _cellMaxY);
+        // Expand the query AABB to the overlapping cell range. Each overlapping cell's per-archetype spatial slot may or may not exist — the iteration
+        // handles null slots gracefully. The Z range is narrowed again below for a 2D archetype.
+        grid.WorldToCellRange(minX, minY, minZ, maxX, maxY, maxZ, out _cellMinX, out _cellMinY, out _cellMinZ, out _cellMaxX, out _cellMaxY, out _cellMaxZ);
 
         var ss = state.SpatialSlot;
         _spatialCompOffset = state.Layout.ComponentOffset(ss.Slot);
@@ -127,10 +130,22 @@ public unsafe ref struct AabbClusterEnumerator
         _descriptor = ss.Descriptor;
         _is3D = ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
 
+        // A 2D archetype's query carries ±Infinity on Z, meaning "every Z", which WorldToCellRange saturates to the full depth. Left alone that makes every
+        // such query sweep every Z plane of a deep grid, of which exactly one can ever hold a cell: ReadSpatialCenter3D reports posZ = 0 for both 2D field
+        // types, so a 2D archetype's entities all live in the plane containing world Z = 0. Collapsing to that plane is not an optimisation of the answer —
+        // the other planes are empty by construction. A flat world is already one plane deep, so this only bites a 2D archetype sharing a volumetric grid.
+        if (!_is3D)
+        {
+            grid.WorldToCellCoords(0f, 0f, 0f, out _, out _, out int planeZ);
+            _cellMinZ = planeZ;
+            _cellMaxZ = planeZ;
+        }
+
         _accessor = default;
         _accessorCreated = false;
         _currentCellX = _cellMinX;
         _currentCellY = _cellMinY;
+        _currentCellZ = _cellMinZ;
         _currentCellIndex = null;
         _currentBroadphaseSlot = 0;
         _currentOccupancyBits = 0UL;
@@ -306,42 +321,54 @@ public unsafe ref struct AabbClusterEnumerator
             // 3b. Advance to the next cell and start fresh with its DynamicIndex.
             _currentCellStaticPass = false;
             _currentPerCellSlot = null;
-            while (_currentCellY <= _cellMaxY)
+            while (_currentCellZ <= _cellMaxZ)
             {
-                while (_currentCellX <= _cellMaxX)
+                while (_currentCellY <= _cellMaxY)
                 {
-                    int cellKey = _grid.ComputeCellKey(_currentCellX, _currentCellY);
-                    _currentCellX++;
-                    if (cellKey < 0 || _state.PerCellIndex == null || cellKey >= _state.PerCellIndex.Length)
+                    while (_currentCellX <= _cellMaxX)
                     {
-                        continue;
+                        // TryGetCellKey, never ComputeCellKey: a query box covers mostly empty space, and resolving-with-create would materialise a cell for
+                        // every coordinate it sweeps — turning the broadphase into the thing that fills a sparse grid in.
+                        bool exists = _grid.TryGetCellKey(_currentCellX, _currentCellY, _currentCellZ, out int cellKey);
+                        _currentCellX++;
+                        if (!exists || _state.PerCellIndex == null || cellKey >= _state.PerCellIndex.Length)
+                        {
+                            continue;
+                        }
+                        var slot = _state.PerCellIndex[cellKey];
+                        if (slot == null)
+                        {
+                            continue;
+                        }
+                        // Prefer DynamicIndex if it has entries; otherwise fall through to StaticIndex in the same iteration.
+                        if (slot.DynamicIndex != null && slot.DynamicIndex.ClusterCount > 0)
+                        {
+                            _currentPerCellSlot = slot;
+                            _currentCellIndex = slot.DynamicIndex;
+                            _currentCellStaticPass = false;
+                            break;
+                        }
+                        if (slot.StaticIndex != null && slot.StaticIndex.ClusterCount > 0)
+                        {
+                            _currentPerCellSlot = slot;
+                            _currentCellIndex = slot.StaticIndex;
+                            _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
+                            break;
+                        }
                     }
-                    var slot = _state.PerCellIndex[cellKey];
-                    if (slot == null)
+                    if (_currentCellIndex != null)
                     {
-                        continue;
-                    }
-                    // Prefer DynamicIndex if it has entries; otherwise fall through to StaticIndex in the same iteration.
-                    if (slot.DynamicIndex != null && slot.DynamicIndex.ClusterCount > 0)
-                    {
-                        _currentPerCellSlot = slot;
-                        _currentCellIndex = slot.DynamicIndex;
-                        _currentCellStaticPass = false;
                         break;
                     }
-                    if (slot.StaticIndex != null && slot.StaticIndex.ClusterCount > 0)
-                    {
-                        _currentPerCellSlot = slot;
-                        _currentCellIndex = slot.StaticIndex;
-                        _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
-                        break;
-                    }
+                    _currentCellY++;
+                    _currentCellX = _cellMinX;
                 }
                 if (_currentCellIndex != null)
                 {
                     break;
                 }
-                _currentCellY++;
+                _currentCellZ++;
+                _currentCellY = _cellMinY;
                 _currentCellX = _cellMinX;
             }
 

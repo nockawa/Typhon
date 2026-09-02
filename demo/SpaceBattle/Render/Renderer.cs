@@ -421,7 +421,7 @@ internal sealed class Renderer
         }
     }
 
-    private int CellKey(int cx, int cy) => _host.Grid.ComputeCellKey(cx, cy);
+    private int CellKey(int cx, int cy) => _host.Grid.ComputeCellKey(cx, cy, 0);
 
     // ─── Level 2: clusters ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -489,7 +489,7 @@ internal sealed class Renderer
             return;
         }
         var homeCell = _host.ClusterHomeCell(archetypeId, chunkId);
-        var centreCell = _host.Grid.WorldToCellKey(0.5f * (a.MinX + a.MaxX), 0.5f * (a.MinY + a.MaxY));
+        var centreCell = _host.Grid.WorldToCellKey(0.5f * (a.MinX + a.MaxX), 0.5f * (a.MinY + a.MaxY), 0f);
         ClusterBoxes.Add(new ClusterBox
         {
             ArchetypeId = archetypeId,
