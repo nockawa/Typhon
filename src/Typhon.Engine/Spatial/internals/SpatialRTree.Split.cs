@@ -104,6 +104,10 @@ internal unsafe partial class SpatialRTree<TStore>
     private void ScatterLeafEntries(byte* nodeBase, int leafChunkId, Span<double> allCoords, Span<long> allIds, Span<int> allCompChunkIds,
         Span<uint> allCategoryMasks, Span<int> perm, int permStart, int permEnd)
     {
+        // Hoisted: the loop body stores through byte*, which the JIT must assume may alias this mutable field, so reading it inside would reload it every
+        // iteration. Hoisting also fixes the reference for the whole scatter — see PayloadBackPointers' remarks on why a concurrent resize is unfixable here.
+        var payloadBackPointers = PayloadBackPointers;
+
         for (int i = permStart; i < permEnd; i++)
         {
             int src = perm[i];
@@ -113,6 +117,13 @@ internal unsafe partial class SpatialRTree<TStore>
             SpatialNodeHelper.WriteLeafEntityId(nodeBase, dst, allIds[src], _desc);
             SpatialNodeHelper.WriteLeafCompChunkId(nodeBase, dst, allCompChunkIds[src], _desc);
             SpatialNodeHelper.WriteLeafCategoryMask(nodeBase, dst, allCategoryMasks[src], _desc);
+
+            // Payload back-pointer, folded into the loop that is already relocating the entry (#872 step 9). One store against four, on the only path that
+            // can move an entry between slots — the alternative is a handle that silently names a different payload after the next split.
+            if (payloadBackPointers != null)
+            {
+                WritePayloadHandle(payloadBackPointers, allIds[src], PackHandle(leafChunkId, dst));
+            }
         }
 
         // Update back-pointers for all scattered entries using stored componentChunkIds

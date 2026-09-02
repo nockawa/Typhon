@@ -47,6 +47,16 @@ public unsafe ref struct AabbClusterEnumerator
     private readonly float _queryMaxX;
     private readonly float _queryMaxY;
     private readonly float _queryMaxZ;
+
+    // The query box expressed in the CURRENT cell's frame. Cluster bounds are C15 cell-relative (#872 step 9), so the broadphase compare needs both sides in
+    // the same frame. Converted once per CELL rather than once per cluster: the origin is constant across every cluster in a cell, so this is six
+    // subtractions per cell instead of six per cluster, on a path whose whole purpose is to reject clusters in bulk.
+    private float _cellQueryMinX;
+    private float _cellQueryMinY;
+    private float _cellQueryMinZ;
+    private float _cellQueryMaxX;
+    private float _cellQueryMaxY;
+    private float _cellQueryMaxZ;
     private readonly uint _categoryMask;
 
     // Cell range the query AABB covers, inclusive. Clamped to the grid extent by SpatialGrid. A 2D archetype's query passes ±Infinity on Z, which
@@ -158,6 +168,29 @@ public unsafe ref struct AabbClusterEnumerator
 
     /// <summary>The most recently yielded result. Valid only after <see cref="MoveNext"/> returns <c>true</c>.</summary>
     public ClusterSpatialQueryResult Current => _current;
+
+    /// <summary>
+    /// Re-express the query box in <paramref name="cellKey"/>'s frame, so the broadphase can compare it against that cell's <c>C15</c> cell-relative cluster
+    /// bounds.
+    /// </summary>
+    /// <remarks>
+    /// <para>The rounding goes OUTWARD on both sides — min down, max up — the opposite of what a stored bound does, and for the same reason. A query box
+    /// that narrows by an ULP under the conversion can drop a cluster grazing its edge, and <c>SQ-01</c> counts that as a false negative however small the
+    /// margin was. Widening can only ever produce an extra narrowphase visit, which the entity-level test then rejects.</para>
+    /// <para>Infinities pass through unchanged: a 2D query uses ±Infinity for Z, and <c>±Infinity - origin</c> is still ±Infinity, so the Z test stays the
+    /// trivially-true comparison it is meant to be. It is <c>Infinity - Infinity</c> that would produce a NaN, and neither side of this subtraction is ever
+    /// the cluster's sentinel — the origin is a finite world coordinate.</para>
+    /// </remarks>
+    private void SetCellQueryFrame(int cellKey)
+    {
+        _grid.CellOrigin(cellKey, out float originX, out float originY, out float originZ);
+        _cellQueryMinX = ClusterSpatialAabb.ToCellRelativeMin(_queryMinX, originX);
+        _cellQueryMinY = ClusterSpatialAabb.ToCellRelativeMin(_queryMinY, originY);
+        _cellQueryMinZ = ClusterSpatialAabb.ToCellRelativeMin(_queryMinZ, originZ);
+        _cellQueryMaxX = ClusterSpatialAabb.ToCellRelativeMax(_queryMaxX, originX);
+        _cellQueryMaxY = ClusterSpatialAabb.ToCellRelativeMax(_queryMaxY, originY);
+        _cellQueryMaxZ = ClusterSpatialAabb.ToCellRelativeMax(_queryMaxZ, originZ);
+    }
 
     /// <summary>Advance to the next matching entity. Returns <c>false</c> when the query is exhausted.</summary>
     public bool MoveNext()
@@ -276,17 +309,17 @@ public unsafe ref struct AabbClusterEnumerator
                 float cMaxX = _currentCellIndex.MaxX[idx];
                 float cMaxY = _currentCellIndex.MaxY[idx];
                 float cMaxZ = _currentCellIndex.MaxZ[idx];
-                if (cMaxX < _queryMinX || cMinX > _queryMaxX)
+                if (cMaxX < _cellQueryMinX || cMinX > _cellQueryMaxX)
                 {
                     continue;
                 }
 
-                if (cMaxY < _queryMinY || cMinY > _queryMaxY)
+                if (cMaxY < _cellQueryMinY || cMinY > _cellQueryMaxY)
                 {
                     continue;
                 }
 
-                if (cMaxZ < _queryMinZ || cMinZ > _queryMaxZ)
+                if (cMaxZ < _cellQueryMinZ || cMinZ > _cellQueryMaxZ)
                 {
                     continue;
                 }
@@ -346,6 +379,11 @@ public unsafe ref struct AabbClusterEnumerator
                             _currentPerCellSlot = slot;
                             _currentCellIndex = slot.DynamicIndex;
                             _currentCellStaticPass = false;
+
+                            // Established only once a cell is known to HOLD something. A query box sweeps mostly-empty space — that is why the walk two
+                            // lines above uses TryGetCellKey rather than ComputeCellKey — so converting the frame before that is proven would pay an
+                            // origin chase and six conversions for every empty cell the box crosses.
+                            SetCellQueryFrame(cellKey);
                             break;
                         }
                         if (slot.StaticIndex != null && slot.StaticIndex.ClusterCount > 0)
@@ -353,6 +391,11 @@ public unsafe ref struct AabbClusterEnumerator
                             _currentPerCellSlot = slot;
                             _currentCellIndex = slot.StaticIndex;
                             _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
+
+                            // BOTH break paths must establish the frame. Setting it only on the Dynamic one leaves a cell whose Dynamic index is empty
+                            // reading its clusters against the PREVIOUS cell's origin — every bound off by the offset between the two, and every Static-only
+                            // cell silently answering nothing. Three Release-suite tests caught exactly that.
+                            SetCellQueryFrame(cellKey);
                             break;
                         }
                     }

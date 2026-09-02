@@ -455,6 +455,34 @@ internal sealed unsafe class SpatialGrid
     }
 
     /// <summary>
+    /// World-space minimum corner of the cell a key names — the origin every <c>C15</c> cell-relative bound is measured from (#872 step 9).
+    /// </summary>
+    /// <remarks>
+    /// <para>One helper rather than the expression, because the expression was already written out longhand in three places before step 9 —
+    /// <c>ClusterRef.MaybeFlagMigration</c>, <c>ArchetypeClusterState.FlagOutliersForMigration</c> and <c>DatabaseEngine.ClusterMigration</c> — and step 8's
+    /// review found the one of the three that had never been taught its Z term. Cell-relative bounds add a fourth and fifth caller, at which point a
+    /// divergence between them stops being a latent defect and becomes a certainty.</para>
+    /// <para><b>Deliberately not clamped and not validated.</b> A caller passing a key for a cell that no longer exists gets whatever coordinates that pool
+    /// slot now holds, which is <c>VG-01</c>'s problem, not this method's — adding a bounds test here would hide a stale key rather than surface it.</para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void CellOrigin(int cellKey, out float originX, out float originY, out float originZ)
+    {
+        var (cellX, cellY, cellZ) = CellKeyToCoords(cellKey);
+        CellOriginFromCoords(cellX, cellY, cellZ, out originX, out originY, out originZ);
+    }
+
+    /// <summary>World-space minimum corner of a cell given its integer coordinates. See <see cref="CellOrigin"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void CellOriginFromCoords(int cellX, int cellY, int cellZ, out float originX, out float originY, out float originZ)
+    {
+        float cellSize = _config.CellSize;
+        originX = _config.WorldMin.X + (cellX * cellSize);
+        originY = _config.WorldMin.Y + (cellY * cellSize);
+        originZ = _config.WorldMin.Z + (cellZ * cellSize);
+    }
+
+    /// <summary>
     /// Floor a world-space point to clamped cell coordinates. Pure arithmetic over the config — it touches no grid structure, which is what makes it safe in
     /// the rebuild's parallel map phase.
     /// </summary>

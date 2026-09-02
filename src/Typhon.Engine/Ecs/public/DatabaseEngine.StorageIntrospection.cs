@@ -410,13 +410,18 @@ public partial class DatabaseEngine
             var aabbs = cluster.ClusterAabbs;
             if (aabbs != null && (uint)clusterChunkId < (uint)aabbs.Length)
             {
+                // Converted back to WORLD space on the way out. Since #872 step 9 the stored bounds are C15 cell-relative, and every consumer of this
+                // method — the Workbench storage detail panel, `typhon` CLI output — reads them as world coordinates. Handing the raw offsets outward
+                // would report a cluster at (10, 10) when it sits at (110, 10): not a correctness failure inside the engine, but a display that is
+                // confidently wrong, which is worse than one that is obviously broken.
+                grid.CellOrigin(cellKey, out float originX, out float originY, out float originZ);
                 ref var box = ref aabbs[clusterChunkId];
-                aabbMinX = box.MinX;
-                aabbMinY = box.MinY;
-                aabbMinZ = box.MinZ;
-                aabbMaxX = box.MaxX;
-                aabbMaxY = box.MaxY;
-                aabbMaxZ = box.MaxZ;
+                aabbMinX = ClusterSpatialAabb.ToWorld(box.MinX, originX);
+                aabbMinY = ClusterSpatialAabb.ToWorld(box.MinY, originY);
+                aabbMinZ = ClusterSpatialAabb.ToWorld(box.MinZ, originZ);
+                aabbMaxX = ClusterSpatialAabb.ToWorld(box.MaxX, originX);
+                aabbMaxY = ClusterSpatialAabb.ToWorld(box.MaxY, originY);
+                aabbMaxZ = ClusterSpatialAabb.ToWorld(box.MaxZ, originZ);
             }
             return true;
         }

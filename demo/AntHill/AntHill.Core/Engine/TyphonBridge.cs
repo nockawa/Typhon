@@ -934,7 +934,7 @@ public sealed class TyphonBridge : IDisposable
             var rockCountLocal = _rockCount;
             if (rockCountLocal > 0)
             {
-                ref readonly var caabb = ref cluster.SpatialBounds;
+                var caabb = cluster.SpatialBounds;
                 const float expandMargin = RockCollisionRadius + 50f;
                 var rMinX = caabb.MinX - expandMargin;
                 var rMaxX = caabb.MaxX + expandMargin;
@@ -1686,7 +1686,7 @@ public sealed class TyphonBridge : IDisposable
             var liveCount = cluster.LiveCount;
 
             // Fast reject: cluster tight AABB fully outside camera (with margin)
-            ref readonly var bounds = ref cluster.SpatialBounds;
+            var bounds = cluster.SpatialBounds;
             if (bounds.MaxX < clipMinX || bounds.MinX > clipMaxX || bounds.MaxY < clipMinY || bounds.MinY > clipMaxY)
             {
                 continue;

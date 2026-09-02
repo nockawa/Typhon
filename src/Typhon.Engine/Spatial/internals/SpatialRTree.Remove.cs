@@ -31,10 +31,29 @@ internal unsafe partial class SpatialRTree<TStore>
         int lastIndex = count - 1;
         long swappedEntityId = 0;
 
+        // Read BEFORE the swap overwrites it: the payload being removed owns a handle that must be retired, not left naming a slot another payload is about
+        // to occupy — or a chunk that RemoveEmptyLeaf frees and AllocNode later recycles. Writing one side of the array and leaving the other to the caller
+        // is how a stale handle survives the very mechanism built to prevent it (#872 step 9).
+        var payloadBackPointers = PayloadBackPointers;
+        long removedEntityId = payloadBackPointers != null ? SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc) : 0;
+
         if (slotIndex != lastIndex)
         {
             SpatialNodeHelper.CopyLeafEntry(leafBase, lastIndex, slotIndex, _desc);
             swappedEntityId = SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc);
+
+            // Swap-with-last moves exactly one entry, so exactly one OTHER handle goes stale. The method already RETURNS the swapped id for callers that keep
+            // back-pointers in a segment; a payload-indexed caller is served here instead, because it is one store and doing it at the call site means every
+            // call site has to remember.
+            if (payloadBackPointers != null)
+            {
+                WritePayloadHandle(payloadBackPointers, swappedEntityId, PackHandle(leafChunkId, slotIndex));
+            }
+        }
+
+        if (payloadBackPointers != null)
+        {
+            WritePayloadHandle(payloadBackPointers, removedEntityId, NullHandle);
         }
 
         SpatialNodeHelper.SetCount(leafBase, lastIndex);

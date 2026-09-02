@@ -722,24 +722,34 @@ public partial class DatabaseEngine
                         // Tier-dispatched union: 2D fields wrote [minX, minY, maxX, maxY] into the first 4 slots; 3D fields wrote the full 6-double layout.
                         // Category mask comes from the archetype-level [SpatialIndex(Category=)] attribute (issue #230 Phase 3).
                         var archetypeCategory = ss.FieldInfo.Category;
-                        if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
-                        {
-                            dstClusterAabb.Union3F(
-                                (float)migrantCoords[0], (float)migrantCoords[1], (float)migrantCoords[2],
-                                (float)migrantCoords[3], (float)migrantCoords[4], (float)migrantCoords[5],
-                                archetypeCategory);
-                        }
-                        else
-                        {
-                            dstClusterAabb.Union2F(
-                                (float)migrantCoords[0], (float)migrantCoords[1],
-                                (float)migrantCoords[2], (float)migrantCoords[3],
-                                archetypeCategory);
-                        }
 
+                        // C15 (#872 step 9): the destination cluster's bounds belong to the DESTINATION cell's frame. This is the rebase point — a migrant's
+                        // coordinates arrive in world space and are converted here, so a cluster that changes cell never carries a bound measured from the
+                        // cell it left. Getting this wrong is silent: every bound would be off by exactly the offset between the two cells.
                         var dstCellKey = clusterState.ClusterCellMap[dstChunkId];
                         if (dstCellKey >= 0)
                         {
+                            _spatialGrid.CellOrigin(dstCellKey, out float dstOriginX, out float dstOriginY, out float dstOriginZ);
+                            if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
+                            {
+                                dstClusterAabb.Union3F(
+                                    ClusterSpatialAabb.ToCellRelativeMin(migrantCoords[0], dstOriginX),
+                                    ClusterSpatialAabb.ToCellRelativeMin(migrantCoords[1], dstOriginY),
+                                    ClusterSpatialAabb.ToCellRelativeMin(migrantCoords[2], dstOriginZ),
+                                    ClusterSpatialAabb.ToCellRelativeMax(migrantCoords[3], dstOriginX),
+                                    ClusterSpatialAabb.ToCellRelativeMax(migrantCoords[4], dstOriginY),
+                                    ClusterSpatialAabb.ToCellRelativeMax(migrantCoords[5], dstOriginZ),
+                                    archetypeCategory);
+                            }
+                            else
+                            {
+                                dstClusterAabb.Union2F(
+                                    ClusterSpatialAabb.ToCellRelativeMin(migrantCoords[0], dstOriginX),
+                                    ClusterSpatialAabb.ToCellRelativeMin(migrantCoords[1], dstOriginY),
+                                    ClusterSpatialAabb.ToCellRelativeMax(migrantCoords[2], dstOriginX),
+                                    ClusterSpatialAabb.ToCellRelativeMax(migrantCoords[3], dstOriginY),
+                                    archetypeCategory);
+                            }
                             if (!wasInIndex)
                             {
                                 clusterState.AddClusterToPerCellIndex(dstChunkId, dstCellKey, dstClusterAabb);

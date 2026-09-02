@@ -28,6 +28,14 @@ internal unsafe partial class SpatialRTree<TStore>
             // Create an empty tree first (reserves chunk 0 for metadata)
             var tree = new SpatialRTree<TStore>(segment, variant, false, changeSet);
 
+            // BulkLoad packs leaves directly and reports no per-entry positions, so a handle-holding owner would end up with an array of handles that name
+            // nothing. Refusing is the honest option: silently building such a tree hands the caller the stale-handle bug the back-pointer array exists to
+            // remove, and it would surface as wrong query answers rather than as anything pointing here (#872 step 9).
+            if (tree.PayloadBackPointers != null)
+            {
+                ThrowHelper.ThrowInvalidOp("SpatialRTree.BulkLoad does not maintain PayloadBackPointers; build the tree with Insert, or extend BulkLoad.");
+            }
+
             int entityCount = entityIds.Length;
             if (entityCount == 0)
             {

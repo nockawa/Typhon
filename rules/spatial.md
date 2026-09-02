@@ -191,9 +191,22 @@
 ## Module: Cluster Spatial AABBs (Issue #230)
 
 ### CA-01: Per-cluster AABB containment `[fatal][silent]`
+  invariant 🔴 FRAME (#872 step 9, decision C15): A is stored CELL-RELATIVE — offsets from the world-space minimum
+    corner of C's cell, which SpatialGrid.CellOrigin derives from ClusterCellMap[C.chunkId]. E.spatialAABB is
+    world-space. The containment below therefore only holds once both sides are in the SAME frame, and the rule is
+    read literally false for every cluster in a cell whose origin is non-zero if that is forgotten. C13
+    (cluster→cell exclusivity) is what makes the origin unique per cluster and hence what makes the frame
+    well-defined at all — CA-01 depends on C13 and not merely alongside it.
   invariant ∀ active cluster C with ClusterAabbs[C.chunkId] = A:
-    A ⊇ union(∀ occupied entity E in C: E.spatialAABB)
+    toCellRelative(union(∀ occupied entity E in C: E.spatialAABB), origin(C)) ⊆ A
     (degenerate entities with NaN/Inf bounds are excluded from the union)
+    conversion rounds AWAY from the entity — min down, max up (ClusterSpatialAabb.ToCellRelativeMin/Max). The
+    narrowing to f32 is where the error is: round-to-nearest can place a bound INSIDE the entity it must contain,
+    which is this rule's own silent failure mode.
+  invariant 🔴 the QUERY side shares the frame or the rule is unobservable: AabbClusterEnumerator.SetCellQueryFrame
+    converts the query box into the cell's frame with the OPPOSITE-signed rounding (outward on both sides). A box
+    narrowed by one ULP there drops a cluster grazing its edge — an SQ-01 false negative that no containment check
+    on the storage side can see.
   invariant RecomputeClusterAabb scans all occupied slots via TZCNT loop
     over the 64-bit occupancy word and calls ReadAndValidateBoundsFromPtr per slot
   post after the refresh pass: ∀ cluster C selected by ClusterProcessBitmap:
@@ -208,7 +221,10 @@
     the fence store silently discards concurrent grows → AABB too tight → this rule's own containment fails.
   scope: ArchetypeClusterState.RecomputeClusterAabb, RecomputeDirtyClusterAabbs, RecomputeDirtyClusterAabbsSlice
          (the parallel path that performs the store), RebuildClusterAabbs,
-         ClusterRef.WriteSpatial / MaybeGrowAndFlagShrink (the concurrent writer class)
+         ClusterRef.WriteSpatial / MaybeGrowAndFlagShrink (the concurrent writer class),
+         ClusterRef.TryGetCellOrigin, ClusterSpatialAabb.ToCellRelativeMin, ClusterSpatialAabb.ToCellRelativeMax,
+         SpatialGrid.CellOrigin (the frame the containment is expressed in — C15),
+         AabbClusterEnumerator.SetCellQueryFrame (the query half; without it the invariant is unobservable)
   note the store is a blind `stored = fresh`, not a grow-merge (issue #573). Safe only under the barrier above; any
        overlap scheme must make it a union first. Neither ArchetypeClusterState nor TyphonRuntime contains a single
        Volatile, so the cluster-side read path is not a valid lock-free protocol on a weak memory model regardless of

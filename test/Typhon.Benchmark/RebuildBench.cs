@@ -98,7 +98,7 @@ internal static class RebuildBench
             // biases the comparison in favour of the two that follow it — small once warm, but free to remove.
             var order = new (string Name, Action Run)[]
             {
-                ("twoPass", () => { cs.RebuildCellState(dbe.SpatialGrid); cs.RebuildClusterAabbs(); }),
+                ("twoPass", () => { cs.RebuildCellState(dbe.SpatialGrid); cs.RebuildClusterAabbs(dbe.SpatialGrid); }),
                 ("serial", () => cs.RebuildSpatialStateFromData(dbe.SpatialGrid, dbe.EpochManager, 1)),
                 ("parallel", () => cs.RebuildSpatialStateFromData(dbe.SpatialGrid, dbe.EpochManager, 0)),
             };

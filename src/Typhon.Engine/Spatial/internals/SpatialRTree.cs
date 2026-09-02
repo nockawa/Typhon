@@ -102,6 +102,119 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// </summary>
     internal ChunkBasedSegment<TStore> BackPointerSegment;
 
+    /// <summary>
+    /// Payload-indexed back-pointer array — the cluster-tree counterpart of <see cref="BackPointerSegment"/> (#872 step 9). Indexed by the payload id passed
+    /// to <see cref="Insert(long,System.ReadOnlySpan{double},ref ChunkAccessor{TStore},ChangeSet,uint)"/>; each element is a packed
+    /// <c>(leafChunkId, slotIndex)</c> made by <see cref="PackHandle"/>. Null for every tree that does not use handles.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why this exists at all.</b> A handle returned by <c>Insert</c> is only valid until the leaf splits. <c>InsertWithSplit</c> scatters BOTH
+    /// halves through the overlap-minimising permutation, so an entry that stays in its original leaf still moves slot — measured at
+    /// <c>SharedSegmentRTreeHarnessTests.Claim1</c>: <b>43 of 60 handles wrong after splits, 20 of them pointing outside their leaf's live range</b>. A stale
+    /// handle makes <c>C5</c>'s escape-bound update write one cluster's bound into another cluster's slot, which is <c>CA-01</c> violated in both directions
+    /// and an <c>SQ-01</c> false negative with no exception anywhere near it.</para>
+    /// <para><b>Why an array rather than <see cref="BackPointerSegment"/>.</b> That path opens a <see cref="ChunkAccessor{TStore}"/> and does a paged lookup
+    /// and write per entry. The cluster payload IS a cluster chunk id and <c>ArchetypeClusterState.ClusterSpatialIndexSlot</c> is already an <c>int[]</c>
+    /// indexed by exactly that, so the fix-up is one array store folded into a scatter loop that is already writing four fields per entry.</para>
+    /// <para><b>The array must be large enough BEFORE any mutation, and must not be resized while one is in flight.</b> It is indexed by payload id, so it
+    /// has to cover the largest live one. A resize is not merely unsynchronised — it cannot be made safe by a writer-side lock alone:
+    /// <see cref="ScatterLeafEntries"/> reads the field once and writes through that reference, so an <c>Array.Resize</c> concurrent with a split publishes
+    /// a NEW array while the scatter fills the abandoned one. The lost write is a stale handle, which is the exact defect this array exists to remove.
+    /// <c>ArchetypeClusterState.EnsureClusterSpatialIndexSlotCapacity</c> is lock-free today, so the contract is the caller's to keep: size it, attach it,
+    /// and do not grow it under a live fence. <see cref="ThrowPayloadOutOfRange"/> makes a violation loud rather than silent.</para>
+    /// </remarks>
+    internal int[] PayloadBackPointers;
+
+    /// <summary>Pack a <c>(leafChunkId, slotIndex)</c> pair into one <see cref="int"/>.</summary>
+    /// <remarks>
+    /// <para>Packing into an <c>int</c> rather than widening to a <c>long</c> keeps <c>ClusterSpatialIndexSlot</c> the size it already is: one array per
+    /// archetype sized by cluster count, so the width is paid per cluster forever. <c>-1</c> stays the "not in any tree" sentinel it already was, and is never
+    /// a valid packed handle because leaf chunk 0 is the segment's reserved null chunk.</para>
+    /// <para><b>Five bits, not four, and the difference is not comfort.</b> Leaf capacities computed from
+    /// <see cref="SpatialNodeDescriptor"/>'s arithmetic are <c>R2Df32</c> 15, <c>R3Df32</c> 11, <c>R2Df64</c> 9, <c>R3Df64</c> 11 — so four bits fits the
+    /// widest variant with <i>exactly zero</i> headroom. A node stride change, a dropped header field, or the cluster-specific descriptor already discussed
+    /// as a follow-up (dropping the unused 8-byte entity id would take <c>R2Df32</c> to 20) each push it over, and the failure is a silently truncated slot
+    /// index — a handle naming the wrong entry, which is precisely the defect this whole mechanism exists to remove. Five bits costs one bit of chunk id,
+    /// leaving 67 M chunks per segment, and <see cref="AssertHandleCapacity"/> makes the remaining margin a startup failure rather than a silent wrap.</para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int PackHandle(int leafChunkId, int slotIndex)
+    {
+        // Both fields are guarded because both can silently wrap. The slot is bounded by LeafCapacity, which AssertHandleCapacity pins at construction;
+        // the chunk id is bounded only by how big the segment grew, and shifting it past bit 31 sets the sign bit, after which >>> returns garbage.
+        if ((uint)slotIndex > HandleSlotMask || (uint)leafChunkId > MaxHandleChunkId)
+        {
+            ThrowHandleOutOfRange(leafChunkId, slotIndex);
+        }
+        return (leafChunkId << HandleSlotBits) | slotIndex;
+    }
+
+    /// <summary>Unpack a handle made by <see cref="PackHandle"/>. Passing <see cref="NullHandle"/> is a caller bug — use <see cref="IsNullHandle"/> first.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static (int leafChunkId, int slotIndex) UnpackHandle(int handle) => (handle >>> HandleSlotBits, handle & HandleSlotMask);
+
+    /// <summary>
+    /// The "this payload is in no tree" handle. Deliberately <c>-1</c>, matching the sentinel <c>ArchetypeClusterState.ClusterSpatialIndexSlot</c> already
+    /// used before it held handles — a second spelling of "absent" is how one of the two gets forgotten.
+    /// </summary>
+    /// <remarks>
+    /// It is not a decodable handle: <c>UnpackHandle(-1)</c> yields <c>(0x07FFFFFF, 31)</c>, which is a perfectly plausible-looking leaf and slot. Test with
+    /// <see cref="IsNullHandle"/> before unpacking; there is no in-band way to tell the two apart afterwards.
+    /// </remarks>
+    internal const int NullHandle = -1;
+
+    /// <summary>Whether a stored handle means "not in any tree".</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool IsNullHandle(int handle) => handle < 0;
+
+    /// <summary>Fail loudly if this variant's leaf capacity cannot be addressed by <see cref="PackHandle"/>'s slot field.</summary>
+    /// <remarks>
+    /// Always compiled, and called from the constructor rather than left to a test: the descriptor arithmetic is derived from the stride at runtime, so a
+    /// change that overflows the field would otherwise produce corrupted handles in Release with nothing to point at.
+    /// </remarks>
+    private void AssertHandleCapacity()
+    {
+        if (_desc.LeafCapacity > HandleSlotMask)
+        {
+            ThrowHandleCapacityExceeded(_variant, _desc.LeafCapacity);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowHandleCapacityExceeded(SpatialVariant variant, int leafCapacity) =>
+        throw new InvalidOperationException(
+            $"Spatial variant {variant} has a leaf capacity of {leafCapacity}, which does not fit PackHandle's {HandleSlotBits}-bit slot field "
+            + $"(max {HandleSlotMask}). Widen HandleSlotBits — the alternative is a silently truncated slot index in every payload back-pointer.");
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowHandleOutOfRange(int leafChunkId, int slotIndex) =>
+        throw new ArgumentOutOfRangeException(nameof(leafChunkId),
+            $"Cannot pack handle (leaf {leafChunkId}, slot {slotIndex}): the slot field holds 0..{HandleSlotMask} and the chunk field 0..{MaxHandleChunkId}. "
+            + "Packing anyway would produce a handle naming a different entry, which is silent.");
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowPayloadOutOfRange(long payloadId, int length) =>
+        throw new ArgumentOutOfRangeException(nameof(payloadId),
+            $"Payload {payloadId} is outside PayloadBackPointers (length {length}). The array must cover every live payload id BEFORE the mutation that "
+            + "relocates it; skipping the write would leave the payload's handle naming whatever entry now occupies its old slot.");
+
+    private const int HandleSlotBits = 5;
+    private const int HandleSlotMask = (1 << HandleSlotBits) - 1;
+
+    /// <summary>Largest leaf chunk id <see cref="PackHandle"/> can hold without shifting into the sign bit.</summary>
+    private const int MaxHandleChunkId = int.MaxValue >> HandleSlotBits;
+
+    /// <summary>Record a payload's new position, or fail loudly if the array cannot hold it. See <see cref="PayloadBackPointers"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void WritePayloadHandle(int[] payloadBackPointers, long payloadId, int handle)
+    {
+        if ((ulong)payloadId >= (ulong)payloadBackPointers.Length)
+        {
+            ThrowPayloadOutOfRange(payloadId, payloadBackPointers.Length);
+        }
+        payloadBackPointers[payloadId] = handle;
+    }
+
     // Chunk 0 metadata layout
     private const int MetaRootOffset = 0;
     private const int MetaNodeCountOffset = 4;
@@ -130,6 +243,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
         _segment = segment;
         _variant = variant;
         _desc = SpatialNodeDescriptor.ForVariant(variant);
+        AssertHandleCapacity();
 
         var guard = EpochGuard.Enter(_segment.Store.EpochManager);
         try

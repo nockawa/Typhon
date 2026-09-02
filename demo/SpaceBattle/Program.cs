@@ -203,7 +203,7 @@ public static class Program
             {
                 continue;
             }
-            ref readonly var a = ref cluster.SpatialBounds;
+            var a = cluster.SpatialBounds;
             if (!(a.MinX <= a.MaxX) || float.IsInfinity(a.MinX))
             {
                 continue;

@@ -2200,24 +2200,34 @@ public unsafe partial class Transaction
                                 // for every entity in the archetype, so the cluster-level OR trivially converges to the archetype value. Defaults to
                                 // uint.MaxValue when the attribute doesn't set Category, matching pre-Phase-3 behavior.
                                 uint archetypeCategory = ss.FieldInfo.Category;
-                                if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
-                                {
-                                    clusterAabb.Union3F(
-                                        (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1], (float)spawnSpatialCoords[2],
-                                        (float)spawnSpatialCoords[3], (float)spawnSpatialCoords[4], (float)spawnSpatialCoords[5],
-                                        archetypeCategory);
-                                }
-                                else
-                                {
-                                    clusterAabb.Union2F(
-                                        (float)spawnSpatialCoords[0], (float)spawnSpatialCoords[1],
-                                        (float)spawnSpatialCoords[2], (float)spawnSpatialCoords[3],
-                                        archetypeCategory);
-                                }
 
+                                // C15 (#872 step 9): the union is built in the CELL's frame, so the cell has to be resolved before it rather than after.
+                                // A cluster with no cell has no frame to be expressed in — its AABB is left at Empty rather than filled with world-space
+                                // values that would be indistinguishable from cell-relative ones on read.
                                 int cellKey = ctx.ClusterState.ClusterCellMap[clusterChunkId];
                                 if (cellKey >= 0)
                                 {
+                                    ctx.ClusterState.Grid.CellOrigin(cellKey, out float cellOriginX, out float cellOriginY, out float cellOriginZ);
+                                    if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
+                                    {
+                                        clusterAabb.Union3F(
+                                            ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[0], cellOriginX),
+                                            ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[1], cellOriginY),
+                                            ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[2], cellOriginZ),
+                                            ClusterSpatialAabb.ToCellRelativeMax(spawnSpatialCoords[3], cellOriginX),
+                                            ClusterSpatialAabb.ToCellRelativeMax(spawnSpatialCoords[4], cellOriginY),
+                                            ClusterSpatialAabb.ToCellRelativeMax(spawnSpatialCoords[5], cellOriginZ),
+                                            archetypeCategory);
+                                    }
+                                    else
+                                    {
+                                        clusterAabb.Union2F(
+                                            ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[0], cellOriginX),
+                                            ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[1], cellOriginY),
+                                            ClusterSpatialAabb.ToCellRelativeMax(spawnSpatialCoords[2], cellOriginX),
+                                            ClusterSpatialAabb.ToCellRelativeMax(spawnSpatialCoords[3], cellOriginY),
+                                            archetypeCategory);
+                                    }
                                     if (!wasInIndex)
                                     {
                                         ctx.ClusterState.AddClusterToPerCellIndex(clusterChunkId, cellKey, clusterAabb);

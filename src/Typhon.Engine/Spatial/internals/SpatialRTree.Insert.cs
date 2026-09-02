@@ -45,6 +45,82 @@ internal unsafe partial class SpatialRTree<TStore>
     internal (int leafChunkId, int slotIndex) Insert(long entityId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet = null,
         uint categoryMask = uint.MaxValue) => Insert(entityId, 0, coords, ref accessor, changeSet, categoryMask);
 
+    /// <summary>
+    /// Overwrite a leaf entry's bounds without touching the tree's structure, when the new bounds still fit inside the leaf's existing MBR — the in-place
+    /// half of <c>C5</c>'s escape-bound maintenance (#872 step 9).
+    /// </summary>
+    /// <returns><see langword="false"/> when the caller must fall back to remove-and-reinsert; the entry is left untouched in that case.</returns>
+    /// <remarks>
+    /// <para><b>The leaf MBR is deliberately NOT refitted.</b> That is the entire saving: a refit walks eleven entries and then every ancestor, which is the
+    /// ~500 ns path this method exists to avoid on a box that merely drifted. The consequence is that the leaf's MBR becomes a strict superset of the union
+    /// of its entries, which <c>ST-01</c> states as equality — so the looseness must not outlive the exclusive window. The caller refits the leaves it touched
+    /// before the window closes; queries run after it, and see equality.</para>
+    /// <para><b>The identity check is not a formality.</b> A handle that no longer names its own payload is exactly the failure the payload back-pointers were
+    /// added to prevent, and writing through one would put this cluster's bounds into another cluster's slot — <c>CA-01</c> broken in both directions with no
+    /// exception anywhere near it. Refusing here converts a silent corruption into a reinsert, which is merely slower.</para>
+    /// <para><b>Category masks widen rather than shrink.</b> A mask carrying a bit the node's union does not have would make <c>ST-02</c> false, so the union
+    /// is widened to include it. The reverse — a mask that drops bits — leaves the union too broad, which costs a redundant visit and nothing else, and
+    /// tightening it would require re-scanning every sibling entry.</para>
+    /// </remarks>
+    internal bool TryUpdateLeafEntryInPlace(int leafChunkId, int slotIndex, long entityId, ReadOnlySpan<double> coords, uint categoryMask,
+        ref ChunkAccessor<TStore> accessor)
+    {
+        if (leafChunkId <= 0 || (uint)slotIndex >= (uint)_desc.LeafCapacity)
+        {
+            return false;
+        }
+
+        byte* leafBase = accessor.GetChunkAddress(leafChunkId, true);
+        if (!SpatialNodeHelper.IsLeaf(leafBase) || slotIndex >= SpatialNodeHelper.GetCount(leafBase))
+        {
+            return false;
+        }
+
+        if (SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc) != entityId)
+        {
+            return false;
+        }
+
+        // Containment against the leaf's own MBR, on every axis. Any escape sends the caller to the reinsert path.
+        int halfCoord = _desc.CoordCount / 2;
+        for (int d = 0; d < halfCoord; d++)
+        {
+            if (coords[d] < SpatialNodeHelper.ReadNodeMBRCoord(leafBase, d, _desc)
+                || coords[d + halfCoord] > SpatialNodeHelper.ReadNodeMBRCoord(leafBase, d + halfCoord, _desc))
+            {
+                return false;
+            }
+        }
+
+        SpinWriteLock(leafBase, out var latch);
+        try
+        {
+            // Re-checked under the latch: between the containment test above and this point a concurrent split could have moved the entry out from under us.
+            // Inside the exclusive window that cannot happen and the latch is free; outside it, this is what keeps the write from landing on a stranger.
+            if (!SpatialNodeHelper.IsLeaf(leafBase) || slotIndex >= SpatialNodeHelper.GetCount(leafBase)
+                || SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc) != entityId)
+            {
+                return false;
+            }
+
+            SpatialNodeHelper.WriteLeafEntryCoords(leafBase, slotIndex, coords, _desc);
+            SpatialNodeHelper.WriteLeafCategoryMask(leafBase, slotIndex, categoryMask, _desc);
+
+            uint union = SpatialNodeHelper.ReadUnionCategoryMask(leafBase, _desc);
+            if ((union | categoryMask) != union)
+            {
+                SpatialNodeHelper.ExpandLeafMBR(leafBase, slotIndex, categoryMask, _desc);
+            }
+        }
+        finally
+        {
+            latch.WriteUnlock();
+        }
+
+        Interlocked.Increment(ref _mutationVersion);
+        return true;
+    }
+
     private (bool success, int leafChunkId, int slotIndex) TryInsert(long entityId, int componentChunkId, ReadOnlySpan<double> coords,
         ref ChunkAccessor<TStore> accessor, ChangeSet changeSet, uint categoryMask)
     {

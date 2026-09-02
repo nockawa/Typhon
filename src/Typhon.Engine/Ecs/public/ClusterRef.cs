@@ -36,6 +36,22 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
     private readonly int _chunkId;
     private readonly ArchetypeClusterState _state; // null only on synthetic test refs; carries spatial bookkeeping + grid
 
+    // ── Cached cell frame (#872 step 9) ────────────────────────────────────
+    //
+    // The cluster's cell origin is a per-CLUSTER constant, and WriteSpatial is called per ENTITY. Resolving it inside the write meant two array loads, a
+    // bounds check and a CellKeyToCoords — itself a volatile load plus two derefs into the cell's CellState line — for every ant, every tick, inlined into
+    // the simulation barrier. A ClusterRef is created once per cluster and then written through many times (AntHill: `foreach (var cluster in clusters)`
+    // with a slot loop inside), so caching on the ref moves that work from O(entities) to O(clusters).
+    //
+    // Lazy rather than resolved in the constructor: the constructor runs for every cluster access including the read-only query paths, which never need an
+    // origin. Cheap to keep valid — the cluster's cell cannot change while the ref is alive (a cluster is assigned a cell at creation and only ever released
+    // to -1; migration moves ENTITIES between clusters, never a cluster between cells).
+    private const int CellFrameUnresolved = -2;
+    private int _cachedCellKey;
+    private float _cachedOriginX;
+    private float _cachedOriginY;
+    private float _cachedOriginZ;
+
     internal ClusterRef(byte* basePtr, byte* transientBasePtr, ArchetypeClusterInfo layout, ArchetypeMetadata meta, int chunkId, ArchetypeClusterState state)
     {
         _base = basePtr;
@@ -44,6 +60,10 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         _meta = meta;
         _chunkId = chunkId;
         _state = state;
+        _cachedCellKey = CellFrameUnresolved;
+        _cachedOriginX = 0f;
+        _cachedOriginY = 0f;
+        _cachedOriginZ = 0f;
     }
 
     /// <summary>Bitmask of occupied slots. Bit i = 1 means slot i contains a live entity.</summary>
@@ -212,10 +232,49 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
     }
 
     /// <summary>
-    /// Tight AABB of all entities in this cluster. Returns the empty sentinel (min = +inf, max = -inf) when the archetype has no spatial index.
-    /// For 2D archetypes, MinZ/MaxZ are ±infinity sentinels — use MinX/MinY/MaxX/MaxY only.
+    /// Tight AABB of all entities in this cluster, in <b>world</b> coordinates. Returns the empty sentinel (min = +inf, max = -inf) when the archetype has
+    /// no spatial index, or when the cluster is not attached to a cell. For 2D archetypes, MinZ/MaxZ are ±infinity sentinels — use MinX/MinY/MaxX/MaxY only.
     /// </summary>
-    public ref readonly ClusterSpatialAabb SpatialBounds
+    /// <remarks>
+    /// <para><b>Returns a value, not a <c>ref readonly</c>, since #872 step 9.</b> The engine stores these bounds <c>C15</c> cell-relative, and this property
+    /// is the boundary where they become world coordinates again. A reference cannot convert, and leaving it as one would have silently changed what every
+    /// existing caller receives: the AntHill rock gather (<c>TyphonBridge</c>) and the SpaceBattle renderer and camera cull all compare this box against
+    /// world positions, so they would have kept compiling and started answering wrongly by exactly the distance to the cell's origin.</para>
+    /// <para>The cost is a 28-byte copy plus two dependent loads for the cell origin, against returning a reference. That is the right trade for a public
+    /// property: callers reading it per cluster per frame can afford it, and a caller that wants the raw stored frame is inside the engine and can use
+    /// <see cref="CellRelativeBounds"/>.</para>
+    /// </remarks>
+    public ClusterSpatialAabb SpatialBounds
+    {
+        get
+        {
+            if (_state?.ClusterAabbs == null || (uint)_chunkId >= (uint)_state.ClusterAabbs.Length)
+            {
+                return ClusterSpatialAabb.Empty;
+            }
+
+            var box = _state.ClusterAabbs[_chunkId];
+            if (!TryGetCellOrigin(out float originX, out float originY, out float originZ))
+            {
+                // No cell means the stored value is the Empty sentinel rather than a bound in some other frame — see the spawn union in
+                // Transaction.ECS, which leaves it untouched when a cluster has no cell. Returning it unconverted is correct, not a fallback.
+                return box;
+            }
+
+            box.MinX = ClusterSpatialAabb.ToWorld(box.MinX, originX);
+            box.MinY = ClusterSpatialAabb.ToWorld(box.MinY, originY);
+            box.MinZ = ClusterSpatialAabb.ToWorld(box.MinZ, originZ);
+            box.MaxX = ClusterSpatialAabb.ToWorld(box.MaxX, originX);
+            box.MaxY = ClusterSpatialAabb.ToWorld(box.MaxY, originY);
+            box.MaxZ = ClusterSpatialAabb.ToWorld(box.MaxZ, originZ);
+            return box;
+        }
+    }
+
+    /// <summary>
+    /// The cluster's bounds in the <c>C15</c> CELL-RELATIVE frame they are stored in — engine-internal. Use <see cref="SpatialBounds"/> outside.
+    /// </summary>
+    internal ref readonly ClusterSpatialAabb CellRelativeBounds
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => ref (_state?.ClusterAabbs != null ? ref _state.ClusterAabbs[_chunkId] : ref ClusterSpatialAabb.s_empty);
@@ -313,14 +372,27 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         // the MVCC Transaction path (which marks dirty), or call _state.SetDirty explicitly after WriteSpatial. See claude/design/spatial/write-time-spatial.md.
 
         // Step 4 + 5: AABB grow inline (CAS) and shrink flag.
-        ref var stored = ref _state.ClusterAabbs[_chunkId];
-        var aabbChanged = MaybeGrowAndFlagShrink(ref stored, oldMinX, oldMinY, oldMaxX, oldMaxY, newMinX, newMinY, newMaxX, newMaxY);
+        //
+        // C15 (#872 step 9): ClusterAabbs holds CELL-RELATIVE bounds, so the entity's world coordinates have to be rebased before they can be compared with
+        // — let alone CAS'd into — the stored extremes. The origin costs two dependent loads (ClusterCellMap, then the cell's own coordinates out of its
+        // CellState) and is needed by the migration check below regardless, so it is resolved once here and handed to both.
+        bool haveOrigin = TryGetCellOrigin(out int cellKey, out float originX, out float originY, out float originZ);
+        var aabbChanged = false;
+        if (haveOrigin)
+        {
+            ref var stored = ref _state.ClusterAabbs[_chunkId];
+            aabbChanged = MaybeGrowAndFlagShrink(ref stored,
+                ClusterSpatialAabb.ToCellRelativeMin(oldMinX, originX), ClusterSpatialAabb.ToCellRelativeMin(oldMinY, originY),
+                ClusterSpatialAabb.ToCellRelativeMax(oldMaxX, originX), ClusterSpatialAabb.ToCellRelativeMax(oldMaxY, originY),
+                ClusterSpatialAabb.ToCellRelativeMin(newMinX, originX), ClusterSpatialAabb.ToCellRelativeMin(newMinY, originY),
+                ClusterSpatialAabb.ToCellRelativeMax(newMaxX, originX), ClusterSpatialAabb.ToCellRelativeMax(newMaxY, originY));
+        }
 
         // Step 6: migration check.
         // centerZ is 0 because this specialization handles AABB2F and WriteSpatial supports nothing else yet. It matches ReadSpatialCenter3D, which reports
         // posZ = 0 for both 2D field types — so a write-time check and a fence-time check place the same entity in the same Z plane. When AABB3F lands here,
         // this must pass the real centre or the two will disagree.
-        var migrationFlagged = MaybeFlagMigration(slotIndex, newMinX, newMinY, newMaxX, newMaxY, 0f);
+        var migrationFlagged = haveOrigin && MaybeFlagMigration(slotIndex, cellKey, originX, originY, originZ, newMinX, newMinY, newMaxX, newMaxY, 0f);
 
         // Step 6b: bump the fence work-planner's migration cost hint. Non-atomic: an order-of-magnitude approximation is enough for chunk bucketing; lost
         // increments under contention are tolerable.
@@ -458,40 +530,89 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         }
     }
 
+    /// <summary>
+    /// World-space minimum corner of the cell this cluster belongs to — the origin its <c>C15</c> cell-relative bounds are measured from.
+    /// </summary>
+    /// <remarks>
+    /// <see langword="false"/> when the archetype has no grid or the cluster has no cell yet, in which case there is no frame to express a bound in and the
+    /// caller must leave <c>ClusterAabbs</c> alone. Writing a world-space bound as a fallback would be worse than writing nothing: it would be indistinguishable
+    /// from a cell-relative one on read, and wrong by the whole distance to the origin.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryGetCellOrigin(out float originX, out float originY, out float originZ) =>
+        TryGetCellOrigin(out _, out originX, out originY, out originZ);
+
+    /// <summary>
+    /// The cluster's cell key and the world-space origin its <c>C15</c> bounds are measured from, resolved once per <see cref="ClusterRef{TArch}"/> and
+    /// cached. Also yields the key, so a caller needing both does not resolve the cluster's cell twice.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryGetCellOrigin(out int cellKey, out float originX, out float originY, out float originZ)
+    {
+        if (_cachedCellKey != CellFrameUnresolved)
+        {
+            cellKey = _cachedCellKey;
+            originX = _cachedOriginX;
+            originY = _cachedOriginY;
+            originZ = _cachedOriginZ;
+            return cellKey >= 0;
+        }
+
+        return ResolveCellOrigin(out cellKey, out originX, out originY, out originZ);
+    }
+
+    /// <summary>The cold half of <see cref="TryGetCellOrigin(out int, out float, out float, out float)"/> — taken once per cluster, never inlined into the
+    /// per-entity write.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool ResolveCellOrigin(out int cellKey, out float originX, out float originY, out float originZ)
+    {
+        cellKey = -1;
+        originX = 0f;
+        originY = 0f;
+        originZ = 0f;
+
+        var grid = _state?.Grid;
+        var clusterCellMap = _state?.ClusterCellMap;
+        if (grid != null && clusterCellMap != null && (uint)_chunkId < (uint)clusterCellMap.Length)
+        {
+            cellKey = clusterCellMap[_chunkId];
+            if (cellKey >= 0)
+            {
+                grid.CellOrigin(cellKey, out originX, out originY, out originZ);
+            }
+        }
+
+        // Only a SUCCESSFUL resolution is cached. Caching the miss would be faster and is not safe: a cluster acquires its cell during creation, so a ref
+        // taken before that assignment and used after it would answer "no cell" for the rest of its life — and the caller's response to "no cell" is to skip
+        // the CA-01 grow entirely, silently. A miss therefore re-resolves, which costs nothing that matters: a live cluster always has a cell, so the miss
+        // path is not a path the hot loop takes.
+        if (cellKey >= 0)
+        {
+            _cachedCellKey = cellKey;
+            _cachedOriginX = originX;
+            _cachedOriginY = originY;
+            _cachedOriginZ = originZ;
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Migration cell-boundary check. Returns true when a migration was flagged.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool MaybeFlagMigration(int slotIndex, float newMinX, float newMinY, float newMaxX, float newMaxY, float centerZ)
+    private bool MaybeFlagMigration(int slotIndex, int currentCellKey, float cellMinX, float cellMinY, float cellMinZ,
+        float newMinX, float newMinY, float newMaxX, float newMaxY, float centerZ)
     {
+        // The cell key and origin are PASSED IN rather than re-derived. The caller resolved both to convert the entity's bounds into the cluster's frame,
+        // and this method used to repeat all of it — two array loads, a bounds check, CellKeyToCoords (itself two dependent loads into the cell's CellState)
+        // and three multiplies — per entity per tick, inlined into the AntHill simulation barrier.
         var grid = _state.Grid;
-        if (grid == null)
-        {
-            return false;
-        }
-
-        var clusterCellMap = _state.ClusterCellMap;
-        if (clusterCellMap == null)
-        {
-            return false;
-        }
-
-        var currentCellKey = clusterCellMap[_chunkId];
-        if (currentCellKey < 0)
-        {
-            return false;
-        }
-
-        // Use AABB center for the migration check. AntHill point-form encodes pos as (MinX==MaxX, MinY==MaxY), so center == pos. For non-degenerate AABB2F
-        // (future spatial systems), the center is the canonical cell-bucketing point (matches WorldToCellKeyFromSpatialField's behavior for AABB2F).
         var centerX = 0.5f * (newMinX + newMaxX);
         var centerY = 0.5f * (newMinY + newMaxY);
 
         ref readonly var cfg = ref grid.Config;
         var cellSize = cfg.CellSize;
         var hyster = cellSize * cfg.MigrationHysteresisRatio;
-        var (cx, cy, cz) = grid.CellKeyToCoords(currentCellKey);
-        var cellMinX = cfg.WorldMin.X + cx * cellSize;
-        var cellMinY = cfg.WorldMin.Y + cy * cellSize;
-        var cellMinZ = cfg.WorldMin.Z + cz * cellSize;
         var cellMaxX = cellMinX + cellSize;
         var cellMaxY = cellMinY + cellSize;
         var cellMaxZ = cellMinZ + cellSize;

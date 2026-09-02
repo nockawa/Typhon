@@ -1761,7 +1761,7 @@ internal sealed class App : IDisposable
             foreach (var c in e)
             {
                 t++;
-                ref readonly var a2 = ref c.SpatialBounds;
+                var a2 = c.SpatialBounds;
                 if (!(a2.MinX <= a2.MaxX) || !float.IsFinite(a2.MinX)) { b++; be += c.LiveCount; }
             }
             return (t, b, be);
@@ -1776,7 +1776,7 @@ internal sealed class App : IDisposable
             foreach (var c in e)
             {
                 t++;
-                ref readonly var a2 = ref c.SpatialBounds;
+                var a2 = c.SpatialBounds;
                 if (!(a2.MinX <= a2.MaxX) || !float.IsFinite(a2.MinX)) { b++; be += c.LiveCount; }
             }
             return (t, b, be);
@@ -1791,7 +1791,7 @@ internal sealed class App : IDisposable
             foreach (var c in e)
             {
                 t++;
-                ref readonly var a2 = ref c.SpatialBounds;
+                var a2 = c.SpatialBounds;
                 if (!(a2.MinX <= a2.MaxX) || !float.IsFinite(a2.MinX)) { b++; be += c.LiveCount; }
             }
             return (t, b, be);
@@ -1806,7 +1806,7 @@ internal sealed class App : IDisposable
             foreach (var c in e)
             {
                 t++;
-                ref readonly var a2 = ref c.SpatialBounds;
+                var a2 = c.SpatialBounds;
                 if (!(a2.MinX <= a2.MaxX) || !float.IsFinite(a2.MinX)) { b++; be += c.LiveCount; }
             }
             return (t, b, be);
@@ -1836,7 +1836,7 @@ internal sealed class App : IDisposable
             {
                 continue;
             }
-            ref readonly var box = ref c.SpatialBounds;
+            var box = c.SpatialBounds;
             var w = box.MaxX - box.MinX;
             var h = box.MaxY - box.MinY;
             if (w * h > _cfg.FillMaxCellArea * _cfg.CellSize * _cfg.CellSize)

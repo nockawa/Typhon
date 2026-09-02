@@ -167,7 +167,7 @@ class ClusterRebuildMergeTests : TestBase<ClusterRebuildMergeTests>
 
         ResetSpatialState(dbe);
         cs.RebuildCellState(dbe.SpatialGrid);
-        cs.RebuildClusterAabbs();
+        cs.RebuildClusterAabbs(dbe.SpatialGrid);
         var oracle = Capture(dbe);
 
         ResetSpatialState(dbe);
@@ -343,7 +343,7 @@ class ClusterRebuildMergeTests : TestBase<ClusterRebuildMergeTests>
         ResetSpatialState(dbe);
         cs.RebuildSegmentPassCount = 0;
         cs.RebuildCellState(dbe.SpatialGrid);
-        cs.RebuildClusterAabbs();
+        cs.RebuildClusterAabbs(dbe.SpatialGrid);
         var twoPassReads = cs.RebuildSegmentPassCount;
 
         ResetSpatialState(dbe);

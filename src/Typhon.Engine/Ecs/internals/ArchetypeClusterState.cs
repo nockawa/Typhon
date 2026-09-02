@@ -2050,6 +2050,62 @@ internal sealed unsafe class ArchetypeClusterState
     internal int RebuildSegmentPassCount;
 
     /// <summary>
+    /// Cluster AABBs whose recompute produced a different box since the last <see cref="ResetEscapeRateCounters"/> — the denominator of <c>Q2</c>'s escape
+    /// rate (#872 step 9, <c>AC-9.8</c>).
+    /// </summary>
+    internal long AabbChangeCount;
+
+    /// <summary>
+    /// Of those, the ones whose new box is NOT contained by the box it replaced — the numerator of the escape rate.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is a bound on the real escape rate, not the rate itself, and the direction is stated so nobody reads it as exact.</b> <c>C5</c> defines
+    /// an escape as a bound leaving its LEAF NODE's MBR; a leaf's MBR is the union of up to eleven entries and is therefore always at least as large as any
+    /// one of them. So a box still inside its own previous box is certainly still inside the leaf: <c>containedInPrevious ⟹ inPlace</c>. This counter's
+    /// complement is an UPPER bound on escapes, and the true in-place rate can only be better than what it reports.</para>
+    /// <para>Measured before the tree exists on purpose. <c>C5</c>'s economics — ~14 µs/cell/tick escape-bound against ~94-235 µs for remove-and-reinsert —
+    /// rest entirely on this ratio, and it is knowable today with the linear index still in place. Building the tree first and measuring after would mean
+    /// discovering the premise was wrong with the implementation already committed to it.</para>
+    /// </remarks>
+    internal long AabbEscapeCount;
+
+    /// <summary>Zero the escape-rate counters. Tests and benchmark harnesses call this to scope a measurement to one workload.</summary>
+    internal void ResetEscapeRateCounters()
+    {
+        Interlocked.Exchange(ref AabbChangeCount, 0);
+        Interlocked.Exchange(ref AabbEscapeCount, 0);
+    }
+
+    /// <summary>
+    /// Record one AABB change for <c>Q2</c>. <paramref name="previous"/> is the box being replaced, <paramref name="fresh"/> the new one; both are in the
+    /// same cell-relative frame, which is what makes the containment test meaningful.
+    /// </summary>
+    /// <remarks>
+    /// Interlocked because the AABB refresh phase runs across fence workers on disjoint CLUSTER ranges — disjoint for the arrays they write, but not for
+    /// these two counters. A plain increment would under-report by exactly the contention, which is worst in precisely the dense workloads the number is
+    /// being collected for.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void NoteAabbChange(in ClusterSpatialAabb previous, in ClusterSpatialAabb fresh)
+    {
+        Interlocked.Increment(ref AabbChangeCount);
+
+        // A degenerate previous box (the Empty sentinel) is a first fill, not a move: +inf/-inf contains nothing, so counting it as an escape would inflate
+        // the rate by the whole spawn burst.
+        if (float.IsPositiveInfinity(previous.MinX))
+        {
+            return;
+        }
+
+        bool contained = fresh.MinX >= previous.MinX && fresh.MinY >= previous.MinY && fresh.MinZ >= previous.MinZ
+                         && fresh.MaxX <= previous.MaxX && fresh.MaxY <= previous.MaxY && fresh.MaxZ <= previous.MaxZ;
+        if (!contained)
+        {
+            Interlocked.Increment(ref AabbEscapeCount);
+        }
+    }
+
+    /// <summary>
     /// Per-cluster result of the rebuild map phase. Pure function of one cluster's bytes, so it can be computed on any worker without touching shared state;
     /// the reduce phase folds these into the grid, the pool and the per-cell index serially.
     /// </summary>
@@ -2100,7 +2156,8 @@ internal sealed unsafe class ArchetypeClusterState
         // and one occupancy load — worth far less than the ~18 % the merge itself buys — at the price of a SECOND copy of a [fatal][silent] CA-01 computation
         // that could silently diverge from this one. The 3D branch in particular is only covered through RecomputeClusterAabb, so a twin's 3D half would have
         // had no test at all.
-        result.Aabb = RecomputeClusterAabb(chunkId, ref accessor);
+        grid.CellOriginFromCoords(result.CellX, result.CellY, result.CellZ, out float originX, out float originY, out float originZ);
+        result.Aabb = RecomputeClusterAabb(chunkId, ref accessor, originX, originY, originZ);
         return result;
     }
 
@@ -2586,10 +2643,18 @@ internal sealed unsafe class ArchetypeClusterState
     /// Cost: one pass over <see cref="ArchetypeClusterInfo.ClusterSize"/> occupancy bits, ~50-100 ns per occupied entity on the L1-hot common path.
     /// Category mask is the OR of per-entity masks; in Phase 1 all entities use the default <c>uint.MaxValue</c> mask, so this collapses to <c>uint.MaxValue</c>.
     /// </remarks>
-    internal ClusterSpatialAabb RecomputeClusterAabb(int clusterChunkId, ref ChunkAccessor<PersistentStore> accessor)
-        => RecomputeClusterAabb(clusterChunkId, ref accessor, out _);
+    internal ClusterSpatialAabb RecomputeClusterAabb(int clusterChunkId, ref ChunkAccessor<PersistentStore> accessor,
+        double originX, double originY, double originZ)
+        => RecomputeClusterAabb(clusterChunkId, ref accessor, originX, originY, originZ, out _);
 
-    internal ClusterSpatialAabb RecomputeClusterAabb(int clusterChunkId, ref ChunkAccessor<PersistentStore> accessor, out int slotsScanned)
+    /// <remarks>
+    /// <paramref name="originX"/>/<paramref name="originY"/>/<paramref name="originZ"/> are the world-space minimum corner of the cluster's cell: the result
+    /// is <c>C15</c> CELL-RELATIVE, not world-space (#872 step 9). The caller supplies the origin rather than this method deriving it, because both hot
+    /// callers already hold the cell — the rebuild map phase has just computed the cell COORDINATES and has no key yet, and the dirty pass has read the key
+    /// out of <c>ClusterCellMap</c> two statements earlier. Deriving it here would repeat that work once per cluster per tick for nothing.
+    /// </remarks>
+    internal ClusterSpatialAabb RecomputeClusterAabb(int clusterChunkId, ref ChunkAccessor<PersistentStore> accessor,
+        double originX, double originY, double originZ, out int slotsScanned)
     {
         var ss = SpatialSlot;
         byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
@@ -2616,13 +2681,28 @@ internal sealed unsafe class ArchetypeClusterState
                 continue; // skip degenerate slot
             }
 
+            // The narrowing to f32 happens HERE, through the directed-rounding helpers, and not as the bare `(float)` casts this used to do. coords is
+            // double; subtracting the origin and rounding to nearest can land a min bound above — or a max bound below — the entity it must contain, which
+            // is a CA-01 violation and therefore a silent SQ-01 false negative. See ClusterSpatialAabb.ToCellRelativeMin.
             if (is3D)
             {
-                aabb.Union3F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], (float)coords[4], (float)coords[5], ss.FieldInfo.Category);
+                aabb.Union3F(
+                    ClusterSpatialAabb.ToCellRelativeMin(coords[0], originX),
+                    ClusterSpatialAabb.ToCellRelativeMin(coords[1], originY),
+                    ClusterSpatialAabb.ToCellRelativeMin(coords[2], originZ),
+                    ClusterSpatialAabb.ToCellRelativeMax(coords[3], originX),
+                    ClusterSpatialAabb.ToCellRelativeMax(coords[4], originY),
+                    ClusterSpatialAabb.ToCellRelativeMax(coords[5], originZ),
+                    ss.FieldInfo.Category);
             }
             else
             {
-                aabb.Union2F((float)coords[0], (float)coords[1], (float)coords[2], (float)coords[3], ss.FieldInfo.Category);
+                aabb.Union2F(
+                    ClusterSpatialAabb.ToCellRelativeMin(coords[0], originX),
+                    ClusterSpatialAabb.ToCellRelativeMin(coords[1], originY),
+                    ClusterSpatialAabb.ToCellRelativeMax(coords[2], originX),
+                    ClusterSpatialAabb.ToCellRelativeMax(coords[3], originY),
+                    ss.FieldInfo.Category);
             }
         }
 
@@ -2643,7 +2723,11 @@ internal sealed unsafe class ArchetypeClusterState
     /// Precondition: <see cref="RebuildCellState"/> has already run, so <see cref="ClusterCellMap"/> is populated and every active cluster's cell is known.
     /// </para>
     /// </remarks>
-    internal void RebuildClusterAabbs()
+    /// <remarks>
+    /// Takes the grid since #872 step 9: bounds are C15 cell-relative, so recomputing one needs its cell's origin. The legacy two-pass path this belongs to
+    /// has no production caller left (the merged rebuild replaced it in step 2) but it is the differential oracle the merge is asserted against.
+    /// </remarks>
+    internal void RebuildClusterAabbs(SpatialGrid grid)
     {
         if (!SpatialSlot.HasSpatialIndex || ClusterSegment == null)
         {
@@ -2675,20 +2759,29 @@ internal sealed unsafe class ArchetypeClusterState
             for (int i = 0; i < ActiveClusterCount; i++)
             {
                 int chunkId = ActiveClusterIds[i];
-                ClusterSpatialAabb aabb = RecomputeClusterAabb(chunkId, ref clusterAccessor);
-                ClusterAabbs[chunkId] = aabb;
 
-                // Add to the per-cell index. The cell key was already written into ClusterCellMap by RebuildCellState. Skip clusters whose cell is unknown
-                // (ClusterCellMap[chunkId] == -1) or whose AABB is degenerate (all entities were skipped).
+                // The cell is resolved FIRST now: a C15 cell-relative AABB cannot be computed without the cell's origin, so the order that used to be
+                // "recompute, then find the cell" is inverted. A cluster with no cell keeps the Empty sentinel rather than an AABB measured from nowhere.
                 if (ClusterCellMap == null || chunkId >= ClusterCellMap.Length)
                 {
+                    // Same reasoning as the cellKey < 0 branch below: no cell means no frame, and the slot must be cleared rather than left stale.
+                    ClusterAabbs[chunkId] = ClusterSpatialAabb.Empty;
                     continue;
                 }
                 int cellKey = ClusterCellMap[chunkId];
                 if (cellKey < 0)
                 {
+                    // No cell, so no frame — but the slot must still be CLEARED rather than left holding whatever a previous life of this chunk id wrote.
+                    // Reordering the cell lookup ahead of the recompute (C15 needs the origin first) made "continue" silently mean "keep the stale value";
+                    // ClusterRebuildMergeTests.MergedRebuild_MatchesOracle_WhenAClusterIsEmpty caught it as a 50.0f where the merged path had +Infinity.
+                    ClusterAabbs[chunkId] = ClusterSpatialAabb.Empty;
                     continue;
                 }
+
+                grid.CellOrigin(cellKey, out float originX, out float originY, out float originZ);
+                ClusterSpatialAabb aabb = RecomputeClusterAabb(chunkId, ref clusterAccessor, originX, originY, originZ);
+                ClusterAabbs[chunkId] = aabb;
+
                 if (float.IsPositiveInfinity(aabb.MinX))
                 {
                     continue; // empty — no valid entities
@@ -2724,7 +2817,12 @@ internal sealed unsafe class ArchetypeClusterState
     /// The <paramref name="dirtyBits"/> parameter is retained for API stability; this method no longer reads it.
     /// </para>
     /// </summary>
-    internal void RecomputeDirtyClusterAabbs(long[] dirtyBits, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid = null)
+    /// <remarks>
+    /// <paramref name="grid"/> lost its <c>null</c> default in #872 step 9: C15 cell-relative bounds cannot be computed without a cell origin, so every
+    /// recompute now dereferences the grid unconditionally. Leaving the default in place would have kept a null-argument overload compiling at call sites
+    /// that no longer have a valid meaning.
+    /// </remarks>
+    internal void RecomputeDirtyClusterAabbs(long[] dirtyBits, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid)
     {
         _ = dirtyBits;
 
@@ -2889,7 +2987,8 @@ internal sealed unsafe class ArchetypeClusterState
                     ClusterSpatialAabb fresh;
                     if (shrinkMask != 0)
                     {
-                        fresh = RecomputeClusterAabb(chunkId, ref accessor, out int clusterSlots);
+                        grid.CellOrigin(cellKey, out float shrinkOriginX, out float shrinkOriginY, out float shrinkOriginZ);
+                        fresh = RecomputeClusterAabb(chunkId, ref accessor, shrinkOriginX, shrinkOriginY, shrinkOriginZ, out int clusterSlots);
                         slotsScanned += clusterSlots;
                         if (float.IsPositiveInfinity(fresh.MinX))
                         {
@@ -2915,6 +3014,7 @@ internal sealed unsafe class ArchetypeClusterState
                     // barrier, which guarantees no concurrent WriteSpatial is flagging new geometry into this cell. Relaxing that barrier without converting
                     // this to a union against `stored` silently drops the racing write and leaves the AABB too tight — wrong query results, no error (#573).
                     fresh.CategoryMask = slot.DynamicIndex.CategoryMasks[indexSlot];
+                    NoteAabbChange(in stored, in fresh);
                     stored = fresh;
                     slot.DynamicIndex.UpdateAt(indexSlot, in fresh);
                     aabbsChanged++;
@@ -2970,7 +3070,8 @@ internal sealed unsafe class ArchetypeClusterState
                     continue;
                 }
 
-                ClusterSpatialAabb fresh = RecomputeClusterAabb(chunkId, ref accessor, out int clusterSlots);
+                grid.CellOrigin(cellKey, out float dirtyOriginX, out float dirtyOriginY, out float dirtyOriginZ);
+                ClusterSpatialAabb fresh = RecomputeClusterAabb(chunkId, ref accessor, dirtyOriginX, dirtyOriginY, dirtyOriginZ, out int clusterSlots);
                 slotsScanned += clusterSlots;
                 if (float.IsPositiveInfinity(fresh.MinX))
                 {
@@ -2985,6 +3086,7 @@ internal sealed unsafe class ArchetypeClusterState
                 }
 
                 fresh.CategoryMask = slot.DynamicIndex.CategoryMasks[indexSlot];
+                NoteAabbChange(in stored, in fresh);
                 stored = fresh;
                 slot.DynamicIndex.UpdateAt(indexSlot, in fresh);
                 aabbsChanged++;
