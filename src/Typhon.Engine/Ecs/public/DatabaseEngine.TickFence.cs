@@ -148,7 +148,7 @@ public partial class DatabaseEngine
     {
         var arena = _fenceCollectionArena ??= new CommitBatchArena();
         arena.Reset();
-        var batch = new CommitBatchBuilder(arena, tickNumber, 0, fenceMode: true);
+        var batch = new CommitBatchBuilder(arena, tickNumber, 0, true);
         var batchBytes = 0;
         long highestLSN = 0;
 
@@ -184,7 +184,7 @@ public partial class DatabaseEngine
                 {
                     highestLSN = Math.Max(highestLSN, AppendFenceBatch(ref batch));
                     arena.Reset();
-                    batch = new CommitBatchBuilder(arena, tickNumber, 0, fenceMode: true);
+                    batch = new CommitBatchBuilder(arena, tickNumber, 0, true);
                     batchBytes = 0;
                 }
             }
@@ -270,7 +270,7 @@ public partial class DatabaseEngine
                 // One arena per thread — ProcessTableFence is documented safe to call concurrently across distinct tables.
                 var fenceArena = _fenceArena ??= new CommitBatchArena();
                 fenceArena.Reset();
-                var batch = new CommitBatchBuilder(fenceArena, tickNumber, 0, fenceMode: true);
+                var batch = new CommitBatchBuilder(fenceArena, tickNumber, 0, true);
                 var batchBytes = 0;
 
                 var accessor = table.ComponentSegment.CreateChunkAccessor();
@@ -305,7 +305,7 @@ public partial class DatabaseEngine
                                 highestLSN = Math.Max(highestLSN, AppendFenceBatch(ref batch));
                                 walPublished = true;
                                 fenceArena.Reset();
-                                batch = new CommitBatchBuilder(fenceArena, tickNumber, 0, fenceMode: true);
+                                batch = new CommitBatchBuilder(fenceArena, tickNumber, 0, true);
                                 batchBytes = 0;
                             }
 

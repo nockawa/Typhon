@@ -125,7 +125,7 @@ public class PagedMMFOptions
             return;
         }
 
-        Directory.Delete(path, recursive: true);
+        Directory.Delete(path, true);
         var sw = new System.Diagnostics.Stopwatch();
         sw.Start();
         while (Directory.Exists(path) && sw.ElapsedMilliseconds < maxWaitMs)

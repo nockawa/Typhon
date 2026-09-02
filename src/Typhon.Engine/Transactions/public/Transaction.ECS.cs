@@ -1559,7 +1559,7 @@ public unsafe partial class Transaction
                     {
                         continue;
                     }
-                    PublishMembershipEntry(entry.Id, isCreation: true);
+                    PublishMembershipEntry(entry.Id, true);
                 }
             }
 
@@ -1567,7 +1567,7 @@ public unsafe partial class Transaction
             {
                 foreach (var entityId in _pendingDestroys)
                 {
-                    PublishMembershipEntry(entityId, isCreation: false);
+                    PublishMembershipEntry(entityId, false);
                 }
             }
 

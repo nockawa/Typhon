@@ -480,8 +480,7 @@ public class ChunkBasedSegment<TStore> : LogicalSegment<TStore> where TStore : s
     /// → fsync drops DC→0 → eviction → reload-from-disk-zeros loses subsequent dir/bucket writes) does not exist here because the caller's accessor remains
     /// the sole dirty-tracker for this page.
     /// </remarks>
-    public int AllocateChunk(ChangeSet changeSet, ref ChunkAccessor<TStore> accessor)
-        => AllocateChunkInternal(clearContent: true, changeSet, ref accessor);
+    public int AllocateChunk(ChangeSet changeSet, ref ChunkAccessor<TStore> accessor) => AllocateChunkInternal(true, changeSet, ref accessor);
 
     /// <summary>
     /// Allocates a single chunk from the segment.

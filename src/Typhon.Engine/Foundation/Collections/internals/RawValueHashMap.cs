@@ -1242,7 +1242,7 @@ unsafe partial class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStor
         // bucket seen — a single small allocation amortised across the whole O(n) scan.
         int bufCap = _bucketCapacity * 2;
         var keyBuf = new TKey[bufCap];
-        var valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, pinned: true);
+        var valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, true);
         byte* valPtr = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(valBuf));
 
         for (int b = 0; b < bucketCount; b++)
@@ -1295,7 +1295,7 @@ unsafe partial class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStor
                     {
                         bufCap = Math.Max(bufCap * 2, n + count);
                         keyBuf = new TKey[bufCap];
-                        valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, pinned: true);
+                        valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, true);
                         valPtr = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(valBuf));
                         retry = true;   // restart the bucket with the larger buffer
                         break;

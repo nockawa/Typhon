@@ -227,7 +227,7 @@ public unsafe struct ChunkAccessor<TStore> : IDisposable where TStore : struct, 
         // Setting ACW > 0 here ensures the clear is atomic w.r.t. checkpoint snapshots: the snapshot either runs entirely BEFORE this method (sees the chunk's
         // PREVIOUS content, but that's OK because the bitmap bit is also still =0 if FreeChunk's snapshot hasn't yet fsync'd) or entirely AFTER (sees cleared
         // content).
-        var addr = GetChunkAddress(index, dirty: true);
+        var addr = GetChunkAddress(index, true);
         new Span<long>(addr, _stride / 8).Clear();
     }
 

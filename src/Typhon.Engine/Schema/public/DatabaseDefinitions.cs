@@ -233,7 +233,7 @@ public class DatabaseDefinitions
             var spa = fieldInfo.GetCustomAttribute<SpatialIndexAttribute>();
 
             fields.Add(new ComponentFieldSpec(
-                name: fa?.Name ?? fieldInfo.Name,
+                fa?.Name ?? fieldInfo.Name,
                 dotNetType: fieldInfo.FieldType,
                 offset: Marshal.OffsetOf(t, fieldInfo.Name).ToInt32(),
                 previousName: fa?.PreviousName,
