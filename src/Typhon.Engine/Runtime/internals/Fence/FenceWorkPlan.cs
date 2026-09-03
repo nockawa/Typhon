@@ -301,7 +301,18 @@ internal sealed class FenceWorkPlan
                 continue;
             }
 
-            var pendingCount = state.PendingMigrationCount;
+            // The DRAIN PREFIX, not the whole queue — the two are different quantities since #872 step 10 and slicing the wrong one desynchronises Migrate
+            // from Finalize (CR-01).
+            //
+            // Finalize is skipped for an archetype whose Prep returned false (FenceBranchPath == 0, see EmitArchetypeFinalizeItems), while this loop gated
+            // on PendingMigrationCount, which survives across ticks. An archetype that queued drift requests on one tick and then went quiet — its
+            // clusters drained, or it stopped being spatial — therefore had its whole tail EXECUTED here with no Finalize to compact it away, so the same
+            // requests re-executed on every subsequent tick.
+            //
+            // PrepareArchetypeFence sets the prefix to zero on exactly the paths where it returns false, so reading it here makes Migrate and Finalize
+            // agree by construction: no Prep, no drain, nothing to compact. When Prep did return true the prefix equals the queue length at that moment,
+            // so this is otherwise the identical slicing.
+            var pendingCount = state.PendingMigrationDrainCount;
             if (pendingCount <= 0)
             {
                 continue;

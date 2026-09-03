@@ -66,9 +66,11 @@ public sealed class EcsMetricsExporter : IDisposable
         _meter.CreateObservableGauge("typhon.ecs.spatial.active_clusters", EnumerateActiveClusterCount, "{clusters}",
             "Live clusters per archetype — the denominator for the migration and drifter rates");
         _meter.CreateObservableGauge("typhon.ecs.spatial.clusters_scanned", EnumerateClustersScanned, "{clusters}",
-            "Clusters examined by the intra-cell drifter scan in the last completed tick, per archetype (zero until intra-cell re-clustering exists)");
+            "Clusters written, and therefore examined by the intra-cell drifter scan, in the last completed tick, per archetype");
         _meter.CreateObservableGauge("typhon.ecs.spatial.drifters_detected", EnumerateDriftersDetected, "{entities}",
-            "Entities found outside their cluster's target region in the last completed tick, per archetype (zero until intra-cell re-clustering exists)");
+            "Entities found outside their cluster's target region in the last completed tick, per archetype");
+        _meter.CreateObservableGauge("typhon.ecs.spatial.drift_absorbed", EnumerateDriftAbsorbed, "{entities}",
+            "Entities inside the intra-cell drift margin, and therefore left alone, in the last completed tick, per archetype");
         _meter.CreateObservableGauge("typhon.ecs.spatial.recluster_budget_ms", EnumerateReclusterBudgetMs, "ms",
             "Per-tick re-clustering budget consumed in the last completed tick, per archetype (zero until throttled re-clustering exists)");
         _meter.CreateObservableCounter("typhon.ecs.spatial.migrations_total", EnumerateTotalMigrations, "{migrations}",
@@ -93,6 +95,8 @@ public sealed class EcsMetricsExporter : IDisposable
     private IEnumerable<Measurement<long>> EnumerateClustersScanned() => EnumerateSpatialLong(static t => t.ClustersScanned);
 
     private IEnumerable<Measurement<long>> EnumerateDriftersDetected() => EnumerateSpatialLong(static t => t.DriftersDetected);
+
+    private IEnumerable<Measurement<long>> EnumerateDriftAbsorbed() => EnumerateSpatialLong(static t => t.DriftAbsorbedCount);
 
     private IEnumerable<Measurement<long>> EnumerateTotalMigrations() => EnumerateSpatialLong(static t => t.TotalMigrations);
 

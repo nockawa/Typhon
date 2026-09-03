@@ -36,6 +36,36 @@ public readonly struct SpatialGridConfig
     /// </summary>
     public readonly float MigrationHysteresisRatio;
 
+    /// <summary>
+    /// The extent a cluster's AABB is expected to stay within, as a fraction of cell size — the <b>target region</b> of §5.2, and parameter <b>P4</b> of
+    /// the design's open-parameter table. Default 0.25.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>What it gates.</b> Intra-cell drift detection (#872 step 10) is two-level. A cluster whose largest axis extent is within this bound is
+    /// <i>tight enough</i> and its entities are never examined; only inside a cluster that exceeds it does the per-entity test run. That is what makes
+    /// "detect broadly" affordable — a healthy world pays three float compares per written cluster and nothing per entity.</para>
+    /// <para><b>Why it is not the cluster's own AABB.</b> The write-time CAS in <c>ClusterRef.MaybeGrowAndFlagShrink</c> grows that bound to contain every
+    /// entity it holds, so "outside my cluster's AABB" is never true of anything. The target region has to be an independent, tighter box or it detects
+    /// nothing.</para>
+    /// <para><b>The default is provisional and the design says so.</b> P4 is marked TBD — "too tight ⇒ thrash; too loose ⇒ no selectivity gain" — and the
+    /// value that resolves it comes from step 11's budget/tightness curve, not from first principles. For orientation: C clusters partitioning a flat cell
+    /// tile it at about <c>cellSize / sqrt(C)</c>, which is ~0.11 at the ~80 clusters AntHill's densest zones hold and ~0.025 at the 1 563 of a 100
+    /// K-entity cell. 0.25 is deliberately looser than either, because a gate that fires on nearly every cluster converts a detection pass into a
+    /// relocation storm before any throttle exists to absorb it (step 11).</para>
+    /// </remarks>
+    public readonly float ClusterTargetExtentRatio;
+
+    /// <summary>
+    /// Dead zone around the target region, as a fraction of cell size, below which a drifting entity is left alone. Default 0.05.
+    /// </summary>
+    /// <remarks>
+    /// The intra-cell counterpart of <see cref="MigrationHysteresisRatio"/>, and deliberately a separate number: that one governs <i>cell crossing</i>, is
+    /// measured by <c>LastTickHysteresisAbsorbedCount</c>, and both existing detectors emit only when the cell key actually changes — so neither can
+    /// absorb anything for a move that stays inside one cell. Without its own margin, an entity sitting on the target-region boundary would be relocated
+    /// every tick it jitters across, paying a full migration to move a few units.
+    /// </remarks>
+    public readonly float ClusterDriftMarginRatio;
+
     // ── Derived values, computed in the constructor ────────────────────────
 
     /// <summary>
@@ -46,7 +76,7 @@ public readonly struct SpatialGridConfig
     /// <summary>Number of cells along the Y axis.</summary>
     public readonly int GridHeight;
 
-    /// <summary>Number of cells along the Z axis. <c>1</c> for a flat world built with <see cref="Flat(Vector2,Vector2,float,float)"/>.</summary>
+    /// <summary>Number of cells along the Z axis. <c>1</c> for a flat world built with <see cref="Flat(Vector2,Vector2,float,float,float,float)"/>.</summary>
     public readonly int GridDepth;
 
     /// <summary>Precomputed 1 / <see cref="CellSize"/>.</summary>
@@ -63,13 +93,18 @@ public readonly struct SpatialGridConfig
     /// <param name="worldMax">World-space maximum corner (exclusive); must be strictly greater than <paramref name="worldMin"/> on all three axes.</param>
     /// <param name="cellSize">Cell size in world units; must be &gt; 0.</param>
     /// <param name="migrationHysteresisRatio">Per-axis dead zone as a fraction of cell size (default 0.05).</param>
+    /// <param name="clusterTargetExtentRatio">Target cluster extent as a fraction of cell size — P4 (default 0.25).</param>
+    /// <param name="clusterDriftMarginRatio">Intra-cell drift dead zone as a fraction of cell size (default 0.05).</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="cellSize"/> is not positive, or the derived cell count does not fit a 32-bit cell key.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="worldMax"/> is not strictly greater than <paramref name="worldMin"/> on all three axes.</exception>
-    public SpatialGridConfig(Vector3 worldMin, Vector3 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f)
+    public SpatialGridConfig(Vector3 worldMin, Vector3 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
+        float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cellSize);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(clusterTargetExtentRatio);
+        ArgumentOutOfRangeException.ThrowIfNegative(clusterDriftMarginRatio);
         if (worldMax.X <= worldMin.X || worldMax.Y <= worldMin.Y || worldMax.Z <= worldMin.Z)
         {
             throw new ArgumentException("WorldMax must be strictly greater than WorldMin on all three axes.", nameof(worldMax));
@@ -79,6 +114,8 @@ public readonly struct SpatialGridConfig
         WorldMax = worldMax;
         CellSize = cellSize;
         MigrationHysteresisRatio = migrationHysteresisRatio;
+        ClusterTargetExtentRatio = clusterTargetExtentRatio;
+        ClusterDriftMarginRatio = clusterDriftMarginRatio;
         InverseCellSize = 1.0f / cellSize;
 
         GridWidth  = (int)MathF.Ceiling((worldMax.X - worldMin.X) * InverseCellSize);
@@ -107,6 +144,10 @@ public readonly struct SpatialGridConfig
     /// <param name="worldMax">World-space maximum corner on X and Y (exclusive).</param>
     /// <param name="cellSize">Cell size in world units; must be &gt; 0.</param>
     /// <param name="migrationHysteresisRatio">Per-axis dead zone as a fraction of cell size (default 0.05).</param>
-    public static SpatialGridConfig Flat(Vector2 worldMin, Vector2 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f) =>
-        new(new Vector3(worldMin, 0f), new Vector3(worldMax, cellSize), cellSize, migrationHysteresisRatio);
+    /// <param name="clusterTargetExtentRatio">Target cluster extent as a fraction of cell size — P4 (default 0.25).</param>
+    /// <param name="clusterDriftMarginRatio">Intra-cell drift dead zone as a fraction of cell size (default 0.05).</param>
+    public static SpatialGridConfig Flat(Vector2 worldMin, Vector2 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
+        float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f) =>
+        new(new Vector3(worldMin, 0f), new Vector3(worldMax, cellSize), cellSize, migrationHysteresisRatio, clusterTargetExtentRatio,
+            clusterDriftMarginRatio);
 }

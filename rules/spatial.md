@@ -402,6 +402,121 @@
 
 ---
 
+## Module: Intra-cell relocation (Issue #872 step 10)
+
+### CR-01: The pending-migration queue drains its prefix and keeps the rest `[fatal][silent]`
+  invariant the queue has PRODUCERS ON BOTH SIDES OF ITS CONSUMER, and that is the whole rule.
+    DetectClusterMigrations files during Prep, which precedes Migrate; FlagOutliersForMigration and
+    DetectDriftersInCluster file during AabbRefresh, which FOLLOWS it. So:
+      let P = PendingMigrationCount when PrepareArchetypeFence returns
+      Migrate executes exactly PendingMigrations[0 .. P)
+      Finalize removes exactly that prefix and shifts the remainder down
+      ∀ tick: PendingMigrationCount after Finalize == (requests filed during this tick's AabbRefresh)
+  invariant the prefix must be recorded on EVERY exit path of Prep, not at the bottom of its body. Prep has
+    three returns, and the clean-bitmap `return true` is the one an archetype written through the spatial
+    barrier takes on every ordinary tick — the barrier sets ClusterProcessBitmap and leaves
+    ClusterDirtyBitmap clean. A prefix of zero there means Migrate executes the whole queue while Finalize
+    compacts nothing away
+  invariant neither failure is loud, and they fail in opposite directions:
+    prefix too LARGE (the pre-#872 `PendingMigrationCount = 0`) → every request filed by the AabbRefresh
+      producers is discarded before it is ever drained. The outlier guard had been detecting, counting itself
+      in telemetry, merging under the finalize lock and dropping the result since #230; its own comment says
+      those requests "execute next tick", and none of them ever did
+    prefix too SMALL → executed requests stay queued and re-execute against slots their entities have already
+      left, and the queue grows without bound. Measured: 16 000 entities produced 17 234 migrations on the
+      first tick and 224 854 on the twentieth, against ~10 900 genuine drifters per tick
+  scope: DatabaseEngine.PrepareArchetypeFence, ArchetypeClusterState.CompactPendingMigrations,
+    ArchetypeClusterState.PendingMigrationDrainCount, DatabaseEngine.FinalizeArchetypeFence
+  verified: ClusterRelocationTests.PendingQueue_KeepsOnlyWhatTheCurrentTickFiled (nine ticks of continuous
+    intra-cell motion, asserting per tick that what remains queued is at most what that tick detected).
+    Ablated: forcing the prefix to zero reddens it, and also reddens
+    ClusterDriftParallelTests.DriftDetection_YieldsTheRulesDrifterSet_WhicheverFenceRunsIt
+  on_violation:
+    prefix too large → intra-cell drift is detected forever and repaired never; the ~24x selectivity win the
+      issue exists for simply does not arrive, with every counter reporting healthy detection
+    prefix too small → unbounded queue growth and repeated migration of slots whose occupants have moved on
+  requires: MD-01 (dirty bits reflect both source and destination after each executed request)
+
+### CR-02: A relocation destination is a preference, and every consumer must treat it as one `[fatal]`
+  invariant MigrationRequest.DestClusterChunkId names the least-enlargement cluster detection chose, or
+    AnyCluster (-1). It is computed a whole phase before the drain, so between the two the pinned cluster can
+    fill up, or be drained and freed and its chunk id reallocated to a DIFFERENT cell
+  invariant the claim must therefore validate identity, not bounds:
+    TryClaimPinnedSlot requires ClusterCellMap[pin] == the request's DestCellKey before claiming
+    on failure it falls back to the first-fit ClaimSlotInCell — it must NOT refuse the migration, which would
+      strand the entity in a cluster it no longer belongs to
+  invariant a pinned claim is a FOURTH success site for CellState.EntityCount. TryClaimSlotInCluster
+    deliberately does not touch it and the scan overloads bump it at three separate sites, so the pinned path
+    owes its own increment; without it a cell under-counts by one per relocation
+  invariant placement reads ClusterAabbs for candidate clusters while the AabbRefresh phase is concurrently
+    writing that array for clusters other slices own, so under W > 1 a candidate's box may be read either side
+    of its own refresh. That is TOLERATED, and only because the pin is advisory: losing the race costs a
+    slightly worse box, never a wrong one. It follows that the chosen DESTINATION is not reproducible across
+    worker counts, while the DRIFTER SET is — the latter is decided from a cluster's own freshly computed
+    bound and its own entities, both slice-local
+  scope: ArchetypeClusterState.ClaimSlotInCell, ArchetypeClusterState.TryClaimPinnedSlot,
+    ArchetypeClusterState.ChooseRelocationTarget, MigrationRequest.DestClusterChunkId
+  verified: ClusterRelocationTests (Placement_ChoosesTheLeastEnlargementCandidate against an independent
+    least-enlargement computation, Placement_NeverChoosesTheSourceCluster,
+    Placement_TreatsAnEmptyClusterAsZeroEnlargement, Relocation_LeavesEveryEntityResidentExactlyOnce for the
+    cell count). Ablated: ignoring the pin, and dropping the source exclusion, each redden their own test
+  on_violation:
+    no identity check → the entity lands in a cluster belonging to another cell; C13 broken silently, with
+      every counter still balancing
+    refusing instead of falling back → the entity stays in a cluster whose cell it has left
+    missing EntityCount increment → cells report fewer entities than they hold
+  requires: CC-01 (ClusterCellMap validity), CA-01 (the destination's bound must cover what it admits)
+
+### CR-03: A drifter is defined by the target region alone `[silent]`
+  invariant the rule is two-level, and the levels are not interchangeable:
+    gate    — a cluster whose largest axis extent ≤ CellSize * ClusterTargetExtentRatio is skipped whole; no
+              entity in it can be improved by moving, so a tight world does three float compares per written
+              cluster and no per-entity work
+    entity  — inside a gated cluster, an entity whose centre lies outside the target box by more than
+              CellSize * ClusterDriftMarginRatio is a drifter
+  invariant 🔴 the target box is centred on the cluster's CENTROID, never on the midpoint of its AABB. A box
+    midpoint sits halfway between the two extremes, so ONE far outlier drags it half the distance to itself:
+    thirty entities at x≈12 plus one at x=90 put the midpoint at 50, where nothing lives, and the whole core
+    then reads as drifting. Relocating the majority to chase a point defined by the entity that should have
+    left is the inverse of the intended repair. The centroid moves by 1/N instead of 1/2
+  invariant DriftersDetected counts DETECTION, not outcome — it is incremented before placement is attempted.
+    A cell whose every other cluster is full yields drifters and no migrations, and that gap is the signal
+    step 11 needs; folding a placement outcome into a detection number destroys it
+  invariant the intra-cell margin gets its own counter (DriftAbsorbedCount) and must not reuse
+    HysteresisAbsorbedCount. That one is about cell-boundary oscillation and tunes MigrationHysteresisRatio;
+    this one tunes ClusterDriftMarginRatio. The margins move independently, so one number tunes neither
+  invariant 🔴 SCOPED EXCEPTION on the legacy (ActiveClusterIds) refresh branch: a cluster is examined only when its
+    bound moved or its ClusterProcessBitmap bit is set. An entity moved by a writer that sets no process bit — OpenMut,
+    or a raw GetSpan mutation — to a position INSIDE its cluster's existing bound satisfies neither, and is never
+    tested. A real AC-10.1 false negative, kept because the same gate is what makes a quiet tick cost nothing on a
+    branch that walks every active cluster with no dirty-bit filter; lifting it reddens AMotionlessTick_DetectsNothing.
+    Closing it needs a per-cluster written-this-tick signal that branch does not carry. An archetype whose spatial
+    writes all go through WriteSpatial is unaffected, and TYPHON009 flags the sites that do not
+  invariant an entity the outlier guard has queued for ANOTHER cell is not also a drifter here. Two requests
+    naming one source slot would have the second drain find it empty, and the guard's escape outranks an
+    intra-cell quality move. Running the guard first only made the collision unlikely; since the two share one
+    gather pass the guard returns the slots it claimed and detection excludes them by mask
+  invariant one gather pass per written cluster feeds both consumers (D1). The cluster is walked at most twice
+    per tick — once for the BOUND, through the double-precision directed-rounding reader C15 needs, and once
+    for the CENTRES, cached SoA for the guard and the drift test to scan. The two readers stay separate on
+    purpose: for a BSphere field the stored centre is not the midpoint of the derived bounds, only equal to it
+    up to a rounding step, so deriving one from the other would move drift decisions by an ULP at the
+    target-region boundary and decouple production from the oracle that reads the component the same way
+  scope: ArchetypeClusterState.DetectDriftersInCluster, ArchetypeClusterState.GatherClusterCentres,
+    SpatialGridConfig.ClusterTargetExtentRatio, SpatialGridConfig.ClusterDriftMarginRatio,
+    SpatialMigrationTelemetry.DriftAbsorbedCount
+  verified: ClusterDriftDetectionTests against ClusterDriftOracle (an independent implementation of the rule,
+    not a call to the production predicate), plus ClusterDriftParallelTests for the serial ≡ oracle ≡ parallel
+    equality at W in {1,2,8} under a real TyphonRuntime. Ablated: swapping the centroid for the AABB midpoint,
+    and disabling the margin, each redden the differential
+  on_violation:
+    midpoint instead of centroid → a one-entity repair becomes a full cluster shuffle, away from where the
+      cluster actually is
+    gate removed → the per-entity walk runs on every written cluster, against a budget of 0.576 ns/entity
+    counters merged → neither margin can be tuned from telemetry
+
+---
+
 ## Module: ClusterCellMap (Issue #229)
 
 ### CC-01: ClusterCellMap validity `[fatal]`

@@ -105,6 +105,7 @@ public partial class DatabaseEngine
             clusterState.LastTickMigrationExecuteMs,
             clusterState.LastTickClustersScanned,
             clusterState.LastTickDriftersDetected,
+            clusterState.LastTickDriftAbsorbedCount,
             clusterState.LastTickReclusterBudgetUsedMs,
             clusterState.ActiveClusterCount,
             clusterState.TotalMigrationCount,
@@ -130,6 +131,7 @@ public partial class DatabaseEngine
         var executeMs = 0d;
         var scanned = 0;
         var drifters = 0;
+        var driftAbsorbed = 0;
         var budgetMs = 0d;
         var activeClusters = 0;
         var totalMigrations = 0L;
@@ -148,12 +150,14 @@ public partial class DatabaseEngine
             executeMs += clusterState.LastTickMigrationExecuteMs;
             scanned += clusterState.LastTickClustersScanned;
             drifters += clusterState.LastTickDriftersDetected;
+            driftAbsorbed += clusterState.LastTickDriftAbsorbedCount;
             budgetMs += clusterState.LastTickReclusterBudgetUsedMs;
             activeClusters += clusterState.ActiveClusterCount;
             totalMigrations += clusterState.TotalMigrationCount;
             totalAbsorbed += clusterState.TotalHysteresisAbsorbedCount;
         }
 
-        return new SpatialMigrationTelemetry(migrations, absorbed, executeMs, scanned, drifters, budgetMs, activeClusters, totalMigrations, totalAbsorbed);
+        return new SpatialMigrationTelemetry(migrations, absorbed, executeMs, scanned, drifters, driftAbsorbed, budgetMs, activeClusters, totalMigrations,
+            totalAbsorbed);
     }
 }

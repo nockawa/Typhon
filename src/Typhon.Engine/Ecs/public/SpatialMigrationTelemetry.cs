@@ -15,8 +15,9 @@ namespace Typhon.Engine;
 /// </para>
 /// <para>
 /// <b>Zero means zero, never "unknown".</b> An archetype with no cluster state, an out-of-range id and a tick in which nothing happened all report zero.
-/// <see cref="ClustersScanned"/>, <see cref="DriftersDetected"/> and <see cref="ReclusterBudgetUsedMs"/> additionally have no producer yet — they read zero
-/// until intra-cell re-clustering lands (steps 10-11 of <c>claude/design/Spatial/vdb-cell-grid-and-migration.md</c>).
+/// <see cref="ReclusterBudgetUsedMs"/> additionally has no producer yet — it reads zero until throttled
+/// re-clustering lands (step 11 of <c>claude/design/Spatial/vdb-cell-grid-and-migration.md</c>). <see cref="ClustersScanned"/>,
+/// <see cref="DriftersDetected"/> and <see cref="DriftAbsorbedCount"/> gained theirs in step 10.
 /// </para>
 /// <para>
 /// <b>Cumulative members restart with the archetype's cluster state.</b> <see cref="DatabaseEngine.InitializeArchetypes"/> reallocates the per-archetype state
@@ -28,8 +29,9 @@ namespace Typhon.Engine;
 public readonly struct SpatialMigrationTelemetry
 {
     internal SpatialMigrationTelemetry(int migrationCount, int hysteresisAbsorbedCount, double migrationExecuteMs, int clustersScanned, int driftersDetected,
-        double reclusterBudgetUsedMs, int activeClusterCount, long totalMigrations, long totalHysteresisAbsorbed)
+        int driftAbsorbedCount, double reclusterBudgetUsedMs, int activeClusterCount, long totalMigrations, long totalHysteresisAbsorbed)
     {
+        DriftAbsorbedCount = driftAbsorbedCount;
         MigrationCount = migrationCount;
         HysteresisAbsorbedCount = hysteresisAbsorbedCount;
         MigrationExecuteMs = migrationExecuteMs;
@@ -64,15 +66,36 @@ public readonly struct SpatialMigrationTelemetry
 
     /// <summary>
     /// Clusters examined by the intra-cell drifter scan during the most recently completed tick.
-    /// <b>Reads zero until intra-cell re-clustering exists</b> — see the remarks on <see cref="SpatialMigrationTelemetry"/>.
     /// </summary>
+    /// <remarks>
+    /// Clusters that were WRITTEN this tick, not clusters that exist — a settled world scans nothing, which is the cheap half of the design's promise and the
+    /// denominator that makes <see cref="DriftersDetected"/> mean anything.
+    /// </remarks>
     public int ClustersScanned { get; }
 
     /// <summary>
     /// Entities found outside their cluster's target region during the most recently completed tick — candidates for intra-cell relocation.
-    /// <b>Reads zero until intra-cell re-clustering exists.</b>
     /// </summary>
+    /// <remarks>
+    /// Counts DETECTION, not outcome. An entity is counted here the moment the target-region rule rejects it, whether or not placement then found a better
+    /// cluster to put it in — a cell whose every other cluster is full produces drifters and no migrations, and that gap is the signal you want, not noise to
+    /// be suppressed. Read against <see cref="MigrationCount"/> to see it.
+    /// </remarks>
     public int DriftersDetected { get; }
+
+    /// <summary>
+    /// Entities outside their cluster's target region by less than the intra-cell drift margin during the most recently completed tick, and therefore left
+    /// alone.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Deliberately not folded into <see cref="HysteresisAbsorbedCount"/>.</b> That counter is about cell-boundary oscillation and tunes
+    /// <c>MigrationHysteresisRatio</c>; this one is about intra-cell drift and tunes <c>ClusterDriftMarginRatio</c>. They answer different questions and their
+    /// margins move independently, so a single number would tune neither — which is the whole reason step 10 added a second counter rather than reusing the
+    /// first.</para>
+    /// <para>Read as a fraction of <c>DriftAbsorbedCount + DriftersDetected</c>: near zero means the margin is too narrow to damp anything, near one means it
+    /// is wide enough to be suppressing repairs the step exists to make.</para>
+    /// </remarks>
+    public int DriftAbsorbedCount { get; }
 
     /// <summary>
     /// Milliseconds of the per-tick re-clustering budget consumed during the most recently completed tick.

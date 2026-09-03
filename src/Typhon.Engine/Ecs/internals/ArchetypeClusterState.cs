@@ -157,13 +157,13 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        ref WaitContext nullCtx = ref Unsafe.NullRef<WaitContext>();
+        ref var nullCtx = ref Unsafe.NullRef<WaitContext>();
         _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
         try
         {
             // First pass: find the max chunkId referenced so we grow FenceDirtyBits once if needed.
-            int maxChunkId = -1;
-            for (int i = 0; i < count; i++)
+            var maxChunkId = -1;
+            for (var i = 0; i < count; i++)
             {
                 var d = buffer[offset + i];
                 if (d.SrcChunkId > maxChunkId)
@@ -178,14 +178,14 @@ internal sealed unsafe partial class ArchetypeClusterState
             }
             if (FenceDirtyBits == null || maxChunkId >= FenceDirtyBits.Length)
             {
-                int required = maxChunkId + 1;
+                var required = maxChunkId + 1;
                 if (FenceDirtyBits == null)
                 {
                     FenceDirtyBits = new long[Math.Max(required, 16)];
                 }
                 else
                 {
-                    int newLen = FenceDirtyBits.Length;
+                    var newLen = FenceDirtyBits.Length;
                     while (newLen < required)
                     {
                         newLen = Math.Max(newLen * 2, required);
@@ -197,7 +197,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
             // Second pass: apply clears and sets. Plain bit ops — we hold the lock, no other worker is writing.
             var bits = FenceDirtyBits;
-            for (int i = 0; i < count; i++)
+            for (var i = 0; i < count; i++)
             {
                 var d = buffer[offset + i];
                 if (d.SrcClearMask != 0 && d.SrcChunkId >= 0 && d.SrcChunkId < bits.Length)
@@ -229,19 +229,19 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        ref WaitContext nullCtx = ref Unsafe.NullRef<WaitContext>();
+        ref var nullCtx = ref Unsafe.NullRef<WaitContext>();
         _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
         try
         {
             // Re-check under lock — another worker may have already grown past us.
-            int required = chunkId + 1;
+            var required = chunkId + 1;
             if (FenceDirtyBits == null)
             {
                 FenceDirtyBits = new long[Math.Max(required, 16)];
             }
             else if (FenceDirtyBits.Length < required)
             {
-                int newLen = FenceDirtyBits.Length;
+                var newLen = FenceDirtyBits.Length;
                 while (newLen < required)
                 {
                     newLen = Math.Max(newLen * 2, required);
@@ -279,8 +279,8 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             // Preserve existing dirty bits set during Prep — Array.Resize copies; we just need more tail space for migrations that may target chunk ids beyond
             // the snapshot length.
-            int oldLen = FenceDirtyBits.Length;
-            int newLen = oldLen;
+            var oldLen = FenceDirtyBits.Length;
+            var newLen = oldLen;
             while (newLen < upperBound)
             {
                 newLen = Math.Max(newLen * 2, upperBound);
@@ -297,7 +297,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         // Deferred-drain list sized to PendingMigrationCount (each migration drains at most one source slot, so the cluster-drain count cannot exceed migration
         // count). _drainedCount is zeroed by Prep.
-        int drainCap = Math.Max(16, PendingMigrationCount);
+        var drainCap = Math.Max(16, PendingMigrationCount);
         if (_drainedClusterIds == null || _drainedClusterIds.Length < drainCap)
         {
             _drainedClusterIds = new int[Math.Max(drainCap, (_drainedClusterIds?.Length ?? 0) * 2)];
@@ -333,11 +333,11 @@ internal sealed unsafe partial class ArchetypeClusterState
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void RecordClusterDrain(int clusterChunkId)
     {
-        int idx = Interlocked.Increment(ref _drainedCount) - 1;
+        var idx = Interlocked.Increment(ref _drainedCount) - 1;
         if (_drainedClusterIds == null || idx >= _drainedClusterIds.Length)
         {
             // PreSizeMigrationBuffers should have covered this — fall back to a synchronized grow.
-            ref WaitContext nullCtx = ref Unsafe.NullRef<WaitContext>();
+            ref var nullCtx = ref Unsafe.NullRef<WaitContext>();
             _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
             try
             {
@@ -347,7 +347,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                 }
                 else if (_drainedClusterIds.Length <= idx)
                 {
-                    int newLen = _drainedClusterIds.Length * 2;
+                    var newLen = _drainedClusterIds.Length * 2;
                     while (newLen <= idx)
                     {
                         newLen *= 2;
@@ -381,14 +381,14 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </summary>
     internal void DrainPendingClusterFinalizations(SpatialGrid grid)
     {
-        int count = _drainedCount;
+        var count = _drainedCount;
         if (count == 0)
         {
             return;
         }
 
         var ids = _drainedClusterIds;
-        bool hasCluster = ClusterSegment != null;
+        var hasCluster = ClusterSegment != null;
         // `using`, because GetChunkAddress(chunkId, dirty: true) below registers an ActiveChunkWriter on each
         // chunk's page and only Dispose -> CommitChanges releases it (CP-13). Without it every drained cluster left
         // one ACW on its page forever, so CP-11 skipped that page in EVERY checkpoint cycle: CK-03's coverage gate
@@ -398,10 +398,10 @@ internal sealed unsafe partial class ArchetypeClusterState
         using var clusterAccessor = hasCluster ? ClusterSegment.CreateChunkAccessor() : default;
         using var transientAccessor = TransientSegment?.CreateChunkAccessor() ?? default;
 
-        for (int i = 0; i < count; i++)
+        for (var i = 0; i < count; i++)
         {
-            int chunkId = ids[i];
-            byte* clusterBase = hasCluster ? clusterAccessor.GetChunkAddress(chunkId, true) : transientAccessor.GetChunkAddress(chunkId, true);
+            var chunkId = ids[i];
+            var clusterBase = hasCluster ? clusterAccessor.GetChunkAddress(chunkId, true) : transientAccessor.GetChunkAddress(chunkId, true);
             if (*(ulong*)clusterBase != 0)
             {
                 continue; // Claim re-filled this cluster after the drain — keep alive
@@ -438,6 +438,49 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <c>DetectClusterMigrations</c>, drained by <see cref="DatabaseEngine.ExecuteMigrations"/> at the tick fence.
     /// Null until the first cell-crossing is detected.</summary>
     internal MigrationRequest[] PendingMigrations;
+
+    /// <summary>
+    /// How many entries of <see cref="PendingMigrations"/> this tick's Migrate phase is draining — the prefix
+    /// <c>[0, PendingMigrationDrainCount)</c>. Snapshotted at the end of Prep and consumed by the Finalize compaction.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The queue has two producers on opposite sides of its consumer.</b> <c>DetectClusterMigrations</c> files during Prep, which precedes Migrate;
+    /// <c>FlagOutliersForMigration</c> and step 10's drift detection file during AabbRefresh, which follows it. A phase that drains "everything" and a Finalize
+    /// that then zeroed the count therefore destroyed the second producer's work every tick — which is why the outlier guard could fire, report itself in
+    ///  telemetry, and never migrate anything.</para>
+    /// <para>Recording the prefix is what lets Finalize remove exactly what was executed and keep the rest for the next tick, turning this back into the queue
+    /// its callers already believed it was.</para>
+    /// </remarks>
+    internal int PendingMigrationDrainCount;
+
+    /// <summary>
+    /// Drop the prefix this tick's Migrate phase executed, keeping requests filed after it for the next tick.
+    /// </summary>
+    /// <remarks>
+    /// Single-threaded: called from <c>FinalizeArchetypeFence</c>, after the Migrate and AabbRefresh barriers, so no producer or consumer is in flight.
+    /// The move is a straight <c>Array.Copy</c> of the tail over the head — the queue is small (a tick's migrants) and the ordering it preserves is the arrival
+    /// order the drain relies on.
+    /// </remarks>
+    internal void CompactPendingMigrations()
+    {
+        var drained = PendingMigrationDrainCount;
+        PendingMigrationDrainCount = 0;
+
+        if (drained <= 0)
+        {
+            return;
+        }
+
+        var remaining = PendingMigrationCount - drained;
+        if (remaining > 0 && PendingMigrations != null)
+        {
+            Array.Copy(PendingMigrations, drained, PendingMigrations, 0, remaining);
+            PendingMigrationCount = remaining;
+            return;
+        }
+
+        PendingMigrationCount = 0;
+    }
 
     /// <summary>Number of valid entries in <see cref="PendingMigrations"/>. Reset to zero at the start
     /// of every <see cref="DatabaseEngine.ExecuteMigrations"/> call.</summary>
@@ -486,19 +529,29 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     /// <summary>
     /// Telemetry counter: clusters examined by the intra-cell drifter scan in the most recently completed tick.
-    /// <b>No producer yet</b> — reads zero until step 10 (detect-and-relocate) of the VDB partitioning design lands.
-    /// <para>Declared now so the telemetry surface is complete before the mechanism exists, and reset at the fence from day one so the future producer inherits
-    /// a correct reset instead of having to remember to add one. Note that zero is therefore genuinely ambiguous between "not built" and "nothing happened this
-    /// tick" — the surface does not distinguish them, and a consumer that needs to must look at whether the feature exists, not at the value. See
-    /// <c>claude/design/Spatial/vdb-cell-grid-and-migration.md</c> §8.3.</para>
+    /// <para>Produced since #872 step 10 by <c>RecomputeDirtyClusterAabbsSlice</c>. Counts clusters WRITTEN this tick, not clusters that exist: a settled world
+    /// scans nothing, which is the denominator that makes <see cref="LastTickDriftersDetected"/> mean something. Zero is no longer ambiguous between "not
+    /// built" and "nothing moved" — it now means the latter.</para>
     /// </summary>
     public int LastTickClustersScanned;
 
     /// <summary>
     /// Telemetry counter: entities the intra-cell scan found outside their cluster's target region in the most recently completed tick.
-    /// <b>No producer yet</b> — reads zero until step 10 of the VDB partitioning design. See <see cref="LastTickClustersScanned"/>.
+    /// <para>Produced since #872 step 10. Counts DETECTION, not outcome: an entity is counted the moment the target-region rule rejects it, whether or not
+    /// placement then found it a home. See <see cref="LastTickClustersScanned"/>.</para>
     /// </summary>
     public int LastTickDriftersDetected;
+
+    /// <summary>
+    /// Telemetry counter: intra-cell drifters left in place because they were inside the drift dead zone, in the most recently completed tick.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT folded into <see cref="LastTickHysteresisAbsorbedCount"/>. That counter measures the margin around a CELL boundary and is the
+    /// input that tunes <c>MigrationHysteresisRatio</c>; this one measures the margin around a cluster's TARGET REGION and tunes
+    /// <c>ClusterDriftMarginRatio</c>. Summing them would produce a number that tunes neither, and the two cannot even fire for the same entity — the
+    /// cell-crossing detectors emit only when the cell key changes, which an intra-cell drifter by definition does not do.
+    /// </remarks>
+    public int LastTickDriftAbsorbedCount;
 
     /// <summary>
     /// Telemetry counter: milliseconds of the per-tick re-clustering budget consumed in the most recently completed tick.
@@ -946,7 +999,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        ref WaitContext growCtx = ref Unsafe.NullRef<WaitContext>();
+        ref var growCtx = ref Unsafe.NullRef<WaitContext>();
         _finalizeLock.Lock.EnterExclusiveAccess(ref growCtx);
         try
         {
@@ -1118,7 +1171,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        ref WaitContext nullCtx = ref Unsafe.NullRef<WaitContext>();
+        ref var nullCtx = ref Unsafe.NullRef<WaitContext>();
         _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
         try
         {
@@ -1153,9 +1206,9 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        long started = Stopwatch.GetTimestamp();
+        var started = Stopwatch.GetTimestamp();
         pending.Sort(static (a, b) => a.ClusterChunkId.CompareTo(b.ClusterChunkId));
-        for (int i = 0; i < pending.Count; i++)
+        for (var i = 0; i < pending.Count; i++)
         {
             var entry = pending[i];
             UpdateClusterInPerCellIndex(entry.ClusterChunkId, entry.CellKey, in ClusterAabbs[entry.ClusterChunkId]);
@@ -1463,7 +1516,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void MarkEntityDirty(int clusterChunkId, int slotIndex)
     {
-        int entityIndex = clusterChunkId * 64 + slotIndex;
+        var entityIndex = clusterChunkId * 64 + slotIndex;
         ClusterDirtyBitmap.Set(entityIndex);
 
         // Issue #233: if this cluster is sleeping, request a deferred wake. The null check on SleepStates is the zero-cost bypass for non-spatial archetypes.
@@ -1516,14 +1569,14 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <param name="categoryMask">Category bitmask; <c>0</c> means "no filter".</param>
     public AabbClusterEnumerator QueryRadius(SpatialGrid grid, float centerX, float centerY, float centerZ, float radius, uint categoryMask = uint.MaxValue)
     {
-        float minX = centerX - radius;
-        float minY = centerY - radius;
-        float maxX = centerX + radius;
-        float maxY = centerY + radius;
-        bool is3D = SpatialSlot.FieldInfo.FieldType == SpatialFieldType.AABB3F || SpatialSlot.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
-        float minZ = is3D ? centerZ - radius : float.NegativeInfinity;
-        float maxZ = is3D ? centerZ + radius : float.PositiveInfinity;
-        float effectiveCenterZ = is3D ? centerZ : 0f;
+        var minX = centerX - radius;
+        var minY = centerY - radius;
+        var maxX = centerX + radius;
+        var maxY = centerY + radius;
+        var is3D = SpatialSlot.FieldInfo.FieldType == SpatialFieldType.AABB3F || SpatialSlot.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
+        var minZ = is3D ? centerZ - radius : float.NegativeInfinity;
+        var maxZ = is3D ? centerZ + radius : float.PositiveInfinity;
+        var effectiveCenterZ = is3D ? centerZ : 0f;
         return new AabbClusterEnumerator(this, grid, minX, minY, minZ, maxX, maxY, maxZ, categoryMask, radius * radius, centerX, centerY, effectiveCenterZ);
     }
 
@@ -1539,7 +1592,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         ChunkBasedSegment<TransientStore> transientSegment = null, TransientStore? transientStore = null)
     {
         Debug.Assert(segment != null || transientSegment != null, "At least one cluster segment must be provided");
-        int capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
+        var capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
         return new ArchetypeClusterState
         {
             ClusterSegment = segment,
@@ -1563,7 +1616,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         ChunkBasedSegment<TransientStore> transientSegment = null, TransientStore? transientStore = null)
     {
         Debug.Assert(segment != null || transientSegment != null, "At least one cluster segment must be provided");
-        int capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
+        var capacity = segment?.ChunkCapacity ?? transientSegment.ChunkCapacity;
         var state = new ArchetypeClusterState
         {
             ClusterSegment = segment,
@@ -1620,15 +1673,15 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     private void ScanActiveChunks(ref ChunkAccessor<PersistentStore> accessor, int capacity)
     {
-        for (int chunkId = 1; chunkId < capacity; chunkId++)
+        for (var chunkId = 1; chunkId < capacity; chunkId++)
         {
             if (!ClusterSegment.IsChunkAllocated(chunkId))
             {
                 continue;
             }
 
-            byte* clusterBase = accessor.GetChunkAddress(chunkId);
-            ulong occupancy = *(ulong*)clusterBase;
+            var clusterBase = accessor.GetChunkAddress(chunkId);
+            var occupancy = *(ulong*)clusterBase;
 
             if (occupancy == 0)
             {
@@ -1646,15 +1699,15 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     private void ScanActiveChunksTransient(ref ChunkAccessor<TransientStore> accessor, int capacity)
     {
-        for (int chunkId = 1; chunkId < capacity; chunkId++)
+        for (var chunkId = 1; chunkId < capacity; chunkId++)
         {
             if (!TransientSegment.IsChunkAllocated(chunkId))
             {
                 continue;
             }
 
-            byte* clusterBase = accessor.GetChunkAddress(chunkId);
-            ulong occupancy = *(ulong*)clusterBase;
+            var clusterBase = accessor.GetChunkAddress(chunkId);
+            var occupancy = *(ulong*)clusterBase;
 
             if (occupancy == 0)
             {
@@ -1685,15 +1738,15 @@ internal sealed unsafe partial class ArchetypeClusterState
     {
         while (true)
         {
-            ulong current = Volatile.Read(ref occupancy);
-            ulong available = ~current & fullMask;
+            var current = Volatile.Read(ref occupancy);
+            var available = ~current & fullMask;
             if (available == 0)
             {
                 return -1;
             }
 
-            int slot = BitOperations.TrailingZeroCount(available);
-            ulong desired = current | (1UL << slot);
+            var slot = BitOperations.TrailingZeroCount(available);
+            var desired = current | (1UL << slot);
             if (Interlocked.CompareExchange(ref occupancy, desired, current) == current)
             {
                 return slot;
@@ -1718,15 +1771,15 @@ internal sealed unsafe partial class ArchetypeClusterState
         // Try existing cluster with free slots (O(1) when FreeClusterHead is valid)
         if (FreeClusterHead >= 0)
         {
-            int clusterId = FreeClusterHead;
-            byte* clusterBase = accessor.GetChunkAddress(clusterId, true);
-            ref ulong occupancy = ref *(ulong*)clusterBase;
+            var clusterId = FreeClusterHead;
+            var clusterBase = accessor.GetChunkAddress(clusterId, true);
+            ref var occupancy = ref *(ulong*)clusterBase;
 
             // Fold BEFORE the claim: the CAS inside ClaimFreeBit is what publishes the bit, and its full fence keeps this store on the correct side of it.
             // Folding for a claim that then fails (cluster full) only raises the maximum, which is conservative — never a relaxation.
             NoteClusterBorn(clusterId, bornTsn);
 
-            int slot = ClaimFreeBit(ref occupancy, Layout.FullMask);
+            var slot = ClaimFreeBit(ref occupancy, Layout.FullMask);
             if (slot >= 0)
             {
                 // If the cluster is now full, reset the head — the next call allocates a new one (O(1)).
@@ -1743,8 +1796,8 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
 
         // No free clusters — allocate new one (O(1))
-        int newClusterId = AllocateNewCluster(changeSet);
-        byte* newBase = accessor.GetChunkAddress(newClusterId, true);
+        var newClusterId = AllocateNewCluster(changeSet);
+        var newBase = accessor.GetChunkAddress(newClusterId, true);
 
         // Claim slot 0 in the fresh cluster. NO fold here — see FreshClusterStaysUnknown. Release store, paired with the reader's acquire read of the word.
         Volatile.Write(ref *(ulong*)newBase, 1UL); // OccupancyBit 0 set
@@ -1761,13 +1814,13 @@ internal sealed unsafe partial class ArchetypeClusterState
     {
         if (FreeClusterHead >= 0)
         {
-            int clusterId = FreeClusterHead;
-            byte* clusterBase = accessor.GetChunkAddress(clusterId, true);
-            ref ulong occupancy = ref *(ulong*)clusterBase;
+            var clusterId = FreeClusterHead;
+            var clusterBase = accessor.GetChunkAddress(clusterId, true);
+            ref var occupancy = ref *(ulong*)clusterBase;
 
             NoteClusterBorn(clusterId, bornTsn);   // before the publishing CAS — see the PersistentStore overload
 
-            int slot = ClaimFreeBit(ref occupancy, Layout.FullMask);
+            var slot = ClaimFreeBit(ref occupancy, Layout.FullMask);
             if (slot >= 0)
             {
                 if ((Volatile.Read(ref occupancy) & Layout.FullMask) == Layout.FullMask)
@@ -1780,8 +1833,8 @@ internal sealed unsafe partial class ArchetypeClusterState
             FreeClusterHead = -1;
         }
 
-        int newClusterId = AllocateNewCluster(null);
-        byte* newBase = accessor.GetChunkAddress(newClusterId, true);
+        var newClusterId = AllocateNewCluster(null);
+        var newBase = accessor.GetChunkAddress(newClusterId, true);
         Volatile.Write(ref *(ulong*)newBase, 1UL);   // no fold — see FreshClusterStaysUnknown
         FreeClusterHead = Layout.ClusterSize > 1 ? newClusterId : -1;
 
@@ -1808,11 +1861,11 @@ internal sealed unsafe partial class ArchetypeClusterState
     private int TryClaimSlotInCluster<TStore>(ref ChunkAccessor<TStore> accessor, int clusterChunkId, long bornTsn)
         where TStore : struct, IPageStore
     {
-        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
-        ref ulong occupancy = ref *(ulong*)clusterBase;
+        var clusterBase = accessor.GetChunkAddress(clusterChunkId);
+        ref var occupancy = ref *(ulong*)clusterBase;
 
-        ulong current = occupancy;
-        ulong available = ~current & Layout.FullMask;
+        var current = occupancy;
+        var available = ~current & Layout.FullMask;
         if (available == 0)
         {
             return -1;
@@ -1827,8 +1880,8 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         while (true)
         {
-            int slot = BitOperations.TrailingZeroCount(available);
-            ulong desired = current | (1UL << slot);
+            var slot = BitOperations.TrailingZeroCount(available);
+            var desired = current | (1UL << slot);
             if (Interlocked.CompareExchange(ref occupancy, desired, current) == current)
             {
                 return slot;
@@ -1842,6 +1895,87 @@ internal sealed unsafe partial class ArchetypeClusterState
                 return -1;
             }
         }
+    }
+
+    /// <summary>
+    /// Claim a slot in <paramref name="preferredClusterChunkId"/> if that cluster is still a live member of
+    /// <paramref name="cellKey"/> and still has room; otherwise fall back to the ordinary first-fit scan.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why a pin exists at all (#872 step 10).</b> First-fit is what this whole issue is repairing: it places an entity in whichever cluster the
+    /// cursor reaches first, with no regard for how much that cluster's AABB has to grow, which is how bounds end up covering ~90 % of their cell. Intra-cell
+    /// relocation computes a least-enlargement destination during detection; without a way to name it, the claim would scan from the cursor, find the SOURCE
+    /// cluster — which is in the same cell's list and usually has a free slot — and hand the entity straight back.</para>
+    /// <para><b>The pin is a preference, and the fallback is not a formality.</b> Detection runs a whole phase before the drain, so the chosen cluster can fill
+    /// up or be drained and freed in between. Landing in a worse cluster costs selectivity; refusing the migration would strand the entity in a cluster it no
+    /// longer belongs to, which is a correctness problem rather than a quality one. So a failed pin degrades to first fit.</para>
+    /// <para><b>The <see cref="ClusterCellMap"/> check is an identity check, not a bounds check.</b> A chunk id that was freed can be reallocated to a
+    /// different cell, and it would look like a perfectly good cluster with free slots. Claiming into it would put the entity in the wrong cell — <c>C13</c>
+    /// broken, and
+    /// silently, because every counter still balances. Verifying the pinned cluster still maps to the cell the request names is what rejects that.</para>
+    /// </remarks>
+    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, int preferredClusterChunkId, ref ChunkAccessor<PersistentStore> accessor,
+        ChangeSet changeSet, SpatialGrid grid, long bornTsn)
+    {
+        if (TryClaimPinnedSlot(cellKey, preferredClusterChunkId, ref accessor, grid, bornTsn, out var pinnedSlot))
+        {
+            return (preferredClusterChunkId, pinnedSlot);
+        }
+
+        return ClaimSlotInCell(cellKey, ref accessor, changeSet, grid, bornTsn);
+    }
+
+    /// <inheritdoc cref="ClaimSlotInCell(int, int, ref ChunkAccessor{PersistentStore}, ChangeSet, SpatialGrid, long)"/>
+    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, int preferredClusterChunkId, ref ChunkAccessor<TransientStore> accessor,
+        SpatialGrid grid, long bornTsn)
+    {
+        if (TryClaimPinnedSlot(cellKey, preferredClusterChunkId, ref accessor, grid, bornTsn, out var pinnedSlot))
+        {
+            return (preferredClusterChunkId, pinnedSlot);
+        }
+
+        return ClaimSlotInCell(cellKey, ref accessor, grid, bornTsn);
+    }
+
+    /// <summary>
+    /// The pinned half of the two overloads above: validate the pin, claim, and bump the cell's entity count.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="TryClaimSlotInCluster{TStore}"/> deliberately does NOT touch <see cref="CellState.EntityCount"/> — the scan overloads bump it at each of
+    /// their three success sites instead. A pinned claim is a fourth success site and owes the same increment; omitting it makes the cell under-count by
+    /// one per relocation, which nothing would fail on until a cell reports fewer entities than it holds.
+    /// </remarks>
+    private bool TryClaimPinnedSlot<TStore>(int cellKey, int preferredClusterChunkId, ref ChunkAccessor<TStore> accessor, SpatialGrid grid, long bornTsn,
+        out int slotIndex) where TStore : struct, IPageStore
+    {
+        slotIndex = -1;
+
+        // ONE read of the field, into a local, and an acquire one. This runs on a Migrate worker while a sibling worker can be growing the same array —
+        // EnsureClusterCellMapCapacity replaces the reference under _finalizeLock and then publishes entries into the replacement. Re-reading the field per
+        // access let the length check land on the grown array and the index on the old one (an out-of-range throw), and on arm64 the plain reference store is
+        // unordered against the element copies behind it, so a reader could see the new reference with stale contents. Volatile.Read pairs with that
+        // publication and costs nothing on x64.
+        var cellMap = Volatile.Read(ref ClusterCellMap);
+        if (preferredClusterChunkId < 0 || cellMap == null || (uint)preferredClusterChunkId >= (uint)cellMap.Length)
+        {
+            return false;
+        }
+
+        if (cellMap[preferredClusterChunkId] != cellKey)
+        {
+            return false;
+        }
+
+        var slot = TryClaimSlotInCluster(ref accessor, preferredClusterChunkId, bornTsn);
+        if (slot < 0)
+        {
+            return false;
+        }
+
+        ref var cell = ref grid.GetCell(cellKey);
+        Interlocked.Increment(ref cell.EntityCount);
+        slotIndex = slot;
+        return true;
     }
 
     /// <summary>
@@ -1876,7 +2010,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // a parallel-migration release which — unlike serial destroy — deliberately does NOT reset the cursor). Phase 1 ∪ phase 2 cover the whole list, so a
         // new cluster is allocated only when every existing cluster is genuinely full. This makes the cursor a pure hint: stale values cost a redundant
         // scan, never a missed free slot.
-        int scanStart = CellClusterPool.GetScanCursor(cellKey);
+        var scanStart = CellClusterPool.GetScanCursor(cellKey);
         if (scanStart > clusters.Length)
         {
             scanStart = clusters.Length;
@@ -1884,11 +2018,11 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         // Phase 1 — forward scan from the cursor. firstNonFull tracks the contiguous full-cluster prefix so the cursor only advances past clusters that are
         // genuinely full (a non-full cluster earlier in the scan pins it — the cursor must never skip a cluster that still has a free slot).
-        int firstNonFull = scanStart;
-        for (int i = scanStart; i < clusters.Length; i++)
+        var firstNonFull = scanStart;
+        for (var i = scanStart; i < clusters.Length; i++)
         {
-            int clusterId = clusters[i];
-            int slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
+            var clusterId = clusters[i];
+            var slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
             if (slot < 0)
             {
                 if (i == firstNonFull)
@@ -1906,11 +2040,11 @@ internal sealed unsafe partial class ArchetypeClusterState
         // BACKWARD (SetScanCursor, not the monotonic AdvanceScanCursor) to this phase's own contiguous-full prefix, so subsequent claims start in the
         // reclaimed region instead of re-walking the now-full tail. Safe as a plain write — the cell is worker-exclusive on the migration path and
         // single-threaded on spawn/destroy.
-        int prefixFirstNonFull = 0;
-        for (int i = 0; i < scanStart; i++)
+        var prefixFirstNonFull = 0;
+        for (var i = 0; i < scanStart; i++)
         {
-            int clusterId = clusters[i];
-            int slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
+            var clusterId = clusters[i];
+            var slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
             if (slot < 0)
             {
                 if (i == prefixFirstNonFull)
@@ -1932,7 +2066,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         //   (3) CellClusterPool.AddCluster + ClusterCellMap[newChunkId] = cellKey — per-cell pool mutation + back-pointer.
         // These all happen here. The hot path (existing-cluster CAS above) does NOT take this lock.
         int newChunkId;
-        ref WaitContext nullCtx0 = ref Unsafe.NullRef<WaitContext>();
+        ref var nullCtx0 = ref Unsafe.NullRef<WaitContext>();
         _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx0);
         try
         {
@@ -1953,7 +2087,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         Interlocked.Increment(ref cell.ClusterCount);
         Interlocked.Increment(ref cell.EntityCount);
 
-        byte* newBase = accessor.GetChunkAddress(newChunkId, true);
+        var newBase = accessor.GetChunkAddress(newChunkId, true);
         Volatile.Write(ref *(ulong*)newBase, 1UL); // occupancy bit 0, no fold — see FreshClusterStaysUnknown
 
         // Phase 3: Spatial:Grid:ClusterCellAssign instant — fired when a new cluster is bound to a cell.
@@ -1971,18 +2105,18 @@ internal sealed unsafe partial class ArchetypeClusterState
         var clusters = CellClusterPool.GetClusters(cellKey);
 
         // Two-phase cursor scan — see the PersistentStore overload above for the full rationale (O(M²) re-scan collapse, phase-2 self-heal, hint semantics).
-        int scanStart = CellClusterPool.GetScanCursor(cellKey);
+        var scanStart = CellClusterPool.GetScanCursor(cellKey);
         if (scanStart > clusters.Length)
         {
             scanStart = clusters.Length;
         }
 
         // Phase 1 — forward scan from the cursor.
-        int firstNonFull = scanStart;
-        for (int i = scanStart; i < clusters.Length; i++)
+        var firstNonFull = scanStart;
+        for (var i = scanStart; i < clusters.Length; i++)
         {
-            int clusterId = clusters[i];
-            int slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
+            var clusterId = clusters[i];
+            var slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
             if (slot < 0)
             {
                 if (i == firstNonFull)
@@ -1997,11 +2131,11 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
 
         // Phase 2 — prefix scan, reached only when phase 1 found nothing. On success the cursor is moved backward to the reclaimed region.
-        int prefixFirstNonFull = 0;
-        for (int i = 0; i < scanStart; i++)
+        var prefixFirstNonFull = 0;
+        for (var i = 0; i < scanStart; i++)
         {
-            int clusterId = clusters[i];
-            int slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
+            var clusterId = clusters[i];
+            var slot = TryClaimSlotInCluster(ref accessor, clusterId, bornTsn);
             if (slot < 0)
             {
                 if (i == prefixFirstNonFull)
@@ -2018,7 +2152,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // No free slot — allocate a new cluster and attach it to this archetype's per-cell claim list.
         // See PersistentStore overload above for the rationale on locking this slow path.
         int newChunkId;
-        ref WaitContext nullCtx1 = ref Unsafe.NullRef<WaitContext>();
+        ref var nullCtx1 = ref Unsafe.NullRef<WaitContext>();
         _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx1);
         try
         {
@@ -2037,7 +2171,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         Interlocked.Increment(ref cell.ClusterCount);
         Interlocked.Increment(ref cell.EntityCount);
 
-        byte* newBase = accessor.GetChunkAddress(newChunkId, true);
+        var newBase = accessor.GetChunkAddress(newChunkId, true);
         Volatile.Write(ref *(ulong*)newBase, 1UL); // no fold — see FreshClusterStaysUnknown
 
         // Phase 3: Spatial:Grid:ClusterCellAssign instant — fired when a new cluster is bound to a cell.
@@ -2078,27 +2212,27 @@ internal sealed unsafe partial class ArchetypeClusterState
         Array.Fill(ClusterCellMap, -1);
 
         var ss = SpatialSlot;
-        int componentOffset = Layout.ComponentOffset(ss.Slot);
-        int compStride = Layout.ComponentSize(ss.Slot);
+        var componentOffset = Layout.ComponentOffset(ss.Slot);
+        var compStride = Layout.ComponentSize(ss.Slot);
         var fieldType = ss.FieldInfo.FieldType;
 
         Interlocked.Increment(ref RebuildSegmentPassCount);
         var clusterAccessor = ClusterSegment.CreateChunkAccessor();
         try
         {
-            for (int i = 0; i < ActiveClusterCount; i++)
+            for (var i = 0; i < ActiveClusterCount; i++)
             {
-                int chunkId = ActiveClusterIds[i];
-                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId);
-                ulong occupancy = *(ulong*)clusterBase;
+                var chunkId = ActiveClusterIds[i];
+                var clusterBase = clusterAccessor.GetChunkAddress(chunkId);
+                var occupancy = *(ulong*)clusterBase;
                 if (occupancy == 0)
                 {
                     continue;
                 }
 
-                int firstSlot = BitOperations.TrailingZeroCount(occupancy);
-                byte* fieldPtr = clusterBase + componentOffset + firstSlot * compStride + ss.FieldOffset;
-                int cellKey = grid.WorldToCellKeyFromSpatialField(fieldPtr, fieldType);
+                var firstSlot = BitOperations.TrailingZeroCount(occupancy);
+                var fieldPtr = clusterBase + componentOffset + firstSlot * compStride + ss.FieldOffset;
+                var cellKey = grid.WorldToCellKeyFromSpatialField(fieldPtr, fieldType);
 
                 ClusterCellMap[chunkId] = cellKey;
                 CellClusterPool.AddCluster(cellKey, chunkId);
@@ -2172,8 +2306,8 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        bool contained = fresh.MinX >= previous.MinX && fresh.MinY >= previous.MinY && fresh.MinZ >= previous.MinZ
-                         && fresh.MaxX <= previous.MaxX && fresh.MaxY <= previous.MaxY && fresh.MaxZ <= previous.MaxZ;
+        var contained = fresh.MinX >= previous.MinX && fresh.MinY >= previous.MinY && fresh.MinZ >= previous.MinZ
+                        && fresh.MaxX <= previous.MaxX && fresh.MaxY <= previous.MaxY && fresh.MaxZ <= previous.MaxZ;
         if (!contained)
         {
             Interlocked.Increment(ref AabbEscapeCount);
@@ -2214,8 +2348,8 @@ internal sealed unsafe partial class ArchetypeClusterState
         var result = default(ClusterRebuildMapResult);
         result.Aabb = ClusterSpatialAabb.Empty;
 
-        byte* clusterBase = accessor.GetChunkAddress(chunkId);
-        ulong occupancy = *(ulong*)clusterBase;
+        var clusterBase = accessor.GetChunkAddress(chunkId);
+        var occupancy = *(ulong*)clusterBase;
         result.PopCount = BitOperations.PopCount(occupancy);
         if (occupancy == 0)
         {
@@ -2223,15 +2357,15 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
 
         var ss = SpatialSlot;
-        int firstSlot = BitOperations.TrailingZeroCount(occupancy);
-        byte* firstFieldPtr = clusterBase + Layout.ComponentOffset(ss.Slot) + firstSlot * Layout.ComponentSize(ss.Slot) + ss.FieldOffset;
+        var firstSlot = BitOperations.TrailingZeroCount(occupancy);
+        var firstFieldPtr = clusterBase + Layout.ComponentOffset(ss.Slot) + firstSlot * Layout.ComponentSize(ss.Slot) + ss.FieldOffset;
         grid.ReadCellCoordsFromSpatialField(firstFieldPtr, ss.FieldInfo.FieldType, out result.CellX, out result.CellY, out result.CellZ);
 
         // Delegate the union rather than inlining a twin of it. Inlining would save one GetChunkAddress (an MRU-cache hit on a line this method just touched)
         // and one occupancy load — worth far less than the ~18 % the merge itself buys — at the price of a SECOND copy of a [fatal][silent] CA-01 computation
         // that could silently diverge from this one. The 3D branch in particular is only covered through RecomputeClusterAabb, so a twin's 3D half would have
         // had no test at all.
-        grid.CellOriginFromCoords(result.CellX, result.CellY, result.CellZ, out float originX, out float originY, out float originZ);
+        grid.CellOriginFromCoords(result.CellX, result.CellY, result.CellZ, out var originX, out var originY, out var originZ);
         result.Aabb = RecomputeClusterAabb(chunkId, ref accessor, originX, originY, originZ);
         return result;
     }
@@ -2372,7 +2506,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // Serial, in ActiveClusterIds order, so the append-ordered index slots and pool contents do not depend on how the map was scheduled.
         for (var i = 0; i < count; i++)
         {
-            int chunkId = ActiveClusterIds[i];
+            var chunkId = ActiveClusterIds[i];
             ref var m = ref mapped[i];
 
             // Written even for an empty cluster: RebuildClusterAabbs stored Empty for those, and bit-identical means bit-identical.
@@ -2386,7 +2520,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             // The cell is CREATED here, in the serial reduce, from the coordinates the parallel map produced. Creation order is therefore ActiveClusterIds
             // order — the same ordering that already makes ClusterSpatialIndexSlot independent of the worker count, and what keeps the whole rebuild's output
             // bit-identical across W (see the map/reduce rationale above).
-            int cellKey = grid.ComputeCellKey(m.CellX, m.CellY, m.CellZ);
+            var cellKey = grid.ComputeCellKey(m.CellX, m.CellY, m.CellZ);
 
             ClusterCellMap[chunkId] = cellKey;
             CellClusterPool.AddCluster(cellKey, chunkId);
@@ -2421,7 +2555,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     {
         if (ClusterCellMap == null)
         {
-            int initial = Math.Max(16, requiredLength);
+            var initial = Math.Max(16, requiredLength);
             ClusterCellMap = new int[initial];
             Array.Fill(ClusterCellMap, -1);
             return;
@@ -2433,12 +2567,12 @@ internal sealed unsafe partial class ArchetypeClusterState
         // Defensive: if ClusterCellMap.Length is ever 0 (shouldn't happen through normal
         // construction — we always allocate >= 16 — but a future constructor path could regress)
         // start the doubling from 1 instead of 0 to avoid an infinite loop.
-        int newLen = Math.Max(ClusterCellMap.Length, 1);
+        var newLen = Math.Max(ClusterCellMap.Length, 1);
         while (newLen < requiredLength)
         {
             newLen *= 2;
         }
-        int oldLen = ClusterCellMap.Length;
+        var oldLen = ClusterCellMap.Length;
         Array.Resize(ref ClusterCellMap, newLen);
         Array.Fill(ClusterCellMap, -1, oldLen, newLen - oldLen);
     }
@@ -2451,9 +2585,9 @@ internal sealed unsafe partial class ArchetypeClusterState
     {
         if (ClusterAabbs == null)
         {
-            int initial = Math.Max(16, requiredLength);
+            var initial = Math.Max(16, requiredLength);
             ClusterAabbs = new ClusterSpatialAabb[initial];
-            for (int i = 0; i < initial; i++)
+            for (var i = 0; i < initial; i++)
             {
                 ClusterAabbs[i] = ClusterSpatialAabb.Empty;
             }
@@ -2463,14 +2597,14 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int newLen = Math.Max(ClusterAabbs.Length, 1);
+        var newLen = Math.Max(ClusterAabbs.Length, 1);
         while (newLen < requiredLength)
         {
             newLen *= 2;
         }
-        int oldLen = ClusterAabbs.Length;
+        var oldLen = ClusterAabbs.Length;
         Array.Resize(ref ClusterAabbs, newLen);
-        for (int i = oldLen; i < newLen; i++)
+        for (var i = oldLen; i < newLen; i++)
         {
             ClusterAabbs[i] = ClusterSpatialAabb.Empty;
         }
@@ -2484,7 +2618,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     {
         if (ClusterSpatialIndexSlot == null)
         {
-            int initial = Math.Max(16, requiredLength);
+            var initial = Math.Max(16, requiredLength);
             ClusterSpatialIndexSlot = new int[initial];
             Array.Fill(ClusterSpatialIndexSlot, -1);
             return;
@@ -2493,12 +2627,12 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int newLen = Math.Max(ClusterSpatialIndexSlot.Length, 1);
+        var newLen = Math.Max(ClusterSpatialIndexSlot.Length, 1);
         while (newLen < requiredLength)
         {
             newLen *= 2;
         }
-        int oldLen = ClusterSpatialIndexSlot.Length;
+        var oldLen = ClusterSpatialIndexSlot.Length;
         Array.Resize(ref ClusterSpatialIndexSlot, newLen);
         Array.Fill(ClusterSpatialIndexSlot, -1, oldLen, newLen - oldLen);
 
@@ -2515,15 +2649,15 @@ internal sealed unsafe partial class ArchetypeClusterState
     internal void EnsureClusterWriteBookkeepingCapacity(int requiredLength)
     {
         // ClusterProcessBitmap: 1 bit per cluster → (requiredLength + 63) / 64 long words.
-        int requiredWords = (requiredLength + 63) >> 6;
+        var requiredWords = (requiredLength + 63) >> 6;
         if (ClusterProcessBitmap == null)
         {
-            int initialWords = Math.Max(1, requiredWords);
+            var initialWords = Math.Max(1, requiredWords);
             ClusterProcessBitmap = new long[initialWords];
         }
         else if (ClusterProcessBitmap.Length < requiredWords)
         {
-            int newLen = Math.Max(ClusterProcessBitmap.Length, 1);
+            var newLen = Math.Max(ClusterProcessBitmap.Length, 1);
             while (newLen < requiredWords)
             {
                 newLen *= 2;
@@ -2536,7 +2670,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // Per-cluster arrays sized 1:1 with clusterChunkId range.
         if (ClusterMigrationPendingSlots == null)
         {
-            int initial = Math.Max(16, requiredLength);
+            var initial = Math.Max(16, requiredLength);
             ClusterMigrationPendingSlots = new ulong[initial];
             ClusterMigrationDestCellKeys = new int[initial];
             Array.Fill(ClusterMigrationDestCellKeys, -1);
@@ -2547,13 +2681,13 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int newClusterLen = Math.Max(ClusterMigrationPendingSlots.Length, 1);
+        var newClusterLen = Math.Max(ClusterMigrationPendingSlots.Length, 1);
         while (newClusterLen < requiredLength)
         {
             newClusterLen *= 2;
         }
 
-        int oldLen = ClusterMigrationPendingSlots.Length;
+        var oldLen = ClusterMigrationPendingSlots.Length;
         Array.Resize(ref ClusterMigrationPendingSlots, newClusterLen);
         Array.Resize(ref ClusterMigrationDestCellKeys, newClusterLen);
         Array.Fill(ClusterMigrationDestCellKeys, -1, oldLen, newClusterLen - oldLen);
@@ -2569,7 +2703,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     {
         if (PerCellIndex == null)
         {
-            int initial = Math.Max(16, requiredLength);
+            var initial = Math.Max(16, requiredLength);
             PerCellIndex = new PerCellSpatialSlot[initial];
             return;
         }
@@ -2577,7 +2711,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int newLen = Math.Max(PerCellIndex.Length, 1);
+        var newLen = Math.Max(PerCellIndex.Length, 1);
         while (newLen < requiredLength)
         {
             newLen *= 2;
@@ -2603,7 +2737,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int newLen = Math.Max(SleepStates.Length, 1);
+        var newLen = Math.Max(SleepStates.Length, 1);
         while (newLen < requiredLength)
         {
             newLen *= 2;
@@ -2629,9 +2763,9 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        for (int i = 0; i < ActiveClusterCount; i++)
+        for (var i = 0; i < ActiveClusterCount; i++)
         {
-            int chunkId = ActiveClusterIds[i];
+            var chunkId = ActiveClusterIds[i];
             if (chunkId >= SleepStates.Length)
             {
                 continue;
@@ -2642,14 +2776,14 @@ internal sealed unsafe partial class ArchetypeClusterState
             if (state == ClusterSleepState.Active)
             {
                 // Check dirty bitmap: nonzero word means at least one entity written this tick
-                bool dirty = chunkId < dirtyBits.Length && dirtyBits[chunkId] != 0;
+                var dirty = chunkId < dirtyBits.Length && dirtyBits[chunkId] != 0;
                 if (dirty)
                 {
                     SleepCounters[chunkId] = 0;
                 }
                 else
                 {
-                    int counter = SleepCounters[chunkId] + 1;
+                    var counter = SleepCounters[chunkId] + 1;
                     if (counter >= SleepThresholdTicks)
                     {
                         SleepStates[chunkId] = ClusterSleepState.Sleeping;
@@ -2705,9 +2839,9 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
         _lastWakeTransitionTick = currentTick;
 
-        for (int i = 0; i < ActiveClusterCount; i++)
+        for (var i = 0; i < ActiveClusterCount; i++)
         {
-            int chunkId = ActiveClusterIds[i];
+            var chunkId = ActiveClusterIds[i];
             if (chunkId < SleepStates.Length && SleepStates[chunkId] == ClusterSleepState.WakePending)
             {
                 SleepStates[chunkId] = ClusterSleepState.Active;
@@ -2740,25 +2874,25 @@ internal sealed unsafe partial class ArchetypeClusterState
         double originX, double originY, double originZ, out int slotsScanned)
     {
         var ss = SpatialSlot;
-        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
-        ulong occupancy = *(ulong*)clusterBase;
+        var clusterBase = accessor.GetChunkAddress(clusterChunkId);
+        var occupancy = *(ulong*)clusterBase;
         slotsScanned = BitOperations.PopCount(occupancy);
-        int componentOffset = Layout.ComponentOffset(ss.Slot);
-        int componentStride = Layout.ComponentSize(ss.Slot);
+        var componentOffset = Layout.ComponentOffset(ss.Slot);
+        var componentStride = Layout.ComponentSize(ss.Slot);
 
         var aabb = ClusterSpatialAabb.Empty;
         // 6 doubles covers both 2D ([minX, minY, maxX, maxY]) and 3D ([minX, minY, minZ, maxX, maxY, maxZ]) layouts produced by
         // SpatialMaintainer.ReadAndValidateBoundsFromPtr. The tail slots cost nothing for 2D reads.
         Span<double> coords = stackalloc double[6];
-        bool is3D = ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
+        var is3D = ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
 
-        ulong bits = occupancy;
+        var bits = occupancy;
         while (bits != 0)
         {
-            int slot = BitOperations.TrailingZeroCount(bits);
+            var slot = BitOperations.TrailingZeroCount(bits);
             bits &= bits - 1;
 
-            byte* fieldPtr = clusterBase + componentOffset + slot * componentStride + ss.FieldOffset;
+            var fieldPtr = clusterBase + componentOffset + slot * componentStride + ss.FieldOffset;
             if (!SpatialMaintainer.ReadAndValidateBoundsFromPtr(fieldPtr, ss.FieldInfo, coords, ss.Descriptor))
             {
                 continue; // skip degenerate slot
@@ -2844,9 +2978,9 @@ internal sealed unsafe partial class ArchetypeClusterState
         var clusterAccessor = ClusterSegment.CreateChunkAccessor();
         try
         {
-            for (int i = 0; i < ActiveClusterCount; i++)
+            for (var i = 0; i < ActiveClusterCount; i++)
             {
-                int chunkId = ActiveClusterIds[i];
+                var chunkId = ActiveClusterIds[i];
 
                 // The cell is resolved FIRST now: a C15 cell-relative AABB cannot be computed without the cell's origin, so the order that used to be
                 // "recompute, then find the cell" is inverted. A cluster with no cell keeps the Empty sentinel rather than an AABB measured from nowhere.
@@ -2856,7 +2990,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                     ClusterAabbs[chunkId] = ClusterSpatialAabb.Empty;
                     continue;
                 }
-                int cellKey = ClusterCellMap[chunkId];
+                var cellKey = ClusterCellMap[chunkId];
                 if (cellKey < 0)
                 {
                     // No cell, so no frame — but the slot must still be CLEARED rather than left holding whatever a previous life of this chunk id wrote.
@@ -2866,8 +3000,8 @@ internal sealed unsafe partial class ArchetypeClusterState
                     continue;
                 }
 
-                grid.CellOrigin(cellKey, out float originX, out float originY, out float originZ);
-                ClusterSpatialAabb aabb = RecomputeClusterAabb(chunkId, ref clusterAccessor, originX, originY, originZ);
+                grid.CellOrigin(cellKey, out var originX, out var originY, out var originZ);
+                var aabb = RecomputeClusterAabb(chunkId, ref clusterAccessor, originX, originY, originZ);
                 ClusterAabbs[chunkId] = aabb;
 
                 if (float.IsPositiveInfinity(aabb.MinX))
@@ -2939,15 +3073,18 @@ internal sealed unsafe partial class ArchetypeClusterState
         var refreshSpan = TyphonEvent.BeginSpatialClusterAabbRefresh((ushort)ArchetypeId, ActiveClusterCount);
         try
         {
-            int totalWork = (SpatialBarrierOnly && ClusterProcessBitmap != null) ? ClusterProcessBitmap.Length : ActiveClusterCount;
+            var totalWork = (SpatialBarrierOnly && ClusterProcessBitmap != null) ? ClusterProcessBitmap.Length : ActiveClusterCount;
             if (totalWork > 0)
             {
                 var outlierBuffer = new List<MigrationRequest>(0);
                 // No deferral buffer on the serial path: it is already the single writer, so a promoted cell's tree can be written directly and the drain
                 // below has nothing to do. Passing null is what selects that — see the divert in the slice.
-                RecomputeDirtyClusterAabbsSlice(0, totalWork, ref accessor, grid, null, outlierBuffer, out int aabbsChanged, out int slotsScanned,
-                    out int outlierGuardFires);
+                RecomputeDirtyClusterAabbsSlice(0, totalWork, ref accessor, grid, null, outlierBuffer, out var aabbsChanged, out var slotsScanned,
+                    out var outlierGuardFires, out var clustersScanned, out var driftersDetected, out var driftAbsorbed);
                 EnqueueMigrationsBulk(outlierBuffer);
+                Interlocked.Add(ref LastTickClustersScanned, clustersScanned);
+                Interlocked.Add(ref LastTickDriftersDetected, driftersDetected);
+                Interlocked.Add(ref LastTickDriftAbsorbedCount, driftAbsorbed);
                 refreshSpan.AabbsChanged = aabbsChanged;
                 refreshSpan.SlotsScanned = slotsScanned;
                 refreshSpan.OutlierGuardFires = outlierGuardFires;
@@ -2988,11 +3125,15 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </para>
     /// </summary>
     internal void RecomputeDirtyClusterAabbsSlice(int sliceStart, int sliceCount, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid,
-        List<PromotedAabbApply> promotedApplyBuffer, List<MigrationRequest> outlierBuffer, out int aabbsChanged, out int slotsScanned, out int outlierGuardFires)
+        List<PromotedAabbApply> promotedApplyBuffer, List<MigrationRequest> outlierBuffer, out int aabbsChanged, out int slotsScanned,
+        out int outlierGuardFires, out int clustersScanned, out int driftersDetected, out int driftAbsorbed)
     {
         aabbsChanged = 0;
         slotsScanned = 0;
         outlierGuardFires = 0;
+        clustersScanned = 0;
+        driftersDetected = 0;
+        driftAbsorbed = 0;
 
         if (!SpatialSlot.HasSpatialIndex)
         {
@@ -3019,20 +3160,30 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        float maxExtent = 0f;
-        float cellSize = 0f;
-        bool outlierGuardActive = grid != null && (cellSize = grid.Config.CellSize) > 0f;
+        var maxExtent = 0f;
+        var cellSize = 0f;
+        var outlierGuardActive = grid != null && (cellSize = grid.Config.CellSize) > 0f;
+        var driftTargetExtent = 0f;
         if (outlierGuardActive)
         {
             maxExtent = cellSize * 1.2f;
+            driftTargetExtent = cellSize * grid.Config.ClusterTargetExtentRatio;
         }
+
+        // Hoisted out of the per-cluster loop, which is the whole point of taking it as a parameter (D1). 64 slots is the cluster capacity ceiling and
+        // three axes are cached, so this is 768 bytes on the slice worker's stack, reused for every cluster the slice touches. Allocating it per cluster
+        // would put a stackalloc inside a loop.
+        Span<float> centreScratch = stackalloc float[3 * MaxSlotsPerCluster];
+
+        // Per-WORKER, not per-slice — see _candidateScratch. Reused across ticks, so the steady state allocates nothing.
+        var candidateScratch = CandidateScratch ??= new List<RelocationCandidate>(64);
 
         if (SpatialBarrierOnly && ClusterProcessBitmap != null)
         {
-            int wordEnd = Math.Min(sliceStart + sliceCount, ClusterProcessBitmap.Length);
-            for (int wordIdx = sliceStart; wordIdx < wordEnd; wordIdx++)
+            var wordEnd = Math.Min(sliceStart + sliceCount, ClusterProcessBitmap.Length);
+            for (var wordIdx = sliceStart; wordIdx < wordEnd; wordIdx++)
             {
-                long word = ClusterProcessBitmap[wordIdx];
+                var word = ClusterProcessBitmap[wordIdx];
                 if (word == 0)
                 {
                     continue;
@@ -3040,7 +3191,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
                 while (word != 0)
                 {
-                    int chunkId = (wordIdx << 6) + BitOperations.TrailingZeroCount((ulong)word);
+                    var chunkId = (wordIdx << 6) + BitOperations.TrailingZeroCount((ulong)word);
                     word &= word - 1;
 
                     if (chunkId >= ClusterSpatialIndexSlot.Length)
@@ -3048,7 +3199,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                         continue;
                     }
 
-                    int indexSlot = ClusterSpatialIndexSlot[chunkId];
+                    var indexSlot = ClusterSpatialIndexSlot[chunkId];
                     if (indexSlot < 0)
                     {
                         continue;
@@ -3059,7 +3210,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                         continue;
                     }
 
-                    int cellKey = ClusterCellMap[chunkId];
+                    var cellKey = ClusterCellMap[chunkId];
                     if (cellKey < 0)
                     {
                         continue;
@@ -3074,14 +3225,16 @@ internal sealed unsafe partial class ArchetypeClusterState
                         continue;
                     }
 
-                    byte shrinkMask = ClusterShrinkPendingAxes != null && chunkId < ClusterShrinkPendingAxes.Length ? ClusterShrinkPendingAxes[chunkId] : (byte)0;
+                    var shrinkMask = ClusterShrinkPendingAxes != null && chunkId < ClusterShrinkPendingAxes.Length
+                        ? ClusterShrinkPendingAxes[chunkId]
+                        : (byte)0;
 
                     ref var stored = ref ClusterAabbs[chunkId];
                     ClusterSpatialAabb fresh;
                     if (shrinkMask != 0)
                     {
-                        grid.CellOrigin(cellKey, out float shrinkOriginX, out float shrinkOriginY, out float shrinkOriginZ);
-                        fresh = RecomputeClusterAabb(chunkId, ref accessor, shrinkOriginX, shrinkOriginY, shrinkOriginZ, out int clusterSlots);
+                        grid.CellOrigin(cellKey, out var shrinkOriginX, out var shrinkOriginY, out var shrinkOriginZ);
+                        fresh = RecomputeClusterAabb(chunkId, ref accessor, shrinkOriginX, shrinkOriginY, shrinkOriginZ, out var clusterSlots);
                         slotsScanned += clusterSlots;
                         if (float.IsPositiveInfinity(fresh.MinX))
                         {
@@ -3109,8 +3262,8 @@ internal sealed unsafe partial class ArchetypeClusterState
                     // The bit is the signal, and it costs nothing here because it is what we are already iterating. A cluster reaches this loop only because
                     // WriteSpatial set its ClusterProcessBitmap bit, and it sets that bit on exactly `aabbChanged || migrationFlagged` — either way the index
                     // wants the current box. ClearAabbRefreshBookkeeping zeroes the bitmap once per tick, so a set bit always refers to this tick.
-                    bool boundsMoved = stored.MinX != fresh.MinX || stored.MinY != fresh.MinY || stored.MinZ != fresh.MinZ ||
-                                       stored.MaxX != fresh.MaxX || stored.MaxY != fresh.MaxY || stored.MaxZ != fresh.MaxZ;
+                    var boundsMoved = stored.MinX != fresh.MinX || stored.MinY != fresh.MinY || stored.MinZ != fresh.MinZ ||
+                                      stored.MaxX != fresh.MaxX || stored.MaxY != fresh.MaxY || stored.MaxZ != fresh.MaxZ;
 
                     fresh.CategoryMask = ReadStoredCategoryMask(slot, chunkId, indexSlot);
                     NoteClusterOverhang(in fresh, cellSize);
@@ -3132,29 +3285,57 @@ internal sealed unsafe partial class ArchetypeClusterState
                     // UNREACHABLE today — WriteSpatial supports AABB2F only, so no cluster AABB grows on Z at write time, and a 2D union leaves
                     // MinZ/MaxZ at the ±Infinity sentinel whose difference is -Infinity. It goes in now rather than being discovered missing when 3D
                     // write support lands (steps 9-10).
-                    if (outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent ||
-                                               (fresh.MaxY - fresh.MinY) > maxExtent ||
-                                               (fresh.MaxZ - fresh.MinZ) > maxExtent))
+                    // ── D1: ONE gather, then two cheap consumers ──────────────────────────────────────────────────
+                    //
+                    // Gated so a healthy cluster still costs nothing per entity. The guard's threshold is cellSize x 1.2 and
+                    // the drift gate is cellSize x ClusterTargetExtentRatio (0.25 by default), so the drift gate is the wider
+                    // of the two and a cluster that trips the guard has always tripped it as well — but both are tested
+                    // rather than assuming the ratio stays below 1.2, because it is a tunable and step 11 will tune it.
+                    //
+                    // Both extents come from `fresh`, which is already in registers, so the decision to walk is three float
+                    // compares. Only a cluster that has actually spread pays for the walk, which is what makes §5.2's
+                    // "you can afford to LOOK at everything" true of clusters rather than only of entities.
+                    var guardFires = outlierGuardActive && 
+                                     ((fresh.MaxX - fresh.MinX) > maxExtent || (fresh.MaxY - fresh.MinY) > maxExtent || (fresh.MaxZ - fresh.MinZ) > maxExtent);
+                    var driftGated = driftTargetExtent > 0f && ((fresh.MaxX - fresh.MinX) > driftTargetExtent
+                                                                || (fresh.MaxY - fresh.MinY) > driftTargetExtent
+                                                                || (fresh.MaxZ - fresh.MinZ) > driftTargetExtent);
+
+                    clustersScanned++;
+                    if (!guardFires && !driftGated)
+                    {
+                        continue;
+                    }
+
+                    var centres = GatherClusterCentres(chunkId, ref accessor, centreScratch);
+                    ulong guardClaimed = 0;
+                    if (guardFires)
                     {
                         outlierGuardFires++;
-                        FlagOutliersForMigration(chunkId, cellKey, grid, ref accessor, outlierBuffer);
+                        guardClaimed = FlagOutliersForMigration(chunkId, cellKey, grid, in centres, outlierBuffer);
+                    }
+
+                    if (driftGated)
+                    {
+                        DetectDriftersInCluster(chunkId, cellKey, in fresh, grid, ref accessor, in centres, guardClaimed, outlierBuffer,
+                            candidateScratch, ref driftersDetected, ref driftAbsorbed);
                     }
                 }
             }
         }
         else
         {
-            int activeEnd = Math.Min(sliceStart + sliceCount, ActiveClusterCount);
-            for (int activeIdx = sliceStart; activeIdx < activeEnd; activeIdx++)
+            var activeEnd = Math.Min(sliceStart + sliceCount, ActiveClusterCount);
+            for (var activeIdx = sliceStart; activeIdx < activeEnd; activeIdx++)
             {
-                int chunkId = ActiveClusterIds[activeIdx];
+                var chunkId = ActiveClusterIds[activeIdx];
 
                 if (chunkId >= ClusterSpatialIndexSlot.Length)
                 {
                     continue;
                 }
 
-                int indexSlot = ClusterSpatialIndexSlot[chunkId];
+                var indexSlot = ClusterSpatialIndexSlot[chunkId];
                 if (indexSlot < 0)
                 {
                     continue;
@@ -3165,7 +3346,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                     continue;
                 }
 
-                int cellKey = ClusterCellMap[chunkId];
+                var cellKey = ClusterCellMap[chunkId];
                 if (cellKey < 0)
                 {
                     continue;
@@ -3178,8 +3359,8 @@ internal sealed unsafe partial class ArchetypeClusterState
                     continue;
                 }
 
-                grid.CellOrigin(cellKey, out float dirtyOriginX, out float dirtyOriginY, out float dirtyOriginZ);
-                ClusterSpatialAabb fresh = RecomputeClusterAabb(chunkId, ref accessor, dirtyOriginX, dirtyOriginY, dirtyOriginZ, out int clusterSlots);
+                grid.CellOrigin(cellKey, out var dirtyOriginX, out var dirtyOriginY, out var dirtyOriginZ);
+                var fresh = RecomputeClusterAabb(chunkId, ref accessor, dirtyOriginX, dirtyOriginY, dirtyOriginZ, out var clusterSlots);
                 slotsScanned += clusterSlots;
                 if (float.IsPositiveInfinity(fresh.MinX))
                 {
@@ -3187,14 +3368,33 @@ internal sealed unsafe partial class ArchetypeClusterState
                 }
 
                 ref var stored = ref ClusterAabbs[chunkId];
-                bool boundsMoved = stored.MinX != fresh.MinX || stored.MinY != fresh.MinY || stored.MinZ != fresh.MinZ ||
-                                   stored.MaxX != fresh.MaxX || stored.MaxY != fresh.MaxY || stored.MaxZ != fresh.MaxZ;
+                var boundsMoved = stored.MinX != fresh.MinX || stored.MinY != fresh.MinY || stored.MinZ != fresh.MinZ ||
+                                  stored.MaxX != fresh.MaxX || stored.MaxY != fresh.MaxY || stored.MaxZ != fresh.MaxZ;
 
                 // See the bitmap branch above for why equality is the wrong question. Here `fresh` IS recomputed from the entities, so the comparison is not
                 // a tautology — but it still answers "did the fence learn anything new", not "is the index current". The write-time CAS can have moved
                 // ClusterAabbs to exactly what the recompute produces, and then the fence has nothing to store while the index is still a tick behind. The
                 // process bit separates the two: WriteSpatial sets it, and the OpenMut / GetSpan writers that leave ClusterAabbs for the fence to recompute
                 // do not — which is precisely the case where equality really does mean nothing happened.
+                // 🔴 This gate carries TWO meanings, and they cannot currently be separated. Read it before changing it.
+                //
+                // Meaning one, which is correct: a cluster nobody touched needs neither an index write nor a scan, and
+                // skipping it is what makes a settled world cost nothing (AC-10.8). This loop walks EVERY active cluster —
+                // there is no dirty-bit filter on this branch — so without the skip a quiet tick would scan the whole
+                // archetype.
+                //
+                // Meaning two, which is a known false negative: an entity moved through OpenMut or GetSpan (writers that set
+                // no process bit) to a new position INSIDE its cluster's existing bound also leaves `boundsMoved` false, and
+                // is therefore never examined by drift detection. It is a genuine AC-10.1 miss, and a galling one — an entity
+                // drifting inside a bound that is already too large is precisely what step 10 exists to repair.
+                //
+                // Separating the two needs a per-cluster "was written this tick" signal that this branch does not carry;
+                // `boundsMoved` is a proxy for it and the process bit covers only the WriteSpatial writers. Lifting the skip
+                // so detection always runs was tried and reddens AMotionlessTick_DetectsNothing, because it converts the
+                // quiet-tick guarantee into a full scan. Recorded as a scoped exception on CR-03 rather than papered over.
+                //
+                // Exposure is narrow: an archetype whose spatial writes all go through WriteSpatial sets the process bit and
+                // is unaffected, and TYPHON009 flags the mutation sites that do not.
                 if (!boundsMoved && !IsClusterProcessBitSet(chunkId))
                 {
                     continue;
@@ -3210,11 +3410,15 @@ internal sealed unsafe partial class ArchetypeClusterState
 
                 // The ActiveClusterIds branch is sliced by active-list index and is just as parallel as the bitmap branch above, so it defers identically.
                 // Leaving it undiverted was the shape of the original defect: one branch protected, the other silently writing a shared tree from a worker.
+                //
+                // Gated rather than unconditional for the CA-02 reason: when neither the bound moved nor a write-time CAS
+                // touched this cluster, the index already holds the current box and rewriting it is pure cost.
                 ApplyOrDeferClusterUpdate(chunkId, cellKey, in fresh, slot, promotedApplyBuffer);
                 if (boundsMoved)
                 {
                     aabbsChanged++;
                 }
+
                 TyphonEvent.EmitSpatialCellIndexUpdate(cellKey, indexSlot);
 
                 // The Z term matters because FlagOutliersForMigration tests all three axes: without it a cluster that drifts purely on Z never
@@ -3222,12 +3426,33 @@ internal sealed unsafe partial class ArchetypeClusterState
                 // UNREACHABLE today — WriteSpatial supports AABB2F only, so no cluster AABB grows on Z at write time, and a 2D union leaves
                 // MinZ/MaxZ at the ±Infinity sentinel whose difference is -Infinity. It goes in now rather than being discovered missing when 3D
                 // write support lands (steps 9-10).
-                if (outlierGuardActive &&    ((fresh.MaxX - fresh.MinX) > maxExtent
-                                           || (fresh.MaxY - fresh.MinY) > maxExtent
-                                           || (fresh.MaxZ - fresh.MinZ) > maxExtent))
+
+                // See the bitmap branch above — one gather, same gating, same reason.
+                var guardFires = outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent
+                                                        || (fresh.MaxY - fresh.MinY) > maxExtent
+                                                        || (fresh.MaxZ - fresh.MinZ) > maxExtent);
+                var driftGated = driftTargetExtent > 0f && ((fresh.MaxX - fresh.MinX) > driftTargetExtent
+                                                            || (fresh.MaxY - fresh.MinY) > driftTargetExtent
+                                                            || (fresh.MaxZ - fresh.MinZ) > driftTargetExtent);
+
+                clustersScanned++;
+                if (!guardFires && !driftGated)
+                {
+                    continue;
+                }
+
+                var centres = GatherClusterCentres(chunkId, ref accessor, centreScratch);
+                ulong guardClaimed = 0;
+                if (guardFires)
                 {
                     outlierGuardFires++;
-                    FlagOutliersForMigration(chunkId, cellKey, grid, ref accessor, outlierBuffer);
+                    guardClaimed = FlagOutliersForMigration(chunkId, cellKey, grid, in centres, outlierBuffer);
+                }
+
+                if (driftGated)
+                {
+                    DetectDriftersInCluster(chunkId, cellKey, in fresh, grid, ref accessor, in centres, guardClaimed, outlierBuffer,
+                        candidateScratch, ref driftersDetected, ref driftAbsorbed);
                 }
             }
         }
@@ -3246,9 +3471,9 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         if (SpatialBarrierOnly && ClusterProcessBitmap != null)
         {
-            int end = Math.Min(sliceStart + sliceCount, ClusterProcessBitmap.Length);
-            int total = 0;
-            for (int w = sliceStart; w < end; w++)
+            var end = Math.Min(sliceStart + sliceCount, ClusterProcessBitmap.Length);
+            var total = 0;
+            for (var w = sliceStart; w < end; w++)
             {
                 total += BitOperations.PopCount((ulong)ClusterProcessBitmap[w]);
             }
@@ -3289,7 +3514,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        float over = MathF.Max(-aabb.MinX, aabb.MaxX - cellSize);
+        var over = MathF.Max(-aabb.MinX, aabb.MaxX - cellSize);
         over = MathF.Max(over, MathF.Max(-aabb.MinY, aabb.MaxY - cellSize));
 
         // A 2D archetype leaves Z at the +/-Infinity sentinel; feeding that in would poison the max with an infinity that widens every search forever.
@@ -3303,10 +3528,10 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        float current = Volatile.Read(ref MaxClusterOverhang);
+        var current = Volatile.Read(ref MaxClusterOverhang);
         while (over > current)
         {
-            float prior = Interlocked.CompareExchange(ref MaxClusterOverhang, over, current);
+            var prior = Interlocked.CompareExchange(ref MaxClusterOverhang, over, current);
             if (prior == current)
             {
                 return;
@@ -3327,7 +3552,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     private bool IsClusterProcessBitSet(int chunkId)
     {
         var bitmap = ClusterProcessBitmap;
-        int wordIdx = chunkId >> 6;
+        var wordIdx = chunkId >> 6;
         return bitmap != null && (uint)wordIdx < (uint)bitmap.Length && (bitmap[wordIdx] & (1L << (chunkId & 63))) != 0;
     }
 
@@ -3343,9 +3568,9 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        for (int wordIdx = 0; wordIdx < ClusterProcessBitmap.Length; wordIdx++)
+        for (var wordIdx = 0; wordIdx < ClusterProcessBitmap.Length; wordIdx++)
         {
-            long word = ClusterProcessBitmap[wordIdx];
+            var word = ClusterProcessBitmap[wordIdx];
             if (word == 0)
             {
                 continue;
@@ -3353,7 +3578,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
             while (word != 0)
             {
-                int chunkId = (wordIdx << 6) + BitOperations.TrailingZeroCount((ulong)word);
+                var chunkId = (wordIdx << 6) + BitOperations.TrailingZeroCount((ulong)word);
                 word &= word - 1;
                 if (ClusterMigrationPendingSlots != null && chunkId < ClusterMigrationPendingSlots.Length)
                 {
@@ -3377,55 +3602,55 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// coherence.
     /// </summary>
     /// <remarks>
-    /// Rare path. Runs inside <see cref="RecomputeDirtyClusterAabbs"/> only when the extent check fires — well-behaved workloads never hit it. The enqueued
-    /// migrations are drained on the next tick (not this one), because this runs AFTER <see cref="DatabaseEngine.ExecuteMigrations"/> in the tick fence
-    /// order. That one-tick lag is the "safety valve, not a common case" note from the design doc.
+    /// <para>Rare path. Runs inside <see cref="RecomputeDirtyClusterAabbs"/> only when the extent check fires — well-behaved workloads never hit it. The
+    /// enqueued migrations are drained on the next tick (not this one), because this runs AFTER
+    /// <see cref="DatabaseEngine.ExecuteMigrations"/> in the tick fence order. That one-tick lag is the "safety valve, not a common case" note from the
+    /// design doc.</para>
+    /// <para><b>Reads centres from the caller's single gather pass since <c>D1</c>, and no longer walks the cluster itself.</b> It used to re-fetch the chunk
+    /// base, re-read the occupancy word and re-hoist the component offsets to obtain exactly the values drift detection was about to read again two lines
+    /// later. The returned mask is what lets detection exclude the slots this method claimed — see the exclusion in
+    /// <see cref="DetectDriftersInCluster"/>, which was previously only an ordering convention.</para>
     /// </remarks>
-    private void FlagOutliersForMigration(int clusterChunkId, int cellKey, SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor,
+    /// <returns>The slots queued for another cell, so intra-cell detection can skip them.</returns>
+    private ulong FlagOutliersForMigration(int clusterChunkId, int cellKey, SpatialGrid grid, in ClusterCentres centres,
         List<MigrationRequest> outlierBuffer)
     {
-        var ss = SpatialSlot;
-        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId);
-        ulong occupancy = *(ulong*)clusterBase;
-        int compOffset = Layout.ComponentOffset(ss.Slot);
-        int compStride = Layout.ComponentSize(ss.Slot);
-
         var (cellX, cellY, cellZ) = grid.CellKeyToCoords(cellKey);
         ref readonly var cfg = ref grid.Config;
-        float cellMinX = cfg.WorldMin.X + cellX * cfg.CellSize;
-        float cellMinY = cfg.WorldMin.Y + cellY * cfg.CellSize;
-        float cellMinZ = cfg.WorldMin.Z + cellZ * cfg.CellSize;
-        float cellMaxX = cellMinX + cfg.CellSize;
-        float cellMaxY = cellMinY + cfg.CellSize;
-        float cellMaxZ = cellMinZ + cfg.CellSize;
+        var cellMinX = cfg.WorldMin.X + cellX * cfg.CellSize;
+        var cellMinY = cfg.WorldMin.Y + cellY * cfg.CellSize;
+        var cellMinZ = cfg.WorldMin.Z + cellZ * cfg.CellSize;
+        var cellMaxX = cellMinX + cfg.CellSize;
+        var cellMaxY = cellMinY + cfg.CellSize;
+        var cellMaxZ = cellMinZ + cfg.CellSize;
 
-        ulong bits = occupancy;
+        ulong claimed = 0;
+        var bits = centres.ValidMask;
         while (bits != 0)
         {
-            int slotIndex = BitOperations.TrailingZeroCount(bits);
+            var slotIndex = BitOperations.TrailingZeroCount(bits);
             bits &= bits - 1;
 
-            byte* fieldPtr = clusterBase + compOffset + slotIndex * compStride + ss.FieldOffset;
-            SpatialGrid.ReadSpatialCenter3D(fieldPtr, ss.FieldInfo.FieldType, out float posX, out float posY, out float posZ);
-
-            if (!float.IsFinite(posX) || !float.IsFinite(posY) || !float.IsFinite(posZ))
-            {
-                continue; // defensive — non-finite positions should have been rejected upstream
-            }
+            var posX = centres.X(slotIndex);
+            var posY = centres.Y(slotIndex);
+            var posZ = centres.Z(slotIndex);
 
             // Raw cell boundary (no hysteresis) — force migrate anything outside. A 2D field reports posZ = 0 and the grid is one cell deep there, so the Z
             // pair is always false for a flat world: the third axis costs two comparisons and changes no flat-world outcome.
             if (posX < cellMinX || posX > cellMaxX || posY < cellMinY || posY > cellMaxY || posZ < cellMinZ || posZ > cellMaxZ)
             {
-                int newCellKey = grid.WorldToCellKey(posX, posY, posZ);
+                var newCellKey = grid.WorldToCellKey(posX, posY, posZ);
                 if (newCellKey != cellKey)
                 {
                     // Worker-local buffer: caller bulk-appends under _finalizeLock once at slice end. Avoids per-entity lock acquisition (review D-2).
                     // For serial callers (RecomputeDirtyClusterAabbs whole-archetype wrapper), the buffer is appended without contention.
                     outlierBuffer.Add(new MigrationRequest(clusterChunkId, slotIndex, newCellKey));
+                    claimed |= 1UL << slotIndex;
                 }
             }
         }
+
+        return claimed;
     }
 
     /// <summary>
@@ -3448,7 +3673,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             PerCellIndex[cellKey] = slot;
         }
 
-        bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        var isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
         var tree = isStatic ? slot.StaticTree : slot.DynamicTree;
         if (tree != null)
         {
@@ -3461,14 +3686,14 @@ internal sealed unsafe partial class ArchetypeClusterState
         if (isStatic)
         {
             slot.StaticIndex ??= new CellSpatialIndex();
-            int indexSlot = slot.StaticIndex.Add(clusterChunkId, aabb);
+            var indexSlot = slot.StaticIndex.Add(clusterChunkId, aabb);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
             TyphonEvent.EmitSpatialCellIndexAdd(cellKey, indexSlot, clusterChunkId, slot.StaticIndex.Capacity);
         }
         else
         {
             slot.DynamicIndex ??= new CellSpatialIndex();
-            int indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
+            var indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
             TyphonEvent.EmitSpatialCellIndexAdd(cellKey, indexSlot, clusterChunkId, slot.DynamicIndex.Capacity);
         }
@@ -3507,12 +3732,12 @@ internal sealed unsafe partial class ArchetypeClusterState
         // Retire the LINEAR slot indices before re-issuing tree handles into the same array. The two representations share ClusterSpatialIndexSlot, and a
         // linear slot index is just a small non-negative int — indistinguishable from a packed handle. Without this the tree cannot tell an entry it already
         // holds from one the linear index used to hold, so its own duplicate-add guard fires on every promotion.
-        for (int i = 0; i < linear.ClusterCount; i++)
+        for (var i = 0; i < linear.ClusterCount; i++)
         {
             ClusterSpatialIndexSlot[linear.ClusterIds[i]] = SpatialRTree<TransientStore>.NullHandle;
         }
 
-        for (int i = 0; i < linear.ClusterCount; i++)
+        for (var i = 0; i < linear.ClusterCount; i++)
         {
             var aabb = new ClusterSpatialAabb
             {
@@ -3555,8 +3780,8 @@ internal sealed unsafe partial class ArchetypeClusterState
         // copy of a fact the tree already owns — the exact shape ST-05 was written about.
         var linear = new CellSpatialIndex(Math.Max(CellSpatialIndex.DefaultInitialCapacity, tree.ClusterCount));
         var ids = new int[tree.ClusterCount];
-        int found = 0;
-        foreach (int clusterChunkId in tree.EnumerateClusterIds())
+        var found = 0;
+        foreach (var clusterChunkId in tree.EnumerateClusterIds())
         {
             if (found < ids.Length)
             {
@@ -3564,10 +3789,10 @@ internal sealed unsafe partial class ArchetypeClusterState
             }
         }
 
-        for (int i = 0; i < found; i++)
+        for (var i = 0; i < found; i++)
         {
-            int clusterChunkId = ids[i];
-            int indexSlot = linear.Add(clusterChunkId, in ClusterAabbs[clusterChunkId]);
+            var clusterChunkId = ids[i];
+            var indexSlot = linear.Add(clusterChunkId, in ClusterAabbs[clusterChunkId]);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
         }
 
@@ -3596,7 +3821,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        for (int i = 0; i < PerCellIndex.Length; i++)
+        for (var i = 0; i < PerCellIndex.Length; i++)
         {
             var slot = PerCellIndex[i];
             slot?.DynamicTree?.RefitLooseLeaves();
@@ -3650,7 +3875,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        var isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
         var tree = isStatic ? slot.StaticTree : slot.DynamicTree;
         if (tree != null)
         {
@@ -3664,7 +3889,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        int indexSlot = ClusterSpatialIndexSlot[clusterChunkId];
+        var indexSlot = ClusterSpatialIndexSlot[clusterChunkId];
         if (indexSlot < 0)
         {
             return;
@@ -3713,7 +3938,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        for (int i = 0; i < PerCellIndex.Length; i++)
+        for (var i = 0; i < PerCellIndex.Length; i++)
         {
             var slot = PerCellIndex[i];
             slot?.DynamicTree?.RebindBackPointers(ClusterSpatialIndexSlot);
@@ -3741,13 +3966,13 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int indexSlot = ClusterSpatialIndexSlot[clusterChunkId];
+        var indexSlot = ClusterSpatialIndexSlot[clusterChunkId];
         if (indexSlot < 0)
         {
             return; // not in the index
         }
 
-        bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        var isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
         var tree = isStatic ? slot.StaticTree : slot.DynamicTree;
         if (tree != null)
         {
@@ -3762,13 +3987,13 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        CellSpatialIndex targetIndex = isStatic ? slot.StaticIndex : slot.DynamicIndex;
+        var targetIndex = isStatic ? slot.StaticIndex : slot.DynamicIndex;
         if (targetIndex == null)
         {
             return;
         }
 
-        int swappedClusterId = targetIndex.RemoveAt(indexSlot);
+        var swappedClusterId = targetIndex.RemoveAt(indexSlot);
         TyphonEvent.EmitSpatialCellIndexRemove(cellKey, indexSlot, swappedClusterId);
         if (swappedClusterId >= 0 && swappedClusterId < ClusterSpatialIndexSlot.Length)
         {
@@ -3812,15 +4037,15 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        ref WaitContext nullCtx = ref Unsafe.NullRef<WaitContext>();
+        ref var nullCtx = ref Unsafe.NullRef<WaitContext>();
         _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
         try
         {
-            int n = outlierBuffer.Count;
+            var n = outlierBuffer.Count;
             if (PendingMigrations == null)
             {
-                int initCap = Math.Max(16, n);
-                int p = 1;
+                var initCap = Math.Max(16, n);
+                var p = 1;
                 while (p < initCap)
                 {
                     p <<= 1;
@@ -3830,7 +4055,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             }
             else if (PendingMigrationCount + n > PendingMigrations.Length)
             {
-                int newLen = PendingMigrations.Length * 2;
+                var newLen = PendingMigrations.Length * 2;
                 while (newLen < PendingMigrationCount + n)
                 {
                     newLen *= 2;
@@ -3838,7 +4063,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
                 Array.Resize(ref PendingMigrations, newLen);
             }
-            for (int i = 0; i < n; i++)
+            for (var i = 0; i < n; i++)
             {
                 PendingMigrations[PendingMigrationCount++] = outlierBuffer[i];
             }
@@ -3869,7 +4094,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // Dual-segment: allocate matching chunk in TransientSegment (lockstep ensures same chunk IDs)
         if (TransientSegment != null && ClusterSegment != null)
         {
-            int transientChunkId = TransientSegment.AllocateChunk(true);
+            var transientChunkId = TransientSegment.AllocateChunk(true);
             Debug.Assert(transientChunkId == chunkId, $"Dual-segment chunk ID mismatch: PS={chunkId}, TS={transientChunkId}");
         }
 
@@ -3915,7 +4140,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <summary>Remove a cluster chunk ID from the active list (swap-with-last, O(1)).</summary>
     public void RemoveFromActiveList(int chunkId)
     {
-        for (int i = 0; i < ActiveClusterCount; i++)
+        for (var i = 0; i < ActiveClusterCount; i++)
         {
             if (ActiveClusterIds[i] == chunkId)
             {
@@ -4007,7 +4232,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     public void ReleaseSlot(ref ChunkAccessor<PersistentStore> accessor, int clusterChunkId, int slotIndex, ChangeSet changeSet, SpatialGrid grid = null,
         bool deferFinalize = false)
     {
-        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
+        var clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
 
         // Release SV ComponentCollection buffers held in this slot BEFORE clearing it — but only on a true destroy.
         // Migration passes deferFinalize:true and is a MOVE: the handle was byte-copied to the destination slot, so the
@@ -4017,10 +4242,10 @@ internal sealed unsafe partial class ArchetypeClusterState
             ReleaseSlotCollections(clusterBase, slotIndex, changeSet);
         }
 
-        ulong slotMask = 1UL << slotIndex;
-        ulong prevOccupancy = ClearSlotMetadata(clusterBase, slotIndex);
-        bool wasOccupied = (prevOccupancy & slotMask) != 0;
-        bool clusterDrained = wasOccupied && (prevOccupancy & ~slotMask) == 0;
+        var slotMask = 1UL << slotIndex;
+        var prevOccupancy = ClearSlotMetadata(clusterBase, slotIndex);
+        var wasOccupied = (prevOccupancy & slotMask) != 0;
+        var clusterDrained = wasOccupied && (prevOccupancy & ~slotMask) == 0;
 
         if (wasOccupied)
         {
@@ -4058,12 +4283,12 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </summary>
     public void ReleaseSlot(ref ChunkAccessor<TransientStore> accessor, int clusterChunkId, int slotIndex, SpatialGrid grid = null, bool deferFinalize = false)
     {
-        byte* clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
+        var clusterBase = accessor.GetChunkAddress(clusterChunkId, true);
 
-        ulong slotMask = 1UL << slotIndex;
-        ulong prevOccupancy = ClearSlotMetadata(clusterBase, slotIndex);
-        bool wasOccupied = (prevOccupancy & slotMask) != 0;
-        bool clusterDrained = wasOccupied && (prevOccupancy & ~slotMask) == 0;
+        var slotMask = 1UL << slotIndex;
+        var prevOccupancy = ClearSlotMetadata(clusterBase, slotIndex);
+        var wasOccupied = (prevOccupancy & slotMask) != 0;
+        var clusterDrained = wasOccupied && (prevOccupancy & ~slotMask) == 0;
 
         if (wasOccupied)
         {
@@ -4099,7 +4324,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     public void InitializeCollections(ComponentTable[] slotToTable)
     {
         List<ClusterCollectionSlot> slots = null;
-        for (int slot = 0; slot < slotToTable.Length; slot++)
+        for (var slot = 0; slot < slotToTable.Length; slot++)
         {
             var table = slotToTable[slot];
             if (table == null || table.StorageMode != StorageMode.SingleVersion || !table.HasCollections)
@@ -4124,10 +4349,10 @@ internal sealed unsafe partial class ArchetypeClusterState
         var layout = Layout;
         foreach (var cs in CollectionSlots)
         {
-            byte* compBase = clusterBase + layout.ComponentOffset(cs.Slot) + slotIndex * layout.ComponentSize(cs.Slot);
+            var compBase = clusterBase + layout.ComponentOffset(cs.Slot) + slotIndex * layout.ComponentSize(cs.Slot);
             foreach (var f in cs.Fields)
             {
-                int bufferId = *(int*)(compBase + f.OffsetInComponentStorage);
+                var bufferId = *(int*)(compBase + f.OffsetInComponentStorage);
                 if (bufferId != 0)
                 {
                     var ca = f.Vsbs.Segment.CreateChunkAccessor(changeSet);
@@ -4153,7 +4378,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int cellKey = ClusterCellMap[clusterChunkId];
+        var cellKey = ClusterCellMap[clusterChunkId];
         if (cellKey < 0)
         {
             return;
@@ -4175,7 +4400,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             return;
         }
-        int cellKey = ClusterCellMap[clusterChunkId];
+        var cellKey = ClusterCellMap[clusterChunkId];
         if (cellKey < 0)
         {
             return;
@@ -4214,15 +4439,15 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </remarks>
     private ulong ClearSlotMetadata(byte* clusterBase, int slotIndex)
     {
-        long slotMask = 1L << slotIndex;
-        long inverseMask = ~slotMask;
+        var slotMask = 1L << slotIndex;
+        var inverseMask = ~slotMask;
 
-        for (int slot = 0; slot < Layout.ComponentCount; slot++)
+        for (var slot = 0; slot < Layout.ComponentCount; slot++)
         {
             Interlocked.And(ref *(long*)(clusterBase + Layout.EnabledBitsOffset(slot)), inverseMask);
         }
 
-        ulong prevOccupancy = (ulong)Interlocked.And(ref *(long*)clusterBase, inverseMask);
+        var prevOccupancy = (ulong)Interlocked.And(ref *(long*)clusterBase, inverseMask);
 
         *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8) = 0;
 
@@ -4249,9 +4474,9 @@ internal sealed unsafe partial class ArchetypeClusterState
         TransientIndexSegment = transientIndexSegment;
         TransientIndexSegmentString64 = transientString64IndexSegment;
 
-        int slotCount = 0;
-        int transientSlotCount = 0;
-        for (int slot = 0; slot < slotToTable.Length; slot++)
+        var slotCount = 0;
+        var transientSlotCount = 0;
+        for (var slot = 0; slot < slotToTable.Length; slot++)
         {
             var infos = slotToTable[slot].IndexedFieldInfos;
             if (infos == null || infos.Length == 0)
@@ -4273,14 +4498,14 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         IndexSlots = new ClusterIndexSlot<PersistentStore>[slotCount];
         TransientIndexSlots = transientSlotCount > 0 ? new ClusterIndexSlot<TransientStore>[transientSlotCount] : null;
-        int idx = 0;
-        int transientIdx = 0;
+        var idx = 0;
+        var transientIdx = 0;
         // Sequential counter for AllowMultiple indexed fields across ALL component slots in this archetype.
         // Drives each field's MultiFieldIndex, which selects the corresponding section in the cluster layout's elementId tail
         // (see ArchetypeClusterInfo.IndexElementIdOffset). Must match the flat count passed to ArchetypeClusterInfo.Compute at archetype registration time.
         // Transient slots participate too since #655 — the tail is per-entity in the cluster, and a Transient entity occupies the same ClusterLocation.
-        int multiFieldCounter = 0;
-        for (int slot = 0; slot < slotToTable.Length; slot++)
+        var multiFieldCounter = 0;
+        for (var slot = 0; slot < slotToTable.Length; slot++)
         {
             var table = slotToTable[slot];
             var infos = table.IndexedFieldInfos;
@@ -4345,8 +4570,8 @@ internal sealed unsafe partial class ArchetypeClusterState
         var stats = new IndexStatistics[infos.Length];
 
         // Iterate component definition fields to find indexed ones (in stable order matching IndexedFieldInfos)
-        int fi = 0;
-        for (int i = 0; i < table.Definition.MaxFieldId && fi < infos.Length; i++)
+        var fi = 0;
+        for (var i = 0; i < table.Definition.MaxFieldId && fi < infos.Length; i++)
         {
             var fieldDef = table.Definition[i];
             if (fieldDef == null || !fieldDef.HasIndex)
@@ -4356,7 +4581,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
             ref var ifi = ref infos[fi];
             // FieldOffset in cluster = field offset within pure component data (no ComponentOverhead in clusters)
-            int clusterFieldOffset = ifi.OffsetToField - table.ComponentOverhead;
+            var clusterFieldOffset = ifi.OffsetToField - table.ComponentOverhead;
             // Node stride is per key type: String64 nodes don't fit the 256-byte segment (#658). Mirrors ComponentTable.CreateIndexForField.
             var fieldSegment = fieldDef.Type == FieldType.String64 ? string64Segment : defaultSegment;
             Debug.Assert(fieldSegment != null,
@@ -4369,7 +4594,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             var btree = ComponentTable.CreateIndexForFieldCore(fieldDef, indexKey, load, fieldSegment, changeSet);
             // AllowMultiple fields claim the next sequential slot in the cluster's elementId tail.
             // Single-value fields don't allocate tail space and use MultiFieldIndex = -1.
-            int multiFieldIndex = ifi.AllowMultiple ? multiFieldCounter++ : -1;
+            var multiFieldIndex = ifi.AllowMultiple ? multiFieldCounter++ : -1;
             fields[fi] = new ClusterIndexField<TStore>
             {
                 FieldOffset = clusterFieldOffset,
@@ -4424,27 +4649,27 @@ internal sealed unsafe partial class ArchetypeClusterState
         var idxAccessorS64 = hasString64 ? IndexSegmentString64.CreateChunkAccessor(changeSet) : default;
         try
         {
-            for (int c = 0; c < ActiveClusterCount; c++)
+            for (var c = 0; c < ActiveClusterCount; c++)
             {
-                int chunkId = ActiveClusterIds[c];
-                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId);
-                ulong occupancy = *(ulong*)clusterBase;
+                var chunkId = ActiveClusterIds[c];
+                var clusterBase = clusterAccessor.GetChunkAddress(chunkId);
+                var occupancy = *(ulong*)clusterBase;
 
                 while (occupancy != 0)
                 {
-                    int slotIndex = BitOperations.TrailingZeroCount(occupancy);
+                    var slotIndex = BitOperations.TrailingZeroCount(occupancy);
                     occupancy &= occupancy - 1;
-                    int clusterLocation = chunkId * 64 + slotIndex;
+                    var clusterLocation = chunkId * 64 + slotIndex;
 
-                    for (int s = 0; s < IndexSlots.Length; s++)
+                    for (var s = 0; s < IndexSlots.Length; s++)
                     {
                         ref var ixSlot = ref IndexSlots[s];
-                        byte* compBase = clusterBase + Layout.ComponentOffset(ixSlot.Slot);
-                        int compSize = Layout.ComponentSize(ixSlot.Slot);
-                        for (int f = 0; f < ixSlot.Fields.Length; f++)
+                        var compBase = clusterBase + Layout.ComponentOffset(ixSlot.Slot);
+                        var compSize = Layout.ComponentSize(ixSlot.Slot);
+                        for (var f = 0; f < ixSlot.Fields.Length; f++)
                         {
                             ref var field = ref ixSlot.Fields[f];
-                            byte* fieldPtr = compBase + slotIndex * compSize + field.FieldOffset;
+                            var fieldPtr = compBase + slotIndex * compSize + field.FieldOffset;
 
                             int elementId;
                             try
@@ -4510,7 +4735,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         ArchetypeId = archetypeId;
         Grid = grid;
 
-        for (int slot = 0; slot < slotToTable.Length; slot++)
+        for (var slot = 0; slot < slotToTable.Length; slot++)
         {
             var table = slotToTable[slot];
             if (table.SpatialIndex == null)
@@ -4520,7 +4745,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
             var tableFi = table.SpatialIndex.FieldInfo;
             // FieldOffset in cluster = field offset within pure component data (no ComponentOverhead in clusters)
-            int clusterFieldOffset = tableFi.FieldOffset - table.ComponentOverhead;
+            var clusterFieldOffset = tableFi.FieldOffset - table.ComponentOverhead;
             var variant = tableFi.ToVariant();
             var descriptor = SpatialNodeDescriptor.ForVariant(variant);
 
@@ -4537,7 +4762,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             CellClusterPool = new CellClusterPool(grid.CellCount);
 
             // Issue #233: allocate dormancy arrays for spatial archetypes. Non-spatial archetypes leave SleepStates null (zero overhead).
-            int capacity = Math.Max(16, PrimarySegmentCapacity);
+            var capacity = Math.Max(16, PrimarySegmentCapacity);
             SleepStates = new ClusterSleepState[capacity];
             SleepCounters = new ushort[capacity];
 
@@ -4594,13 +4819,13 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         var clusterAccessor = ClusterSegment.CreateChunkAccessor();
         var mapAccessor = engineState.EntityMap.Segment.CreateChunkAccessor();
-        int recordSize = meta._entityRecordSize;
-        byte* recordBuf = stackalloc byte[recordSize];
+        var recordSize = meta._entityRecordSize;
+        var recordBuf = stackalloc byte[recordSize];
 
         // Pre-create accessors for each Versioned slot's tables (hoisted out of entity/slot loops)
         var compRevAccessors = new ChunkAccessor<PersistentStore>[meta.ComponentCount];
         var contentAccessors = new ChunkAccessor<PersistentStore>[meta.ComponentCount];
-        for (int slot = 0; slot < meta.ComponentCount; slot++)
+        for (var slot = 0; slot < meta.ComponentCount; slot++)
         {
             if (slotToVi[slot] >= 0)
             {
@@ -4612,19 +4837,19 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         try
         {
-            for (int c = 0; c < ActiveClusterCount; c++)
+            for (var c = 0; c < ActiveClusterCount; c++)
             {
-                int chunkId = ActiveClusterIds[c];
-                byte* clusterBase = clusterAccessor.GetChunkAddress(chunkId, true);
-                ulong occupancy = *(ulong*)clusterBase;
+                var chunkId = ActiveClusterIds[c];
+                var clusterBase = clusterAccessor.GetChunkAddress(chunkId, true);
+                var occupancy = *(ulong*)clusterBase;
 
                 while (occupancy != 0)
                 {
-                    int slotIndex = BitOperations.TrailingZeroCount(occupancy);
+                    var slotIndex = BitOperations.TrailingZeroCount(occupancy);
                     occupancy &= occupancy - 1;
 
                     // Read entity key from cluster
-                    long entityPK = *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8);
+                    var entityPK = *(long*)(clusterBase + Layout.EntityIdsOffset + slotIndex * 8);
 
                     // C3 (#680's review, applied here per #688): a LIVE cluster slot always carries a non-zero entity id, so a zero at an occupied slot proves
                     // the geometry being read through is wrong — whatever the cause. Elsewhere (ClusterMigration) a zero here is a legitimate race with a
@@ -4637,7 +4862,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                             + "the cluster geometry being read does not match the occupancy bitmap");
                     }
 
-                    long entityKey = EntityId.FromRaw(entityPK).EntityKey;
+                    var entityKey = EntityId.FromRaw(entityPK).EntityKey;
 
                     // Read ClusterEntityRecord from EntityMap to get compRevFirstChunkId
                     if (!engineState.EntityMap.TryGet(entityKey, recordBuf, ref mapAccessor))
@@ -4650,7 +4875,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                     }
 
                     // For each Versioned slot: walk chain → find HEAD → copy to cluster slot
-                    for (int slot = 0; slot < meta.ComponentCount; slot++)
+                    for (var slot = 0; slot < meta.ComponentCount; slot++)
                     {
                         int vi = slotToVi[slot];
                         if (vi < 0)
@@ -4658,7 +4883,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                             continue;
                         }
 
-                        int compRevFirstChunkId = ClusterEntityRecordAccessor.GetCompRevFirstChunkId(recordBuf, vi);
+                        var compRevFirstChunkId = ClusterEntityRecordAccessor.GetCompRevFirstChunkId(recordBuf, vi);
                         if (compRevFirstChunkId == 0)
                         {
                             // No chain root for this Versioned slot. The enabled bit says which of the two states this is, and they are not the same event:
@@ -4692,11 +4917,11 @@ internal sealed unsafe partial class ArchetypeClusterState
                         }
 
                         // Read HEAD value from content chunk and copy to cluster slot
-                        int headChunkId = chainResult.Value.CurCompContentChunkId;
+                        var headChunkId = chainResult.Value.CurCompContentChunkId;
                         ref var contentAccessor = ref contentAccessors[slot];
-                        byte* srcAddr = contentAccessor.GetChunkAddress(headChunkId);
-                        int compSize = Layout.ComponentSize(slot);
-                        byte* dstSlot = clusterBase + Layout.ComponentOffset(slot) + slotIndex * compSize;
+                        var srcAddr = contentAccessor.GetChunkAddress(headChunkId);
+                        var compSize = Layout.ComponentSize(slot);
+                        var dstSlot = clusterBase + Layout.ComponentOffset(slot) + slotIndex * compSize;
                         Unsafe.CopyBlockUnaligned(dstSlot, srcAddr + engineState.SlotToComponentTable[slot].ComponentOverhead, (uint)compSize);
                     }
                 }
@@ -4705,7 +4930,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         finally
         {
             // Dispose all hoisted accessors
-            for (int slot = 0; slot < meta.ComponentCount; slot++)
+            for (var slot = 0; slot < meta.ComponentCount; slot++)
             {
                 if (slotToVi[slot] >= 0)
                 {

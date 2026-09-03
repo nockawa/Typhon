@@ -222,9 +222,31 @@ public partial class DatabaseEngine
             // fence, so reading it here always yielded Max(16, 0) and the queue regrew from 16 every migration-heavy tick (#872).
             var prevMigrations = clusterState.PreviousTickMigrationCount;
             var expectedCapacity = Math.Max(16, prevMigrations + (prevMigrations >> 2));
+
+            // 🔴 The queue now CARRIES A TAIL between ticks, so this grow must preserve it (CR-01).
+            //
+            // Before #872 step 10 the count was unconditionally zeroed in Finalize, so replacing the array here was free — there was never anything in it
+            // worth keeping. Now Finalize compacts away only the prefix this tick executed and keeps whatever the AabbRefresh producers filed after it, so
+            // `[0, PendingMigrationCount)` holds live requests when this runs. Swapping in a fresh array without copying turned those into default-valued
+            // `MigrationRequest`s — source cluster 0, slot 0, destination cell 0 — which Migrate then executes. The step-0 staleness guard tests the
+            // source slot's OCCUPANCY, not its identity, so a re-occupied slot 0 migrates an entity that was never a migrant.
+            //
+            // 🔴 NOT DEMONSTRATED BY A TEST, and that is recorded rather than implied. Three attempts to drive this branch with a live tail from a fixture
+            // all went green under ablation, so the reachability argument below is by inspection only: the capacity target is 1.25x last tick's EXECUTED
+            // count, which says nothing about the retained tail, so a tick whose target outruns the current array reallocates while the tail is live. The
+            // guard costs one Array.Copy on a path that runs at most once per tick and removes a whole class of silent loss, so it stays in on those terms
+            // — but nobody should read it as covered.
+            var retained = clusterState.PendingMigrationCount;
+            expectedCapacity = Math.Max(expectedCapacity, retained);
             if (clusterState.PendingMigrations == null || clusterState.PendingMigrations.Length < expectedCapacity)
             {
-                clusterState.PendingMigrations = new MigrationRequest[expectedCapacity];
+                var grown = new MigrationRequest[expectedCapacity];
+                if (clusterState.PendingMigrations != null && retained > 0)
+                {
+                    Array.Copy(clusterState.PendingMigrations, grown, Math.Min(retained, clusterState.PendingMigrations.Length));
+                }
+
+                clusterState.PendingMigrations = grown;
             }
 
             var migrationsQueuedCount = 0;
@@ -572,13 +594,19 @@ public partial class DatabaseEngine
                 var migrationBornBound = TransactionChain.NextFreeId;
                 int dstChunkId;
                 int dstSlot;
+                // A step-10 intra-cell relocation names its destination CLUSTER, not just the cell: the least-enlargement choice detection made is the
+                // entire point of the move, and first-fit would discard it (see MigrationRequest.DestClusterChunkId). AnyCluster keeps the cell-crossing
+                // behaviour byte for byte — the pinned overload's first test is the sign check.
+                int preferredCluster = req.DestClusterChunkId;
                 if (hasClusterAccessor)
                 {
-                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, ref clusterAccessor, changeSet, grid, migrationBornBound);
+                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, ref clusterAccessor, changeSet, grid,
+                        migrationBornBound);
                 }
                 else
                 {
-                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, ref transientClusterAccessor, grid, migrationBornBound);
+                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, ref transientClusterAccessor, grid,
+                        migrationBornBound);
                 }
 
                 // 3. Re-fetch source / destination bases after potential segment growth inside ClaimSlotInCell.
@@ -829,6 +857,12 @@ public partial class DatabaseEngine
                 {
                     clusterState.ReleaseSlot(ref transientClusterAccessor, srcChunkId, srcSlot, grid, true);
                 }
+
+                // 10b. The source cluster just lost an entity, so its AABB may be too large — flag a full recompute for this tick's refresh pass (#872
+                // step 10, AC-10.9). Step 8 above notes the src AABB "stays conservative (not shrunk) — Phase 1 trade-off"; that trade is what an
+                // intra-cell relocation cannot accept, since tightening the source IS the point of the move. Cheap and unconditional: a cell-crossing
+                // migration wants it just as much, and the flag costs one CAS against a cluster the refresh is likely to visit anyway.
+                clusterState.FlagClusterForShrinkRefresh(srcChunkId);
 
                 // 11. Record dirty-bit deltas to a worker-local buffer instead of writing FenceDirtyBits directly. False-sharing on adjacent chunkIds
                 //     (8 longs per 64B cache line) made concurrent Interlocked.Or/And ping-pong cache lines across workers — drained at chunk end under

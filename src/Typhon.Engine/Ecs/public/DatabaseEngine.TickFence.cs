@@ -756,7 +756,14 @@ public partial class DatabaseEngine
         try
         {
             clusterState.RecomputeDirtyClusterAabbsSlice(sliceStart, sliceCount, ref accessor, _spatialGrid, promotedBuffer, outlierBuffer,
-                out var aabbsChanged, out var slotsScanned, out var outlierGuardFires);
+                out var aabbsChanged, out var slotsScanned, out var outlierGuardFires, out var clustersScanned, out var driftersDetected,
+                out var driftAbsorbed);
+            // Interlocked, not plain adds: every AabbRefresh slice of this archetype reaches here, and the three counters are archetype-wide. They are reset
+            // once per tick in PrepareArchetypeFence, so a lost add would under-report for that tick only — which is exactly the kind of quiet inaccuracy that
+            // makes a measurement useless for tuning P4.
+            Interlocked.Add(ref clusterState.LastTickClustersScanned, clustersScanned);
+            Interlocked.Add(ref clusterState.LastTickDriftersDetected, driftersDetected);
+            Interlocked.Add(ref clusterState.LastTickDriftAbsorbedCount, driftAbsorbed);
             clusterState.EnqueueMigrationsBulk(outlierBuffer);
             clusterState.EnqueuePromotedAppliesBulk(promotedBuffer);
             refreshSpan.AabbsChanged = aabbsChanged;
@@ -789,6 +796,44 @@ public partial class DatabaseEngine
     /// </remarks>
     internal unsafe bool PrepareArchetypeFence(ArchetypeMetadata meta, long tickNumber, ChangeSet changeSet)
     {
+        var hasWork = PrepareArchetypeFenceCore(meta, tickNumber, changeSet);
+
+        // ── The drain prefix, recorded on the way out and NOWHERE ELSE ────────────────────────────────────────────────
+        //
+        // Whatever is queued when Prep finishes is exactly what this tick's Migrate phase will execute: the parallel work
+        // plan is built from PendingMigrationCount after Prep returns, and the serial path passes that same count straight
+        // to ExecuteMigrationsSlice. Requests filed LATER — by FlagOutliersForMigration and by step 10's drift detection,
+        // both of which run inside AabbRefresh, after Migrate — land beyond the prefix and must survive to the next tick.
+        //
+        // 🔴 This lives in a wrapper rather than at the bottom of the body because the body has THREE exits, and taking the
+        // one that skips this is not an edge case. An archetype written through the spatial barrier sets ClusterProcessBitmap
+        // and leaves ClusterDirtyBitmap clean, so it leaves through the clean-bitmap `return true` on every ordinary tick.
+        // With the snapshot inside the body, that archetype recorded a drain prefix of zero while Migrate executed the whole
+        // queue, Finalize then compacted nothing, and the queue grew by its drifter count every tick — with the entire
+        // backlog re-executing each time. Measured before the fix: 16 000 entities produced 17 234 migrations on the first
+        // tick and 224 854 on the twentieth, against ~10 900 genuine drifters per tick.
+        //
+        // Worth being blunt about, because it is strictly worse than the bug it replaced. The old code reset the count in
+        // Finalize, which discarded the AabbRefresh producers' work silently but at least kept the queue bounded; a prefix
+        // that is wrong in the other direction re-executes stale requests against slots their entities have already left.
+        // Guarded exactly as the core's own preamble guards, and for the same reasons: WriteClusterTickFence walks every
+        // archetype from GetAllArchetypes() with no filter, so `meta` may be null or carry an id past the state array — the
+        // two conditions the core returns false for. Reading the array before re-testing them made the wrapper throw on the
+        // inputs its own body was written to reject.
+        if (meta == null || meta.ArchetypeId >= _archetypeStates.Length)
+        {
+            return hasWork;
+        }
+
+        var pending = _archetypeStates[meta.ArchetypeId]?.ClusterState;
+        pending?.PendingMigrationDrainCount = hasWork ? pending.PendingMigrationCount : 0;
+
+        return hasWork;
+    }
+
+    /// <inheritdoc cref="PrepareArchetypeFence"/>
+    private unsafe bool PrepareArchetypeFenceCore(ArchetypeMetadata meta, long tickNumber, ChangeSet changeSet)
+    {
         if (meta == null || !meta.IsClusterEligible || meta.ArchetypeId >= _archetypeStates.Length)
         {
             return false;
@@ -805,6 +850,10 @@ public partial class DatabaseEngine
         // Migrate / Finalize phases. The Migrate slices (Phase 2) Interlocked.Add into LastTickMigrationCount / LastTickMigrationExecuteMs — start at zero here.
         clusterState.FenceBranchPath = 0;
         clusterState.FenceDirtyBits = null;
+
+        // The pending-migration queue is deliberately NOT cleared here, nor in Finalize where it used to be. See
+        // ArchetypeClusterState.PendingMigrationDrainCount: the queue has producers on both sides of its consumer, so a per-tick reset destroyed
+        // everything filed by the AabbRefresh-side detectors. Finalize now compacts away exactly the prefix that was executed.
         clusterState.FenceEntryCount = 0;
         clusterState.FenceDirtyClusterCount = 0;
         clusterState.FenceProcessBitmapClusterCount = -1; // recomputed in Prep when in BarrierOnly mode
@@ -814,6 +863,9 @@ public partial class DatabaseEngine
         clusterState.PreviousTickMigrationCount = clusterState.LastTickMigrationCount;
         clusterState.LastTickMigrationCount = 0;
         clusterState.LastTickMigrationExecuteMs = 0d;
+        clusterState.LastTickClustersScanned = 0;
+        clusterState.LastTickDriftersDetected = 0;
+        clusterState.LastTickDriftAbsorbedCount = 0;
 
         // LastTickHysteresisAbsorbedCount was NOT reset here until #872, and DetectClusterMigrations only ever ASSIGNED it (=, not +=). A tick in which
         // detection did not run therefore reported the PREVIOUS tick's absorbed count as if it were this tick's — a stale reading indistinguishable from a live
@@ -828,10 +880,11 @@ public partial class DatabaseEngine
         clusterState.LastTickHysteresisAbsorbedCount = absorbedLive;
         clusterState.TotalHysteresisAbsorbedCount += absorbedLive;
 
-        // No producer yet (steps 10/11); reset from the start so the future producer inherits a correct reset rather than having to remember to add one. Until
-        // then their zero is ambiguous between "not built" and "nothing happened this tick" — see the field docs; the surface does not separate the two.
-        clusterState.LastTickClustersScanned = 0;
-        clusterState.LastTickDriftersDetected = 0;
+        // ReclusterBudgetUsedMs still has no producer — step 11 owns the budget. Reset anyway so that producer inherits a correct reset rather than having to
+        // remember to add one; until then its zero is ambiguous between "not built" and "nothing happened this tick", which the surface does not separate.
+        // ClustersScanned / DriftersDetected / DriftAbsorbed used to be reset HERE too, on the same "no producer yet" grounds. Step 10 gave them one, and their
+        // reset moved up beside LastTickMigrationCount where the rest of the per-tick counters live — a second zeroing of two of the three was worse than
+        // redundant, because it silently excluded the third and would have hidden a producer that ran between the two blocks.
         clusterState.LastTickReclusterBudgetUsedMs = 0d;
         clusterState._drainedCount = 0; // deferred-drain list reset (review C-1 fix)
 
@@ -1120,9 +1173,10 @@ public partial class DatabaseEngine
         long highestLSN = 0;
         var dirtyBits = clusterState.FenceDirtyBits;
         
-        // Reset the per-archetype pending-migration queue exactly once, AFTER all Migrate-phase slices finished and BEFORE we begin Finalize work.
-        // Resetting inside ExecuteMigrationsSlice would race with sibling slices.
-        clusterState.PendingMigrationCount = 0;
+        // Drop the prefix this tick executed and keep the rest. This replaced an outright `PendingMigrationCount = 0`, which discarded every request
+        // enqueued AFTER the Migrate phase — all of them, for the two detectors that run inside AabbRefresh (FlagOutliersForMigration since #230, and step
+        // 10's drift detection). Both are documented as executing "next tick"; neither ever did.
+        clusterState.CompactPendingMigrations();
 
         // Drain pending cluster finalizations (review C-1 fix): ReleaseSlot during Migrate only records the chunkId; actual finalize + FreeChunk happens here,
         // after the Migrate/AabbRefresh phase barriers. By this point no concurrent ClaimSlotInCell can race with us — safe to free clean clusters.
