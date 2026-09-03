@@ -209,7 +209,7 @@ public class SpatialBulkLoadTests
             var treeResults = new HashSet<long>();
             foreach (var hit in tree.QueryAABB(queryCoords))
             {
-                treeResults.Add(hit.EntityId);
+                treeResults.Add(hit.PayloadId);
             }
 
             var oracleResults = new HashSet<long>(oracle.QueryAABB(queryCoords));
@@ -254,7 +254,7 @@ public class SpatialBulkLoadTests
         var mask1Results = new List<long>();
         foreach (var hit in tree.QueryAABB(bigQuery, categoryMask: 1))
         {
-            mask1Results.Add(hit.EntityId);
+            mask1Results.Add(hit.PayloadId);
         }
 
         // All results should be even-indexed entity IDs (1, 3, 5, ... based on our generation)

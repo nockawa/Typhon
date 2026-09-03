@@ -376,6 +376,102 @@ public partial class DatabaseEngine
     /// Called from <see cref="WriteTickFence"/> after per-ComponentTable processing.
     /// </summary>
     /// <summary>Create a fresh CBS&lt;TransientStore&gt; for cluster Transient component storage.</summary>
+    /// <summary>
+    /// Give a cluster state the means to build its shared per-cell R-Tree segment on first promotion (#872 step 9), and apply the configured thresholds.
+    /// </summary>
+    /// <remarks>
+    /// <para>A factory rather than an eager segment: promotion is opt-in and, at the measured crossover, unreachable for most workloads — so the common case
+    /// must cost nothing. A <see cref="ChunkBasedSegment{TStore}"/> is at least two pages, and paying that for every spatial archetype in every database to
+    /// serve a case none of them reach is the kind of default that only shows up as a memory graph nobody can explain.</para>
+    /// <para>Attached here rather than inside <see cref="ArchetypeClusterState"/> because that type is built by static factory methods holding no services,
+    /// and giving it a <see cref="DatabaseEngine"/> reference to reach the allocator would couple the storage state to the engine for one lazy allocation.</para>
+    /// </remarks>
+    /// <summary>
+    /// Refuse to start the parallel fence while per-cell R-Tree promotion is enabled (#872 step 9).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why a guard and not just a default.</b> Promotion is off by default, which is what makes the combination unreachable today — but "unreachable
+    /// because of a default value" is a property of the configuration, not of the code, and the next person to raise the threshold gets a silent data race
+    /// rather than a message. This turns it into a refusal at startup, where it is cheap to read and impossible to miss.</para>
+    /// <para><b>What is actually unsafe.</b> The <c>AabbRefresh</c> phase slices on CLUSTER ID (<c>FenceWorkPlan.EmitAabbRefreshSliceItems</c>), and cluster
+    /// ids are allocated by the segment with no relation to cells — so one promoted cell's clusters land in different slices and two workers mutate one tree.
+    /// <see cref="SpatialRTree{TStore}"/> is single-writer by specification (ADR-044; <c>03-tree-operations.md</c> invariant O2, "at most one writer holds the
+    /// lock bit on any node at any time"), and its root-split path writes <c>_rootChunkId</c> and <c>_depth</c> as plain unsynchronised fields. Concurrent
+    /// splits orphan a subtree; the clusters in it stop being returned by any query, with nothing raised.</para>
+    /// <para><b>Migrate is NOT affected</b> and needs no guard: its slices are carved on <c>DestCellKey</c> boundaries so no two workers share a dest cell,
+    /// which is the same per-cell exclusivity this phase lacks.</para>
+    /// </remarks>
+    internal void AssertCellTreePromotionIsSafeForParallelFence()
+    {
+        if (AllowCellTreePromotionWithParallelFence)
+        {
+            return;
+        }
+
+        // The per-STATE copy is what governs behaviour — AttachCellTreeFactory snapshots the engine property at InitializeArchetypes, so checking only the
+        // property would miss an archetype initialised while it held a different value, and would also miss nothing at all if the property were lowered after
+        // the states were built. Check both: the property catches a threshold set before any archetype exists, the states catch everything after.
+        int offending = ClusterCellTreePromoteThreshold;
+        if (_archetypeStates != null)
+        {
+            for (int i = 0; i < _archetypeStates.Length; i++)
+            {
+                var cs = _archetypeStates[i]?.ClusterState;
+                if (cs != null && cs.CellTreePromoteThreshold != int.MaxValue)
+                {
+                    offending = cs.CellTreePromoteThreshold;
+                    break;
+                }
+            }
+        }
+
+        if (offending == int.MaxValue)
+        {
+            return;
+        }
+
+        ThrowHelper.ThrowInvalidOp(
+            $"A cell-tree promotion threshold of {offending} is active, but RuntimeOptions.EnableParallelFence is true. The AabbRefresh "
+            + "phase now defers promoted cells to the serial tail, but the MIGRATE path still resizes ClusterSpatialIndexSlot and grows the shared cluster "
+            + "segment from workers, and both are per-ARCHETYPE so cell-disjoint slicing does not protect them (MD-02). Run the serial fence, or leave "
+            + "promotion at int.MaxValue until those land (#872 step 9).");
+    }
+
+    private ArchetypeClusterState AttachCellTreeFactory(ArchetypeClusterState state)
+    {
+        state.CellTreeSegmentFactory = stride =>
+        {
+            CreateTransientClusterSegment(stride, out var treeStore, out var treeSegment);
+            return (treeSegment, treeStore.Value);
+        };
+        state.CellTreePromoteThreshold = ClusterCellTreePromoteThreshold;
+        state.CellTreeDemoteThreshold = ClusterCellTreePromoteThreshold == int.MaxValue ? int.MaxValue : ClusterCellTreePromoteThreshold / 2;
+        return state;
+    }
+
+    /// <summary>
+    /// Clusters in one cell at which that cell's linear broadphase is replaced by an R-Tree. <see cref="int.MaxValue"/> — the default — never promotes.
+    /// </summary>
+    /// <remarks>
+    /// Left off by default on measured grounds: below ~512 clusters the linear scan wins a selective query (6x at 80, which is AntHill's densest zone) and the
+    /// tree's update path is 22-38x dearer per moved cluster. See <c>ArchetypeClusterState.CellTreePromoteThreshold</c> for the full argument and
+    /// <c>BroadphaseCrossoverSweepTests</c> for the numbers.
+    /// </remarks>
+    internal int ClusterCellTreePromoteThreshold { get; set; } = int.MaxValue;
+
+    /// <summary>
+    /// Bypass <see cref="AssertCellTreePromotionIsSafeForParallelFence"/>. <b>Tests only.</b>
+    /// </summary>
+    /// <remarks>
+    /// <para>The AabbRefresh half of the hazard IS fixed — promoted cells are diverted out of the parallel pass and applied in the serial tail
+    /// (<c>DrainPromotedAabbApplies</c>). What is NOT fixed is the Migrate path's two PER-ARCHETYPE resources, which cell-disjoint slicing does not protect:
+    /// <c>EnsureClusterSpatialIndexSlotCapacity</c>'s <c>Array.Resize</c> plus <c>RebindCellTreeBackPointers</c>, and the shared
+    /// <c>ChunkBasedSegment.Grow</c> invalidating a sibling worker's chunk pointer. Those are <c>MD-02</c> and are tracked separately.</para>
+    /// <para>So this flag exists for the tests that must drive the parallel fence to prove the divert works, and for nothing else. It is not a supported
+    /// configuration, and it stays a bypass rather than becoming a default until the Migrate-path items land.</para>
+    /// </remarks>
+    internal bool AllowCellTreePromotionWithParallelFence { get; set; }
+
     private void CreateTransientClusterSegment(int stride, out TransientStore? store, out ChunkBasedSegment<TransientStore> segment)
     {
         store = new TransientStore(TransientOptions, MemoryAllocator, EpochManager, this);
@@ -654,11 +750,15 @@ public partial class DatabaseEngine
         // _finalizeLock once after the slice finishes. List is short-lived per slice (no pooling — outlier fires are rare; allocations are bounded by the
         // AABB-Refresh chunk count per tick).
         var outlierBuffer = new List<MigrationRequest>(0);
+        // Worker-local deferral buffer for promoted cells, same shape and lifetime as the outlier buffer above and merged the same way. Allocated only when
+        // this archetype actually has a promoted cell — the overwhelmingly common case is none, and an empty List per slice per tick is not free.
+        var promotedBuffer = clusterState.PromotedCellCount > 0 ? new List<ArchetypeClusterState.PromotedAabbApply>(0) : null;
         try
         {
-            clusterState.RecomputeDirtyClusterAabbsSlice(sliceStart, sliceCount, ref accessor, _spatialGrid, outlierBuffer, out var aabbsChanged, 
-                out var slotsScanned, out var outlierGuardFires);
+            clusterState.RecomputeDirtyClusterAabbsSlice(sliceStart, sliceCount, ref accessor, _spatialGrid, promotedBuffer, outlierBuffer,
+                out var aabbsChanged, out var slotsScanned, out var outlierGuardFires);
             clusterState.EnqueueMigrationsBulk(outlierBuffer);
+            clusterState.EnqueuePromotedAppliesBulk(promotedBuffer);
             refreshSpan.AabbsChanged = aabbsChanged;
             refreshSpan.SlotsScanned = slotsScanned;
             refreshSpan.OutlierGuardFires = outlierGuardFires;
@@ -1042,6 +1142,15 @@ public partial class DatabaseEngine
             {
                 clusterState.ClearAabbRefreshBookkeeping();
             }
+
+            // Deferred promoted-cell applies first, then the refit — in that order, because the refit has to see the tree those applies produce. Both are
+            // no-ops when nothing was promoted.
+            clusterState.DrainPromotedAabbApplies();
+
+            // ST-07's make-good, in the one place that satisfies both of its constraints: after every AABB slice (the phase barrier above guarantees it) and
+            // before any query can run. The in-place update path deliberately leaves leaf MBRs wider than the union of their entries, which is safe for
+            // queries and false for ST-01 read literally — so the looseness must not survive the fence.
+            clusterState.RefitPromotedCellTrees();
 
             // Clean-spatial-refresh branch (path 1) stops here — no dormancy sweep change (already swept clean), no WAL emit.
             if (clusterState.FenceBranchPath == 1)

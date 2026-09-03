@@ -3465,7 +3465,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
 
                     _archetypeStates[meta.ArchetypeId].ClusterState =
-                        ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment, transientClusterSegment, transientClusterStore);
+                        AttachCellTreeFactory(ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment, transientClusterSegment, transientClusterStore));
                 }
                 else if (TryGetPersistedArchetype(meta, out var clusterPersisted) && clusterPersisted.Arch.ClusterSegmentSPI > 0)
                 {
@@ -3489,7 +3489,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     if (loaded)
                     {
                         using var clusterEpoch = EpochGuard.Enter(EpochManager);
-                        var clusterState = ArchetypeClusterState.CreateFromExisting(meta.ClusterLayout, loadedCluster, transientClusterSegment, transientClusterStore);
+                        var clusterState = AttachCellTreeFactory(ArchetypeClusterState.CreateFromExisting(meta.ClusterLayout, loadedCluster, transientClusterSegment, transientClusterStore));
                         _archetypeStates[meta.ArchetypeId].ClusterState = clusterState;
 
                         // Sync TransientSegment chunk IDs with PersistentStore's active clusters
@@ -3503,13 +3503,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         var fallbackSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride, null, 
                             StorageSegmentKind.Cluster);
                         _archetypeStates[meta.ArchetypeId].ClusterState =
-                            ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment, transientClusterSegment, transientClusterStore);
+                            AttachCellTreeFactory(ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment, transientClusterSegment, transientClusterStore));
                     }
                     else
                     {
                         // Pure-Transient reopen: no persisted data, create fresh
                         _archetypeStates[meta.ArchetypeId].ClusterState =
-                            ArchetypeClusterState.Create(meta.ClusterLayout, null, transientClusterSegment, transientClusterStore);
+                            AttachCellTreeFactory(ArchetypeClusterState.Create(meta.ClusterLayout, null, transientClusterSegment, transientClusterStore));
                     }
                 }
 

@@ -57,11 +57,26 @@
     persisted metadata disagrees with tree content
 
 ### ST-05: Back-pointer consistency `[fatal]`
-  invariant ∀ entity E in tree: BackPointer[E.entityId] == (E.leafChunkId, E.slotIndex, treeSelector)
-  invariant the back-pointer KEY is stable for the entity's lifetime — invariant under MVCC revision minting,
-            cluster migration, and leaf-slot swap. A key that can be re-minted while the entity is alive is
+  invariant ∀ payload P in tree: BackPointer[P.payloadId] == (P.leafChunkId, P.slotIndex, treeSelector)
+  invariant 🔴 the back-pointer array is the SOLE store of a payload's location, not a repair channel. EVERY path
+            that places or moves an entry writes it — Insert for a new entry, ScatterLeafEntries for a split,
+            Remove for the swap-with-last and the retirement. Miss the Insert and the array is silently
+            incomplete: a caller must then merge it with Insert's return value, and the moment it keeps its own
+            copy that copy goes stale the first time ANOTHER payload's split or removal relocates this one. The
+            failure that follows is not a missed lookup — TryUpdateLeafEntryInPlace refuses on the identity
+            check, which is the check working, and the escape path underneath then removes at the stale
+            location, which is a live entry belonging to somebody else. (#872 step 9; found by measurement, not
+            by review.)
+  invariant the back-pointer KEY is stable for the payload's lifetime — invariant under MVCC revision minting,
+            cluster migration, and leaf-slot swap. A key that can be re-minted while the payload is alive is
             not a valid back-pointer key, however convenient it is to reach.
-  scope: SpatialMaintainer.InsertSpatial / UpdateSpatialCore / RemoveFromSpatial, SpatialRTree.ScatterLeafEntries, Remove
+  note 🔴 the key is a PAYLOAD id, not necessarily an entity id. SpatialRTree is generic over what it indexes:
+       the entity-level trees key on EntityId, the per-cell cluster trees of #872 step 9 key on a CLUSTER chunk
+       id. The field was called EntityId until step 9 renamed it to PayloadId, which read as a type guarantee
+       it never made.
+  scope: SpatialMaintainer.InsertSpatial / UpdateSpatialCore / RemoveFromSpatial,
+         SpatialRTree.Insert (the new-entry write), ScatterLeafEntries, Remove,
+         CellClusterTree.Add / UpdateAt / RemoveAt (which read the array rather than holding a handle)
   on_violation: the lookup misses, the update falls through to a fresh Insert, the prior leaf entry is orphaned →
     duplicate EntityIds in the tree (TreeValidator "R5 violation"); or update/remove targets the wrong leaf slot
   rationale: 🔴 CORRECTED 2026-07-27. This rule previously keyed the back-pointer on `componentChunkId` — the key the
@@ -71,6 +86,33 @@
     05-ecs-integration.md ReadBackPointer(entityId)). The rule had diverged from its own design and therefore RATIFIED
     the defect — which is why review never flagged the implementation. The key-stability clause is the missing half:
     re-keying alone states the what without the why, and the next storage mode reintroduces it.
+
+### ST-07: Escape-bound in-place update `[fatal][silent]`
+  invariant TryUpdateLeafEntryInPlace writes ONLY when all three hold: the target is a leaf, the slot is live,
+    and the entry's payload id equals the caller's. The identity check is not defensive coding — without it a
+    stale handle writes cluster X's bounds into cluster Y's slot, breaking CA-01 in both directions with no
+    exception raised anywhere near the cause.
+  invariant it writes only when the new bounds are CONTAINED by the leaf's current MBR on every axis. That is
+    what makes skipping the refit sound: an entry that stays inside its leaf cannot change the union's outer
+    edge outward, so no ancestor can become too tight.
+  invariant 🔴 the handle comes from PayloadBackPointers, never from a caller-held copy — see ST-05. The escape
+    path removes at the handle it was given, so a handle that has gone stale removes a stranger.
+  invariant 🔴 ST-01's leaf equality is SUSPENDED between an in-place write and the end-of-pass refit, and only
+    there. Not refitting is the entire saving, and its cost is that the leaf MBR becomes a strict SUPERSET of
+    the union of its entries. Too-loose is ST-01's performance-only direction, so the window is safe — but it
+    must not outlive the exclusive window, because a query running against a loose MBR is merely slower while
+    a REBUILD or a validator run against one reports a violation that is real.
+  post after the pass closes: ∀ leaf touched by an in-place update, L.NodeMBR == union(L.entries) once more,
+    i.e. ST-01 holds unconditionally outside the window.
+  scope: SpatialRTree.TryUpdateLeafEntryInPlace, CellClusterTree.UpdateAt
+  verified: CellClusterTreeDifferentialTests (EscapeBoundUpdate_KeepsTheTreeAgreeingWithTheScan carries the
+    attribute; HandlesStayValid_AcrossUpdatesAndRemovals covers the handle half)
+  on_violation:
+    wrote through a stale handle → two clusters hold each other's bounds → CA-01 fails silently, SQ-01 false
+      negatives for both, and TreeValidator passes throughout because the TREE is structurally perfect —
+      only the addresses held outside it are wrong
+    refit skipped and never made up → ST-01 equality permanently false; queries stay correct, validators do not
+  requires: ST-05 (the handle is where the array says it is)
 
 ### ST-06: OLC version validity `[fatal]`
   invariant ∀ node: OlcVersion ≥ 4 (version ≥ 1, lock=0, obsolete=0) when not write-locked
@@ -234,6 +276,36 @@
     AABB too loose → extra overlap tests (performance only)
   requires: occupancy word accurately reflects live slots
 
+### CA-02: The per-cell index tracks ClusterAabbs, and equality is not the test for it `[fatal][silent]`
+  invariant the broadphase prunes on the bound held by the PER-CELL structure — CellSpatialIndex.MinX[] et al, or
+    the leaf entry in a promoted CellClusterTree — never on ClusterAabbs. So:
+    ∀ active cluster C, after the AabbRefresh phase and its promoted-cell drain:
+      indexBound(C) ⊇ ClusterAabbs[C.chunkId]
+    Too loose costs an overlap test; too tight is an SQ-01 false negative that no containment check on ClusterAabbs
+    can observe, because ClusterAabbs is correct in that failure.
+  invariant 🔴 the fence may NOT decide whether to write the index by comparing ClusterAabbs against itself.
+    CA-01 names two writer classes for ClusterAabbs; the index has ONE, the fence. When writer class (a) — the
+    CAS-grow in ClusterRef.MaybeGrowAndFlagShrink — has already applied the grow, the fence's `stored == fresh`
+    test answers "the fence learned nothing", which is TRUE and not the question. The index is still a tick behind.
+    ClusterRef.MaybeGrowAndFlagShrink says so in its own summary: it returns true "in which case the cluster needs
+    a fence-time PerCellIndex.UpdateAt with the fresh AABB".
+    On the SpatialBarrierOnly branch the comparison was worse than wrong, it was a TAUTOLOGY: `fresh` is assigned
+    from `stored` when no shrink is pending, so a grow-only tick could never update the index at all — and both
+    demos run barrier-only.
+  invariant the signal is ClusterProcessBitmap, which WriteSpatial sets on exactly `aabbChanged || migrationFlagged`
+    and ClearAabbRefreshBookkeeping zeroes once per tick. A writer that leaves ClusterAabbs alone for the fence to
+    recompute (OpenMut / GetSpan) sets no bit, which is precisely the case where equality does mean nothing changed.
+  scope: ArchetypeClusterState.RecomputeDirtyClusterAabbsSlice, ArchetypeClusterState.IsClusterProcessBitSet,
+    ArchetypeClusterState.ApplyOrDeferClusterUpdate, ArchetypeClusterState.UpdateClusterInPerCellIndex,
+    ClusterRef.MaybeGrowAndFlagShrink
+  verified: CellTreeParallelFenceTests.CellIndexTracksClusterAabbs_AfterAWriteTimeGrow (both slicing branches,
+    50 serial fence ticks of rotation, queries compared against entity positions read straight out of cluster
+    storage). Pre-fix it failed on both branches with the index one to two ticks inside ClusterAabbs on every axis.
+  on_violation:
+    index bound tighter than ClusterAabbs → the cell prunes a cluster the query overlaps → every entity in it
+      disappears from the result, silently, and CA-01 holds throughout because ClusterAabbs is right
+  requires: CA-01 (ClusterAabbs itself contains the entities)
+
 ---
 
 ## Module: VDB Cell Grid (Issue #872 step 8)
@@ -286,6 +358,47 @@
       only observable
     creating from the parallel map → pool slots depend on thread interleaving → rebuild output stops being
       bit-identical across worker counts
+
+---
+
+## Module: Per-cell R-Tree promotion (Issue #872 step 9)
+
+### PC-01: A promoted cell's tree has exactly one writer `[fatal][silent]`
+  invariant SpatialRTree is single-writer by specification (ADR-044; O2 in
+    claude/design/Spatial/SpatialIndex/03-tree-operations.md). Nothing in CellClusterTree adds a latch, so
+    every mutation of a promoted cell half must be serialised by the CALLER
+  invariant the fence's AabbRefresh phase slices by CLUSTER id, not by cell (FenceWorkPlan.EmitAabbRefreshSliceItems
+    emits bitmap-word or active-index ranges), so two workers routinely carry clusters of one cell. Neither
+    slicing branch may therefore write a promoted cell's tree:
+    ∀ slice worker w, ∀ cluster c whose cell is promoted:
+      w appends (c.chunkId, cellKey) to its OWN List<PromotedAabbApply> and writes nothing
+      the buffer is merged under _finalizeLock (EnqueuePromotedAppliesBulk), one acquisition per slice
+      DrainPromotedAabbApplies replays them on ONE thread, in FinalizeArchetypeFence, after the phase barrier
+  invariant 🔴 the deferral is conditional on a sink being supplied, and the fallback is MANDATORY: a null
+    buffer means the caller is already the single writer (the serial whole-archetype recompute), so the write
+    happens inline. Written as `buffer?.Add(...)` with no else, a null sink DISCARDS the update — ClusterAabbs
+    advances, the tree does not, and the two diverge into SQ-01 false negatives with nothing raised. That
+    shape was reachable on the only configuration the promotion guard leaves open
+  invariant replay order is by cluster id, not arrival order. Arrival order depends on how the planner sliced
+    and which worker finished first, so replaying in it would make the tree — and every handle in
+    ClusterSpatialIndexSlot — a function of the worker count
+  invariant promotion itself (MaybePromoteCellHalf) runs from AddClusterToPerCellIndex, which the parallel
+    Migrate phase reaches. Cell-disjoint slicing does NOT protect the per-archetype resources it touches
+    (Array.Resize of ClusterSpatialIndexSlot, the shared ChunkBasedSegment's Grow), so promotion is refused
+    alongside a parallel fence until that is closed — see the guard named in scope
+  scope: ArchetypeClusterState.ApplyOrDeferClusterUpdate, ArchetypeClusterState.EnqueuePromotedAppliesBulk,
+    ArchetypeClusterState.DrainPromotedAabbApplies, ArchetypeClusterState.UpdateClusterInPerCellIndex,
+    DatabaseEngine.AssertCellTreePromotionIsSafeForParallelFence
+  verified: CellTreeParallelFenceTests (both slicing branches, 50 parallel-fence ticks with motion). Ablated:
+    reverting the divert to an unconditional UpdateClusterInPerCellIndex reddens it 3 runs of 3, on the
+    membership comparison — "cell 1 holds cluster 46 twice", the duplicate a second concurrent
+    remove-and-reinsert leaves behind
+  on_violation:
+    two workers in one tree → a leaf entry duplicated or lost, or RemoveChecked raising an identity mismatch
+      out of a fence worker. The tree stays STRUCTURALLY valid, so TreeValidator passes over corruption
+    deferral without a fallback → the promoted cells silently stop tracking their clusters' bounds
+    replay in arrival order → handles depend on worker count, and a rebuild stops reproducing them
+  requires: ST-05 (handles live in PayloadBackPointers), ST-07 (the in-place window closes inside the fence)
 
 ---
 

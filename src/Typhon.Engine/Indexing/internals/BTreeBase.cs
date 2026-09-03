@@ -111,8 +111,7 @@ internal abstract class BTreeBase<TStore> : IBTreeIndex where TStore : struct, I
     /// mean making <c>KWayMergeState</c>, <c>ArchetypeSortedStream</c> and everything they touch generic over <c>TKey</c> — for a merge whose entire job is
     /// to compare keys that have already been normalised to <see cref="long"/>.
     /// </remarks>
-    internal abstract int FillOrderedPage(ref LeafPageCursorState state, System.Span<long> orderedKeys, System.Span<int> values,
-        ref ChunkAccessor<TStore> accessor);
+    internal abstract int FillOrderedPage(ref LeafPageCursorState state, Span<long> orderedKeys, Span<int> values, ref ChunkAccessor<TStore> accessor);
 
     // Deliberately NOT here: the OLC diagnostic counters (OptimisticRestarts, PessimisticFallbacks, SplitCount,
     // MergeCount, MoveRightCount, WriteLockFailures, ContentionSplitCount). Five of them were abstract on this base and

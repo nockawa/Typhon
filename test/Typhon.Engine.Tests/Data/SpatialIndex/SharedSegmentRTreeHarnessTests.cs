@@ -72,6 +72,110 @@ unsafe class SharedSegmentRTreeHarnessTests
         catch { /* best-effort */ }
     }
 
+    /// <summary>
+    /// A tree must refuse to refit a leaf that belongs to a DIFFERENT tree in the same segment, and must not walk that tree's parent chain.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>What the guard is actually for, stated precisely because the first version of this test overstated it.</b> Before step 9 a chunk id could
+    /// only name a node of the one tree over its segment, so <c>RefitLeafAndAncestors</c> could take "it is a leaf" as proof of ownership. With many trees per
+    /// segment a chunk this tree freed can be reallocated as another cell tree's leaf and passes that test wearing the other tree's data; the walk then climbs
+    /// ITS parent chain, since every root in a shared segment has <c>ParentChunkId == 0</c> and the terminator says nothing about whose chain it was.</para>
+    /// <para><b>It is NOT silent data corruption, and claiming so would be wrong.</b> The refit recomputes each node's MBR from that node's own entries, so
+    /// running it over a well-formed foreign tree writes back the values already there — the observable VALUES do not change, which is exactly why the first
+    /// version of this test could not fail. What does happen is that tree A takes WRITE LATCHES on tree B's nodes, all the way to B's root. That is the real
+    /// defect: an exclusive-window discipline (<c>PC-01</c>) that reasons per tree is void if one tree can latch another's spine, and a chunk id that is stale
+    /// rather than reallocated has no well-formed contents to recompute from and no bounded parent chain to walk.</para>
+    /// <para><b>So the assertion is on the OLC version, not on the coordinates.</b> A write latch bumps it whether or not the value changes, which makes
+    /// "was this node touched" observable where "did this node change" is not.</para>
+    /// <para><b>Ablation.</b> Disabling the <c>OwnsNode</c> guard reddens this — B's root version advances because A latched it.</para>
+    /// </remarks>
+    [Test]
+    [CancelAfter(15_000)]
+    public void RefitLeafAndAncestors_RefusesALeafBelongingToAnotherTreeOnTheSameSegment()
+    {
+        using var pmmf = _serviceProvider.GetRequiredService<ManagedPagedMMF>();
+        using var em = _serviceProvider.GetRequiredService<EpochManager>();
+        var guard = EpochGuard.Enter(em);
+        try
+        {
+            var desc = SpatialNodeDescriptor.ForVariant(SpatialVariant.R3Df32);
+            var segment = pmmf.AllocateChunkBasedSegment(PageBlockType.None, 64, desc.Stride);
+
+            var treeA = new SpatialRTree<PersistentStore>(segment, SpatialVariant.R3Df32);
+            var treeB = new SpatialRTree<PersistentStore>(segment, SpatialVariant.R3Df32);
+            treeA.PayloadBackPointers = new int[512];
+            treeB.PayloadBackPointers = new int[512];
+
+            var accessor = segment.CreateChunkAccessor();
+            try
+            {
+                // A is far from the origin, B is near it, and both are forced past one leaf so each owns an internal root with a real MBR to corrupt.
+                for (int i = 0; i < 40; i++)
+                {
+                    treeA.Insert(100 + i, Box(desc, 900 + i, 900 + i, 904 + i, 904 + i), ref accessor);
+                    treeB.Insert(200 + i, Box(desc, i, i, 4 + i, 4 + i), ref accessor);
+                }
+
+                var (foreignLeaf, _) = SpatialRTree<PersistentStore>.UnpackHandle(treeB.PayloadBackPointers[200]);
+
+                // Preconditions, or the test proves nothing: the two trees must be distinct, B must have split (so its root is internal and carries a MBR
+                // that a foreign refit would rewrite), and the leaf we hand to A must genuinely be B's.
+                Assert.Multiple(() =>
+                {
+                    Assert.That(treeA.RootChunkId, Is.Not.EqualTo(treeB.RootChunkId), "the two trees must not share a root");
+                    Assert.That(treeB.Depth, Is.GreaterThan(1), "tree B must have split, or its root is the leaf and there is no ancestor chain to walk");
+                    Assert.That(foreignLeaf, Is.Not.EqualTo(treeA.RootChunkId));
+                });
+
+                int rootVersionBefore = ReadNodeVersion(treeB.RootChunkId, ref accessor);
+                int leafVersionBefore = ReadNodeVersion(foreignLeaf, ref accessor);
+
+                // The whole point: A is asked to refit a leaf it does not own.
+                treeA.RefitLeafAndAncestors(foreignLeaf, ref accessor);
+
+                int rootVersionAfter = ReadNodeVersion(treeB.RootChunkId, ref accessor);
+                int leafVersionAfter = ReadNodeVersion(foreignLeaf, ref accessor);
+                TestContext.Out.WriteLine($"OWNS foreignLeaf={foreignLeaf} rootB={treeB.RootChunkId} depthB={treeB.Depth} "
+                    + $"leafVer {leafVersionBefore}->{leafVersionAfter} rootVer {rootVersionBefore}->{rootVersionAfter}");
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(leafVersionAfter, Is.EqualTo(leafVersionBefore), "tree A write-latched a LEAF belonging to tree B");
+                    Assert.That(rootVersionAfter, Is.EqualTo(rootVersionBefore), "tree A walked into tree B's ancestor chain and write-latched its root");
+                });
+
+                // And B still answers for everything it holds — the SQ-01 direction that a rewritten MBR would break.
+                var whole = Box(desc, -1e6, -1e6, 1e6, 1e6);
+                int found = 0;
+                var e = treeB.QueryAABB(whole);
+                try
+                {
+                    while (e.MoveNext())
+                    {
+                        found++;
+                    }
+                }
+                finally
+                {
+                    e.Dispose();
+                }
+                Assert.That(found, Is.EqualTo(40), "tree B lost entries after a foreign refit");
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+        }
+        finally
+        {
+            guard.Dispose();
+        }
+    }
+
+    /// <summary>A node's OLC version — bumped by any write latch, so it records that a node was TOUCHED even when the values written were identical.</summary>
+    private static int ReadNodeVersion(int chunkId, ref ChunkAccessor<PersistentStore> accessor) =>
+        SpatialNodeHelper.OlcVersionRef(accessor.GetChunkAddress(chunkId));
+
     private static double[] Box(SpatialNodeDescriptor desc, double minX, double minY, double maxX, double maxY)
     {
         var coords = new double[desc.CoordCount];
@@ -233,9 +337,9 @@ unsafe class SharedSegmentRTreeHarnessTests
 
                 var whole = Box(desc, -1e6, -1e6, 1e6, 1e6);
                 var fromA = new HashSet<long>();
-                foreach (var r in treeA.QueryAABB(whole)) { fromA.Add(r.EntityId); }
+                foreach (var r in treeA.QueryAABB(whole)) { fromA.Add(r.PayloadId); }
                 var fromB = new HashSet<long>();
-                foreach (var r in treeB.QueryAABB(whole)) { fromB.Add(r.EntityId); }
+                foreach (var r in treeB.QueryAABB(whole)) { fromB.Add(r.PayloadId); }
 
                 TestContext.Out.WriteLine($"CLAIM2 rootA={treeA.RootChunkId} rootB={treeB.RootChunkId} nodesA={treeA.NodeCount} nodesB={treeB.NodeCount} "
                     + $"depthA={treeA.Depth} depthB={treeB.Depth} insertedA={inA.Count} insertedB={inB.Count} foundA={fromA.Count} foundB={fromB.Count} "
@@ -299,6 +403,19 @@ unsafe class SharedSegmentRTreeHarnessTests
 
                     TestContext.Out.WriteLine($"CLAIM3 clusters={clusters,4} nodes={tree.NodeCount,3} depth={tree.Depth} "
                         + $"treeBytes={treeBytes,6} soaBytes={soaBytes,6} ratio={(double)treeBytes / soaBytes:F2}");
+
+                    // This was Assert.Pass("reported") — an assertion no mutation of SpatialRTree could redden, in a fixture that (unlike its two sibling
+                    // instruments) is not [Explicit], so it ran on every gate shard for no signal at all. Node count and depth are what the measurement is
+                    // ABOUT, so they are what gets pinned: a tree cannot store more entries than its leaves have capacity for, and depth must grow with the
+                    // population rather than staying flat. A tree that silently dropped inserts would fail the first; one that never split, the second.
+                    Assert.Multiple(() =>
+                    {
+                        Assert.That(tree.NodeCount, Is.GreaterThanOrEqualTo((clusters + desc.LeafCapacity - 1) / desc.LeafCapacity),
+                            $"{clusters} entries need at least ceil({clusters} / {desc.LeafCapacity}) leaves");
+                        Assert.That(tree.Depth, Is.GreaterThanOrEqualTo(clusters > desc.LeafCapacity ? 2 : 1),
+                            "a population past one leaf must have split, so depth must be at least 2");
+                        Assert.That(tree.EntityCount, Is.EqualTo(clusters), "every insert must be present in the tree");
+                    });
                 }
                 finally
                 {
@@ -306,7 +423,6 @@ unsafe class SharedSegmentRTreeHarnessTests
                 }
             }
 
-            Assert.Pass("reported");
         }
         finally
         {

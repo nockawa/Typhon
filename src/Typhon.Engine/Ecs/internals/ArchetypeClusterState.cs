@@ -18,7 +18,7 @@ namespace Typhon.Engine.Internals;
 /// <para>Active clusters are tracked in a compact array for O(N_clusters) iteration.
 /// Free slot discovery uses bitmask TZCNT on OccupancyBits.</para>
 /// </remarks>
-internal sealed unsafe class ArchetypeClusterState
+internal sealed unsafe partial class ArchetypeClusterState
 {
     /// <summary>ChunkBasedSegment backing cluster data (SV + V components). Null for pure-Transient archetypes.</summary>
     public ChunkBasedSegment<PersistentStore> ClusterSegment;
@@ -1032,6 +1032,140 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     internal PerCellSpatialSlot[] PerCellIndex;
 
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // Per-cell R-Tree promotion (#872 step 9)
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Cluster count at which a cell's linear index is replaced by a <see cref="CellClusterTree"/>. <see cref="int.MaxValue"/> disables promotion entirely,
+    /// which is the default.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Default off, on measured grounds.</b> The crossover was measured across cluster count and query selectivity: below ~512 clusters the linear
+    /// scan wins a selective query — 6x at 80 clusters, which is what AntHill's densest zones hold — and the tree's update path is 22-38x dearer per moved
+    /// cluster. Above ~1500 the tree wins by 3.6x, and by 25.8x at 15625. A default that promoted eagerly would make the common case slower to help a case
+    /// no measured workload reaches.</para>
+    /// <para><b>And the regime is harder to reach than it looks.</b> Clusters-per-cell is the world TIMES the cell size, so the same population crosses this
+    /// threshold or not depending on a number the developer picks. On a clumped population the mean was 1.8 clusters per cell with the worst cell at 102 —
+    /// nowhere near. Reaching 512 needed hotspots so tight that any query into one returns tens of thousands of entities, at which point the broadphase is
+    /// 0.2% of the query and the tree improves the worst case by 0.03%. Promotion is therefore a hedge against a mis-sized grid, not a normal operating mode,
+    /// and it is opt-in so that turning it on is a decision somebody made.</para>
+    /// </remarks>
+    internal int CellTreePromoteThreshold = int.MaxValue;
+
+    /// <summary>
+    /// Cluster count at which a promoted cell falls back to a linear index. Must be meaningfully below <see cref="CellTreePromoteThreshold"/>.
+    /// </summary>
+    /// <remarks>
+    /// The gap between the two is not tuning slack, it is what stops thrashing: a cell hovering at the threshold would otherwise rebuild its whole structure
+    /// twice per tick, and a rebuild is O(C) on a cell whose C is by definition large. Half the promote threshold gives a cell room to breathe across a
+    /// spawn/destroy cycle without changing shape.
+    /// </remarks>
+    internal int CellTreeDemoteThreshold = int.MaxValue;
+
+    /// <summary>Segment shared by every cell tree of this archetype. Created on first promotion, never per cell — see <see cref="CellClusterTree"/>.</summary>
+    internal ChunkBasedSegment<TransientStore> CellTreeSegment;
+
+    /// <summary>Store kept alive for <see cref="CellTreeSegment"/>.</summary>
+    internal TransientStore? CellTreeStore;
+
+    /// <summary>
+    /// Supplies the shared cell-tree segment on first promotion. Set by <c>DatabaseEngine</c> at construction; null leaves promotion unavailable, which is
+    /// what every non-engine construction path (tests, harnesses) gets.
+    /// </summary>
+    /// <remarks>
+    /// A factory rather than an eagerly-created segment because a <see cref="ChunkBasedSegment{TStore}"/> costs at least two pages, and the overwhelmingly
+    /// common case is that no cell in the archetype ever crosses the threshold. A factory rather than service references on this type because
+    /// <see cref="ArchetypeClusterState"/> is constructed by static factory methods that hold none.
+    /// </remarks>
+    internal Func<int, (ChunkBasedSegment<TransientStore> segment, TransientStore store)> CellTreeSegmentFactory;
+
+    /// <summary>Cells currently served by a tree, counted for telemetry and for the tests that assert promotion did or did not happen.</summary>
+    internal int PromotedCellCount;
+
+    /// <summary>
+    /// One deferred index write for a cluster in a promoted cell. Carries no bounds — <see cref="ClusterAabbs"/> already holds them by the time this is
+    /// recorded, and duplicating a 28-byte struct into a buffer only to read the same value back would be two sources for one fact.
+    /// </summary>
+    internal readonly struct PromotedAabbApply
+    {
+        internal readonly int ClusterChunkId;
+        internal readonly int CellKey;
+
+        internal PromotedAabbApply(int clusterChunkId, int cellKey)
+        {
+            ClusterChunkId = clusterChunkId;
+            CellKey = cellKey;
+        }
+    }
+
+    /// <summary>
+    /// Index writes deferred out of the parallel AabbRefresh phase because their cell is promoted. Drained by <see cref="DrainPromotedAabbApplies"/>.
+    /// </summary>
+    internal List<PromotedAabbApply> PendingPromotedApplies;
+
+    /// <summary>Deferred applies drained by the last fence, and the microseconds the drain took — the escalation trigger's two inputs (#872 step 9).</summary>
+    internal int PromotedApplyCount;
+
+    /// <summary>See <see cref="PromotedApplyCount"/>.</summary>
+    internal double PromotedApplyUs;
+
+    /// <summary>Merge one worker's deferred applies into the archetype's pending list, under the same lock the outlier buffer uses.</summary>
+    internal void EnqueuePromotedAppliesBulk(List<PromotedAabbApply> buffer)
+    {
+        if (buffer == null || buffer.Count == 0)
+        {
+            return;
+        }
+
+        ref WaitContext nullCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
+        try
+        {
+            PendingPromotedApplies ??= new List<PromotedAabbApply>(buffer.Count);
+            PendingPromotedApplies.AddRange(buffer);
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>
+    /// Apply every index write the parallel phase deferred, on one thread. Runs in the fence's per-archetype tail, before the loose-leaf refit.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Order is by cluster id, not arrival order.</b> Arrival order depends on how the planner happened to slice and on which worker finished first,
+    /// so applying in it would make the resulting tree — and every handle in <c>ClusterSpatialIndexSlot</c> — a function of the worker count. Sorting costs
+    /// O(n log n) on a list that is empty in every unpromoted archetype, and buys a result identical across machines, which is the same constraint the rebuild
+    /// reduce already carries.</para>
+    /// <para><b>This is where §4.1's parallelism claim is spent.</b> The design says cells are independent and R-Tree maintenance partitions by cell; this
+    /// satisfies the exclusivity half in full and defers the throughput half to one partition. <see cref="PromotedApplyUs"/> is the measurement that says when
+    /// that stops being the right trade.</para>
+    /// </remarks>
+    internal void DrainPromotedAabbApplies()
+    {
+        PromotedApplyCount = 0;
+        PromotedApplyUs = 0d;
+        var pending = PendingPromotedApplies;
+        if (pending == null || pending.Count == 0)
+        {
+            return;
+        }
+
+        long started = Stopwatch.GetTimestamp();
+        pending.Sort(static (a, b) => a.ClusterChunkId.CompareTo(b.ClusterChunkId));
+        for (int i = 0; i < pending.Count; i++)
+        {
+            var entry = pending[i];
+            UpdateClusterInPerCellIndex(entry.ClusterChunkId, entry.CellKey, in ClusterAabbs[entry.ClusterChunkId]);
+        }
+
+        PromotedApplyCount = pending.Count;
+        PromotedApplyUs = (Stopwatch.GetTimestamp() - started) * 1_000_000d / Stopwatch.Frequency;
+        pending.Clear();
+    }
+
     /// <summary>
     /// Snapshot of the previous tick's dirty bitmap (occupancy-masked). Set during <c>WriteClusterTickFence</c>, consumed
     /// by <c>TyphonRuntime.BuildFilteredClusterEntities</c> for change-filtered parallel dispatch.
@@ -1393,65 +1527,6 @@ internal sealed unsafe class ArchetypeClusterState
         return new AabbClusterEnumerator(this, grid, minX, minY, minZ, maxX, maxY, maxZ, categoryMask, radius * radius, centerX, centerY, effectiveCenterZ);
     }
 
-    /// <summary>
-    /// k-nearest-neighbor query against the per-cell cluster spatial index (issue #230 Phase 3). Collects up to <paramref name="k"/> entities whose tight
-    /// AABBs are closest to the query center, sorted by distance ascending. Returns the number of valid entries written to <paramref name="results"/>.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>Simple implementation.</b> Runs a <see cref="QueryRadius"/> query with a grid-spanning radius, collects every candidate (entityId, distSq) into
-    /// a managed list, runs a partial selection sort to find the top k by distance, and writes them to the caller buffer. Correct for any k; performance
-    /// degrades when the grid is large and the query center is not near a cluster. Iterative radius expansion is an optimization follow-up tracked under
-    /// sub-issues of #228.
-    /// </para>
-    /// <para>
-    /// Allocates one <see cref="System.Collections.Generic.List{T}"/> per call for the candidate buffer. Not intended for per-tick hot loops.
-    /// </para>
-    /// </remarks>
-    public int QueryNearest(SpatialGrid grid, float centerX, float centerY, float centerZ, int k, Span<(long entityId, float distSq)> results, 
-        uint categoryMask = uint.MaxValue)
-    {
-        if (k <= 0 || results.Length == 0)
-        {
-            return 0;
-        }
-
-        int targetCount = Math.Min(k, results.Length);
-
-        // Generous radius: use float.MaxValue so no entity is excluded by the broadphase. QueryRadius clamps the AABB to the
-        // grid's world bounds, so this won't allocate more cells than exist. Using float.MaxValue instead of the grid diagonal
-        // ensures 3D archetypes with entities far along the Z axis are also captured.
-        float maxRadius = float.MaxValue;
-
-        var scratch = new List<(long entityId, float distSq)>(64);
-        foreach (var hit in QueryRadius(grid, centerX, centerY, centerZ, maxRadius, categoryMask))
-        {
-            scratch.Add((hit.EntityId, hit.DistanceSq));
-        }
-
-        // Partial selection sort for top k by distance ascending. O(k × n) — fine for small k.
-        int n = scratch.Count;
-        int resultCount = Math.Min(targetCount, n);
-        for (int i = 0; i < resultCount; i++)
-        {
-            int minIdx = i;
-            float minDist = scratch[i].distSq;
-            for (int j = i + 1; j < n; j++)
-            {
-                if (scratch[j].distSq < minDist)
-                {
-                    minIdx = j;
-                    minDist = scratch[j].distSq;
-                }
-            }
-            if (minIdx != i)
-            {
-                (scratch[i], scratch[minIdx]) = (scratch[minIdx], scratch[i]);
-            }
-            results[i] = scratch[i];
-        }
-        return resultCount;
-    }
 
     /// <summary>
     /// Create a new ArchetypeClusterState for a cluster-eligible archetype (fresh database).
@@ -2208,6 +2283,11 @@ internal sealed unsafe class ArchetypeClusterState
         if (PerCellIndex != null)
         {
             Array.Clear(PerCellIndex);
+
+            // Clearing the slots discards every promoted cell's tree with them, so the counter has to follow. Leaving it stale makes RefitPromotedCellTrees
+            // and RebindCellTreeBackPointers walk an array of nulls forever after a rebuild — harmless — but it also makes PromotedCellCount lie to the tests
+            // that use it as their non-vacuity guard, which is how a promotion test passes without promoting anything.
+            PromotedCellCount = 0;
         }
         Array.Fill(ClusterSpatialIndexSlot, -1);
 
@@ -2421,6 +2501,9 @@ internal sealed unsafe class ArchetypeClusterState
         int oldLen = ClusterSpatialIndexSlot.Length;
         Array.Resize(ref ClusterSpatialIndexSlot, newLen);
         Array.Fill(ClusterSpatialIndexSlot, -1, oldLen, newLen - oldLen);
+
+        // Array.Resize REALLOCATES, and this array doubles as every cell tree's PayloadBackPointers — see RebindCellTreeBackPointers.
+        RebindCellTreeBackPointers();
     }
 
     /// <summary>
@@ -2749,6 +2832,11 @@ internal sealed unsafe class ArchetypeClusterState
         if (PerCellIndex != null)
         {
             Array.Clear(PerCellIndex);
+
+            // Clearing the slots discards every promoted cell's tree with them, so the counter has to follow. Leaving it stale makes RefitPromotedCellTrees
+            // and RebindCellTreeBackPointers walk an array of nulls forever after a rebuild — harmless — but it also makes PromotedCellCount lie to the tests
+            // that use it as their non-vacuity guard, which is how a promotion test passes without promoting anything.
+            PromotedCellCount = 0;
         }
         Array.Fill(ClusterSpatialIndexSlot, -1);
 
@@ -2855,7 +2943,9 @@ internal sealed unsafe class ArchetypeClusterState
             if (totalWork > 0)
             {
                 var outlierBuffer = new List<MigrationRequest>(0);
-                RecomputeDirtyClusterAabbsSlice(0, totalWork, ref accessor, grid, outlierBuffer, out int aabbsChanged, out int slotsScanned, 
+                // No deferral buffer on the serial path: it is already the single writer, so a promoted cell's tree can be written directly and the drain
+                // below has nothing to do. Passing null is what selects that — see the divert in the slice.
+                RecomputeDirtyClusterAabbsSlice(0, totalWork, ref accessor, grid, null, outlierBuffer, out int aabbsChanged, out int slotsScanned,
                     out int outlierGuardFires);
                 EnqueueMigrationsBulk(outlierBuffer);
                 refreshSpan.AabbsChanged = aabbsChanged;
@@ -2897,8 +2987,8 @@ internal sealed unsafe class ArchetypeClusterState
     /// crash. Whoever relaxes this barrier must first convert the store to a grow-merge (union with <c>stored</c>, handling the shrink path explicitly).
     /// </para>
     /// </summary>
-    internal void RecomputeDirtyClusterAabbsSlice(int sliceStart, int sliceCount, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid, 
-        List<MigrationRequest> outlierBuffer, out int aabbsChanged, out int slotsScanned, out int outlierGuardFires)
+    internal void RecomputeDirtyClusterAabbsSlice(int sliceStart, int sliceCount, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid,
+        List<PromotedAabbApply> promotedApplyBuffer, List<MigrationRequest> outlierBuffer, out int aabbsChanged, out int slotsScanned, out int outlierGuardFires)
     {
         aabbsChanged = 0;
         slotsScanned = 0;
@@ -2976,7 +3066,10 @@ internal sealed unsafe class ArchetypeClusterState
                     }
 
                     var slot = PerCellIndex[cellKey];
-                    if (slot == null || slot.DynamicIndex == null)
+                    // DynamicClusterCount, not DynamicIndex != null: a promoted cell has no linear index at all, so testing the field skips the recompute
+                    // for exactly the cells the tree was introduced to serve. Silent — the fence simply stops updating those clusters' bounds, and CA-01
+                    // decays from there.
+                    if (slot == null || slot.DynamicClusterCount == 0)
                     {
                         continue;
                     }
@@ -3004,20 +3097,34 @@ internal sealed unsafe class ArchetypeClusterState
                         }
                     }
 
-                    if (stored.MinX == fresh.MinX && stored.MinY == fresh.MinY && stored.MinZ == fresh.MinZ &&
-                        stored.MaxX == fresh.MaxX && stored.MaxY == fresh.MaxY && stored.MaxZ == fresh.MaxZ && shrinkMask == 0)
+                    // 🔴 The per-cell index is NOT a copy of ClusterAabbs, and deciding whether to write it by comparing ClusterAabbs against ITSELF was
+                    // an SQ-01 false negative. ClusterAabbs has TWO writers — the write-time CAS in ClusterRef.MaybeGrowAndFlagShrink, whose own summary says
+                    // a grow means "the cluster needs a fence-time PerCellIndex.UpdateAt with the fresh AABB" — while the index has ONE, this loop. When the
+                    // CAS has already applied the grow, `stored` and `fresh` agree and the old short-circuit skipped the index, leaving it holding the
+                    // previous tick's SMALLER box. A query whose edge fell in the gap pruned the cluster and lost every entity in it, with nothing raised.
+                    //
+                    // On this branch it was not even a race: `fresh` is ASSIGNED from `stored` when no shrink is pending, so the comparison was a tautology
+                    // and a grow-only tick could NEVER update the index at all. Both demos run barrier-only, so that was the shipped path.
+                    //
+                    // The bit is the signal, and it costs nothing here because it is what we are already iterating. A cluster reaches this loop only because
+                    // WriteSpatial set its ClusterProcessBitmap bit, and it sets that bit on exactly `aabbChanged || migrationFlagged` — either way the index
+                    // wants the current box. ClearAabbRefreshBookkeeping zeroes the bitmap once per tick, so a set bit always refers to this tick.
+                    bool boundsMoved = stored.MinX != fresh.MinX || stored.MinY != fresh.MinY || stored.MinZ != fresh.MinZ ||
+                                       stored.MaxX != fresh.MaxX || stored.MaxY != fresh.MaxY || stored.MaxZ != fresh.MaxZ;
+
+                    fresh.CategoryMask = ReadStoredCategoryMask(slot, chunkId, indexSlot);
+                    NoteClusterOverhang(in fresh, cellSize);
+                    if (boundsMoved)
                     {
-                        continue;
+                        // CA-01 PRECONDITION (see the method's remarks): `stored = fresh` is a BLIND STORE, not a grow-merge. Sound only under the tick fence
+                        // barrier, which guarantees no concurrent WriteSpatial is flagging new geometry into this cell. Relaxing that barrier without
+                        // converting it to a union against `stored` silently drops the racing write and leaves the AABB too tight (#573).
+                        NoteAabbChange(in stored, in fresh);
+                        stored = fresh;
+                        aabbsChanged++;
                     }
 
-                    // CA-01 PRECONDITION (see the method's remarks): `stored = fresh` is a BLIND STORE, not a grow-merge. Sound only under the tick fence
-                    // barrier, which guarantees no concurrent WriteSpatial is flagging new geometry into this cell. Relaxing that barrier without converting
-                    // this to a union against `stored` silently drops the racing write and leaves the AABB too tight — wrong query results, no error (#573).
-                    fresh.CategoryMask = slot.DynamicIndex.CategoryMasks[indexSlot];
-                    NoteAabbChange(in stored, in fresh);
-                    stored = fresh;
-                    slot.DynamicIndex.UpdateAt(indexSlot, in fresh);
-                    aabbsChanged++;
+                    ApplyOrDeferClusterUpdate(chunkId, cellKey, in fresh, slot, promotedApplyBuffer);
                     TyphonEvent.EmitSpatialCellIndexUpdate(cellKey, indexSlot);
 
                     // The Z term matters because FlagOutliersForMigration tests all three axes: without it a cluster that drifts purely on Z never
@@ -3025,8 +3132,8 @@ internal sealed unsafe class ArchetypeClusterState
                     // UNREACHABLE today — WriteSpatial supports AABB2F only, so no cluster AABB grows on Z at write time, and a 2D union leaves
                     // MinZ/MaxZ at the ±Infinity sentinel whose difference is -Infinity. It goes in now rather than being discovered missing when 3D
                     // write support lands (steps 9-10).
-                    if (outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent || 
-                                               (fresh.MaxY - fresh.MinY) > maxExtent || 
+                    if (outlierGuardActive && ((fresh.MaxX - fresh.MinX) > maxExtent ||
+                                               (fresh.MaxY - fresh.MinY) > maxExtent ||
                                                (fresh.MaxZ - fresh.MinZ) > maxExtent))
                     {
                         outlierGuardFires++;
@@ -3065,7 +3172,8 @@ internal sealed unsafe class ArchetypeClusterState
                 }
 
                 var slot = PerCellIndex[cellKey];
-                if (slot == null || slot.DynamicIndex == null)
+                // See the sliced path above: a promoted cell has no DynamicIndex, and testing the field would skip it.
+                if (slot == null || slot.DynamicClusterCount == 0)
                 {
                     continue;
                 }
@@ -3079,17 +3187,34 @@ internal sealed unsafe class ArchetypeClusterState
                 }
 
                 ref var stored = ref ClusterAabbs[chunkId];
-                if (stored.MinX == fresh.MinX && stored.MinY == fresh.MinY && stored.MinZ == fresh.MinZ &&
-                    stored.MaxX == fresh.MaxX && stored.MaxY == fresh.MaxY && stored.MaxZ == fresh.MaxZ)
+                bool boundsMoved = stored.MinX != fresh.MinX || stored.MinY != fresh.MinY || stored.MinZ != fresh.MinZ ||
+                                   stored.MaxX != fresh.MaxX || stored.MaxY != fresh.MaxY || stored.MaxZ != fresh.MaxZ;
+
+                // See the bitmap branch above for why equality is the wrong question. Here `fresh` IS recomputed from the entities, so the comparison is not
+                // a tautology — but it still answers "did the fence learn anything new", not "is the index current". The write-time CAS can have moved
+                // ClusterAabbs to exactly what the recompute produces, and then the fence has nothing to store while the index is still a tick behind. The
+                // process bit separates the two: WriteSpatial sets it, and the OpenMut / GetSpan writers that leave ClusterAabbs for the fence to recompute
+                // do not — which is precisely the case where equality really does mean nothing happened.
+                if (!boundsMoved && !IsClusterProcessBitSet(chunkId))
                 {
                     continue;
                 }
 
-                fresh.CategoryMask = slot.DynamicIndex.CategoryMasks[indexSlot];
-                NoteAabbChange(in stored, in fresh);
-                stored = fresh;
-                slot.DynamicIndex.UpdateAt(indexSlot, in fresh);
-                aabbsChanged++;
+                fresh.CategoryMask = ReadStoredCategoryMask(slot, chunkId, indexSlot);
+                NoteClusterOverhang(in fresh, cellSize);
+                if (boundsMoved)
+                {
+                    NoteAabbChange(in stored, in fresh);
+                    stored = fresh;
+                }
+
+                // The ActiveClusterIds branch is sliced by active-list index and is just as parallel as the bitmap branch above, so it defers identically.
+                // Leaving it undiverted was the shape of the original defect: one branch protected, the other silently writing a shared tree from a worker.
+                ApplyOrDeferClusterUpdate(chunkId, cellKey, in fresh, slot, promotedApplyBuffer);
+                if (boundsMoved)
+                {
+                    aabbsChanged++;
+                }
                 TyphonEvent.EmitSpatialCellIndexUpdate(cellKey, indexSlot);
 
                 // The Z term matters because FlagOutliersForMigration tests all three axes: without it a cluster that drifts purely on Z never
@@ -3130,6 +3255,80 @@ internal sealed unsafe class ArchetypeClusterState
             return total;
         }
         return Math.Min(sliceCount, Math.Max(0, ActiveClusterCount - sliceStart));
+    }
+
+    /// <summary>
+    /// The largest distance by which any of this archetype's cluster boxes reaches OUTSIDE its own cell, in world units. Zero until a cluster proves otherwise.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why a cluster can leave its cell at all.</b> Cell membership is decided by an entity's CENTRE — <c>SpatialGrid.ReadSpatialCenter3D</c>, and the
+    /// migration check in <c>DetectClusterMigrations</c> uses the same point — so an entity with extent protrudes past its cell by up to its own
+    /// half-extent, and the cluster box that unions it protrudes with it. <c>C13</c> makes a cluster belong to exactly one cell; it does not make its geometry
+    /// fit inside one.</para>
+    /// <para><b>What breaks without it.</b> Every grid search that argues "rings 0..R cover a radius of R cells, so nothing outside can be nearer" is wrong by
+    /// exactly this much. <see cref="CoveredRadiusSq"/> made that argument and dropped true nearest neighbours whenever entities had extent — invisible to a
+    /// test that spawns points, which is what the first kNN fixture did.</para>
+    /// <para><b>Cell-relative bounds make it free to compute.</b> C15 stores <see cref="ClusterAabbs"/> as offsets from the cell origin, so the overhang is
+    /// <c>max(-Min, Max - cellSize)</c> per axis with no origin lookup and no second pass.</para>
+    /// <para><b>It only ever rises.</b> Too large merely widens a search; too small loses results — so the asymmetry is deliberate and it is never lowered.
+    /// The consequence to know: an entity whose overhang exceeds anything seen before becomes visible to kNN at the fence following its write, not at the
+    /// write itself. Entity sizes are effectively static in the workloads this serves, so that window is "a larger-than-ever entity was just spawned", not
+    /// steady-state motion.</para>
+    /// </remarks>
+    internal float MaxClusterOverhang;
+
+    /// <summary>Raise <see cref="MaxClusterOverhang"/> to cover one cluster box, given in that cluster's own cell frame.</summary>
+    /// <remarks>
+    /// CAS rather than a plain store because the parallel AabbRefresh slices all reach it; the loop is a max, so a lost race just retries. The common case is
+    /// the first compare failing, which is a load and a branch.
+    /// </remarks>
+    internal void NoteClusterOverhang(in ClusterSpatialAabb aabb, float cellSize)
+    {
+        if (!(cellSize > 0f))
+        {
+            return;
+        }
+
+        float over = MathF.Max(-aabb.MinX, aabb.MaxX - cellSize);
+        over = MathF.Max(over, MathF.Max(-aabb.MinY, aabb.MaxY - cellSize));
+
+        // A 2D archetype leaves Z at the +/-Infinity sentinel; feeding that in would poison the max with an infinity that widens every search forever.
+        if (!float.IsPositiveInfinity(aabb.MinZ) && !float.IsNegativeInfinity(aabb.MaxZ))
+        {
+            over = MathF.Max(over, MathF.Max(-aabb.MinZ, aabb.MaxZ - cellSize));
+        }
+
+        if (!float.IsFinite(over) || over <= 0f)
+        {
+            return;
+        }
+
+        float current = Volatile.Read(ref MaxClusterOverhang);
+        while (over > current)
+        {
+            float prior = Interlocked.CompareExchange(ref MaxClusterOverhang, over, current);
+            if (prior == current)
+            {
+                return;
+            }
+            current = prior;
+        }
+    }
+
+    /// <summary>
+    /// Whether <c>ClusterRef.WriteSpatial</c> touched this cluster since the last fence — that is, whether <see cref="ClusterAabbs"/> may have been advanced
+    /// by the write-time CAS rather than by the fence's own recompute.
+    /// </summary>
+    /// <remarks>
+    /// A plain read, not <see cref="Interlocked"/>: writers SET the bit with <c>Interlocked.Or</c>, but this reads it from inside the fence, after the barrier
+    /// that closes the write window, so nothing is concurrent with it. <see cref="ClearAabbRefreshBookkeeping"/> zeroes the array once per tick, so a set bit
+    /// always refers to this tick and never carries over.
+    /// </remarks>
+    private bool IsClusterProcessBitSet(int chunkId)
+    {
+        var bitmap = ClusterProcessBitmap;
+        int wordIdx = chunkId >> 6;
+        return bitmap != null && (uint)wordIdx < (uint)bitmap.Length && (bitmap[wordIdx] & (1L << (chunkId & 63))) != 0;
     }
 
     /// <summary>
@@ -3236,6 +3435,8 @@ internal sealed unsafe class ArchetypeClusterState
     /// </summary>
     internal void AddClusterToPerCellIndex(int clusterChunkId, int cellKey, in ClusterSpatialAabb aabb)
     {
+        NoteClusterOverhang(in aabb, Grid?.Config.CellSize ?? 0f);
+
         EnsurePerCellIndexCapacity(cellKey + 1);
         EnsureClusterSpatialIndexSlotCapacity(clusterChunkId + 1);
         EnsureClusterWriteBookkeepingCapacity(clusterChunkId + 1);
@@ -3248,6 +3449,15 @@ internal sealed unsafe class ArchetypeClusterState
         }
 
         bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        var tree = isStatic ? slot.StaticTree : slot.DynamicTree;
+        if (tree != null)
+        {
+            // The tree records the handle into ClusterSpatialIndexSlot itself, through PayloadBackPointers — see ST-05 on why nothing else may keep a copy.
+            tree.Add(clusterChunkId, in aabb);
+            TyphonEvent.EmitSpatialCellIndexAdd(cellKey, ClusterSpatialIndexSlot[clusterChunkId], clusterChunkId, tree.ClusterCount);
+            return;
+        }
+
         if (isStatic)
         {
             slot.StaticIndex ??= new CellSpatialIndex();
@@ -3261,6 +3471,253 @@ internal sealed unsafe class ArchetypeClusterState
             int indexSlot = slot.DynamicIndex.Add(clusterChunkId, aabb);
             ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
             TyphonEvent.EmitSpatialCellIndexAdd(cellKey, indexSlot, clusterChunkId, slot.DynamicIndex.Capacity);
+        }
+
+        MaybePromoteCellHalf(slot, isStatic);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // Promotion and demotion between the linear index and a per-cell R-Tree (#872 step 9)
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Swap a cell half over to a <see cref="CellClusterTree"/> once it holds <see cref="CellTreePromoteThreshold"/> clusters. No-op when promotion is
+    /// disabled, which is the default.
+    /// </summary>
+    /// <remarks>
+    /// The rebuild is O(C) and happens at most once per crossing thanks to the demote gap. Failure to obtain a segment is not an error: an archetype
+    /// constructed outside <c>DatabaseEngine</c> has no factory, and the correct behaviour there is to keep scanning, not to throw at a caller that never
+    /// asked for a tree.
+    /// </remarks>
+    private void MaybePromoteCellHalf(PerCellSpatialSlot slot, bool isStatic)
+    {
+        if (CellTreePromoteThreshold == int.MaxValue)
+        {
+            return;
+        }
+
+        var linear = isStatic ? slot.StaticIndex : slot.DynamicIndex;
+        if (linear == null || linear.ClusterCount < CellTreePromoteThreshold || !TryEnsureCellTreeSegment())
+        {
+            return;
+        }
+
+        var tree = new CellClusterTree(CellTreeSegment, ClusterSpatialIndexSlot);
+
+        // Retire the LINEAR slot indices before re-issuing tree handles into the same array. The two representations share ClusterSpatialIndexSlot, and a
+        // linear slot index is just a small non-negative int — indistinguishable from a packed handle. Without this the tree cannot tell an entry it already
+        // holds from one the linear index used to hold, so its own duplicate-add guard fires on every promotion.
+        for (int i = 0; i < linear.ClusterCount; i++)
+        {
+            ClusterSpatialIndexSlot[linear.ClusterIds[i]] = SpatialRTree<TransientStore>.NullHandle;
+        }
+
+        for (int i = 0; i < linear.ClusterCount; i++)
+        {
+            var aabb = new ClusterSpatialAabb
+            {
+                MinX = linear.MinX[i],
+                MinY = linear.MinY[i],
+                MinZ = linear.MinZ[i],
+                MaxX = linear.MaxX[i],
+                MaxY = linear.MaxY[i],
+                MaxZ = linear.MaxZ[i],
+                CategoryMask = linear.CategoryMasks[i],
+            };
+            tree.Add(linear.ClusterIds[i], in aabb);
+        }
+
+        if (isStatic)
+        {
+            slot.PublishStaticTree(tree);
+        }
+        else
+        {
+            slot.PublishDynamicTree(tree);
+        }
+        // Interlocked because this counter is ARCHETYPE-wide while the Migrate slices that reach it are only CELL-disjoint. A lost increment makes
+        // RefitPromotedCellTrees and RebindCellTreeBackPointers early-return, so ST-07's loose-leaf window outlives the fence and ST-05's rebind is skipped
+        // after a resize — both silent.
+        Interlocked.Increment(ref PromotedCellCount);
+    }
+
+    /// <summary>Fall back to a linear index once a promoted cell half drops to <see cref="CellTreeDemoteThreshold"/>.</summary>
+    private void DemoteCellHalf(PerCellSpatialSlot slot, bool isStatic)
+    {
+        var tree = isStatic ? slot.StaticTree : slot.DynamicTree;
+        if (tree == null)
+        {
+            return;
+        }
+
+        // Ids come from a full-extent query; the BOUNDS come from ClusterAabbs, which already holds every cluster's cell-relative box indexed by chunk id.
+        // Reading them back out of the tree would need a result type carrying coordinates, and keeping a second list of ids inside the tree would be one more
+        // copy of a fact the tree already owns — the exact shape ST-05 was written about.
+        var linear = new CellSpatialIndex(Math.Max(CellSpatialIndex.DefaultInitialCapacity, tree.ClusterCount));
+        var ids = new int[tree.ClusterCount];
+        int found = 0;
+        foreach (int clusterChunkId in tree.EnumerateClusterIds())
+        {
+            if (found < ids.Length)
+            {
+                ids[found++] = clusterChunkId;
+            }
+        }
+
+        for (int i = 0; i < found; i++)
+        {
+            int clusterChunkId = ids[i];
+            int indexSlot = linear.Add(clusterChunkId, in ClusterAabbs[clusterChunkId]);
+            ClusterSpatialIndexSlot[clusterChunkId] = indexSlot;
+        }
+
+        if (isStatic)
+        {
+            slot.PublishStaticIndex(linear);
+        }
+        else
+        {
+            slot.PublishDynamicIndex(linear);
+        }
+        Interlocked.Decrement(ref PromotedCellCount);
+    }
+
+    /// <summary>
+    /// Close <c>ST-07</c>'s window: refit every leaf the in-place update path left loose, across every promoted cell of this archetype.
+    /// </summary>
+    /// <remarks>
+    /// Must run after the last AABB slice and before any query — the fence's single-threaded per-archetype tail is the one point that satisfies both. Cheap
+    /// when nothing was promoted, which is the default, and cheap when nothing moved, because a tree with no recorded loose leaves returns immediately.
+    /// </remarks>
+    internal void RefitPromotedCellTrees()
+    {
+        if (PromotedCellCount == 0 || PerCellIndex == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < PerCellIndex.Length; i++)
+        {
+            var slot = PerCellIndex[i];
+            slot?.DynamicTree?.RefitLooseLeaves();
+            slot?.StaticTree?.RefitLooseLeaves();
+        }
+    }
+
+    /// <summary>
+    /// Apply a cluster's refreshed bounds, or defer them when the cell is promoted AND a deferral sink was supplied.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The fallback is mandatory, not optional.</b> A null sink means the caller is already the single writer — the serial whole-archetype recompute —
+    /// so the write happens immediately. Writing this as <c>buffer?.Add(...)</c> with no else, which is what it was first, makes a null sink DISCARD the update
+    /// instead: <see cref="ClusterAabbs"/> advances, the tree does not, and the two diverge permanently into <c>SQ-01</c> false negatives with nothing raised.
+    /// That failure was reachable on the only configuration the guard leaves open, because the guard tells users to run the serial fence.</para>
+    /// <para>Both fence branches route here — the <c>ClusterProcessBitmap</c> one and the <c>ActiveClusterIds</c> one. Neither is cell-partitioned, so neither
+    /// may write a promoted cell's tree from a worker (ADR-044, invariant O2).</para>
+    /// </remarks>
+    private void ApplyOrDeferClusterUpdate(int chunkId, int cellKey, in ClusterSpatialAabb fresh, PerCellSpatialSlot slot, 
+        List<PromotedAabbApply> promotedApplyBuffer)
+    {
+        if (slot.HasDynamicTree && promotedApplyBuffer != null)
+        {
+            promotedApplyBuffer.Add(new PromotedAabbApply(chunkId, cellKey));
+            return;
+        }
+
+        UpdateClusterInPerCellIndex(chunkId, cellKey, in fresh);
+    }
+
+    /// <summary>
+    /// Overwrite a cluster's stored bounds in its cell, through whichever structure serves that cell.
+    /// </summary>
+    /// <remarks>
+    /// Every caller that used to dereference <c>slot.DynamicIndex</c> directly must come through here, because that field is NULL once the cell is promoted.
+    /// Missing one is a <see cref="NullReferenceException"/> at the threshold and nowhere else — which is exactly what the first run of
+    /// <c>CellTreePromotionTests</c> found in the spawn path, a site the grep for update calls had not covered.
+    /// </remarks>
+    internal void UpdateClusterInPerCellIndex(int clusterChunkId, int cellKey, in ClusterSpatialAabb aabb)
+    {
+        // Guarded like RemoveClusterFromPerCellIndex. This became the single funnel for four call sites, one of which is the deferred drain that runs a whole
+        // fence phase after the ids were recorded — long enough for a cell to have been torn down underneath them.
+        if (PerCellIndex == null || (uint)cellKey >= (uint)PerCellIndex.Length)
+        {
+            return;
+        }
+
+        var slot = PerCellIndex[cellKey];
+        if (slot == null)
+        {
+            return;
+        }
+
+        bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        var tree = isStatic ? slot.StaticTree : slot.DynamicTree;
+        if (tree != null)
+        {
+            tree.UpdateAt(clusterChunkId, in aabb, out _);
+            return;
+        }
+
+        var linear = isStatic ? slot.StaticIndex : slot.DynamicIndex;
+        if (linear == null || ClusterSpatialIndexSlot == null || (uint)clusterChunkId >= (uint)ClusterSpatialIndexSlot.Length)
+        {
+            return;
+        }
+
+        int indexSlot = ClusterSpatialIndexSlot[clusterChunkId];
+        if (indexSlot < 0)
+        {
+            return;
+        }
+
+        linear.UpdateAt(indexSlot, in aabb);
+    }
+
+    /// <summary>
+    /// The category mask currently stored for a cluster in its cell. The tree carries no parallel mask array, so the value comes from
+    /// <see cref="ClusterAabbs"/> — which is the same value the linear index would have been holding.
+    /// </summary>
+    internal uint ReadStoredCategoryMask(PerCellSpatialSlot slot, int clusterChunkId, int indexSlot) =>
+        slot.HasDynamicTree ? ClusterAabbs[clusterChunkId].CategoryMask : slot.DynamicIndex.CategoryMasks[indexSlot];
+
+    /// <summary>Obtain the archetype's shared cell-tree segment, creating it on first use. False when no factory was supplied.</summary>
+    private bool TryEnsureCellTreeSegment()
+    {
+        if (CellTreeSegment != null)
+        {
+            return true;
+        }
+        if (CellTreeSegmentFactory == null)
+        {
+            return false;
+        }
+
+        var (segment, store) = CellTreeSegmentFactory(SpatialNodeDescriptor.ForVariant(CellClusterTree.Variant).Stride);
+        CellTreeSegment = segment;
+        CellTreeStore = store;
+        return CellTreeSegment != null;
+    }
+
+    /// <summary>
+    /// Re-point every live cell tree at the current <see cref="ClusterSpatialIndexSlot"/> array.
+    /// </summary>
+    /// <remarks>
+    /// That array doubles as the trees' <c>PayloadBackPointers</c>, and growing it is an <see cref="Array.Resize{T}"/> — a REALLOCATION, which leaves every
+    /// tree holding the abandoned copy. A tree writing handles into an array nobody reads is the stale-handle failure of ST-05 with an extra layer of
+    /// indirection, so the rebind is not optional and has to happen on the same call that grew the array.
+    /// </remarks>
+    private void RebindCellTreeBackPointers()
+    {
+        if (PromotedCellCount == 0 || PerCellIndex == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < PerCellIndex.Length; i++)
+        {
+            var slot = PerCellIndex[i];
+            slot?.DynamicTree?.RebindBackPointers(ClusterSpatialIndexSlot);
+            slot?.StaticTree?.RebindBackPointers(ClusterSpatialIndexSlot);
         }
     }
 
@@ -3291,6 +3748,20 @@ internal sealed unsafe class ArchetypeClusterState
         }
 
         bool isStatic = SpatialSlot.FieldInfo.Mode == SpatialMode.Static;
+        var tree = isStatic ? slot.StaticTree : slot.DynamicTree;
+        if (tree != null)
+        {
+            // Remove retires this payload's handle to NullHandle and repairs the swapped entry's, both through ClusterSpatialIndexSlot — so unlike the linear
+            // path there is no back-pointer fix-up to do here.
+            tree.RemoveAt(clusterChunkId);
+            TyphonEvent.EmitSpatialCellIndexRemove(cellKey, indexSlot, -1);
+            if (tree.ClusterCount <= CellTreeDemoteThreshold)
+            {
+                DemoteCellHalf(slot, isStatic);
+            }
+            return;
+        }
+
         CellSpatialIndex targetIndex = isStatic ? slot.StaticIndex : slot.DynamicIndex;
         if (targetIndex == null)
         {

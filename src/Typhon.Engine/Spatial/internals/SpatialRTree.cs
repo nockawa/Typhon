@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -97,6 +98,23 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     private readonly Lock _metadataLock = new();
 
     /// <summary>
+    /// Whether this tree mirrors its four metadata values into chunk 0 on every mutation. On for a tree that owns its segment; OFF for the transient per-cell
+    /// cluster trees of #872 step 9, which share one segment per archetype.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Suppressing it on a shared segment is a correctness fix, not only a saving.</b> Chunk 0 is one chunk per SEGMENT, so every tree sharing a
+    /// segment writes the same sixteen bytes — each one stamping its own root, node count, depth and variant over its neighbours'. The mirror is therefore
+    /// already meaningless there, and the only thing that stops it mattering is that nothing reads it back: the authoritative values are per-INSTANCE fields,
+    /// and <see cref="LoadMetadata"/> runs only when a tree is constructed with <c>load: true</c>, which a transient tree never is.</para>
+    /// <para>What it saves is a contended cache line per archetype. The write is taken under <c>_metadataLock</c> on every insert, split and remove, and the
+    /// lock is per-instance while the line is per-segment — so once the fence runs cells in parallel, every cell tree in an archetype is false-sharing one
+    /// line while holding locks that do not exclude each other.</para>
+    /// <para>It is incompatible with <c>load: true</c> by construction, and the constructor refuses the combination rather than silently reading whatever the
+    /// last tree happened to leave in chunk 0.</para>
+    /// </remarks>
+    private readonly bool _mirrorMetadata;
+
+    /// <summary>
     /// Back-pointer CBS for O(1) leaf lookup. When set, split scatter updates back-pointers directly
     /// using componentChunkIds stored in leaf entries. Null for standalone unit tests.
     /// </summary>
@@ -124,6 +142,17 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// and do not grow it under a live fence. <see cref="ThrowPayloadOutOfRange"/> makes a violation loud rather than silent.</para>
     /// </remarks>
     internal int[] PayloadBackPointers;
+
+    /// <summary>
+    /// Optional sink receiving every chunk id this tree frees. Set by owners that hold chunk ids OUTSIDE the tree and must scrub them.
+    /// </summary>
+    /// <remarks>
+    /// <b>"Is it still allocated?" is not a usable test, which is why the sink exists.</b> <c>FreeChunk</c> clears one allocation bit and leaves the chunk's
+    /// bytes intact — leaf flag, count, MBR and parent pointer all survive — so a stale id still looks like a valid leaf. Worse on a segment shared by every
+    /// cell of an archetype: the very next <c>AllocateChunk</c> can hand the chunk to a DIFFERENT cell's tree, at which point the id is allocated, is a leaf,
+    /// and belongs to somebody else. The only sound moment to drop such a record is the instant the chunk is freed, which is here.
+    /// </remarks>
+    internal List<int> FreedChunkSink;
 
     /// <summary>Pack a <c>(leafChunkId, slotIndex)</c> pair into one <see cref="int"/>.</summary>
     /// <remarks>
@@ -238,10 +267,22 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// <param name="variant">Spatial variant (determines descriptor and node layout)</param>
     /// <param name="load">True to load existing tree from segment, false to create new</param>
     /// <param name="changeSet">ChangeSet for WAL participation (null for non-WAL)</param>
-    internal SpatialRTree(ChunkBasedSegment<TStore> segment, SpatialVariant variant, bool load = false, ChangeSet changeSet = null)
+    /// <param name="mirrorMetadata">
+    /// False to stop mirroring metadata into chunk 0 — required for trees SHARING a segment, where the mirror is contended and meaningless. See
+    /// <see cref="_mirrorMetadata"/>.
+    /// </param>
+    internal SpatialRTree(ChunkBasedSegment<TStore> segment, SpatialVariant variant, bool load = false, ChangeSet changeSet = null,
+        bool mirrorMetadata = true)
     {
+        if (load && !mirrorMetadata)
+        {
+            ThrowHelper.ThrowInvalidOp("SpatialRTree cannot load from a segment whose metadata mirror it does not maintain — chunk 0 would hold another "
+                + "tree's values, or none. Load implies mirrorMetadata: true.");
+        }
+
         _segment = segment;
         _variant = variant;
+        _mirrorMetadata = mirrorMetadata;
         _desc = SpatialNodeDescriptor.ForVariant(variant);
         AssertHandleCapacity();
 
@@ -310,6 +351,11 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// <summary>Write tree metadata to chunk 0. Lock-protected against concurrent mutations.</summary>
     private void SyncMetadata(ref ChunkAccessor<TStore> accessor)
     {
+        if (!_mirrorMetadata)
+        {
+            return;
+        }
+
         lock (_metadataLock)
         {
             byte* meta = accessor.GetChunkAddress(0, true);
@@ -317,7 +363,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
             *(int*)(meta + MetaNodeCountOffset) = _nodeCount;
             *(int*)(meta + MetaEntityCountOffset) = _entityCount;
             *(int*)(meta + MetaDepthOffset) = _depth;
-            *(byte*)(meta + MetaVariantOffset) = (byte)_variant;
+            *(meta + MetaVariantOffset) = (byte)_variant;
         }
     }
 
@@ -379,6 +425,82 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
         SpatialNodeHelper.RefitLeafMBR(leafBase, _desc); // recomputes leaf union mask
         latch.WriteUnlock();
         RefitAncestorsBottomUp(leafChunkId, ref accessor);
+    }
+
+    /// <summary>
+    /// Recompute one leaf's MBR from its entries and refit its ancestors — the make-good for the in-place update path, which deliberately skips both
+    /// (<c>ST-07</c>, #872 step 9).
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="SetEntryCategoryMask"/> because that method exists to CHANGE something and refits as a consequence; this one changes nothing
+    /// and exists only to restore <c>ST-01</c>'s equality. Calling it on a leaf that is already tight is correct and cheap, which is what lets the caller
+    /// record touched leaves without deduplicating them.
+    /// </remarks>
+    internal void RefitLeafAndAncestors(int leafChunkId, ref ChunkAccessor<TStore> accessor)
+    {
+        byte* leafBase = accessor.GetChunkAddress(leafChunkId, true);
+        if (!SpatialNodeHelper.IsLeaf(leafBase))
+        {
+            // The leaf was consumed by a split or removal since it was recorded. Its replacement was refit by that operation, so there is nothing owed here.
+            return;
+        }
+
+        // 🔴 Being a leaf is NOT proof of being OUR leaf. Since #872 step 9 many trees share one ChunkBasedSegment, so a chunk this tree freed can have been
+        // reallocated as another cell tree's leaf — and it passes the IsLeaf test above wearing that tree's data. Refitting it would overwrite a stranger's
+        // MBR, and RefitAncestorsBottomUp would then climb ITS parent chain, rewriting internal MBRs and union masks all the way to that tree's root. Nothing
+        // would throw and both trees would stay structurally valid, so TreeValidator would pass over the damage; the only symptom is SQ-01 false negatives in
+        // a cell this caller never touched. RemoveChecked already refuses on identity for the same reason (ST-05) and this path had no equivalent.
+        if (!OwnsNode(leafChunkId, ref accessor))
+        {
+            return;
+        }
+
+        SpinWriteLock(leafBase, out var latch);
+        try
+        {
+            SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
+        }
+        finally
+        {
+            latch.WriteUnlock();
+        }
+
+        RefitAncestorsBottomUp(leafChunkId, ref accessor);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="chunkId"/> belongs to THIS tree, decided by walking the parent chain and checking it arrives at <see cref="_rootChunkId"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>The chain terminator cannot be used for this on its own: every root in a shared segment has <c>ParentChunkId == 0</c>, so "the walk ended" is
+    /// true for a foreign tree exactly as it is for ours. Arriving at OUR root is the part that discriminates.</para>
+    /// <para>Read-only and unlatched, which is sound where it is called from: the loose-leaf refit runs in the fence's per-archetype tail, inside the
+    /// exclusive window <c>ST-07</c> requires and <c>PC-01</c> guarantees. It is not a general concurrent-safe ownership test and must not be used as one.</para>
+    /// <para>The depth cap is a cycle guard, not a correctness bound. A corrupted parent pointer that formed a loop would otherwise spin here forever; a tree
+    /// deeper than the cap is answered "not ours", which fails in the direction that skips work rather than the one that writes to a stranger.</para>
+    /// </remarks>
+    private bool OwnsNode(int chunkId, ref ChunkAccessor<TStore> accessor)
+    {
+        const int MaxChainWalk = 64;
+
+        int current = chunkId;
+        for (int step = 0; step < MaxChainWalk; step++)
+        {
+            if (current == _rootChunkId)
+            {
+                return true;
+            }
+
+            int parent = SpatialNodeHelper.GetParentChunkId(accessor.GetChunkAddress(current));
+            if (parent == 0 || parent == current)
+            {
+                return false;
+            }
+
+            current = parent;
+        }
+
+        return false;
     }
 
     // ── Ancestor refit (bottom-up via ParentChunkId chain) ──────────────────

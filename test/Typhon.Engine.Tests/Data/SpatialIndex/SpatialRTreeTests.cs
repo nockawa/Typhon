@@ -95,7 +95,7 @@ private static double[] MakeCoords(SpatialVariant variant, double minX, double m
         var results = new List<long>();
         foreach (var result in tree.QueryAABB(queryCoords))
         {
-            results.Add(result.EntityId);
+            results.Add(result.PayloadId);
         }
         return results;
     }
@@ -497,7 +497,7 @@ public void QueryAABB_vs_BruteForce_RandomData(SpatialVariant variant)
         var queryCoords = MakeCoords(variant, -100, -100, 200, 200);
         foreach (var r in tree.QueryAABB(queryCoords, categoryMask: 0))
         {
-            results.Add(r.EntityId);
+            results.Add(r.PayloadId);
         }
         Assert.That(results, Has.Count.EqualTo(5), "No-filter query should return all entities");
 
@@ -536,7 +536,7 @@ public void QueryAABB_vs_BruteForce_RandomData(SpatialVariant variant)
         var resultsA = new List<long>();
         foreach (var r in tree.QueryAABB(queryCoords, categoryMask: maskA))
         {
-            resultsA.Add(r.EntityId);
+            resultsA.Add(r.PayloadId);
         }
         Assert.That(resultsA, Has.Count.EqualTo(2), "Category A query");
         Assert.That(resultsA, Does.Contain(1L));
@@ -546,7 +546,7 @@ public void QueryAABB_vs_BruteForce_RandomData(SpatialVariant variant)
         var resultsB = new List<long>();
         foreach (var r in tree.QueryAABB(queryCoords, categoryMask: maskB))
         {
-            resultsB.Add(r.EntityId);
+            resultsB.Add(r.PayloadId);
         }
         Assert.That(resultsB, Has.Count.EqualTo(2), "Category B query");
         Assert.That(resultsB, Does.Contain(2L));
@@ -556,7 +556,7 @@ public void QueryAABB_vs_BruteForce_RandomData(SpatialVariant variant)
         var resultsAB = new List<long>();
         foreach (var r in tree.QueryAABB(queryCoords, categoryMask: maskAB))
         {
-            resultsAB.Add(r.EntityId);
+            resultsAB.Add(r.PayloadId);
         }
         Assert.That(resultsAB, Has.Count.EqualTo(1), "Category A+B conjunctive query");
         Assert.That(resultsAB, Does.Contain(3L));
@@ -687,7 +687,7 @@ public void QueryAABB_vs_BruteForce_RandomData(SpatialVariant variant)
             var treeResults = new HashSet<long>();
             foreach (var r in tree.QueryAABB(queryCoords, categoryMask: queryMask))
             {
-                treeResults.Add(r.EntityId);
+                treeResults.Add(r.PayloadId);
             }
 
             var oracleResults = new HashSet<long>(oracle.QueryAABB(queryCoords, queryMask));

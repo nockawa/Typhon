@@ -11,13 +11,20 @@ namespace Typhon.Engine.Internals;
 /// ComponentChunkId enables direct CBS access for two-pass compound queries without an EntityMap lookup.</summary>
 internal readonly struct SpatialQueryResult
 {
-    public readonly long EntityId;
+    /// <summary>
+    /// The value the tree was given as the entry's identity. <b>Not necessarily an entity id</b> — the tree is generic over its payload, and #872 step 9 puts
+    /// CLUSTER chunk ids in it for the per-cell cluster trees. The field was called <c>EntityId</c> until then, which read as a type guarantee it never made
+    /// and cost a reviewer an hour concluding the cluster trees were indexing entities.
+    /// </summary>
+    public readonly long PayloadId;
+
+    /// <summary>Component chunk id for entity payloads; zero for payloads that have no component backing, such as cluster chunk ids.</summary>
     public readonly int ComponentChunkId;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SpatialQueryResult(long entityId, int componentChunkId)
+    public SpatialQueryResult(long payloadId, int componentChunkId)
     {
-        EntityId = entityId;
+        PayloadId = payloadId;
         ComponentChunkId = componentChunkId;
     }
 }
@@ -29,9 +36,9 @@ internal readonly struct SpatialOccupantResult
     public readonly int ComponentChunkId;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public SpatialOccupantResult(long entityId, int componentChunkId)
+    public SpatialOccupantResult(long payloadId, int componentChunkId)
     {
-        EntityId = entityId;
+        EntityId = payloadId;
         ComponentChunkId = componentChunkId;
     }
 }
@@ -54,7 +61,12 @@ internal unsafe partial class SpatialRTree<TStore>
     /// <param name="categoryMask">
     /// Category bitmask; when non-zero, only entities whose category mask contains all of these bits match. Pass <c>0</c> (default) to disable category filtering.
     /// </param>
-    internal AABBQueryEnumerator QueryAABB(ReadOnlySpan<double> queryCoords, ChangeSet changeSet = null, uint categoryMask = 0)
+    /// <remarks>
+    /// <paramref name="queryCoords"/> is <c>scoped</c>: the enumerator copies it into its own inline buffer and never retains the caller's memory. Saying so
+    /// is what lets a caller pass a <c>stackalloc</c> span and then hold the enumerator — which the full-extent walk in <c>CellClusterTree</c> needs, and which
+    /// ref-safety otherwise refuses on the assumption that the span escapes.
+    /// </remarks>
+    internal AABBQueryEnumerator QueryAABB(scoped ReadOnlySpan<double> queryCoords, ChangeSet changeSet = null, uint categoryMask = 0)
         => new(this, queryCoords, changeSet, categoryMask);
 
     /// <summary>
@@ -86,7 +98,7 @@ internal unsafe partial class SpatialRTree<TStore>
         // Phase 3: Spatial:Query:Aabb span (Tier-2 gated). ResultCount/RestartCount filled during enumeration.
         private SpatialQueryAabbEvent _span;
 
-        internal AABBQueryEnumerator(SpatialRTree<TStore> tree, ReadOnlySpan<double> queryCoords, ChangeSet changeSet, uint categoryMask = 0)
+        internal AABBQueryEnumerator(SpatialRTree<TStore> tree, scoped ReadOnlySpan<double> queryCoords, ChangeSet changeSet, uint categoryMask = 0)
         {
             _tree = tree;
             _desc = tree._desc;
@@ -1234,7 +1246,7 @@ internal unsafe partial class SpatialRTree<TStore>
     /// component data (the tree stores fat AABBs, not tight bounds). Converges in 1–2 iterations for k &lt; 20.
     /// </summary>
     /// <returns>Number of results written (may be less than k if fewer entities exist).</returns>
-    internal int QueryKNN(ReadOnlySpan<double> center, int k, Span<(long entityId, double distSq)> results, ChangeSet changeSet = null, uint categoryMask = 0)
+    internal int QueryKNN(ReadOnlySpan<double> center, int k, Span<(long payloadId, double distSq)> results, ChangeSet changeSet = null, uint categoryMask = 0)
     {
         if (k <= 0 || _entityCount == 0)
         {
@@ -1281,7 +1293,7 @@ internal unsafe partial class SpatialRTree<TStore>
             // Iterative expansion — collect candidate entity IDs within expanding radius. distSq is set to 0 at the tree level because the tree stores fat
             // AABBs, not tight bounds. Callers must recompute actual distances from component data for precise ordering.
             int maxCandidates = Math.Min(k * 4, 256);
-            Span<(long entityId, double distSq)> candidates = stackalloc (long, double)[maxCandidates];
+            Span<(long payloadId, double distSq)> candidates = stackalloc (long, double)[maxCandidates];
             int lastCount = 0;
 
             for (int iteration = 0; iteration < 8; iteration++)
@@ -1293,7 +1305,7 @@ internal unsafe partial class SpatialRTree<TStore>
                     {
                         break;
                     }
-                    candidates[count++] = (result.EntityId, 0);
+                    candidates[count++] = (result.PayloadId, 0);
                 }
 
                 if (count >= k || count == lastCount || radius > 1e15)

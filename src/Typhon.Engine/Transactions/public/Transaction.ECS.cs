@@ -545,8 +545,8 @@ public unsafe partial class Transaction
 
         // O2: pre-extend list, then write entries in-place via span — avoids N copies of 138-byte SpawnEntry
         int baseIndex = _spawnedEntities.Count;
-        System.Runtime.InteropServices.CollectionsMarshal.SetCount(_spawnedEntities, baseIndex + count);
-        var writeSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_spawnedEntities).Slice(baseIndex);
+        CollectionsMarshal.SetCount(_spawnedEntities, baseIndex + count);
+        var writeSpan = CollectionsMarshal.AsSpan(_spawnedEntities).Slice(baseIndex);
 
         for (int n = 0; n < count; n++)
         {
@@ -594,7 +594,7 @@ public unsafe partial class Transaction
         }
 
         // Resolve everything ONCE — no per-entity dictionary lookups
-        var span = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_spawnedEntities);
+        var span = CollectionsMarshal.AsSpan(_spawnedEntities);
         var meta = _dbe.GetMetaByRouting(span[baseIndex].Id.ArchetypeId);
         byte slot = meta.GetSlot(comp._componentTypeId);
         var engineState = _dbe._archetypeStates[meta.ArchetypeId];
@@ -1403,7 +1403,7 @@ public unsafe partial class Transaction
         // First write per entity inserts into SingleCache here. Read-only resolves no longer populate the cache (deferred-insert — the cache holds only
         // written/spawned entries, so commit/rollback/WAL iterate nothing for pure reads); the EntityRef carries the chain root captured at resolve time
         // so the CompRevInfo is re-resolved with a direct chain walk (single-entry fast path in the steady state).
-        ref var cri = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var cached);
+        ref var cri = ref CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var cached);
 
         if (!cached)
         {
@@ -2234,12 +2234,9 @@ public unsafe partial class Transaction
                                     }
                                     else
                                     {
-                                        int indexSlot = ctx.ClusterState.ClusterSpatialIndexSlot[clusterChunkId];
-                                        // Issue #230 Phase 3: route the UpdateAt to the correct sub-index based on archetype mode (Static → StaticIndex,
-                                        // Dynamic → DynamicIndex). Same split used by AddClusterToPerCellIndex.
-                                        var perCellSlot = ctx.ClusterState.PerCellIndex[cellKey];
-                                        var targetIndex = ss.FieldInfo.Mode == SpatialMode.Static ? perCellSlot.StaticIndex : perCellSlot.DynamicIndex;
-                                        targetIndex.UpdateAt(indexSlot, in clusterAabb);
+                                        // Routed rather than dereferenced: the mode split (Static vs Dynamic) is only half of it since #872 step 9 — a
+                                        // promoted cell has no linear index at all, so reaching for one is a null deref above the threshold.
+                                        ctx.ClusterState.UpdateClusterInPerCellIndex(clusterChunkId, cellKey, in clusterAabb);
                                     }
                                 }
                             }
@@ -3085,7 +3082,7 @@ public unsafe partial class Transaction
     {
         var info = GetComponentInfo(compType);
 
-        ref var cri = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var cached);
+        ref var cri = ref CollectionsMarshal.GetValueRefOrAddDefault(info.SingleCache, pk, out var cached);
 
         if (cached)
         {

@@ -9,7 +9,7 @@ internal unsafe partial class SpatialRTree<TStore>
     /// Insert into a full leaf, triggering an R*-overlap-minimizing split.
     /// Handles cascading splits up to the root.
     /// </summary>
-    private (bool success, int leafChunkId, int slotIndex) InsertWithSplit(long entityId, int componentChunkId, ReadOnlySpan<double> coords,
+    private (bool success, int leafChunkId, int slotIndex) InsertWithSplit(long payloadId, int componentChunkId, ReadOnlySpan<double> coords,
         int fullLeafChunkId, ref DescentPath path, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet, uint categoryMask)
     {
         // Phase 3: Spatial:RTree:NodeSplit span (leaf-level). LeftCount/RightCount filled after split. Depth=0 (leaf), SplitAxis=0 (FindBestSplit doesn't expose axis).
@@ -39,7 +39,7 @@ internal unsafe partial class SpatialRTree<TStore>
                 tempCategoryMasks[i] = SpatialNodeHelper.ReadLeafCategoryMask(leafBase, i, _desc);
             }
             coords.CopyTo(tempCoords.Slice(leafCount * _desc.CoordCount, _desc.CoordCount));
-            tempIds[leafCount] = entityId;
+            tempIds[leafCount] = payloadId;
             tempCompChunkIds[leafCount] = componentChunkId;
             tempCategoryMasks[leafCount] = categoryMask;
 
@@ -70,11 +70,11 @@ internal unsafe partial class SpatialRTree<TStore>
 
             // Find where the new entity ended up
             int newEntityLeaf = fullLeafChunkId;
-            int newEntitySlot = FindEntitySlot(tempIds, bestPerm, entityId, 0, splitPos);
+            int newEntitySlot = FindEntitySlot(tempIds, bestPerm, payloadId, 0, splitPos);
             if (newEntitySlot < 0)
             {
                 newEntityLeaf = rightChunkId;
-                newEntitySlot = FindEntitySlot(tempIds, bestPerm, entityId, splitPos, totalEntries) - splitPos;
+                newEntitySlot = FindEntitySlot(tempIds, bestPerm, payloadId, splitPos, totalEntries) - splitPos;
             }
 
             // Propagate split upward
@@ -98,7 +98,7 @@ internal unsafe partial class SpatialRTree<TStore>
 
     /// <summary>
     /// Scatter leaf entries from temp buffers into a node using the permutation.
-    /// Writes coords, entityIds, and componentChunkIds. If <see cref="BackPointerSegment"/> is set,
+    /// Writes coords, payloadIds, and componentChunkIds. If <see cref="BackPointerSegment"/> is set,
     /// updates back-pointers directly using the stored componentChunkIds (O(1) per entry, no EntityMap lookup).
     /// </summary>
     private void ScatterLeafEntries(byte* nodeBase, int leafChunkId, Span<double> allCoords, Span<long> allIds, Span<int> allCompChunkIds,
@@ -162,11 +162,11 @@ internal unsafe partial class SpatialRTree<TStore>
         }
     }
 
-    private static int FindEntitySlot(Span<long> ids, Span<int> perm, long entityId, int start, int end)
+    private static int FindEntitySlot(Span<long> ids, Span<int> perm, long payloadId, int start, int end)
     {
         for (int i = start; i < end; i++)
         {
-            if (ids[perm[i]] == entityId)
+            if (ids[perm[i]] == payloadId)
             {
                 return i;
             }

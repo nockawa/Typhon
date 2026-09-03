@@ -756,8 +756,7 @@ public partial class DatabaseEngine
                             }
                             else
                             {
-                                var indexSlot = clusterState.ClusterSpatialIndexSlot[dstChunkId];
-                                clusterState.PerCellIndex[dstCellKey].DynamicIndex.UpdateAt(indexSlot, in dstClusterAabb);
+                                clusterState.UpdateClusterInPerCellIndex(dstChunkId, dstCellKey, in dstClusterAabb);
                             }
                         }
                     }

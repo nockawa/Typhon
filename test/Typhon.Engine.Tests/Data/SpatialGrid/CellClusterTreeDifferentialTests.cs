@@ -99,7 +99,7 @@ unsafe class CellClusterTreeDifferentialTests
         var hits = new HashSet<int>();
         foreach (var r in tree.Query(coords, 0))
         {
-            hits.Add((int)r.EntityId);
+            hits.Add((int)r.PayloadId);
         }
         return hits;
     }
@@ -131,7 +131,7 @@ unsafe class CellClusterTreeDifferentialTests
             var box = Box(x, y, x + w, y + w);
 
             boxes[id] = box;
-            backPointers[id] = tree.Add(id, in box);
+            tree.Add(id, in box);
             oracle.Add(id, in box);
         }
 
@@ -163,6 +163,7 @@ unsafe class CellClusterTreeDifferentialTests
 
     [Test]
     [CancelAfter(60_000)]
+    [VerifiesRule("ST-07")]
     public void EscapeBoundUpdate_KeepsTheTreeAgreeingWithTheScan()
     {
         // ChunkAccessor creation asserts an epoch scope; production callers are always inside the tick fence's.
@@ -183,7 +184,7 @@ unsafe class CellClusterTreeDifferentialTests
             float x = (float)rng.NextDouble() * 100f;
             float y = (float)rng.NextDouble() * 100f;
             var box = Box(x, y, x + 3f, y + 3f);
-            backPointers[id] = tree.Add(id, in box);
+            tree.Add(id, in box);
             oracleSlot[id] = oracle.Add(id, in box);
         }
 
@@ -199,7 +200,7 @@ unsafe class CellClusterTreeDifferentialTests
                 float y = Math.Clamp((float)rng.NextDouble() * step + (id % 97), 0f, 100f);
                 var box = Box(x, y, x + 3f, y + 3f);
 
-                backPointers[id] = tree.UpdateAt(backPointers[id], id, in box, out bool escaped);
+                tree.UpdateAt(id, in box, out bool escaped);
                 if (escaped) { escapes++; } else { inPlace++; }
                 oracle.UpdateAt(oracleSlot[id], in box);
             }
@@ -243,14 +244,14 @@ unsafe class CellClusterTreeDifferentialTests
         {
             float x = (float)rng.NextDouble() * 100f;
             var box = Box(x, x, x + 2f, x + 2f);
-            backPointers[id] = tree.Add(id, in box);
+            tree.Add(id, in box);
         }
 
         // Remove a third, then confirm every survivor's handle still names its own payload — the property the whole back-pointer mechanism exists for.
         var removed = new HashSet<int>();
         for (int id = 3; id <= ClusterCount; id += 3)
         {
-            tree.RemoveAt(backPointers[id]);
+            tree.RemoveAt(id);
             removed.Add(id);
         }
 
@@ -276,6 +277,126 @@ unsafe class CellClusterTreeDifferentialTests
         finally
         {
             accessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// <c>AC-9.2</c> — after every operation class, the bound the tree holds for a cluster still CONTAINS the bound it was given (<c>CA-01</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>How containment is made observable without entities.</b> <c>CA-01</c> is stated over a cluster's occupied entities, and this tree holds no
+    /// entities — so the property is checked one level up: query with a box exactly equal to the cluster's own stored AABB and require the cluster back. If the
+    /// tree ever narrowed a bound, even by one ULP, that self-query is the first thing to fail, because the cluster now grazes the edge of a box that no longer
+    /// reaches it. This is precisely <c>CA-01</c>'s fatal direction — too tight — expressed where it can be seen.</para>
+    /// <para><b>Too LOOSE deliberately passes.</b> A widened bound costs a redundant cluster open and nothing else, and the in-place update path leaves leaf
+    /// MBRs loose by design (<c>ST-07</c>). A test that demanded exactness would fail on correct code and would be pinning the optimisation, not the invariant.
+    /// </para>
+    /// <para>All four operation classes the AC names are exercised in sequence on one population — insert, in-place update, escape, remove — because the
+    /// interesting failures are the ones a later operation introduces into an entry an earlier one placed correctly.</para>
+    /// </remarks>
+    [Test]
+    [CancelAfter(60_000)]
+    [VerifiesRule("CA-01")]
+    public void StoredBoundsContainWhatTheyWereGiven_AfterInsertUpdateEscapeAndRemove()
+    {
+        using var epoch = EpochGuard.Enter(_serviceProvider.GetRequiredService<EpochManager>());
+
+        const int ClusterCount = 160;
+        var backPointers = new int[ClusterCount + 1];
+        Array.Fill(backPointers, SpatialRTree<TransientStore>.NullHandle);
+
+        var segment = CreateSegment(out _);
+        var tree = new CellClusterTree(segment, backPointers);
+        var expected = new ClusterSpatialAabb[ClusterCount + 1];
+        var live = new bool[ClusterCount + 1];
+
+        var rng = new Random(4242);
+        for (int id = 1; id <= ClusterCount; id++)
+        {
+            float x = (float)rng.NextDouble() * 100f;
+            float y = (float)rng.NextDouble() * 100f;
+            float w = (float)Math.Pow(10, rng.NextDouble() * 1.5) * 0.1f;
+            expected[id] = Box(x, y, x + w, y + w);
+            live[id] = true;
+            tree.Add(id, in expected[id]);
+        }
+
+        AssertAllSelfFindable(tree, expected, live, "after insert");
+
+        // In-place: nudge each box by a fraction of its own width so it stays inside its leaf.
+        for (int id = 1; id <= ClusterCount; id++)
+        {
+            float w = expected[id].MaxX - expected[id].MinX;
+            float dx = ((float)rng.NextDouble() - 0.5f) * w * 0.05f;
+            float dy = ((float)rng.NextDouble() - 0.5f) * w * 0.05f;
+            expected[id] = Box(expected[id].MinX + dx, expected[id].MinY + dy, expected[id].MaxX + dx, expected[id].MaxY + dy);
+            tree.UpdateAt(id, in expected[id], out _);
+        }
+
+        AssertAllSelfFindable(tree, expected, live, "after in-place update");
+
+        // Escape: move a third of the population far enough that it certainly leaves its leaf.
+        int escapes = 0;
+        for (int id = 1; id <= ClusterCount; id += 3)
+        {
+            float w = expected[id].MaxX - expected[id].MinX;
+            float x = (float)rng.NextDouble() * 100f;
+            float y = (float)rng.NextDouble() * 100f;
+            expected[id] = Box(x, y, x + w, y + w);
+            tree.UpdateAt(id, in expected[id], out bool escaped);
+            if (escaped)
+            {
+                escapes++;
+            }
+        }
+
+        Assert.That(escapes, Is.GreaterThan(0), "a third of the population teleported across the cell — if nothing escaped, the escape path is untested here");
+        AssertAllSelfFindable(tree, expected, live, "after escape and reinsert");
+
+        // Remove every fourth cluster. The swap-with-last inside Remove relocates a live entry each time, which is where a containment failure would be
+        // introduced into a cluster nobody touched.
+        for (int id = 4; id <= ClusterCount; id += 4)
+        {
+            tree.RemoveAt(id);
+            live[id] = false;
+        }
+
+        AssertAllSelfFindable(tree, expected, live, "after removals");
+
+        foreach (int id in (int[])[4, 8, 12])
+        {
+            Assert.That(QueryTree(tree, expected[id].MinX, expected[id].MinY, expected[id].MaxX, expected[id].MaxY), Does.Not.Contain(id),
+                $"cluster {id} was removed and must not be returned by a query over the box it used to occupy");
+        }
+    }
+
+    /// <summary>
+    /// Every live cluster must be returned by a degenerate query at BOTH extreme corners of the bound it was given.
+    /// </summary>
+    /// <remarks>
+    /// <b>The corners, not the box.</b> Querying with the whole box is the obvious probe and it is nearly blind: overlap only needs the two boxes to touch, so
+    /// a stored bound narrowed by an ULP — or by half its width — still overlaps a query of its own original extent, and the assertion passes on exactly the
+    /// corruption it was written to catch. A zero-size query AT the max corner requires <c>stored.max >= given.max</c> on every axis, and one at the min corner
+    /// requires <c>stored.min &lt;= given.min</c>. Together those two are containment, and they fail on a single ULP of narrowing, which is what CA-01 calls its
+    /// silent direction. Verified by ablation: decrementing the stored max by one ULP in <c>CellClusterTree.ToCoords</c> reddens the corner probe and leaves the
+    /// whole-box probe green.
+    /// </remarks>
+    private static void AssertAllSelfFindable(CellClusterTree tree, ClusterSpatialAabb[] expected, bool[] live, string stage)
+    {
+        for (int id = 1; id < expected.Length; id++)
+        {
+            if (!live[id])
+            {
+                continue;
+            }
+
+            ref readonly var b = ref expected[id];
+            Assert.That(QueryTree(tree, b.MaxX, b.MaxY, b.MaxX, b.MaxY), Does.Contain(id),
+                $"{stage}: cluster {id} is not returned at its own MAX corner ({b.MaxX}, {b.MaxY}) — the stored upper bound has been narrowed, which is "
+                + "CA-01's silent failure direction");
+            Assert.That(QueryTree(tree, b.MinX, b.MinY, b.MinX, b.MinY), Does.Contain(id),
+                $"{stage}: cluster {id} is not returned at its own MIN corner ({b.MinX}, {b.MinY}) — the stored lower bound has been narrowed, which is "
+                + "CA-01's silent failure direction");
         }
     }
 }

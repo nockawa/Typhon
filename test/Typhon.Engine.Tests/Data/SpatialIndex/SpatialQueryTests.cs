@@ -132,7 +132,7 @@ public class SpatialQueryTests
         var treeResults = new HashSet<long>();
         foreach (var hit in tree.QueryRadius(center, radius))
         {
-            treeResults.Add(hit.EntityId);
+            treeResults.Add(hit.PayloadId);
         }
 
         var oracleResults = oracle.QueryRadius(center, radius);
@@ -179,7 +179,7 @@ public class SpatialQueryTests
         var treeResults = new HashSet<long>();
         foreach (var hit in tree.QueryRay(origin, direction, maxDist))
         {
-            treeResults.Add(hit.EntityId);
+            treeResults.Add(hit.PayloadId);
         }
 
         var oracleResults = oracle.QueryRay(origin, direction, maxDist);
@@ -239,7 +239,7 @@ public class SpatialQueryTests
         var treeResults = new HashSet<long>();
         foreach (var hit in tree.QueryFrustum(planes, 4))
         {
-            treeResults.Add(hit.EntityId);
+            treeResults.Add(hit.PayloadId);
         }
 
         var oracleResults = oracle.QueryFrustum(planes, 4);
@@ -554,8 +554,8 @@ public class SpatialQueryTests
         var accessor = segment.CreateChunkAccessor();
         try
         {
-            tree.Insert(entityId: 100, componentChunkId: 42, stackalloc double[] { 10, 10, 20, 20 }, ref accessor);
-            tree.Insert(entityId: 200, componentChunkId: 99, stackalloc double[] { 50, 50, 60, 60 }, ref accessor);
+            tree.Insert(payloadId: 100, componentChunkId: 42, stackalloc double[] { 10, 10, 20, 20 }, ref accessor);
+            tree.Insert(payloadId: 200, componentChunkId: 99, stackalloc double[] { 50, 50, 60, 60 }, ref accessor);
         }
         finally { accessor.Dispose(); }
 
@@ -563,7 +563,7 @@ public class SpatialQueryTests
         var results = new List<(long entityId, int compChunkId)>();
         foreach (var hit in tree.QueryAABB(stackalloc double[] { 0, 0, 100, 100 }))
         {
-            results.Add((hit.EntityId, hit.ComponentChunkId));
+            results.Add((hit.PayloadId, hit.ComponentChunkId));
         }
 
         Assert.That(results, Has.Count.EqualTo(2));
@@ -619,7 +619,7 @@ public class SpatialQueryTests
             // In real code: byte* compData = componentCBS.GetChunkAddress(hit.ComponentChunkId);
             // Here we simulate: "health > 50" as entityId % 100 > 50
             Assert.That(hit.ComponentChunkId, Is.GreaterThan(0), "ComponentChunkId should be set");
-            int simulatedHealth = (int)(hit.EntityId % 100);
+            int simulatedHealth = (int)(hit.PayloadId % 100);
             if (simulatedHealth > 50)
             {
                 postFilterHits++;

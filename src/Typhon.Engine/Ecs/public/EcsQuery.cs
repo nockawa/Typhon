@@ -2458,7 +2458,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
                 foreach (var hit in tree.QueryAABB(coordSlice))
                 {
-                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    var entityId = EntityId.FromRaw(hit.PayloadId);
                     if (MaskTestByRouting(entityId.ArchetypeId))
                     {
                         result.Add(entityId);
@@ -2475,7 +2475,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
                 foreach (var hit in tree.QueryRadius(center, _spatialParams[3]))
                 {
-                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    var entityId = EntityId.FromRaw(hit.PayloadId);
                     if (MaskTestByRouting(entityId.ArchetypeId))
                     {
                         result.Add(entityId);
@@ -2493,7 +2493,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
                 foreach (var hit in tree.QueryRay(origin, dir, _spatialParams[6]))
                 {
-                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    var entityId = EntityId.FromRaw(hit.PayloadId);
                     if (MaskTestByRouting(entityId.ArchetypeId))
                     {
                         result.Add(entityId);

@@ -153,4 +153,26 @@ public struct ClusterSpatialAabb
     /// </remarks>
     public static float ToWorld(float cellRelativeValue, float cellOrigin) => cellRelativeValue + cellOrigin;
 
+    /// <summary>
+    /// Convert a stored lower bound to world space, rounding OUTWARD. For callers that test containment or intersection.
+    /// </summary>
+    /// <remarks>
+    /// <b>The directed variant <see cref="ToWorld"/>'s remarks said a future caller would need.</b> That caller arrived with #872 step 9's cluster-level ray
+    /// and kNN queries, which compare a cluster's world box against a ray or a distance: a bound rounded inward there shrinks the box, so a ray grazing a face
+    /// is rejected and a kNN lower bound is OVERSTATED — which lets the early-termination test prune a cluster holding a closer entity. Both are silent
+    /// <c>SQ-01</c> false negatives. The compounding hazard that argument warns about does not apply, because these values are consumed and discarded rather
+    /// than re-stored.
+    /// </remarks>
+    public static float ToWorldMin(float cellRelativeValue, float cellOrigin)
+    {
+        float world = cellRelativeValue + cellOrigin;
+        return world > cellRelativeValue + (double)cellOrigin ? MathF.BitDecrement(world) : world;
+    }
+
+    /// <summary>Convert a stored upper bound to world space, rounding OUTWARD. See <see cref="ToWorldMin"/>.</summary>
+    public static float ToWorldMax(float cellRelativeValue, float cellOrigin)
+    {
+        float world = cellRelativeValue + cellOrigin;
+        return world < cellRelativeValue + (double)cellOrigin ? MathF.BitIncrement(world) : world;
+    }
 }

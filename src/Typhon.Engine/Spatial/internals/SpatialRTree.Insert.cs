@@ -1,35 +1,76 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Typhon.Engine.Internals;
 
+/// <summary>
+/// Outcome of an in-place leaf update — see <see cref="SpatialRTree{TStore}.TryUpdateLeafEntryInPlace"/>.
+/// </summary>
+/// <remarks>
+/// <b>Three states rather than a bool, because two of them mean opposite things.</b> A bool collapses "the bounds outgrew this leaf" together with "the
+/// handle you gave me does not name your payload", and the caller's only sensible response to the first — remove at that location and reinsert — is a silent
+/// data-loss bug in response to the second. That is not hypothetical: it is what <c>CellClusterTree.UpdateAt</c> did until #872 step 9 split them.
+/// </remarks>
+internal enum LeafUpdateResult
+{
+    /// <summary>The entry was rewritten in place. The leaf's MBR is now a superset of its entries and is owed a refit (<c>ST-07</c>).</summary>
+    Updated,
+
+    /// <summary>The new bounds leave the leaf's MBR. The caller must remove and reinsert — the ordinary <c>C5</c> escape.</summary>
+    Escaped,
+
+    /// <summary>
+    /// The location does not name this payload: not a leaf, slot beyond the live count, or a different payload sitting there.
+    /// </summary>
+    /// <remarks>
+    /// Under a single writer this is UNREACHABLE, because <c>PayloadBackPointers</c> is repaired on every relocation (<c>ST-05</c>) and retired on removal —
+    /// so reaching it means <c>ST-05</c> has a gap. That makes these three checks the DETECTOR for such a gap, and the reason the caller must fail loudly
+    /// rather than fall through to the escape path: removing at a location just proven not to be ours deletes a stranger and nulls its back-pointer, which is
+    /// precisely the silent failure <c>ST-05</c> exists to describe.
+    /// </remarks>
+    PreconditionFailed,
+}
+
 internal unsafe partial class SpatialRTree<TStore>
 {
     /// <summary>
-    /// Insert an entity with its fat AABB coordinates into the tree.
+    /// Insert a payload with its fat AABB coordinates into the tree. The payload is an entity id for the entity-level trees and a CLUSTER chunk id for the
+    /// per-cell cluster trees (#872 step 9) — the tree itself never interprets it.
     /// </summary>
-    /// <param name="entityId">Raw EntityId value (64-bit)</param>
+    /// <param name="payloadId">Opaque 64-bit identity for this entry — an EntityId value, or a cluster chunk id. Also the back-pointer key.</param>
     /// <param name="componentChunkId">Component CBS chunk ID for back-pointer storage (0 for standalone tests)</param>
     /// <param name="coords">CoordCount doubles ordered [min0, min1, ..., max0, max1, ...]</param>
     /// <param name="accessor">ChunkAccessor for page access</param>
     /// <param name="changeSet">ChangeSet for WAL participation</param>
     /// <param name="categoryMask">Category bitmask for filtering (default: uint.MaxValue = matches all queries)</param>
     /// <returns>(leafChunkId, slotIndex) for back-pointer storage.</returns>
-    internal (int leafChunkId, int slotIndex) Insert(long entityId, int componentChunkId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor,
+    internal (int leafChunkId, int slotIndex) Insert(long payloadId, int componentChunkId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor,
         ChangeSet changeSet = null, uint categoryMask = uint.MaxValue)
     {
-        using var insertSpan = TyphonEvent.BeginSpatialRTreeInsert(entityId);
+        using var insertSpan = TyphonEvent.BeginSpatialRTreeInsert(payloadId);
         byte restartCount = 0;
         while (true)
         {
-            var result = TryInsert(entityId, componentChunkId, coords, ref accessor, changeSet, categoryMask);
+            var result = TryInsert(payloadId, componentChunkId, coords, ref accessor, changeSet, categoryMask);
             if (result.success)
             {
                 if (TelemetryConfig.SpatialRTreeInsertActive)
                 {
                     // Note: fields can't be set on `using var` ref-struct — restart count and depth are diagnostic-only and 0 is acceptable here.
                     // (When forensic depth/restart needed, wire as parameters in BeginX like UpdateSlowPath.)
+                }
+
+                // Record the NEW payload's location, so PayloadBackPointers is the single authoritative handle store rather than a repair channel that only
+                // covers relocations. Without this the array is silently incomplete: Split repairs entries it moves and Remove repairs the swap, but nothing
+                // ever writes an entry that was inserted and never moved. A caller then has to merge this array with Insert's return value, which is two
+                // sources for one fact — and the moment it keeps its own copy, a relocation caused by ANOTHER payload's removal makes that copy stale, the
+                // identity check in TryUpdateLeafEntryInPlace refuses, and the escape path removes whatever now occupies the old slot. Writing here is done
+                // AFTER TryInsert returns, so it names the entry's final position even when the insert split the leaf out from under it.
+                var payloadBackPointers = PayloadBackPointers;
+                if (payloadBackPointers != null)
+                {
+                    WritePayloadHandle(payloadBackPointers, payloadId, PackHandle(result.leafChunkId, result.slotIndex));
                 }
                 return (result.leafChunkId, result.slotIndex);
             }
@@ -42,14 +83,18 @@ internal unsafe partial class SpatialRTree<TStore>
     }
 
     /// <summary>Backward-compatible overload for standalone tree tests (no back-pointer tracking).</summary>
-    internal (int leafChunkId, int slotIndex) Insert(long entityId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet = null,
-        uint categoryMask = uint.MaxValue) => Insert(entityId, 0, coords, ref accessor, changeSet, categoryMask);
+    internal (int leafChunkId, int slotIndex) Insert(long payloadId, ReadOnlySpan<double> coords, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet = null,
+        uint categoryMask = uint.MaxValue) => Insert(payloadId, 0, coords, ref accessor, changeSet, categoryMask);
 
     /// <summary>
     /// Overwrite a leaf entry's bounds without touching the tree's structure, when the new bounds still fit inside the leaf's existing MBR — the in-place
     /// half of <c>C5</c>'s escape-bound maintenance (#872 step 9).
     /// </summary>
-    /// <returns><see langword="false"/> when the caller must fall back to remove-and-reinsert; the entry is left untouched in that case.</returns>
+    /// <returns>
+    /// <see cref="LeafUpdateResult.Updated"/>, <see cref="LeafUpdateResult.Escaped"/> when the caller must remove and reinsert, or
+    /// <see cref="LeafUpdateResult.PreconditionFailed"/> when the location does not name this payload — which the caller must NOT treat as an escape.
+    /// The entry is left untouched in both non-updated cases.
+    /// </returns>
     /// <remarks>
     /// <para><b>The leaf MBR is deliberately NOT refitted.</b> That is the entire saving: a refit walks eleven entries and then every ancestor, which is the
     /// ~500 ns path this method exists to avoid on a box that merely drifted. The consequence is that the leaf's MBR becomes a strict superset of the union
@@ -62,23 +107,23 @@ internal unsafe partial class SpatialRTree<TStore>
     /// is widened to include it. The reverse — a mask that drops bits — leaves the union too broad, which costs a redundant visit and nothing else, and
     /// tightening it would require re-scanning every sibling entry.</para>
     /// </remarks>
-    internal bool TryUpdateLeafEntryInPlace(int leafChunkId, int slotIndex, long entityId, ReadOnlySpan<double> coords, uint categoryMask,
+    internal LeafUpdateResult TryUpdateLeafEntryInPlace(int leafChunkId, int slotIndex, long payloadId, ReadOnlySpan<double> coords, uint categoryMask,
         ref ChunkAccessor<TStore> accessor)
     {
         if (leafChunkId <= 0 || (uint)slotIndex >= (uint)_desc.LeafCapacity)
         {
-            return false;
+            return LeafUpdateResult.PreconditionFailed;
         }
 
         byte* leafBase = accessor.GetChunkAddress(leafChunkId, true);
         if (!SpatialNodeHelper.IsLeaf(leafBase) || slotIndex >= SpatialNodeHelper.GetCount(leafBase))
         {
-            return false;
+            return LeafUpdateResult.PreconditionFailed;
         }
 
-        if (SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc) != entityId)
+        if (SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc) != payloadId)
         {
-            return false;
+            return LeafUpdateResult.PreconditionFailed;
         }
 
         // Containment against the leaf's own MBR, on every axis. Any escape sends the caller to the reinsert path.
@@ -88,7 +133,8 @@ internal unsafe partial class SpatialRTree<TStore>
             if (coords[d] < SpatialNodeHelper.ReadNodeMBRCoord(leafBase, d, _desc)
                 || coords[d + halfCoord] > SpatialNodeHelper.ReadNodeMBRCoord(leafBase, d + halfCoord, _desc))
             {
-                return false;
+                // The ONLY geometric exit. Everything else above and below is a broken precondition, and the caller must treat the two differently.
+                return LeafUpdateResult.Escaped;
             }
         }
 
@@ -98,9 +144,9 @@ internal unsafe partial class SpatialRTree<TStore>
             // Re-checked under the latch: between the containment test above and this point a concurrent split could have moved the entry out from under us.
             // Inside the exclusive window that cannot happen and the latch is free; outside it, this is what keeps the write from landing on a stranger.
             if (!SpatialNodeHelper.IsLeaf(leafBase) || slotIndex >= SpatialNodeHelper.GetCount(leafBase)
-                || SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc) != entityId)
+                || SpatialNodeHelper.ReadLeafEntityId(leafBase, slotIndex, _desc) != payloadId)
             {
-                return false;
+                return LeafUpdateResult.PreconditionFailed;
             }
 
             SpatialNodeHelper.WriteLeafEntryCoords(leafBase, slotIndex, coords, _desc);
@@ -118,10 +164,10 @@ internal unsafe partial class SpatialRTree<TStore>
         }
 
         Interlocked.Increment(ref _mutationVersion);
-        return true;
+        return LeafUpdateResult.Updated;
     }
 
-    private (bool success, int leafChunkId, int slotIndex) TryInsert(long entityId, int componentChunkId, ReadOnlySpan<double> coords,
+    private (bool success, int leafChunkId, int slotIndex) TryInsert(long payloadId, int componentChunkId, ReadOnlySpan<double> coords,
         ref ChunkAccessor<TStore> accessor, ChangeSet changeSet, uint categoryMask)
     {
         DescentPath path = default;
@@ -165,7 +211,7 @@ internal unsafe partial class SpatialRTree<TStore>
         if (leafCount < _desc.LeafCapacity)
         {
             // Room available: append at leafCount position
-            WriteLeafEntry(leafBase, leafCount, entityId, componentChunkId, coords, categoryMask);
+            WriteLeafEntry(leafBase, leafCount, payloadId, componentChunkId, coords, categoryMask);
             SpatialNodeHelper.SetCount(leafBase, leafCount + 1);
             if (leafCount == 0)
             {
@@ -186,7 +232,7 @@ internal unsafe partial class SpatialRTree<TStore>
 
         // Leaf full: need split
         leafLatch.WriteUnlock();
-        return InsertWithSplit(entityId, componentChunkId, coords, nodeChunkId, ref path, ref accessor, changeSet, categoryMask);
+        return InsertWithSplit(payloadId, componentChunkId, coords, nodeChunkId, ref path, ref accessor, changeSet, categoryMask);
     }
 
     /// <summary>
@@ -257,10 +303,10 @@ internal unsafe partial class SpatialRTree<TStore>
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WriteLeafEntry(byte* nodeBase, int index, long entityId, int componentChunkId, ReadOnlySpan<double> coords, uint categoryMask = uint.MaxValue)
+    private void WriteLeafEntry(byte* nodeBase, int index, long payloadId, int componentChunkId, ReadOnlySpan<double> coords, uint categoryMask = uint.MaxValue)
     {
         SpatialNodeHelper.WriteLeafEntryCoords(nodeBase, index, coords, _desc);
-        SpatialNodeHelper.WriteLeafEntityId(nodeBase, index, entityId, _desc);
+        SpatialNodeHelper.WriteLeafEntityId(nodeBase, index, payloadId, _desc);
         SpatialNodeHelper.WriteLeafCompChunkId(nodeBase, index, componentChunkId, _desc);
         SpatialNodeHelper.WriteLeafCategoryMask(nodeBase, index, categoryMask, _desc);
     }

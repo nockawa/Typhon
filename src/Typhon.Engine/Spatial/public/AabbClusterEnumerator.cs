@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -108,6 +109,22 @@ public unsafe ref struct AabbClusterEnumerator
     private bool _currentCellStaticPass;
     private PerCellSpatialSlot _currentPerCellSlot;
 
+    // Tree half of the broadphase (#872 step 9). A cell half is served by EITHER _currentCellIndex or this enumerator, never both — see PerCellSpatialSlot.
+    private SpatialRTree<TransientStore>.AABBQueryEnumerator _treeEnum;
+    private bool _treeActive;
+
+    /// <summary>
+    /// True while a cell half is being scanned, through EITHER structure.
+    /// </summary>
+    /// <remarks>
+    /// The cell walk uses this to decide it has found a cell and can stop advancing. Spelling that as <c>_currentCellIndex != null</c> — which it was until
+    /// the tree path existed — reads a promoted cell as empty, walks straight past the cell it just started, and returns nothing at all. The query is then
+    /// silently empty, and only above the promotion threshold: <c>SQ-01</c>'s worst shape. Caught by
+    /// <c>CellTreePromotionTests.PromotedCell_AnswersIdenticallyToTheLinearScan</c>, which is why that test compares against the linear path rather than
+    /// against an expected count.
+    /// </remarks>
+    private readonly bool HasStartedHalf => _currentCellIndex != null || _treeActive;
+
     // Last-yielded result.
     private ClusterSpatialQueryResult _current;
 
@@ -192,6 +209,44 @@ public unsafe ref struct AabbClusterEnumerator
         _cellQueryMaxZ = ClusterSpatialAabb.ToCellRelativeMax(_queryMaxZ, originZ);
     }
 
+    /// <summary>
+    /// Begin scanning one half of a cell, through whichever structure is serving it. Returns false when that half is empty.
+    /// </summary>
+    /// <remarks>
+    /// <b><see cref="SetCellQueryFrame"/> must already have run for this cell.</b> The tree query box is built from that cell-relative frame, so starting a
+    /// half before the frame is established would query the tree with the PREVIOUS cell's coordinates — every bound off by the offset between the two cells,
+    /// and the cell answering nothing rather than answering wrongly. That is <c>SQ-01</c>'s silent direction, and it is the same defect the two
+    /// <c>SetCellQueryFrame</c> call sites in the cell walk already exist to prevent.
+    /// </remarks>
+    private bool TryStartCellHalf(PerCellSpatialSlot slot, bool isStatic)
+    {
+        // Acquire, not a plain field read: PerCellSpatialSlot publishes the tree with a release store precisely so this load pairs with it, and it must
+        // come BEFORE the index load below — that order is what makes the promotion window unobservable.
+        var tree = slot.ReadTree(isStatic);
+        if (tree != null && tree.ClusterCount > 0)
+        {
+            Span<double> queryCoords = stackalloc double[6];
+            CellClusterTree.QueryToCoords(_cellQueryMinX, _cellQueryMinY, _cellQueryMinZ, _cellQueryMaxX, _cellQueryMaxY, _cellQueryMaxZ, queryCoords);
+
+            // categoryMask 0: the filter is applied on the way out instead, because this broadphase and SpatialRTree disagree on what a mask means. See the
+            // tree branch in MoveNext.
+            _treeEnum = tree.Query(queryCoords, 0);
+            _treeActive = true;
+            _currentCellIndex = null;
+            return true;
+        }
+
+        var linear = slot.ReadIndex(isStatic);
+        if (linear != null && linear.ClusterCount > 0)
+        {
+            _currentCellIndex = linear;
+            _currentBroadphaseSlot = 0;
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Advance to the next matching entity. Returns <c>false</c> when the query is exhausted.</summary>
     public bool MoveNext()
     {
@@ -199,7 +254,7 @@ public unsafe ref struct AabbClusterEnumerator
         // unused tail costs nothing. Allocating ONCE per MoveNext call (not per loop iteration) avoids accumulating stack pressure across iterations of the
         // state machine's while(true) — a query that scans thousands of clusters before finding the first match would otherwise allocate 48 bytes per
         // iteration that can't be released until MoveNext returns. See CA2014 for the general guidance.
-        System.Span<double> entityCoords = stackalloc double[6];
+        Span<double> entityCoords = stackalloc double[6];
 
         // Lazy accessor creation: only opened when the first cluster is about to be scanned. Avoids accessor construction cost for empty queries (no
         // overlapping cells with clusters).
@@ -267,9 +322,9 @@ public unsafe ref struct AabbClusterEnumerator
                 float distSq = 0f;
                 if (_radiusSq > 0f)
                 {
-                    float dx = _radiusCenterX - System.Math.Clamp(_radiusCenterX, eMinX, eMaxX);
-                    float dy = _radiusCenterY - System.Math.Clamp(_radiusCenterY, eMinY, eMaxY);
-                    float dz = _radiusCenterZ - System.Math.Clamp(_radiusCenterZ, eMinZ, eMaxZ);
+                    float dx = _radiusCenterX - Math.Clamp(_radiusCenterX, eMinX, eMaxX);
+                    float dy = _radiusCenterY - Math.Clamp(_radiusCenterY, eMinY, eMaxY);
+                    float dz = _radiusCenterZ - Math.Clamp(_radiusCenterZ, eMinZ, eMaxZ);
                     distSq = dx * dx + dy * dy + dz * dz;
                     if (distSq > _radiusSq)
                     {
@@ -280,6 +335,35 @@ public unsafe ref struct AabbClusterEnumerator
                 long entityId = *(long*)(_currentClusterBase + _state.Layout.EntityIdsOffset + slot * 8);
                 _current = new ClusterSpatialQueryResult(entityId, _currentClusterChunkId, slot, eMinX, eMinY, eMinZ, eMaxX, eMaxY, eMaxZ, distSq);
                 return true;
+            }
+
+            // 2a. Advance to the next cluster via this cell's R-Tree, when it has one.
+            if (_treeActive)
+            {
+                if (_treeEnum.MoveNext())
+                {
+                    int treeChunkId = (int)_treeEnum.Current.PayloadId;
+
+                    // The category filter is applied HERE rather than handed to the tree, because the two disagree: this broadphase accepts any overlapping
+                    // bit and a zero mask means "no filter", while SpatialRTree's own mask test is the legacy stricter one. Passing _categoryMask down would
+                    // therefore make a promoted cell answer a different question from an unpromoted one — an SQ-01 false negative that only appears above the
+                    // promotion threshold, which is the hardest possible place to notice it. The mask comes from ClusterAabbs, which is the same value the
+                    // linear index would have read.
+                    if (_categoryMask != 0 && (_state.ClusterAabbs[treeChunkId].CategoryMask & _categoryMask) == 0)
+                    {
+                        continue;
+                    }
+
+                    EnsureAccessor();
+                    _currentClusterBase = _accessor.GetChunkAddress(treeChunkId);
+                    _currentClusterChunkId = treeChunkId;
+                    _currentOccupancyBits = *(ulong*)_currentClusterBase;
+                    continue;
+                }
+
+                _treeEnum.Dispose();
+                _treeActive = false;
+                // Fall through to section 3: this half is drained.
             }
 
             // 2. Advance to the next cluster in the current cell's broadphase (linear scan).
@@ -344,9 +428,8 @@ public unsafe ref struct AabbClusterEnumerator
             if (!_currentCellStaticPass && _currentPerCellSlot != null)
             {
                 _currentCellStaticPass = true;
-                if (_currentPerCellSlot.StaticIndex != null && _currentPerCellSlot.StaticIndex.ClusterCount > 0)
+                if (TryStartCellHalf(_currentPerCellSlot, isStatic: true))
                 {
-                    _currentCellIndex = _currentPerCellSlot.StaticIndex;
                     continue;
                 }
             }
@@ -373,40 +456,41 @@ public unsafe ref struct AabbClusterEnumerator
                         {
                             continue;
                         }
-                        // Prefer DynamicIndex if it has entries; otherwise fall through to StaticIndex in the same iteration.
-                        if (slot.DynamicIndex != null && slot.DynamicIndex.ClusterCount > 0)
+                        // Prefer the dynamic half if it holds anything; otherwise fall through to the static half in the same iteration.
+                        if (slot.DynamicClusterCount > 0)
                         {
-                            _currentPerCellSlot = slot;
-                            _currentCellIndex = slot.DynamicIndex;
-                            _currentCellStaticPass = false;
-
                             // Established only once a cell is known to HOLD something. A query box sweeps mostly-empty space — that is why the walk two
                             // lines above uses TryGetCellKey rather than ComputeCellKey — so converting the frame before that is proven would pay an
-                            // origin chase and six conversions for every empty cell the box crosses.
+                            // origin chase and six conversions for every empty cell the box crosses. It must also precede TryStartCellHalf, which builds
+                            // the tree query box out of the frame.
                             SetCellQueryFrame(cellKey);
+                            _currentPerCellSlot = slot;
+                            _currentCellStaticPass = false;
+                            TryStartCellHalf(slot, isStatic: false);
                             break;
                         }
-                        if (slot.StaticIndex != null && slot.StaticIndex.ClusterCount > 0)
+                        if (slot.StaticClusterCount > 0)
                         {
-                            _currentPerCellSlot = slot;
-                            _currentCellIndex = slot.StaticIndex;
-                            _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
-
                             // BOTH break paths must establish the frame. Setting it only on the Dynamic one leaves a cell whose Dynamic index is empty
                             // reading its clusters against the PREVIOUS cell's origin — every bound off by the offset between the two, and every Static-only
                             // cell silently answering nothing. Three Release-suite tests caught exactly that.
                             SetCellQueryFrame(cellKey);
+                            _currentPerCellSlot = slot;
+                            _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
+                            TryStartCellHalf(slot, isStatic: true);
                             break;
                         }
                     }
-                    if (_currentCellIndex != null)
+                    // A started half is EITHER a linear index or a tree, so "did we find a cell" cannot be spelled as "_currentCellIndex != null" — that
+                    // reads a promoted cell as empty, walks straight past it, and the query returns nothing at all. Silent, and only above the threshold.
+                    if (HasStartedHalf)
                     {
                         break;
                     }
                     _currentCellY++;
                     _currentCellX = _cellMinX;
                 }
-                if (_currentCellIndex != null)
+                if (HasStartedHalf)
                 {
                     break;
                 }
@@ -416,7 +500,7 @@ public unsafe ref struct AabbClusterEnumerator
             }
 
             // 4. Done — no more cells with clusters.
-            if (_currentCellIndex == null)
+            if (!HasStartedHalf)
             {
                 return false;
             }
@@ -428,6 +512,15 @@ public unsafe ref struct AabbClusterEnumerator
     /// </summary>
     public void Dispose()
     {
+        // The tree enumerator holds its OWN ChunkAccessor over the transient segment and an open telemetry span, and it is only drained naturally when a query
+        // runs to completion. A caller that breaks out of the foreach mid-cell — a "first hit wins" search, an exception — would otherwise leak both. The
+        // pre-tree enumerator had no second resource, so this line has no ancestor to have been copied from.
+        if (_treeActive)
+        {
+            _treeEnum.Dispose();
+            _treeActive = false;
+        }
+
         if (_accessorCreated)
         {
             _accessor.Dispose();

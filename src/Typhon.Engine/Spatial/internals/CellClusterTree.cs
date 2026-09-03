@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace Typhon.Engine.Internals;
@@ -34,6 +35,21 @@ internal sealed class CellClusterTree
     private readonly ChunkBasedSegment<TransientStore> _segment;
     private int _clusterCount;
 
+    /// <summary>
+    /// Leaves left with a MBR wider than the union of their entries by an in-place update, owed a refit before the exclusive window closes (<c>ST-07</c>).
+    /// </summary>
+    /// <remarks>
+    /// Duplicates are allowed and not filtered. A refit is idempotent, so a leaf recorded five times costs four redundant recomputations of eleven entries —
+    /// against a <see cref="System.Collections.Generic.HashSet{T}"/> probe on every in-place update, which is the path this whole design exists to keep cheap.
+    /// The list is cleared, not reallocated, so steady state allocates nothing.
+    /// </remarks>
+    private int[] _looseLeaves = new int[16];
+
+    private int _looseLeafCount;
+
+    /// <summary>Chunks the tree freed during the current operation, drained immediately to scrub <see cref="_looseLeaves"/>.</summary>
+    private readonly List<int> _freedChunks = [];
+
     /// <summary>Number of clusters currently indexed by this cell's tree.</summary>
     internal int ClusterCount => _clusterCount;
 
@@ -43,7 +59,11 @@ internal sealed class CellClusterTree
     internal CellClusterTree(ChunkBasedSegment<TransientStore> segment, int[] payloadBackPointers)
     {
         _segment = segment;
-        _tree = new SpatialRTree<TransientStore>(segment, Variant) { PayloadBackPointers = payloadBackPointers };
+        _tree = new SpatialRTree<TransientStore>(segment, Variant, mirrorMetadata: false)
+        {
+            PayloadBackPointers = payloadBackPointers,
+            FreedChunkSink = _freedChunks,
+        };
     }
 
     /// <summary>
@@ -58,57 +78,104 @@ internal sealed class CellClusterTree
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void RebindBackPointers(int[] payloadBackPointers) => _tree.PayloadBackPointers = payloadBackPointers;
 
-    /// <summary>Insert a cluster. Returns the packed handle, which the caller stores in <c>ClusterSpatialIndexSlot</c>.</summary>
-    internal int Add(int clusterChunkId, in ClusterSpatialAabb aabb)
+    /// <summary>
+    /// Insert a cluster. The handle is recorded in the shared back-pointer array, which is the only place it is kept.
+    /// </summary>
+    /// <remarks>
+    /// <b>The caller must not keep a copy of the handle.</b> Any entry in this tree can be relocated by a mutation belonging to a DIFFERENT cluster — a leaf
+    /// split scatters both halves through the overlap-minimising permutation, and a removal swaps the last entry into the freed slot — so a privately-held
+    /// handle goes stale without its owner touching anything. The back-pointer array is the one store the tree repairs on every such move; reading it is
+    /// one indexed load, which is cheaper than any scheme for keeping a second copy honest.
+    /// </remarks>
+    internal void Add(int clusterChunkId, in ClusterSpatialAabb aabb)
     {
+        // UpdateAt and RemoveAt both refuse a NULL handle; this refuses a non-null one, which is the same guard from the other side. Adding a cluster twice
+        // inserts a second leaf entry and then overwrites the handle, so the first entry is orphaned — returned by every query, unreachable by RemoveAt, and
+        // uncounted. That is ST-05 with no detector, since nothing else ever looks for two entries with one payload id.
+        if (!SpatialRTree<TransientStore>.IsNullHandle(_tree.PayloadBackPointers[clusterChunkId]))
+        {
+            ThrowHelper.ThrowInvalidOp($"Cluster {clusterChunkId} is already in this cell's tree — adding it twice orphans the first entry (ST-05).");
+        }
+
         Span<double> coords = stackalloc double[6];
         ToCoords(in aabb, coords);
 
         var accessor = _segment.CreateChunkAccessor();
         try
         {
-            var (leafChunkId, slotIndex) = _tree.Insert(clusterChunkId, coords, ref accessor, null, aabb.CategoryMask);
+            _tree.Insert(clusterChunkId, coords, ref accessor, null, aabb.CategoryMask);
             _clusterCount++;
-            return SpatialRTree<TransientStore>.PackHandle(leafChunkId, slotIndex);
         }
         finally
         {
             accessor.Dispose();
         }
     }
+
+    /// <summary>The cluster's current packed handle, or <see cref="SpatialRTree{TStore}.NullHandle"/> when it is not in this tree.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int HandleOf(int clusterChunkId) => _tree.PayloadBackPointers[clusterChunkId];
 
     /// <summary>
     /// Update a cluster's bounds in place when they still fit the leaf that holds them, and reinsert only when they escape — <c>C5</c>.
     /// </summary>
-    /// <returns>The handle to store: unchanged on the in-place path, new on the escape path.</returns>
     /// <remarks>
     /// <para>The in-place store is the whole economic argument: a cluster's box moves every tick for a dynamic archetype, and remove-and-reinsert on each is
     /// ~94-235 µs per cell per tick against ~14 µs escape-bound. It is also where a stale handle would do its damage, which is why
     /// <c>SpatialRTree.PayloadBackPointers</c> had to exist before this method could.</para>
+    /// <para><b>The handle is read from the back-pointer array, never passed in.</b> Taking it as a parameter was the earlier shape and it was wrong: the
+    /// caller cannot keep a handle valid, because another cluster's split or removal relocates this one. A stale handle fails the identity check inside
+    /// <see cref="SpatialRTree{TStore}.TryUpdateLeafEntryInPlace"/> — which is the check working — but the escape path underneath would then have removed at
+    /// that same stale location, which is a live entry belonging to somebody else. Reading the authoritative store removes the failure mode rather than
+    /// detecting half of it.</para>
     /// <para><b>This leaves the leaf's MBR loose, and that is deliberate.</b> Not refitting is what makes the fast path fast. <c>ST-01</c> states leaf MBR
     /// EQUALITY, so the looseness must not outlive the exclusive window — the caller refits the leaves it touched at the end of the pass. Too-loose is
     /// <c>ST-01</c>'s performance-only direction; the fatal direction is too-tight, which this path cannot produce because it only ever widens.</para>
     /// </remarks>
-    internal int UpdateAt(int handle, int clusterChunkId, in ClusterSpatialAabb aabb, out bool escaped)
+    internal void UpdateAt(int clusterChunkId, in ClusterSpatialAabb aabb, out bool escaped)
     {
         Span<double> coords = stackalloc double[6];
         ToCoords(in aabb, coords);
+
+        int handle = _tree.PayloadBackPointers[clusterChunkId];
+        if (SpatialRTree<TransientStore>.IsNullHandle(handle))
+        {
+            ThrowHelper.ThrowInvalidOp($"Cluster {clusterChunkId} has no live handle in this cell's tree — update it only after Add and before RemoveAt.");
+        }
 
         var accessor = _segment.CreateChunkAccessor();
         try
         {
             var (leafChunkId, slotIndex) = SpatialRTree<TransientStore>.UnpackHandle(handle);
-            if (_tree.TryUpdateLeafEntryInPlace(leafChunkId, slotIndex, clusterChunkId, coords, aabb.CategoryMask, ref accessor))
+            var outcome = _tree.TryUpdateLeafEntryInPlace(leafChunkId, slotIndex, clusterChunkId, coords, aabb.CategoryMask, ref accessor);
+            if (outcome == LeafUpdateResult.Updated)
             {
                 escaped = false;
-                return handle;
+                RecordLooseLeaf(leafChunkId);
+                return;
             }
 
-            // Escaped its leaf: remove and reinsert. Remove retires the handle and repairs the swapped entry's; Insert issues the new one.
+            if (outcome == LeafUpdateResult.PreconditionFailed)
+            {
+                // NOT an escape, and treating it as one is a silent deletion. This branch existed as a fall-through until #872 step 9: the handle does not name
+                // this cluster, so removing at it deletes whoever does and retires THEIR back-pointer — ST-05's own failure, with no exception near the cause.
+                // Under a single writer the branch is unreachable, which is exactly why it must throw: reaching it means ST-05 has a gap and the loud failure
+                // is the only thing that will surface it.
+                ThrowHelper.ThrowInvalidOp(
+                    $"Cluster {clusterChunkId}'s handle (leaf {leafChunkId}, slot {slotIndex}) no longer names it. PayloadBackPointers is repaired on every "
+                    + "relocation, so this means either a gap in that repair or a concurrent writer on one tree, which SpatialRTree does not support "
+                    + "(ADR-044, invariant O2).");
+            }
+
+            // Escaped its leaf: remove and reinsert. The removal is identity-checked even though the outcome above already proved the slot is ours — the two
+            // reads are separated by nothing here, but the checked form is what keeps that true if this method ever grows a step between them.
             escaped = true;
-            _tree.Remove(leafChunkId, slotIndex, ref accessor);
-            var (newLeaf, newSlot) = _tree.Insert(clusterChunkId, coords, ref accessor, null, aabb.CategoryMask);
-            return SpatialRTree<TransientStore>.PackHandle(newLeaf, newSlot);
+            _tree.RemoveChecked(leafChunkId, slotIndex, clusterChunkId, ref accessor);
+
+            // Before the reinsert, not after: the reinsert can ALLOCATE the chunk the removal just freed, and a record naming it would then point at a live
+            // node again — possibly one belonging to another cell's tree on this shared segment.
+            ScrubFreedLooseLeaves();
+            _tree.Insert(clusterChunkId, coords, ref accessor, null, aabb.CategoryMask);
         }
         finally
         {
@@ -116,14 +183,106 @@ internal sealed class CellClusterTree
         }
     }
 
-    /// <summary>Remove a cluster by its handle.</summary>
-    internal void RemoveAt(int handle)
+    private void RecordLooseLeaf(int leafChunkId)
     {
+        // Collapse a run of updates to the same leaf. A refit is a leaf recompute PLUS an ancestor walk to the root, and every level re-reads all ~11 children
+        // to rebuild its union mask — so a duplicate is not the cheap repeat the first version of this comment claimed, it is a whole root walk. Comparing
+        // against the last entry catches the common case (a cell's clusters are updated in id order, and neighbours share a leaf) without the per-update
+        // HashSet probe this path exists to avoid.
+        if (_looseLeafCount > 0 && _looseLeaves[_looseLeafCount - 1] == leafChunkId)
+        {
+            return;
+        }
+
+        if (_looseLeafCount == _looseLeaves.Length)
+        {
+            Array.Resize(ref _looseLeaves, _looseLeaves.Length * 2);
+        }
+        _looseLeaves[_looseLeafCount++] = leafChunkId;
+    }
+
+    /// <summary>
+    /// Drop any pending refit naming a chunk the tree has just freed.
+    /// </summary>
+    /// <remarks>
+    /// <b>Called immediately after every structural mutation, and it must be immediate.</b> A freed chunk keeps its bytes — leaf flag, count, MBR, parent
+    /// pointer — so a stale record still passes every "is this a leaf" test, and on the shared per-archetype segment the next allocation can hand that chunk
+    /// to a DIFFERENT cell's tree. Refitting it then rewrites a live node belonging to another cell and walks its parent chain, which is ST-01 and ST-03
+    /// damage with nothing near the cause. Single-threaded repro: a leaf holding one cluster, updated in place (recorded) and then escaping (leaf emptied and
+    /// freed) leaves exactly this dangling record.
+    /// </remarks>
+    private void ScrubFreedLooseLeaves()
+    {
+        if (_freedChunks.Count == 0)
+        {
+            return;
+        }
+
+        for (int f = 0; f < _freedChunks.Count; f++)
+        {
+            int freed = _freedChunks[f];
+            for (int i = _looseLeafCount - 1; i >= 0; i--)
+            {
+                if (_looseLeaves[i] == freed)
+                {
+                    _looseLeaves[i] = _looseLeaves[--_looseLeafCount];
+                }
+            }
+        }
+
+        _freedChunks.Clear();
+    }
+
+    /// <summary>
+    /// Refit every leaf an in-place update left loose, restoring <c>ST-01</c>'s equality. Call once at the end of the AABB refresh pass, before any query runs.
+    /// </summary>
+    /// <remarks>
+    /// <b>Why this is owed rather than optional.</b> Skipping the refit is what makes the in-place path fast, and a too-loose MBR costs a query nothing but a
+    /// redundant visit. What it does break is <c>ST-01</c> read literally — so a <c>TreeValidator</c> run, or any rebuild that assumes equality, sees a
+    /// violation that is real even though no query is wrong. Paying it once per pass rather than once per update is the whole trade: the leaves touched in a
+    /// tick are a small fraction of the tree, and each is refit once regardless of how many of its entries moved.
+    /// </remarks>
+    internal void RefitLooseLeaves()
+    {
+        if (_looseLeafCount == 0)
+        {
+            return;
+        }
+
+        var accessor = _segment.CreateChunkAccessor();
+        try
+        {
+            for (int i = 0; i < _looseLeafCount; i++)
+            {
+                _tree.RefitLeafAndAncestors(_looseLeaves[i], ref accessor);
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        _looseLeafCount = 0;
+    }
+
+    /// <summary>Leaves currently owed a refit. Zero outside the exclusive window if the caller is doing its job — which is what the test asserts.</summary>
+    internal int LooseLeafCount => _looseLeafCount;
+
+    /// <summary>Remove a cluster. Its handle is retired to <see cref="SpatialRTree{TStore}.NullHandle"/> by the removal.</summary>
+    internal void RemoveAt(int clusterChunkId)
+    {
+        int handle = _tree.PayloadBackPointers[clusterChunkId];
+        if (SpatialRTree<TransientStore>.IsNullHandle(handle))
+        {
+            ThrowHelper.ThrowInvalidOp($"Cluster {clusterChunkId} is not present in this cell's tree, so it cannot be removed from it.");
+        }
+
         var accessor = _segment.CreateChunkAccessor();
         try
         {
             var (leafChunkId, slotIndex) = SpatialRTree<TransientStore>.UnpackHandle(handle);
-            _tree.Remove(leafChunkId, slotIndex, ref accessor);
+            _tree.RemoveChecked(leafChunkId, slotIndex, clusterChunkId, ref accessor);
+            ScrubFreedLooseLeaves();
             _clusterCount--;
         }
         finally
@@ -135,26 +294,91 @@ internal sealed class CellClusterTree
     /// <summary>
     /// Cluster chunk ids whose bounds overlap <paramref name="queryCoords"/>, which must already be in this cell's frame.
     /// </summary>
-    internal SpatialRTree<TransientStore>.AABBQueryEnumerator Query(ReadOnlySpan<double> queryCoords, uint categoryMask) =>
+    internal SpatialRTree<TransientStore>.AABBQueryEnumerator Query(scoped ReadOnlySpan<double> queryCoords, uint categoryMask) =>
         _tree.QueryAABB(queryCoords, null, categoryMask);
+
+    /// <summary>
+    /// Every cluster chunk id in this tree, in descent order. Used by demotion, which rebuilds a linear index from the tree's contents.
+    /// </summary>
+    /// <remarks>
+    /// A full-extent query rather than a bespoke walk: it reuses the one traversal that is already differentially tested against a brute-force scan, and it
+    /// cannot drift from what a real query sees. The extent is finite-but-enormous rather than infinite because an infinite coordinate entering the overlap
+    /// test produces <c>NaN</c> comparisons on any axis whose node bound is also infinite, and <c>NaN</c> compares false — which would silently return
+    /// nothing, the failure being indistinguishable from an empty cell.
+    /// </remarks>
+    internal ClusterIdEnumerable EnumerateClusterIds() => new(this);
+
+    /// <summary>Allocation-free wrapper turning a full-extent query into a <c>foreach</c> over cluster chunk ids.</summary>
+    internal readonly ref struct ClusterIdEnumerable
+    {
+        private readonly CellClusterTree _owner;
+
+        internal ClusterIdEnumerable(CellClusterTree owner) => _owner = owner;
+
+        public Enumerator GetEnumerator() => new(_owner);
+
+        /// <summary>Drains a full-extent query, yielding each payload as an <see cref="int"/> cluster chunk id.</summary>
+        internal ref struct Enumerator
+        {
+            private SpatialRTree<TransientStore>.AABBQueryEnumerator _inner;
+
+            internal Enumerator(CellClusterTree owner)
+            {
+                Span<double> all = stackalloc double[6];
+                all[0] = FullExtentMin;
+                all[1] = FullExtentMin;
+                all[2] = FullExtentMin;
+                all[3] = FullExtentMax;
+                all[4] = FullExtentMax;
+                all[5] = FullExtentMax;
+                _inner = owner._tree.QueryAABB(all);
+            }
+
+            public int Current => (int)_inner.Current.PayloadId;
+
+            public bool MoveNext() => _inner.MoveNext();
+
+            public void Dispose() => _inner.Dispose();
+        }
+    }
+
+    /// <summary>Lower bound of the full-extent query box. Finite on purpose — see <see cref="EnumerateClusterIds"/>.</summary>
+    private const double FullExtentMin = -1e30;
+
+    /// <inheritdoc cref="FullExtentMin"/>
+    private const double FullExtentMax = 1e30;
 
     /// <summary>
     /// Expand a cluster AABB into the tree's <c>[min0..minN, max0..maxN]</c> coordinate layout.
     /// </summary>
+    /// <summary>
+    /// The Z extent every 2D cluster is given. <b>Unit thickness, not zero</b> — see <see cref="ToCoords"/>.
+    /// </summary>
+    private const double FlatSlabMin = 0d;
+
+    /// <inheritdoc cref="FlatSlabMin"/>
+    private const double FlatSlabMax = 1d;
+
     /// <remarks>
-    /// The 2D sentinel is translated rather than passed through. A 2D archetype leaves Z at ±Infinity, and an R-Tree node MBR that unions an infinite extent
-    /// becomes infinite on that axis for the whole subtree — which prunes nothing and turns every descent into a full scan. Collapsing 2D to a zero-thickness
-    /// Z slab keeps the node bounds finite while remaining exactly as selective, because every 2D cluster shares the same slab.
+    /// <para>The 2D sentinel is translated rather than passed through. A 2D archetype leaves Z at ±Infinity, and an R-Tree node MBR that unions an infinite
+    /// extent becomes infinite on that axis for the whole subtree — which prunes nothing and turns every descent into a full scan.</para>
+    /// <para><b>The slab has unit thickness, and that is load-bearing rather than arbitrary.</b> Collapsing 2D onto a ZERO-thickness slab is the obvious
+    /// translation and it is catastrophic: every cost function in this tree is a product of extents across all three axes (<c>ComputeArea</c>,
+    /// and <c>ChooseSubtree</c>'s <c>area</c>/<c>enlargedArea</c>), so a zero Z extent makes every node's area zero, every enlargement <c>0 - 0 = 0</c>, and
+    /// every candidate indistinguishable. <c>ChooseSubtree</c> then keeps its first candidate on every comparison, so every insert walks the leftmost path
+    /// and the tree degenerates into a list — measured at 5-25x SLOWER than the linear scan it replaces, with query cost growing linearly in cluster count
+    /// instead of logarithmically. A thickness of exactly 1 makes the 3D product equal the true 2D area, so all three heuristics behave as their 2D
+    /// equivalents rather than merely avoiding the degeneracy.</para>
     /// </remarks>
     private static void ToCoords(in ClusterSpatialAabb aabb, Span<double> coords)
     {
         bool flat = float.IsPositiveInfinity(aabb.MinZ) || float.IsNegativeInfinity(aabb.MaxZ);
         coords[0] = aabb.MinX;
         coords[1] = aabb.MinY;
-        coords[2] = flat ? 0d : aabb.MinZ;
+        coords[2] = flat ? FlatSlabMin : aabb.MinZ;
         coords[3] = aabb.MaxX;
         coords[4] = aabb.MaxY;
-        coords[5] = flat ? 0d : aabb.MaxZ;
+        coords[5] = flat ? FlatSlabMax : aabb.MaxZ;
     }
 
     /// <summary>Expand a query box into the tree's coordinate layout, collapsing an infinite Z range onto the flat slab <see cref="ToCoords"/> writes.</summary>
@@ -163,9 +387,9 @@ internal sealed class CellClusterTree
         bool infiniteZ = float.IsNegativeInfinity(minZ) || float.IsPositiveInfinity(maxZ);
         coords[0] = minX;
         coords[1] = minY;
-        coords[2] = infiniteZ ? 0d : minZ;
+        coords[2] = infiniteZ ? FlatSlabMin : minZ;
         coords[3] = maxX;
         coords[4] = maxY;
-        coords[5] = infiniteZ ? 0d : maxZ;
+        coords[5] = infiniteZ ? FlatSlabMax : maxZ;
     }
 }
