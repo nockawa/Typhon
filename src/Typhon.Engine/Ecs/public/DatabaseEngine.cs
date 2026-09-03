@@ -1587,22 +1587,23 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             BitConverter.SingleToInt32Bits(config.MigrationHysteresisRatio),
         ];
 
-        // 🔴 #872 step 10's ClusterTargetExtentRatio and ClusterDriftMarginRatio are deliberately NOT in this record, and the reason is worth stating
+        // 🔴 #872's tuning knobs — step 10's ClusterTargetExtentRatio and ClusterDriftMarginRatio, and step 12's ClusterRepairExtentRatio,
+        // ReclusterBudgetMs, RepairNsPerEntity and RepairWorstClustersPerUnit — are deliberately NOT in this record, and the reason is worth stating
         // because their absence looks like an oversight next to MigrationHysteresisRatio.
         //
         // What this record exists for is RECONSTRUCTION BY AN OPENER THAT NEVER CONFIGURED THE GRID — the Workbench, or `typhon check`. Everything in it
         // defines CELL IDENTITY: change a world bound or the cell size and a position maps to a different cell, which files clusters into cells the writer
-        // never chose (the C13 misplacement the loud rejection below guards). The two ratios decide only WHEN intra-cell relocation fires. They move no
-        // entity into a different cell and no query into a different answer, so a tool reading the database for introspection is correct with the
-        // defaults.
+        // never chose (the C13 misplacement the loud rejection below guards). The six omitted knobs decide only WHEN intra-cell relocation and repair
+        // fire. They move no entity into a different cell and no query into a different answer, so a tool reading the database for introspection is correct
+        // with the defaults.
         //
         // An application that sets them calls ConfigureSpatialGrid, and that path wins outright over the persisted record — the grid is built from the
         // pending config and this record is only rewritten, never read back. So a tuned ratio is never silently replaced by a default; the only consumer
         // of the stored values is the opener that supplied none.
         //
-        // There is also no room: BootstrapDictionary caps an int-vector at 8 values and the eight above fill it, so adding the ratios here needs a second
-        // bootstrap key. That is worth doing the day a ratio becomes part of the on-disk contract — step 11, if the re-clustering budget is persisted with
-        // it — and not before.
+        // There is also no room: BootstrapDictionary caps an int-vector at 8 values and the eight above fill it, so adding them here needs a second
+        // bootstrap key. That is worth doing the day one becomes part of the on-disk contract — step 11, if the adaptive re-clustering budget is persisted
+        // with it — and not before.
         MMF.Bootstrap.Set(BK_SpatialGridConfig, BootstrapDictionary.Value.FromInts(bits));
         MMF.SaveBootstrap();
     }

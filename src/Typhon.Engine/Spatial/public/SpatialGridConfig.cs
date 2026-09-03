@@ -66,6 +66,78 @@ public readonly struct SpatialGridConfig
     /// </remarks>
     public readonly float ClusterDriftMarginRatio;
 
+    /// <summary>
+    /// The extent past which a cluster is considered beyond the delta path's reach and its cell is nominated for a full re-sort, as a fraction of cell size
+    /// — design parameter <b>P7</b>. Default 0.75.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>P7 as the design states it cannot fire, and this is the correction.</b> The design says to start at "the existing <c>cellSize x 1.2</c>
+    /// extent check". That check belongs to the OUTLIER GUARD, and it is looking for a different fault: a cluster whose bound has grown past its own cell,
+    /// which happens only when it holds entities that should have migrated out and did not. A cluster whose entities all genuinely belong to its cell cannot
+    /// exceed the cell by more than the hysteresis margin — <see cref="MigrationHysteresisRatio"/>, 5 % by default — so its extent tops out near
+    /// <c>1.05 x cellSize</c> and the 1.2 threshold is unreachable. The scenario <c>AC-12.1</c> names, AABBs at some 90 % of the cell, sits comfortably
+    /// below it. Wiring repair to that trigger would have produced a repair path that never runs, and a green test suite saying nothing.</para>
+    /// <para><b>Why 0.75 and not the drift target.</b> <see cref="ClusterTargetExtentRatio"/> (0.25) is where step 10 starts RELOCATING, and nominating
+    /// there would ask for a re-sort of every cluster the delta path is already working on — the opposite of rare. Repair is for degradation relocation
+    /// cannot undo, so its threshold belongs well above the drift target and below the cell: three quarters of a cell means the cluster is opened by three
+    /// quarters of the queries that touch the cell, and no greedy per-entity move is going to change that. It sits between the two existing gates by
+    /// construction, so a cluster that nominates has always been drift-gated too.</para>
+    /// <para>Provisional, like P4. The value that resolves it comes from step 11's budget/tightness curve.</para>
+    /// </remarks>
+    public readonly float ClusterRepairExtentRatio;
+
+    /// <summary>
+    /// Per-tick, per-archetype wall-clock budget for the <b>repair</b> path — the full Morton re-sort of §5.2 — in milliseconds. <c>0</c> disables repair
+    /// entirely. Default 1.0.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Whole units, never a fraction of one (§5.6).</b> A Morton sort cannot be halved: a partly re-sorted cell is <i>worse</i> than an untouched
+    /// one, because the cost is paid and the benefit is not. So this budget gates whether a unit is <b>started</b>, and a unit the remaining budget cannot
+    /// finish is not begun (<c>AC-12.5</c>). That makes the budget an admission threshold rather than a stopping condition, which is the opposite of how
+    /// the delta path in step 10 spends — that one is resumable per entity.</para>
+    /// <para><b>The estimate, not the measurement, decides.</b> Cost is projected as
+    /// <c>entities x <see cref="RepairNsPerEntity"/></c> before anything moves, since the decision has to precede the work. The measured spend lands in
+    /// <c>SpatialMigrationTelemetry.ReclusterBudgetUsedMs</c>, which is what tells you whether the projection is honest.</para>
+    /// <para><b>Step 11 replaces the constant with a controller.</b> The design's budget is "adjusted at runtime from the previous tick's measured cost";
+    /// this is the static knob that controller will drive, and the seam a test uses to pin the budget to just-below-cost.</para>
+    /// <para><b>1.0 ms is sized against the measured cost, not chosen.</b> At <see cref="RepairNsPerEntity"/> it admits ~670 entities, which covers one
+    /// default unit of eight 49-slot clusters (392 entities) with room to spare. The first value tried was 0.25 ms, which — once the cost was measured
+    /// rather than assumed — could not afford a single unit, so the feature would have shipped switched on and never run. Repair is self-limiting: a cell
+    /// that has been re-packed is refused on every later tick until its geometry actually changes, so this budget is a ceiling on a rare event and not a
+    /// per-tick tax.</para>
+    /// </remarks>
+    public readonly float ReclusterBudgetMs;
+
+    /// <summary>
+    /// Projected cost of moving one entity on the repair path, in nanoseconds — the exchange rate <see cref="ReclusterBudgetMs"/> is spent at. Default 1500.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>🔴 Not §5.2's 60 ns. That figure does not survive measurement.</b> §5.2 budgets a batched relocation at ~60 ns/entity and derives the ~6 ms
+    /// per 100 K-entity cell that makes repair the rare path rather than the per-tick one. <c>AC-12.7</c>'s measurement
+    /// (<c>ClusterRepairTests.MeasureRepairCostPerEntity</c>, Release, 2 000 entities in 41 clusters, six consecutive repairs on a warm engine) reports
+    /// <b>1 331 to 6 992 ns/entity</b> — 22x to 117x the estimate — which projects to <b>~133 ms</b> for a 100 K-entity cell rather than ~6 ms. The first
+    /// repair a process performs measured 20 681 ns/entity and is warm-up, not signal.</para>
+    /// <para><b>What that changes.</b> Repair being the rare path is, if anything, more true than the design argued: at ~133 ms a 100 K-entity cell cannot
+    /// be re-sorted whole inside any tick, which is exactly why §5.6's <i>preferred</i> unit is one cell's N worst clusters and why
+    /// <see cref="RepairWorstClustersPerUnit"/> defaults to 8 rather than to the whole cell. What it does invalidate is a budget calibrated on 60: it would
+    /// admit units costing twenty times what it thinks, and the per-tick spend AC-11.1 bounds would be exceeded by that factor.</para>
+    /// <para>1 500 is the warm BEST, deliberately, not the worst. The number is an admission threshold, and the value that matters for step 11 is the one a
+    /// controller will converge on from real measurements; seeding it with the worst observed sample would refuse units the machine can comfortably afford.
+    /// Exposed rather than hard-coded because it is a property of the machine and of the archetype's component width, not of the design.</para>
+    /// </remarks>
+    public readonly float RepairNsPerEntity;
+
+    /// <summary>
+    /// How many of a cell's worst clusters one repair unit re-packs. Default 8; <c>0</c> or more than the cell holds means the whole cell.
+    /// </summary>
+    /// <remarks>
+    /// §5.6's <b>preferred unit</b> — "one cell's <i>N worst clusters</i>" — with the whole cell as the documented fallback. Finer than a whole cell, still
+    /// internally coherent (the entities re-sorted are exactly the ones re-packed), and it targets the clusters actually costing selectivity instead of
+    /// spending a 100 K-entity budget to fix eight bad bounds. "Worst" is the largest maximum axis extent, which is the same quantity the
+    /// <c>cellSize x 1.2</c> trigger reads.
+    /// </remarks>
+    public readonly int RepairWorstClustersPerUnit;
+
     // ── Derived values, computed in the constructor ────────────────────────
 
     /// <summary>
@@ -76,7 +148,10 @@ public readonly struct SpatialGridConfig
     /// <summary>Number of cells along the Y axis.</summary>
     public readonly int GridHeight;
 
-    /// <summary>Number of cells along the Z axis. <c>1</c> for a flat world built with <see cref="Flat(Vector2,Vector2,float,float,float,float)"/>.</summary>
+    /// <summary>
+    /// Number of cells along the Z axis. <c>1</c> for a flat world built with
+    /// <see cref="Flat(Vector2,Vector2,float,float,float,float,float,float,float,int)"/>.
+    /// </summary>
     public readonly int GridDepth;
 
     /// <summary>Precomputed 1 / <see cref="CellSize"/>.</summary>
@@ -95,16 +170,39 @@ public readonly struct SpatialGridConfig
     /// <param name="migrationHysteresisRatio">Per-axis dead zone as a fraction of cell size (default 0.05).</param>
     /// <param name="clusterTargetExtentRatio">Target cluster extent as a fraction of cell size — P4 (default 0.25).</param>
     /// <param name="clusterDriftMarginRatio">Intra-cell drift dead zone as a fraction of cell size (default 0.05).</param>
+    /// <param name="clusterRepairExtentRatio">Extent past which a cell is nominated for a full re-sort — P7 (default 0.75).</param>
+    /// <param name="reclusterBudgetMs">Per-tick repair budget in milliseconds; 0 disables repair (default 1.0).</param>
+    /// <param name="repairNsPerEntity">Projected repair cost per entity in nanoseconds (default 1500, measured).</param>
+    /// <param name="repairWorstClustersPerUnit">Clusters per repair unit; 0 means the whole cell (default 8).</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="cellSize"/> is not positive, or the derived cell count does not fit a 32-bit cell key.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="worldMax"/> is not strictly greater than <paramref name="worldMin"/> on all three axes.</exception>
     public SpatialGridConfig(Vector3 worldMin, Vector3 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
-        float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f)
+        float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f, float clusterRepairExtentRatio = 0.75f,
+        float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cellSize);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(clusterTargetExtentRatio);
         ArgumentOutOfRangeException.ThrowIfNegative(clusterDriftMarginRatio);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(clusterRepairExtentRatio);
+        // The UPPER bound only, and the asymmetry is deliberate. At or above the outlier guard's 1.2 the threshold can never be reached — a cluster confined
+        // to its own cell tops out near 1 + MigrationHysteresisRatio — so the value silently disables the feature, which is a configuration error rather
+        // than a tuning choice and deserves a throw.
+        //
+        // The other half of RP-04's ordering, "above ClusterTargetExtentRatio", is NOT enforced. It is a tuning guideline about the two mechanisms competing,
+        // and it stops applying the moment the drift gate is switched off — which the fixtures do by setting the target ratio to 100, a value no cluster can
+        // exceed. Throwing on that would reject a legal configuration in which repair is the only mechanism running, so it stays documented on
+        // ClusterRepairExtentRatio and in RP-04 rather than being a hard failure.
+        if (clusterRepairExtentRatio >= 1.2f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(clusterRepairExtentRatio),
+                $"ClusterRepairExtentRatio ({clusterRepairExtentRatio}) must be below the outlier guard's 1.2, or it can never fire: a cluster whose "
+                + "entities all belong to its own cell cannot exceed the cell by more than MigrationHysteresisRatio.");
+        }
+        ArgumentOutOfRangeException.ThrowIfNegative(reclusterBudgetMs);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(repairNsPerEntity);
+        ArgumentOutOfRangeException.ThrowIfNegative(repairWorstClustersPerUnit);
         if (worldMax.X <= worldMin.X || worldMax.Y <= worldMin.Y || worldMax.Z <= worldMin.Z)
         {
             throw new ArgumentException("WorldMax must be strictly greater than WorldMin on all three axes.", nameof(worldMax));
@@ -116,6 +214,10 @@ public readonly struct SpatialGridConfig
         MigrationHysteresisRatio = migrationHysteresisRatio;
         ClusterTargetExtentRatio = clusterTargetExtentRatio;
         ClusterDriftMarginRatio = clusterDriftMarginRatio;
+        ClusterRepairExtentRatio = clusterRepairExtentRatio;
+        ReclusterBudgetMs = reclusterBudgetMs;
+        RepairNsPerEntity = repairNsPerEntity;
+        RepairWorstClustersPerUnit = repairWorstClustersPerUnit;
         InverseCellSize = 1.0f / cellSize;
 
         GridWidth  = (int)MathF.Ceiling((worldMax.X - worldMin.X) * InverseCellSize);
@@ -146,8 +248,13 @@ public readonly struct SpatialGridConfig
     /// <param name="migrationHysteresisRatio">Per-axis dead zone as a fraction of cell size (default 0.05).</param>
     /// <param name="clusterTargetExtentRatio">Target cluster extent as a fraction of cell size — P4 (default 0.25).</param>
     /// <param name="clusterDriftMarginRatio">Intra-cell drift dead zone as a fraction of cell size (default 0.05).</param>
+    /// <param name="clusterRepairExtentRatio">Extent past which a cell is nominated for a full re-sort — P7 (default 0.75).</param>
+    /// <param name="reclusterBudgetMs">Per-tick repair budget in milliseconds; 0 disables repair (default 1.0).</param>
+    /// <param name="repairNsPerEntity">Projected repair cost per entity in nanoseconds (default 1500, measured).</param>
+    /// <param name="repairWorstClustersPerUnit">Clusters per repair unit; 0 means the whole cell (default 8).</param>
     public static SpatialGridConfig Flat(Vector2 worldMin, Vector2 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
-        float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f) =>
+        float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f, float clusterRepairExtentRatio = 0.75f,
+        float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8) =>
         new(new Vector3(worldMin, 0f), new Vector3(worldMax, cellSize), cellSize, migrationHysteresisRatio, clusterTargetExtentRatio,
-            clusterDriftMarginRatio);
+            clusterDriftMarginRatio, clusterRepairExtentRatio, reclusterBudgetMs, repairNsPerEntity, repairWorstClustersPerUnit);
 }

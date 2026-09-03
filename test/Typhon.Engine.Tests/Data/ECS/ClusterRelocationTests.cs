@@ -37,7 +37,13 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClMigPos>();
         dbe.RegisterComponentFromAccessor<ClMigScratch>();
-        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize));
+        // #872 step 12 turned the repair path on by default, and these fixtures are about the DELTA path. Repair legitimately
+        // preempts relocation — a cell it re-packs comes out tight, so the drift gate stops firing and the deliberately
+        // distinct clusters this fixture builds are collapsed into a Morton packing before a single placement decision is
+        // made. Three placement tests and one shrink test went red that way, all of them correctly. Pinning the budget to
+        // zero scopes each fixture to the mechanism it is written to measure; it is not a workaround for a defect.
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize,
+            reclusterBudgetMs: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -573,7 +579,10 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
         float targetRatio = relocationEnabled ? 0.25f : 100f;
         dbe.ConfigureSpatialGrid(new SpatialGridConfig(
             new Vector3(0, 0, 0), new Vector3(WorldMax, WorldMax, 1f), CellSize,
-            migrationHysteresisRatio: 0.05f, clusterTargetExtentRatio: targetRatio, clusterDriftMarginRatio: 0.05f));
+            migrationHysteresisRatio: 0.05f, clusterTargetExtentRatio: targetRatio, clusterDriftMarginRatio: 0.05f,
+            // Zero, for the reason SetupEngine records: this is an A/B of the DELTA path against itself, and a repair
+            // would tighten both arms and mask the difference the measurement is about.
+            reclusterBudgetMs: 0f));
         dbe.InitializeArchetypes();
 
         using var _ = dbe;

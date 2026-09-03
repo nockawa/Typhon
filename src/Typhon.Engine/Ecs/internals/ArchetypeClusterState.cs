@@ -1898,6 +1898,55 @@ internal sealed unsafe partial class ArchetypeClusterState
     }
 
     /// <summary>
+    /// Attempt to claim ONE NAMED slot in <paramref name="clusterChunkId"/>. Returns <see langword="true"/> on success; <see langword="false"/> if that slot
+    /// is already occupied, out of the layout's range, or lost to a concurrent claimant.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why an exact-slot claim exists (#872 step 12).</b> The repair path re-sorts a cell and computes the whole destination layout before moving
+    /// anything — which entity lands in which cluster AND in which slot is the output of the Morton sort. First fit reproduces that packing only when the
+    /// requests are executed in queue order on one thread, which the Migrate phase does not promise: it slices the queue across workers. So the slot has to
+    /// be nameable, or the sorted order survives only by scheduling luck (<c>AC-12.4</c>).</para>
+    /// <para>Same dirty-then-mutate discipline as <see cref="TryClaimSlotInCluster{TStore}"/>: read with <c>dirty:false</c>, bail before touching
+    /// ActiveChunkWriters when the slot is taken, and only then re-fetch dirty. The visibility fold sits after that early-out, so a request whose slot was
+    /// ALREADY occupied costs nothing — but a request that loses the CAS has folded and dirtied for a claim that did not happen. Conservative in both
+    /// directions (a raised maximum only gates a snapshot for longer; a dirty mark only writes a page back), and identical to what
+    /// <see cref="TryClaimSlotInCluster{TStore}"/> does on its own retry path.</para>
+    /// </remarks>
+    private bool TryClaimExactSlotInCluster<TStore>(ref ChunkAccessor<TStore> accessor, int clusterChunkId, int slotIndex, long bornTsn)
+        where TStore : struct, IPageStore
+    {
+        // Range first, and the order is load-bearing: C# masks a shift count to 6 bits, so `1UL << 64` is 1, not 0. Computing the bit before the check
+        // would leave slot 64 aliasing slot 0 and relying on `||` short-circuiting to save it — correct today, and a trap for anyone who reorders the
+        // clauses or splits them.
+        if ((uint)slotIndex >= MaxSlotsPerCluster)
+        {
+            return false;
+        }
+
+        var bit = 1UL << slotIndex;
+        if ((Layout.FullMask & bit) == 0)
+        {
+            return false;
+        }
+
+        var clusterBase = accessor.GetChunkAddress(clusterChunkId);
+        ref var occupancy = ref *(ulong*)clusterBase;
+
+        var current = occupancy;
+        if ((current & bit) != 0)
+        {
+            return false;
+        }
+
+        accessor.GetChunkAddress(clusterChunkId, true);
+        NoteClusterBorn(clusterChunkId, bornTsn);
+
+        // One CAS, no retry loop. A retry would have to re-test the same bit, and if a sibling took it the answer cannot change — unlike first fit, where a
+        // lost CAS only means "try a different slot". Losing here degrades to the caller's fallback chain, which is the correct response.
+        return Interlocked.CompareExchange(ref occupancy, current | bit, current) == current;
+    }
+
+    /// <summary>
     /// Claim a slot in <paramref name="preferredClusterChunkId"/> if that cluster is still a live member of
     /// <paramref name="cellKey"/> and still has room; otherwise fall back to the ordinary first-fit scan.
     /// </summary>
@@ -1914,10 +1963,10 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// broken, and
     /// silently, because every counter still balances. Verifying the pinned cluster still maps to the cell the request names is what rejects that.</para>
     /// </remarks>
-    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, int preferredClusterChunkId, ref ChunkAccessor<PersistentStore> accessor,
-        ChangeSet changeSet, SpatialGrid grid, long bornTsn)
+    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, int preferredClusterChunkId, int preferredSlotIndex,
+        ref ChunkAccessor<PersistentStore> accessor, ChangeSet changeSet, SpatialGrid grid, long bornTsn)
     {
-        if (TryClaimPinnedSlot(cellKey, preferredClusterChunkId, ref accessor, grid, bornTsn, out var pinnedSlot))
+        if (TryClaimPinnedSlot(cellKey, preferredClusterChunkId, preferredSlotIndex, ref accessor, grid, bornTsn, out var pinnedSlot))
         {
             return (preferredClusterChunkId, pinnedSlot);
         }
@@ -1925,11 +1974,11 @@ internal sealed unsafe partial class ArchetypeClusterState
         return ClaimSlotInCell(cellKey, ref accessor, changeSet, grid, bornTsn);
     }
 
-    /// <inheritdoc cref="ClaimSlotInCell(int, int, ref ChunkAccessor{PersistentStore}, ChangeSet, SpatialGrid, long)"/>
-    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, int preferredClusterChunkId, ref ChunkAccessor<TransientStore> accessor,
-        SpatialGrid grid, long bornTsn)
+    /// <inheritdoc cref="ClaimSlotInCell(int, int, int, ref ChunkAccessor{PersistentStore}, ChangeSet, SpatialGrid, long)"/>
+    public (int clusterChunkId, int slotIndex) ClaimSlotInCell(int cellKey, int preferredClusterChunkId, int preferredSlotIndex,
+        ref ChunkAccessor<TransientStore> accessor, SpatialGrid grid, long bornTsn)
     {
-        if (TryClaimPinnedSlot(cellKey, preferredClusterChunkId, ref accessor, grid, bornTsn, out var pinnedSlot))
+        if (TryClaimPinnedSlot(cellKey, preferredClusterChunkId, preferredSlotIndex, ref accessor, grid, bornTsn, out var pinnedSlot))
         {
             return (preferredClusterChunkId, pinnedSlot);
         }
@@ -1945,8 +1994,8 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// their three success sites instead. A pinned claim is a fourth success site and owes the same increment; omitting it makes the cell under-count by
     /// one per relocation, which nothing would fail on until a cell reports fewer entities than it holds.
     /// </remarks>
-    private bool TryClaimPinnedSlot<TStore>(int cellKey, int preferredClusterChunkId, ref ChunkAccessor<TStore> accessor, SpatialGrid grid, long bornTsn,
-        out int slotIndex) where TStore : struct, IPageStore
+    private bool TryClaimPinnedSlot<TStore>(int cellKey, int preferredClusterChunkId, int preferredSlotIndex, ref ChunkAccessor<TStore> accessor,
+        SpatialGrid grid, long bornTsn, out int slotIndex) where TStore : struct, IPageStore
     {
         slotIndex = -1;
 
@@ -1966,7 +2015,12 @@ internal sealed unsafe partial class ArchetypeClusterState
             return false;
         }
 
-        var slot = TryClaimSlotInCluster(ref accessor, preferredClusterChunkId, bornTsn);
+        // Two-step within the pin: the named slot first (repair), then first fit in the same cluster (step-10 relocation, and repair's own first fallback).
+        // Ordered this way so a repair request that loses its exact slot still lands in the cluster the sort chose, which keeps the cluster's AABB right even
+        // though the intra-cluster ordering is no longer the sorted one — Morton order inside a cluster buys nothing a query can see, the cluster's BOUND is
+        // what selectivity reads.
+        var slot = preferredSlotIndex >= 0 && TryClaimExactSlotInCluster(ref accessor, preferredClusterChunkId, preferredSlotIndex, bornTsn)
+            ? preferredSlotIndex : TryClaimSlotInCluster(ref accessor, preferredClusterChunkId, bornTsn);
         if (slot < 0)
         {
             return false;
@@ -3077,10 +3131,19 @@ internal sealed unsafe partial class ArchetypeClusterState
             if (totalWork > 0)
             {
                 var outlierBuffer = new List<MigrationRequest>(0);
+                // Appended to DIRECTLY rather than through EnqueueRepairNominationsBulk. This wrapper is the serial path — it is the single writer, so the
+                // lock the bulk enqueue takes would be uncontended overhead, and the parallel path's reason for a worker-local buffer (many slices, one
+                // list) does not exist here.
+                //
+                // Null when repair is switched off, matching the parallel call site EXACTLY. Without the gate the two paths disagree: the planner discards
+                // nominations unread at a zero budget, so the serial fence would nominate every degraded cluster every tick and then rent a ChunkAccessor,
+                // copy the list into scratch and clear it, all to return at the budget check. That is the configuration the four step-10 fixtures now run in,
+                // so the cost would have landed on exactly the measurements it must not perturb.
+                var repairNominationBuffer = grid != null && grid.Config.ReclusterBudgetMs > 0f ? RepairNominations : null;
                 // No deferral buffer on the serial path: it is already the single writer, so a promoted cell's tree can be written directly and the drain
                 // below has nothing to do. Passing null is what selects that — see the divert in the slice.
-                RecomputeDirtyClusterAabbsSlice(0, totalWork, ref accessor, grid, null, outlierBuffer, out var aabbsChanged, out var slotsScanned,
-                    out var outlierGuardFires, out var clustersScanned, out var driftersDetected, out var driftAbsorbed);
+                RecomputeDirtyClusterAabbsSlice(0, totalWork, ref accessor, grid, null, outlierBuffer, repairNominationBuffer, out var aabbsChanged,
+                    out var slotsScanned, out var outlierGuardFires, out var clustersScanned, out var driftersDetected, out var driftAbsorbed);
                 EnqueueMigrationsBulk(outlierBuffer);
                 Interlocked.Add(ref LastTickClustersScanned, clustersScanned);
                 Interlocked.Add(ref LastTickDriftersDetected, driftersDetected);
@@ -3112,8 +3175,8 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <para>
     /// <b>Thread-safety</b>: writes only to per-cluster slots (<see cref="ClusterAabbs"/>[chunkId]) and per-cell index slots
     /// (<c>PerCellIndex[cellKey].DynamicIndex.UpdateAt(indexSlot, ...)</c>). Different clusters always have different <c>indexSlot</c>s even within the same
-    /// cell, so SoA writes don't collide. The rare <see cref="FlagOutliersForMigration"/> path (extent-guard fire) serializes <see cref="EnqueueMigration"/>
-    /// internally via <c>_finalizeLock</c>.
+    /// cell, so SoA writes don't collide. The rare <see cref="FlagOutliersForMigration"/> path (extent-guard fire) serializes
+    /// <see cref="EnqueueMigration(int, int, int)"/> internally via <c>_finalizeLock</c>.
     /// </para>
     /// <para>
     /// <b>PRECONDITION — caller must hold the tick fence barrier (CA-01, issue #573).</b> The AABB write below is a <i>blind store</i>
@@ -3125,8 +3188,8 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </para>
     /// </summary>
     internal void RecomputeDirtyClusterAabbsSlice(int sliceStart, int sliceCount, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid,
-        List<PromotedAabbApply> promotedApplyBuffer, List<MigrationRequest> outlierBuffer, out int aabbsChanged, out int slotsScanned,
-        out int outlierGuardFires, out int clustersScanned, out int driftersDetected, out int driftAbsorbed)
+        List<PromotedAabbApply> promotedApplyBuffer, List<MigrationRequest> outlierBuffer, List<int> repairNominationBuffer, out int aabbsChanged,
+        out int slotsScanned, out int outlierGuardFires, out int clustersScanned, out int driftersDetected, out int driftAbsorbed)
     {
         aabbsChanged = 0;
         slotsScanned = 0;
@@ -3164,10 +3227,16 @@ internal sealed unsafe partial class ArchetypeClusterState
         var cellSize = 0f;
         var outlierGuardActive = grid != null && (cellSize = grid.Config.CellSize) > 0f;
         var driftTargetExtent = 0f;
+        // #872 step 12 (P7). A THIRD threshold, deliberately not one of the two above. The design proposes reusing the outlier guard's cellSize x 1.2, but
+        // that check exists to catch a cluster whose bound has escaped its own cell — which only happens when it holds entities that should have migrated
+        // out. A cluster whose entities all belong to its cell tops out near 1.05 x cellSize (the hysteresis margin), so 1.2 is unreachable for the
+        // intra-cell degradation repair exists to fix, and AC-12.1's own "AABBs at ~90 % of the cell" sits below it. See ClusterRepairExtentRatio.
+        var repairExtent = 0f;
         if (outlierGuardActive)
         {
             maxExtent = cellSize * 1.2f;
             driftTargetExtent = cellSize * grid.Config.ClusterTargetExtentRatio;
+            repairExtent = repairNominationBuffer != null ? cellSize * grid.Config.ClusterRepairExtentRatio : 0f;
         }
 
         // Hoisted out of the per-cluster loop, which is the whole point of taking it as a parameter (D1). 64 slots is the cluster capacity ceiling and
@@ -3301,7 +3370,20 @@ internal sealed unsafe partial class ArchetypeClusterState
                                                                 || (fresh.MaxY - fresh.MinY) > driftTargetExtent
                                                                 || (fresh.MaxZ - fresh.MinZ) > driftTargetExtent);
 
+                    // #872 step 12. Three float compares more, on values already in registers, and only on a cluster that has passed the drift gate —
+                    // repairExtent is strictly above driftTargetExtent, so testing it is free of its own gate. Appending the CELL, not the cluster: the
+                    // repair unit is a cell's worst clusters, and which those are is a ranking the planner performs over the whole cell rather than over
+                    // whichever clusters this slice happened to hold.
+                    var repairGated = repairExtent > 0f && ((fresh.MaxX - fresh.MinX) > repairExtent
+                                                            || (fresh.MaxY - fresh.MinY) > repairExtent
+                                                            || (fresh.MaxZ - fresh.MinZ) > repairExtent);
+
                     clustersScanned++;
+                    if (repairGated)
+                    {
+                        repairNominationBuffer.Add(cellKey);
+                    }
+
                     if (!guardFires && !driftGated)
                     {
                         continue;
@@ -3395,6 +3477,32 @@ internal sealed unsafe partial class ArchetypeClusterState
                 //
                 // Exposure is narrow: an archetype whose spatial writes all go through WriteSpatial sets the process bit and
                 // is unaffected, and TYPHON009 flags the mutation sites that do not.
+                // ── #872 step 12: nominate BEFORE the skip, not after ──────────────────────────────────────────────────
+                //
+                // Repair nomination is the one consumer on this branch that must see a cluster NOBODY WROTE. The design's
+                // own trigger list for the repair path is "a cell that degraded badly while throttled", "a teleport dumping
+                // a fleet into a cell", and "initial load / rebuild" — and the last of those is a cell that is loaded wrong
+                // and then never touched again. Below the skip it is invisible, so repair would fire only on cells that are
+                // ALSO moving, which is the population the delta path already handles. Measured before the move: a cell
+                // spawned in scattered order sat at a mean extent of 86.4 of 100 for six consecutive ticks with
+                // clustersScanned = 0 and not one nomination.
+                //
+                // It is free here in a way it would not be on the other branch: this loop has already run
+                // RecomputeClusterAabb over every occupied slot of every active cluster, unconditionally, so `fresh` is in
+                // registers and the nomination is three float compares against a walk that has already been paid for.
+                //
+                // 🔴 KNOWN GAP, barrier-only mode. The other branch iterates ClusterProcessBitmap, which by construction
+                // holds only clusters written this tick, so there is no equivalent place to put this and a still cell in
+                // that mode is never nominated. Closing it needs a signal that ranks CELLS rather than reacting to cluster
+                // writes — which is exactly step 11's priority queue ("candidate cells ... re-ranked lazily", §5.6).
+                var repairGated = repairExtent > 0f && ((fresh.MaxX - fresh.MinX) > repairExtent
+                                                        || (fresh.MaxY - fresh.MinY) > repairExtent
+                                                        || (fresh.MaxZ - fresh.MinZ) > repairExtent);
+                if (repairGated)
+                {
+                    repairNominationBuffer.Add(cellKey);
+                }
+
                 if (!boundsMoved && !IsClusterProcessBitSet(chunkId))
                 {
                     continue;
@@ -3434,7 +3542,6 @@ internal sealed unsafe partial class ArchetypeClusterState
                 var driftGated = driftTargetExtent > 0f && ((fresh.MaxX - fresh.MinX) > driftTargetExtent
                                                             || (fresh.MaxY - fresh.MinY) > driftTargetExtent
                                                             || (fresh.MaxZ - fresh.MinZ) > driftTargetExtent);
-
                 clustersScanned++;
                 if (!guardFires && !driftGated)
                 {
@@ -4013,7 +4120,16 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// with thousands of migrations the array doubles ~10-12 times total (initial 16 -> 32K).
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void EnqueueMigration(int sourceClusterChunkId, int sourceSlotIndex, int destCellKey)
+    internal void EnqueueMigration(int sourceClusterChunkId, int sourceSlotIndex, int destCellKey) =>
+        EnqueueMigration(new MigrationRequest(sourceClusterChunkId, sourceSlotIndex, destCellKey));
+
+    /// <summary>
+    /// Append a fully-formed request — the overload the #872 step-12 repair planner uses, since a repair pins both the destination cluster and the
+    /// destination slot and so cannot express itself as a cell key.
+    /// </summary>
+    /// <inheritdoc cref="EnqueueMigration(int, int, int)"/>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void EnqueueMigration(in MigrationRequest request)
     {
         if (PendingMigrations == null)
         {
@@ -4023,7 +4139,74 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             Array.Resize(ref PendingMigrations, PendingMigrations.Length * 2);
         }
-        PendingMigrations[PendingMigrationCount++] = new MigrationRequest(sourceClusterChunkId, sourceSlotIndex, destCellKey);
+        PendingMigrations[PendingMigrationCount++] = request;
+    }
+
+    /// <summary>
+    /// Grow <see cref="_drainedClusterIds"/> so that <paramref name="required"/> entries fit, on a single thread.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="PreSizeMigrationBuffers"/> sizes this list from <see cref="PendingMigrationCount"/>, on the premise that one migration releases at most
+    /// one source slot. The #872 step-12 repair planner runs AFTER that pre-size and breaks the premise from both ends — it files more migrations, and it
+    /// consumes drain entries of its own for the empty destinations it allocates. Without a top-up the Migrate phase overflows into
+    /// <see cref="RecordClusterDrain"/>'s fallback, which is reached from parallel workers and writes its entry after releasing the grow lock: an entry can
+    /// be dropped by a concurrent resize, and a dropped drain record is a cluster nothing will ever free.
+    /// </remarks>
+    internal void PreSizeDrainedClusterIds(int required)
+    {
+        if (required <= 0)
+        {
+            return;
+        }
+
+        if (_drainedClusterIds == null)
+        {
+            _drainedClusterIds = new int[Math.Max(16, required)];
+            return;
+        }
+
+        if (_drainedClusterIds.Length >= required)
+        {
+            return;
+        }
+
+        var capacity = _drainedClusterIds.Length;
+        while (capacity < required)
+        {
+            capacity *= 2;
+        }
+
+        Array.Resize(ref _drainedClusterIds, capacity);
+    }
+
+    /// <summary>
+    /// Grow <see cref="PendingMigrations"/> once so that <paramref name="additional"/> more requests fit without a doubling per append.
+    /// </summary>
+    /// <remarks>
+    /// For the #872 step-12 repair planner, which knows its emission count before it emits and runs on Prep — the single-threaded phase every archetype
+    /// waits on. Appending 2 000 requests one at a time walked the doubling sequence about seven times, copying ~4 000 entries of 20 bytes for nothing.
+    /// </remarks>
+    internal void ReservePendingMigrationCapacity(int additional)
+    {
+        var required = PendingMigrationCount + additional;
+        if (PendingMigrations == null)
+        {
+            PendingMigrations = new MigrationRequest[Math.Max(required, 16)];
+            return;
+        }
+
+        if (PendingMigrations.Length >= required)
+        {
+            return;
+        }
+
+        var capacity = PendingMigrations.Length;
+        while (capacity < required)
+        {
+            capacity *= 2;
+        }
+
+        Array.Resize(ref PendingMigrations, capacity);
     }
 
     /// <summary>

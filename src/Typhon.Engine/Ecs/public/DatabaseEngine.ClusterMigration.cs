@@ -597,15 +597,18 @@ public partial class DatabaseEngine
                 // A step-10 intra-cell relocation names its destination CLUSTER, not just the cell: the least-enlargement choice detection made is the
                 // entire point of the move, and first-fit would discard it (see MigrationRequest.DestClusterChunkId). AnyCluster keeps the cell-crossing
                 // behaviour byte for byte — the pinned overload's first test is the sign check.
-                int preferredCluster = req.DestClusterChunkId;
+                // A step-12 repair additionally names the SLOT, because the whole destination layout is an output of the Morton sort rather than of the
+                // claim. AnySlot keeps step 10's behaviour byte for byte — the pinned overload tests the sign before touching the exact-slot path.
+                var preferredCluster = req.DestClusterChunkId;
+                var preferredSlot = req.DestSlotIndex;
                 if (hasClusterAccessor)
                 {
-                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, ref clusterAccessor, changeSet, grid,
+                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, preferredSlot, ref clusterAccessor, changeSet, grid,
                         migrationBornBound);
                 }
                 else
                 {
-                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, ref transientClusterAccessor, grid,
+                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, preferredSlot, ref transientClusterAccessor, grid,
                         migrationBornBound);
                 }
 

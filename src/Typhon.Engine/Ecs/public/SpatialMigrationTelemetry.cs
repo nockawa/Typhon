@@ -15,9 +15,9 @@ namespace Typhon.Engine;
 /// </para>
 /// <para>
 /// <b>Zero means zero, never "unknown".</b> An archetype with no cluster state, an out-of-range id and a tick in which nothing happened all report zero.
-/// <see cref="ReclusterBudgetUsedMs"/> additionally has no producer yet — it reads zero until throttled
-/// re-clustering lands (step 11 of <c>claude/design/Spatial/vdb-cell-grid-and-migration.md</c>). <see cref="ClustersScanned"/>,
-/// <see cref="DriftersDetected"/> and <see cref="DriftAbsorbedCount"/> gained theirs in step 10.
+/// <see cref="ClustersScanned"/>, <see cref="DriftersDetected"/> and <see cref="DriftAbsorbedCount"/> gained their producers in step 10 of
+/// <c>claude/design/Spatial/vdb-cell-grid-and-migration.md</c>; <see cref="ReclusterBudgetUsedMs"/>, <see cref="RepairedEntityCount"/>,
+/// <see cref="RepairUnitCount"/> and <see cref="RepairUnitsRefused"/> in step 12.
 /// </para>
 /// <para>
 /// <b>Cumulative members restart with the archetype's cluster state.</b> <see cref="DatabaseEngine.InitializeArchetypes"/> reallocates the per-archetype state
@@ -29,8 +29,12 @@ namespace Typhon.Engine;
 public readonly struct SpatialMigrationTelemetry
 {
     internal SpatialMigrationTelemetry(int migrationCount, int hysteresisAbsorbedCount, double migrationExecuteMs, int clustersScanned, int driftersDetected,
-        int driftAbsorbedCount, double reclusterBudgetUsedMs, int activeClusterCount, long totalMigrations, long totalHysteresisAbsorbed)
+        int driftAbsorbedCount, double reclusterBudgetUsedMs, int activeClusterCount, long totalMigrations, long totalHysteresisAbsorbed,
+        int repairedEntityCount, int repairUnitCount, int repairUnitsRefused)
     {
+        RepairedEntityCount = repairedEntityCount;
+        RepairUnitCount = repairUnitCount;
+        RepairUnitsRefused = repairUnitsRefused;
         DriftAbsorbedCount = driftAbsorbedCount;
         MigrationCount = migrationCount;
         HysteresisAbsorbedCount = hysteresisAbsorbedCount;
@@ -98,10 +102,36 @@ public readonly struct SpatialMigrationTelemetry
     public int DriftAbsorbedCount { get; }
 
     /// <summary>
-    /// Milliseconds of the per-tick re-clustering budget consumed during the most recently completed tick.
-    /// <b>Reads zero until throttled re-clustering exists.</b>
+    /// Milliseconds of the per-tick re-clustering budget the repair path committed during the most recently completed tick.
     /// </summary>
+    /// <remarks>
+    /// <b>Projected, not measured, and the difference is the design.</b> A repair unit is admitted only if the remaining budget covers its whole cost, so
+    /// the estimate has to exist before the work does; reporting the elapsed time instead would report a number that gated nothing. The projection is
+    /// <c>entities x SpatialGridConfig.RepairNsPerEntity</c>. Compare it against a measured tick time to find out whether that constant is honest — which is
+    /// exactly what step 11's adaptive budget will do automatically.
+    /// </remarks>
     public double ReclusterBudgetUsedMs { get; }
+
+    /// <summary>Entities re-packed by the repair path — the full Morton re-sort — during the most recently completed tick.</summary>
+    /// <remarks>
+    /// Disjoint from <see cref="MigrationCount"/> in intent though not in mechanism: a repair emits ordinary migration requests, so the entities counted
+    /// here are also counted there when the requests execute. This is the count the PLANNER committed to; that one is what the Migrate phase actually moved,
+    /// and the two differ by the requests whose source slot had emptied in between.
+    /// </remarks>
+    public int RepairedEntityCount { get; }
+
+    /// <summary>Repair units admitted during the most recently completed tick. A unit is one cell's N worst clusters, or one whole cell.</summary>
+    public int RepairUnitCount { get; }
+
+    /// <summary>
+    /// Repair units whose projected cost exceeded the remaining budget, and which were therefore never begun.
+    /// </summary>
+    /// <remarks>
+    /// A Morton sort cannot be halved — a partly re-sorted cell has paid the cost and banked only part of the benefit — so the budget admits whole units and
+    /// refuses the rest outright. A persistently non-zero reading against a zero <see cref="RepairUnitCount"/> means the budget is below the cost of the
+    /// smallest unit on offer and no repair can ever happen; raise <c>ReclusterBudgetMs</c>, or lower <c>RepairWorstClustersPerUnit</c> so a unit is smaller.
+    /// </remarks>
+    public int RepairUnitsRefused { get; }
 
     /// <summary>
     /// Clusters currently live. The denominator for every ratio above — a migration count means nothing without the population it came from.

@@ -147,6 +147,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-repair"))
+            {
+                ClusterRepairProfile.Run(args);
+                return;
+            }
+
             if (args.Contains("--profile-delete"))
             {
                 BTreeDeleteProfile.Run();

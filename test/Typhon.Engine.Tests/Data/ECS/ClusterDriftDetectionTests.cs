@@ -49,7 +49,13 @@ class ClusterDriftDetectionTests : TestBase<ClusterDriftDetectionTests>
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClMigPos>();
         dbe.RegisterComponentFromAccessor<ClMigScratch>();
-        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize));
+        // #872 step 12 turned the repair path on by default, and these fixtures are about the DELTA path. Repair legitimately
+        // preempts relocation — a cell it re-packs comes out tight, so the drift gate stops firing and the deliberately
+        // distinct clusters this fixture builds are collapsed into a Morton packing before a single placement decision is
+        // made. Three placement tests and one shrink test went red that way, all of them correctly. Pinning the budget to
+        // zero scopes each fixture to the mechanism it is written to measure; it is not a workaround for a defect.
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize,
+            reclusterBudgetMs: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }

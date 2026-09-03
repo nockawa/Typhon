@@ -230,8 +230,39 @@ internal sealed unsafe class ZoneMapArray
     }
 
     /// <summary>
+    /// Read a cluster's recorded bounds, in the ordered-long encoding <see cref="MayContain"/> compares against. Returns <see langword="false"/> when the
+    /// cluster has no bounds recorded — either past the current capacity, or invalidated and not yet re-widened.
+    /// </summary>
+    /// <remarks>
+    /// The only way to observe a zone map's WIDTH rather than its verdict on one query. <see cref="MayContain"/> answers "could this cluster match", which
+    /// is what the planner needs and is deliberately conservative — an unrecorded map answers yes — so it cannot distinguish a map that has narrowed from
+    /// one that has been dropped. #872 step 12 needs that distinction: the repair path is the only thing in the engine that narrows a zone map, and
+    /// <c>AC-12.2</c> asks for the narrowing to be measured before and after rather than inferred.
+    /// </remarks>
+    internal bool TryGetBounds(int clusterChunkId, out long min, out long max)
+    {
+        var store = Volatile.Read(ref _store);
+        if ((uint)clusterChunkId >= (uint)store.Capacity || !store.Valid[clusterChunkId])
+        {
+            min = 0;
+            max = 0;
+            return false;
+        }
+
+        min = store.Mins[clusterChunkId];
+        max = store.Maxs[clusterChunkId];
+        return true;
+    }
+
+    /// <summary>
     /// Invalidate a cluster's zone map (e.g., when cluster is freed).
     /// </summary>
+    /// <remarks>
+    /// <b>Had no caller at all until #872 step 12.</b> Nothing frees a zone map when its cluster is freed, so a recycled chunk id inherits the min/max of
+    /// its previous tenant and <see cref="Widen"/> — the only other writer — can then only make that wider. The consequence is conservative rather than
+    /// wrong (<see cref="MayContain"/> over-reports, so queries open clusters they need not and never miss one), which is why it went unnoticed. The repair
+    /// path calls this on every destination cluster it allocates, so the re-packed contents define the bounds rather than inheriting them.
+    /// </remarks>
     public void Invalidate(int clusterChunkId)
     {
         // A write, so it takes the latch like the other two — but never grows: an index past the current capacity has no bounds recorded, which is already

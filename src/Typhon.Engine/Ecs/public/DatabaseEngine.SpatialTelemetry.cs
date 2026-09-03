@@ -109,7 +109,10 @@ public partial class DatabaseEngine
             clusterState.LastTickReclusterBudgetUsedMs,
             clusterState.ActiveClusterCount,
             clusterState.TotalMigrationCount,
-            clusterState.TotalHysteresisAbsorbedCount);
+            clusterState.TotalHysteresisAbsorbedCount,
+            clusterState.LastTickRepairedEntityCount,
+            clusterState.LastTickRepairUnitCount,
+            clusterState.LastTickRepairUnitsRefused);
     }
 
     /// <summary>
@@ -136,6 +139,9 @@ public partial class DatabaseEngine
         var activeClusters = 0;
         var totalMigrations = 0L;
         var totalAbsorbed = 0L;
+        var repairedEntities = 0;
+        var repairUnits = 0;
+        var repairRefused = 0;
 
         for (var i = 0; i < states.Length; i++)
         {
@@ -155,9 +161,12 @@ public partial class DatabaseEngine
             activeClusters += clusterState.ActiveClusterCount;
             totalMigrations += clusterState.TotalMigrationCount;
             totalAbsorbed += clusterState.TotalHysteresisAbsorbedCount;
+            repairedEntities += clusterState.LastTickRepairedEntityCount;
+            repairUnits += clusterState.LastTickRepairUnitCount;
+            repairRefused += clusterState.LastTickRepairUnitsRefused;
         }
 
         return new SpatialMigrationTelemetry(migrations, absorbed, executeMs, scanned, drifters, driftAbsorbed, budgetMs, activeClusters, totalMigrations,
-            totalAbsorbed);
+            totalAbsorbed, repairedEntities, repairUnits, repairRefused);
     }
 }

@@ -517,6 +517,159 @@
 
 ---
 
+---
+
+## Module: Cell repair — the full Morton re-sort (Issue #872 step 12)
+
+### RP-01: A repair unit is admitted whole or not at all `[fatal][silent]`
+  invariant the budget gates ADMISSION, never progress. A Morton sort cannot be halved: a partly re-sorted cell
+    has paid the cost and banked part of the benefit, and its downstream batches have already formed. So a unit
+    whose projected cost exceeds the remaining budget is not begun — no entity of it is gathered, sorted or
+    moved — and the refusal is counted
+  invariant the projection precedes the work and uses only the population: entities * RepairNsPerEntity, where
+    the population is a popcount of the unit's occupancy words. Measuring instead of projecting would decide
+    admission after the cost was already paid, which is the thing the whole-unit rule exists to prevent
+  invariant ReclusterBudgetUsedMs reports the PROJECTED spend of admitted units, not elapsed time. The number
+    that gates has to be the number that is reported, or the two drift and neither can be reasoned about
+  invariant a refusal must not spend budget. remainingNs is decremented only after a unit has emitted requests
+  scope: ArchetypeClusterState.PlanCellRepairs, ArchetypeClusterState.RepairOneCell,
+    SpatialGridConfig.ReclusterBudgetMs, SpatialGridConfig.RepairNsPerEntity,
+    SpatialMigrationTelemetry.RepairUnitsRefused, SpatialMigrationTelemetry.ReclusterBudgetUsedMs
+  verified: ClusterRepairTests.ARepairIsNeverBegunWithoutTheBudgetToFinishIt drives the budget to 99 % of the
+    projected cost and asserts nothing moved, nothing was spent and the refusal was counted;
+    TheSameCellIsRepairedOnceTheBudgetCoversTheUnit is its control at 150 %, so the pair separates "the rule
+    fired" from "nothing was ever nominated"
+  on_violation:
+    budget stops a unit mid-way → a cell left in a state strictly worse than the one it started in
+    refusal spends budget → later units in the same tick are starved by work that never happened
+
+### RP-02: The repair plan is produced serially and its destinations are pinned exactly `[fatal][silent]`
+  invariant NOMINATION is parallel (AabbRefresh workers) and its output is consumed as a SET — sorted, with
+    repeats skipped — so no permutation of the same cells changes the plan
+  invariant PLANNING is single-threaded: it runs in Prep, which dispatches one work item per archetype. The
+    cluster ranking, the Morton sort and the destination assignment all live there
+  invariant 🔴 a repair request pins the destination SLOT as well as the cluster, and the reason is the SORT, not
+    the slicing. Before Migrate dispatches, SortPendingMigrationsByDestCellKey runs an Array.Sort — introsort,
+    UNSTABLE — over a comparer reading DestCellKey alone, so every request a repair emits for one cell compares
+    equal and the planner's emission order within that cell is permuted arbitrarily. That sort runs only on the
+    parallel path, so first fit would give the serial and parallel fences different packings from identical
+    input. NOT slicing: FenceWorkPlan.EmitMigrationApplyItems advances each boundary until DestCellKey changes, so
+    one cell's run is never split and two workers can never claim into the same fresh cluster. Recorded because
+    the wrong reason is worse than none — whoever makes that sort stable would, from it, correctly conclude the
+    pinned slot is dead code
+  invariant both pins remain PREFERENCES. The fallback chain is exact slot -> the pinned cluster's first free
+    slot -> ClaimSlotInCell. A lost pin costs a worse box, never a wrong cell — CR-02 governs the rest
+  invariant the sort's comparator is a TOTAL order — (mortonKey, sourceLocation) — so equal keys do not leave
+    the tie to the sort's internals. sourceLocation is chunkId * 64 + slot and is unique across a unit
+  scope: ArchetypeClusterState.PlanCellRepairs, ArchetypeClusterState.ExecuteRepairPlan,
+    ArchetypeClusterState.TryClaimExactSlotInCluster, MigrationRequest.DestSlotIndex
+  verified: ClusterRepairParallelTests.ARepairProducesTheSamePacking_WhicheverFenceRunsIt compares the
+    per-cluster tag sequence across the serial fence and a real TyphonRuntime at W in {1,2,8}, having first
+    asserted that each arm actually repacked and did not collapse to one cluster
+  on_violation:
+    slot not pinned → the packing depends on where slice boundaries fell; identical input, different layout
+    planning parallelised → the cluster ranking races and no two runs agree
+
+### RP-03: A repair allocates EMPTY destinations and re-sorts only when the sort would change something `[fatal][silent]`
+  invariant destinations are FRESH clusters, never the unit's own. A re-pack is a permutation of the unit's
+    slots, and ExecuteMigrations claims one slot at a time, so a destination still holding an entity yet to move
+    fails its claim and falls back to first fit — the placement #872 exists to repair
+  invariant 🔴 a fresh destination is published with occupancy ZERO and no CellState.EntityCount bump. Pre-setting
+    the bits would be cheaper and is what "no claim on the repair path" would literally mean, but occupancy is
+    authoritative: the unfiltered Count() fast path sums occupancy popcounts, so a set bit with no entity behind
+    it over-reports the database for the width of a tick
+  invariant every fresh destination is recorded via RecordClusterDrain at allocation. If every request targeting
+    it is skipped it stays empty, and nothing else would ever schedule it for freeing — a release is the only
+    event that normally does. The existing Finalize pass re-reads occupancy and frees only what is still empty
+  invariant 🔴 the planner must top up _drainedClusterIds after it emits. PreSizeMigrationBuffers sizes that list
+    from PendingMigrationCount, on the premise that one migration releases at most one source slot, and it runs in
+    Prep's CORE — before the planner, which then files `count` more migrations AND consumes `destinationCount`
+    drain entries of its own. Without the top-up the Migrate phase overflows into RecordClusterDrain's fallback
+    grow, which parallel workers reach and which writes its entry AFTER releasing the lock, re-reading the field:
+    an entry can be discarded by a concurrent resize, and a discarded drain record is this rule's leaked chunk id
+  invariant destinations are allocated BEFORE any request is emitted. Interleaving lets an allocation fail partway
+    and leave the unit half re-packed — the state RP-01 calls strictly worse than untouched — where allocating up
+    front makes the failure atomic: nothing emitted, and the clusters already taken are freed by Finalize because
+    they are still empty
+  invariant 🔴 the no-op check must also stop the SCAN, not only the moves. Nomination fires on extent alone and a
+    Morton packing does not in general bring every cluster under the threshold, so a converged cell is nominated
+    again every tick and would pay a full GatherClusterCentres walk plus an Array.Sort to reach the same verdict —
+    on Prep, single-threaded, and charged to no budget, since a unit that emits nothing is never debited. The memo
+    is the hash of the unit's ranked bounds, which the ranking loop has already read. Heuristic in one direction:
+    entities shuffling strictly inside their clusters' existing bounds change the key order without changing any
+    bound, and that re-sort is skipped — the same exposure CR-03 records, and the delta path's population
+  invariant 🔴 a unit already packed in sort order is NOT re-packed. Nomination fires on extent alone and a Morton
+    packing does not in general bring every cluster under the threshold, so the same cell is nominated on every
+    subsequent tick; without the check it is re-packed forever at full cost and zero gain. The test is exact and
+    one pass: if every group of the packing already draws from a single source cluster, the sorted partition and
+    the current one coincide
+  scope: ArchetypeClusterState.AllocateEmptyClusterForCell, ArchetypeClusterState.IsAlreadyPackedInSortOrder,
+    ArchetypeClusterState.ExecuteRepairPlan, ArchetypeClusterState.PreSizeDrainedClusterIds,
+    ArchetypeClusterState.HashUnitGeometry
+  verified: ClusterRepairTests.ARepairPreservesEveryEntityAndEveryInvariant (population, CA-01, C13, EntityMap
+    resolution and CellState.EntityCount after the re-pack); ClusterRepairCrashTests (the rebuilt cell layer
+    agrees with cluster storage across a reopen); ClusterRepairConvergenceTests, which pins TERMINATION — that a
+    repaired cell is not repaired again while nothing moves, that it re-converges after destroys punch holes in
+    the packing, and that IsAlreadyPackedInSortOrder answers partition equality on hand-built inputs including a
+    partial trailing group. The no-op guard was added against a measurement: a 2 000-entity cell re-packed all
+    2 000 on five consecutive ticks with its mean extent pinned at 23.0 throughout
+  on_violation:
+    destinations reused → claims fail and the sorted packing degrades to first fit
+    occupancy pre-set → Count() over-reports for a tick
+    drain not recorded → a cluster that never received an entity leaks its chunk id
+    no-op check removed → a converged cell re-packs every tick, forever
+
+### RP-04: The repair trigger is its own threshold, and it must see a still cell `[silent]`
+  invariant 🔴 P7's stated value cannot fire. The design says to start at "the existing cellSize x 1.2 extent
+    check", but that check belongs to the OUTLIER GUARD and looks for a bound that has escaped its own cell,
+    which happens only when a cluster holds entities that should have migrated out. A cluster whose entities all
+    belong to its cell tops out near 1.05 x cellSize (the hysteresis margin), so 1.2 is unreachable and AC-12.1's
+    own scenario — AABBs at ~90 % of the cell — sits below it. ClusterRepairExtentRatio (0.75) replaces it
+  invariant the repair threshold sits strictly between the drift gate (ClusterTargetExtentRatio, 0.25) and the
+    outlier guard (1.2), so a nominating cluster has always been drift-gated too. Nominating at the drift gate
+    would ask for a re-sort of every cluster the delta path is already working on, which is the opposite of rare
+  invariant only the UPPER half is enforced by a throw. At or above 1.2 the threshold can never be reached, so the
+    value silently disables the feature — a configuration error. The lower relation is a tuning guideline about
+    two mechanisms competing and stops applying the moment the drift gate is switched off (the fixtures do that by
+    setting the target ratio to 100, which no cluster can exceed), so throwing on it would reject a legal
+    configuration in which repair is the only mechanism running
+  invariant 🔴 nomination on the legacy refresh branch runs BEFORE the boundsMoved / process-bit skip. The design's
+    own trigger list for repair includes "initial load / rebuild" — a cell laid out badly and then never written —
+    and below the skip that cell is invisible. Measured: a cell spawned in scattered order sat at a mean extent of
+    86.4 of 100 for six consecutive ticks with clustersScanned = 0 and no nomination. It is free there because the
+    branch has already recomputed the bound over every occupied slot
+  invariant 🔴 KNOWN GAP, barrier-only mode: that branch iterates ClusterProcessBitmap, which by construction holds
+    only clusters written this tick, so a still cell is never nominated. Closing it needs a signal that ranks CELLS
+    rather than reacting to cluster writes — step 11's priority queue
+  scope: SpatialGridConfig.ClusterRepairExtentRatio, ArchetypeClusterState.RecomputeDirtyClusterAabbsSlice,
+    ArchetypeClusterState.EnqueueRepairNominationsBulk
+  verified: ClusterRepairTests.ARepairPassTightensADegradedCell drives a still, never-moved cell and asserts the
+    repair both fires and tightens it; the fixture would go green with the nomination deleted only if the cell
+    were also moving, which it is not
+  on_violation:
+    trigger left at 1.2 → the repair path never runs, and its test suite says nothing
+    nomination below the skip → a degraded cell that stops moving is never repaired
+
+### RP-05: A repair is the only thing that narrows a zone map `[perf][silent]`
+  invariant ZoneMapArray.Widen is the only writer on the hot path and never narrows, so a cluster accumulates the
+    union of every value it has held, and a RECYCLED chunk id inherits its previous tenant's bounds because
+    nothing invalidates them on free. ZoneMapArray.Invalidate existed with no caller at all before this step
+  invariant the direction of the error is conservative — MayContain over-reports, so queries open clusters they
+    need not and never miss one — which is why it is a [perf] rule and not a [fatal] one
+  invariant a repair invalidates every indexed field's zone map for each destination cluster it allocates, so
+    Widen rebuilds from the re-packed contents. Without it the narrowing AC-12.2 measures cannot occur at all
+  invariant the narrowing is real only for a field CORRELATED with position. Locality-grouping tightens the min/max
+    of a coordinate, or of something tracking one; for an index on an unrelated quantity a re-sort neither helps
+    nor harms, and claiming otherwise would be claiming magic
+  scope: ArchetypeClusterState.InvalidateClusterZoneMaps, ZoneMapArray.Invalidate, ZoneMapArray.TryGetBounds
+  verified: ClusterRepairTests.ARepairNarrowsTheZoneMapsOfTheCellItRepacks measures total recorded width before
+    and after over every cluster of the cell and every indexed field; measured 3 541 -> 796 (22 %) at 2 000
+    entities in 41 clusters. It also asserts the total is non-zero afterwards, so "narrower" cannot be satisfied
+    by "invalidated and never re-widened"
+  on_violation:
+    invalidate omitted → the re-packed cluster inherits a stale wide bound and prunes nothing
+    invalidate without a following widen → the map reads "unknown", which is conservative but buys no pruning
+
 ## Module: ClusterCellMap (Issue #229)
 
 ### CC-01: ClusterCellMap validity `[fatal]`

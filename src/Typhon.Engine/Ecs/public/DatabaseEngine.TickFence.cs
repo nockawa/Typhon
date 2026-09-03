@@ -753,9 +753,13 @@ public partial class DatabaseEngine
         // Worker-local deferral buffer for promoted cells, same shape and lifetime as the outlier buffer above and merged the same way. Allocated only when
         // this archetype actually has a promoted cell — the overwhelmingly common case is none, and an empty List per slice per tick is not free.
         var promotedBuffer = clusterState.PromotedCellCount > 0 ? new List<ArchetypeClusterState.PromotedAabbApply>(0) : null;
+        // Worker-local repair nominations (#872 step 12), same shape and lifetime as the outlier buffer above and merged the same way. Allocated only when
+        // the grid has a repair budget at all: with ReclusterBudgetMs at zero the planner discards nominations unread, so producing them would be pure cost
+        // on the detection path. Capacity 0 — nomination fires only behind the cellSize x 1.2 guard, which is rare by design.
+        var repairBuffer = _spatialGrid != null && _spatialGrid.Config.ReclusterBudgetMs > 0f ? new List<int>(0) : null;
         try
         {
-            clusterState.RecomputeDirtyClusterAabbsSlice(sliceStart, sliceCount, ref accessor, _spatialGrid, promotedBuffer, outlierBuffer,
+            clusterState.RecomputeDirtyClusterAabbsSlice(sliceStart, sliceCount, ref accessor, _spatialGrid, promotedBuffer, outlierBuffer, repairBuffer,
                 out var aabbsChanged, out var slotsScanned, out var outlierGuardFires, out var clustersScanned, out var driftersDetected,
                 out var driftAbsorbed);
             // Interlocked, not plain adds: every AabbRefresh slice of this archetype reaches here, and the three counters are archetype-wide. They are reset
@@ -766,6 +770,7 @@ public partial class DatabaseEngine
             Interlocked.Add(ref clusterState.LastTickDriftAbsorbedCount, driftAbsorbed);
             clusterState.EnqueueMigrationsBulk(outlierBuffer);
             clusterState.EnqueuePromotedAppliesBulk(promotedBuffer);
+            clusterState.EnqueueRepairNominationsBulk(repairBuffer);
             refreshSpan.AabbsChanged = aabbsChanged;
             refreshSpan.SlotsScanned = slotsScanned;
             refreshSpan.OutlierGuardFires = outlierGuardFires;
@@ -826,9 +831,66 @@ public partial class DatabaseEngine
         }
 
         var pending = _archetypeStates[meta.ArchetypeId]?.ClusterState;
-        pending?.PendingMigrationDrainCount = hasWork ? pending.PendingMigrationCount : 0;
+        if (pending != null)
+        {
+            // ── #872 step 12: plan the repair BEFORE the prefix is taken ────────────────────────────────────────────────
+            //
+            // The requests a repair emits are meant for THIS tick's Migrate phase, not the next one, and the prefix below is
+            // what decides that. The whole reason planning lives in Prep rather than beside the nomination that feeds it is
+            // that the fresh destination clusters it allocates must be created and filled inside one exclusive window — with
+            // a tick in between, an ordinary spawn's first-fit scan would claim into them, and the sorted packing the planner
+            // just computed would be handed to the placement policy this issue exists to repair.
+            //
+            // Gated on hasWork, and the nominations are DISCARDED rather than carried when it is false. An archetype whose
+            // Prep found nothing has FenceBranchPath == 0, so neither Migrate nor Finalize runs for it this tick: requests
+            // filed here would sit unexecuted and the clusters allocated for them would have no sweep to free them. Dropping
+            // the nomination costs one deferred repair — the cluster re-nominates the next time it is written.
+            //
+            // Known limit, worth naming: in barrier-only mode the AABB pass visits only clusters that were WRITTEN, so a cell
+            // that degrades and then goes completely still is never re-nominated and never repaired. The legacy branch walks
+            // every active cluster and does not have the gap. Step 11's priority queue, which ranks candidate cells rather
+            // than waiting to be handed them, is where that is properly answered.
+            if (hasWork)
+            {
+                PlanArchetypeRepairs(pending, changeSet);
+            }
+            else
+            {
+                pending.RepairNominations.Clear();
+            }
+
+            pending.PendingMigrationDrainCount = hasWork ? pending.PendingMigrationCount : 0;
+        }
 
         return hasWork;
+    }
+
+    /// <summary>
+    /// Run the repair planner for one archetype, renting the accessor it needs (#872 step 12). Separated from the caller only so the accessor's
+    /// <c>try/finally</c> does not sit in the middle of the drain-prefix reasoning above.
+    /// </summary>
+    /// <remarks>
+    /// The accessor carries <paramref name="changeSet"/> because the planner allocates clusters and publishes their occupancy word, which is a write and
+    /// owes the WAL the same atomicity as every other fence write. Skipped entirely when the archetype has no cluster segment (pure-Transient) or when
+    /// nothing was nominated, so a settled world does not rent an accessor to discover it has nothing to do.
+    /// </remarks>
+    private void PlanArchetypeRepairs(ArchetypeClusterState clusterState, ChangeSet changeSet)
+    {
+        if (clusterState.ClusterSegment == null || clusterState.RepairNominations.Count == 0)
+        {
+            return;
+        }
+
+        var accessor = clusterState.ClusterSegment.CreateChunkAccessor(changeSet);
+        try
+        {
+            clusterState.PlanCellRepairs(_spatialGrid, ref accessor, out var budgetUsedMs);
+            clusterState.LastTickReclusterBudgetUsedMs = budgetUsedMs;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
     }
 
     /// <inheritdoc cref="PrepareArchetypeFence"/>
@@ -880,12 +942,17 @@ public partial class DatabaseEngine
         clusterState.LastTickHysteresisAbsorbedCount = absorbedLive;
         clusterState.TotalHysteresisAbsorbedCount += absorbedLive;
 
-        // ReclusterBudgetUsedMs still has no producer — step 11 owns the budget. Reset anyway so that producer inherits a correct reset rather than having to
-        // remember to add one; until then its zero is ambiguous between "not built" and "nothing happened this tick", which the surface does not separate.
+        // ReclusterBudgetUsedMs is produced by the step-12 repair planner, which runs in the Prep WRAPPER — after this body returns — so this reset always
+        // precedes the write and never clobbers it. It reports the PROJECTED spend of the units admitted this tick, not a measured elapsed time: the budget
+        // decides admission before any work happens (AC-12.5), so the number that gates has to be the number that is reported. Step 11 replaces the constant
+        // behind the projection with a controller driven by the previous tick's measurement.
         // ClustersScanned / DriftersDetected / DriftAbsorbed used to be reset HERE too, on the same "no producer yet" grounds. Step 10 gave them one, and their
         // reset moved up beside LastTickMigrationCount where the rest of the per-tick counters live — a second zeroing of two of the three was worse than
         // redundant, because it silently excluded the third and would have hidden a producer that ran between the two blocks.
         clusterState.LastTickReclusterBudgetUsedMs = 0d;
+        clusterState.LastTickRepairedEntityCount = 0;
+        clusterState.LastTickRepairUnitCount = 0;
+        clusterState.LastTickRepairUnitsRefused = 0;
         clusterState._drainedCount = 0; // deferred-drain list reset (review C-1 fix)
 
         // Pure-Transient archetypes have no PersistentStore segment — nothing to persist to WAL, no migrations.
