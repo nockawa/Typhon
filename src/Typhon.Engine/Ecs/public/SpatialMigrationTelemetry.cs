@@ -159,11 +159,63 @@ public readonly struct SpatialMigrationTelemetry
     public int RelocationsThrottled { get; init; }
 
     /// <summary>
+    /// Intra-cell relocations dropped because a cell crossing already claimed the same entity during the most recently completed tick (#877).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Not a budget signal, and that is why it is not folded into <see cref="RelocationsThrottled"/>.</b> Drift detection runs in AabbRefresh, so
+    /// its relocations are decided by the next tick's Prep — by which time the crossing detector may have filed a <c>CellCrossing</c> for the same entity.
+    /// An entity that drifted to the edge of its cell is precisely the one most likely to leave it, so the overlap is the common case on a moving world,
+    /// not a corner. The relocation is dropped because the crossing supersedes it: the entity is migrating regardless, to a cell the relocation's
+    /// destination was never chosen for.</para>
+    /// <para><b>Before #877 both requests were executed.</b> <c>ExecuteMigrations</c>' stale-source guard is an occupancy test rather than an identity test,
+    /// so it only covered the case where the freed slot was still empty when the second request drained; when an unrelated migrant had claimed it, the
+    /// relocation moved THAT entity to a destination chosen for someone else. A high reading here is normal and healthy. A high reading that starts
+    /// tracking <see cref="RelocationsThrottled"/> is worth a look, because it means drift and crossings are competing for the same entities.</para>
+    /// </remarks>
+    public int RelocationsSuperseded { get; init; }
+
+    /// <summary>
+    /// Prep's internal split for the most recently completed tick, in milliseconds of wall time, in phase order:
+    /// snapshot, occupancy mask, index replay, min/max refresh, crossing detection, budget, repair plan, pre-size.
+    /// </summary>
+    /// <remarks>
+    /// <b>Added because the design that proposes optimising Prep could not say which of its steps cost anything.</b> The phase-level spans say Prep is 52 %
+    /// of the fence; they do not say whether that is the occupancy mask, the min/max rescan or the decisions at the tail. Ranking the steps from what each
+    /// one touches rather than from what each one costs is the same mistake one level down that the phase spans were added to prevent one level up.
+    /// </remarks>
+    public double PrepSnapshotMs { get; init; }
+
+    /// <inheritdoc cref="PrepSnapshotMs"/>
+    public double PrepMaskMs { get; init; }
+
+    /// <inheritdoc cref="PrepSnapshotMs"/>
+    public double PrepShadowMs { get; init; }
+
+    /// <inheritdoc cref="PrepSnapshotMs"/>
+    public double PrepZoneMapMs { get; init; }
+
+    /// <inheritdoc cref="PrepSnapshotMs"/>
+    public double PrepDetectMs { get; init; }
+
+    /// <inheritdoc cref="PrepSnapshotMs"/>
+    public double PrepThrottleMs { get; init; }
+
+    /// <inheritdoc cref="PrepSnapshotMs"/>
+    public double PrepPlanMs { get; init; }
+
+    /// <inheritdoc cref="PrepSnapshotMs"/>
+    public double PrepPreSizeMs { get; init; }
+
+    /// <summary>Clusters whose change word survived the occupancy mask — the size of the domain a sliced Prep would partition.</summary>
+    public int PrepDirtyClusters { get; init; }
+
+    /// <summary>
     /// Drifters that were detected but for which placement found no better cluster, during the most recently completed tick.
     /// </summary>
     /// <remarks>
     /// The gap <see cref="DriftersDetected"/>'s own remarks point at, now counted rather than inferred: a cell whose every cluster is equally bad produces
-    /// drifters and no migrations. Together the identity <c>DriftersDetected = admitted + RelocationsThrottled + DriftersUnplaced</c> holds over a tick,
+    /// drifters and no migrations. Together the identity
+    /// <c>DriftersDetected = admitted + RelocationsThrottled + RelocationsSuperseded + DriftersUnplaced</c> holds over a tick,
     /// which is what makes "a drifter is never both absorbed and throttled" checkable rather than merely asserted (<c>AC-11.7</c>).
     /// </remarks>
     public int DriftersUnplaced { get; init; }

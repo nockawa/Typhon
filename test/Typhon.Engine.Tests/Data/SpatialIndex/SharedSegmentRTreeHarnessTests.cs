@@ -220,7 +220,7 @@ unsafe class SharedSegmentRTreeHarnessTests
             var accessor = segment.CreateChunkAccessor();
             try
             {
-                // LeafCapacity is 11 for R3Df32, so 60 entries forces several leaf splits and at least one root split.
+                // LeafCapacity is 13 for R3Df32 (11 before #872 step 13), so 60 entries forces several leaf splits and at least one root split.
                 var rng = new Random(90210);
                 for (long id = 1; id <= Count; id++)
                 {

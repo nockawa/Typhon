@@ -9,7 +9,7 @@ internal unsafe partial class SpatialRTree<TStore>
     /// Insert into a full leaf, triggering an R*-overlap-minimizing split.
     /// Handles cascading splits up to the root.
     /// </summary>
-    private (bool success, int leafChunkId, int slotIndex) InsertWithSplit(long payloadId, int componentChunkId, ReadOnlySpan<double> coords,
+    private (bool success, int leafChunkId, int slotIndex) InsertWithSplit(long payloadId, ReadOnlySpan<double> coords,
         int fullLeafChunkId, ref DescentPath path, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet, uint categoryMask)
     {
         // Phase 3: Spatial:RTree:NodeSplit span (leaf-level). LeftCount/RightCount filled after split. Depth=0 (leaf), SplitAxis=0 (FindBestSplit doesn't expose axis).
@@ -26,7 +26,6 @@ internal unsafe partial class SpatialRTree<TStore>
             int maxCoords = totalEntries * _desc.CoordCount;
             Span<double> tempCoords = stackalloc double[maxCoords];
             Span<long> tempIds = stackalloc long[totalEntries];
-            Span<int> tempCompChunkIds = stackalloc int[totalEntries];
             Span<uint> tempCategoryMasks = stackalloc uint[totalEntries];
             Span<int> sortIndices = stackalloc int[totalEntries];
             Span<int> bestPerm = stackalloc int[totalEntries];
@@ -35,12 +34,10 @@ internal unsafe partial class SpatialRTree<TStore>
             {
                 SpatialNodeHelper.ReadLeafEntryCoords(leafBase, i, tempCoords.Slice(i * _desc.CoordCount, _desc.CoordCount), _desc);
                 tempIds[i] = SpatialNodeHelper.ReadLeafEntityId(leafBase, i, _desc);
-                tempCompChunkIds[i] = SpatialNodeHelper.ReadLeafCompChunkId(leafBase, i, _desc);
                 tempCategoryMasks[i] = SpatialNodeHelper.ReadLeafCategoryMask(leafBase, i, _desc);
             }
             coords.CopyTo(tempCoords.Slice(leafCount * _desc.CoordCount, _desc.CoordCount));
             tempIds[leafCount] = payloadId;
-            tempCompChunkIds[leafCount] = componentChunkId;
             tempCategoryMasks[leafCount] = categoryMask;
 
             int splitPos = FindBestSplit(tempCoords, totalEntries, sortIndices, bestPerm);
@@ -56,13 +53,13 @@ internal unsafe partial class SpatialRTree<TStore>
             leafLatch = GetLatch(leafBase);
             byte* rightBase = accessor.GetChunkAddress(rightChunkId, true);
 
-            // Scatter entries to left and right using bestPerm (includes componentChunkIds and categoryMasks)
-            ScatterLeafEntries(leafBase, fullLeafChunkId, tempCoords, tempIds, tempCompChunkIds, tempCategoryMasks, bestPerm, 0, splitPos);
+            // Scatter entries to left and right using bestPerm (carries payload ids and category masks)
+            ScatterLeafEntries(leafBase, fullLeafChunkId, tempCoords, tempIds, tempCategoryMasks, bestPerm, 0, splitPos);
             SpatialNodeHelper.SetCount(leafBase, splitPos);
             SpatialNodeHelper.RefitLeafMBR(leafBase, _desc);
 
             int rightCount = totalEntries - splitPos;
-            ScatterLeafEntries(rightBase, rightChunkId, tempCoords, tempIds, tempCompChunkIds, tempCategoryMasks, bestPerm, splitPos, totalEntries);
+            ScatterLeafEntries(rightBase, rightChunkId, tempCoords, tempIds, tempCategoryMasks, bestPerm, splitPos, totalEntries);
             SpatialNodeHelper.SetCount(rightBase, rightCount);
             SpatialNodeHelper.RefitLeafMBR(rightBase, _desc);
 
@@ -97,12 +94,10 @@ internal unsafe partial class SpatialRTree<TStore>
     }
 
     /// <summary>
-    /// Scatter leaf entries from temp buffers into a node using the permutation.
-    /// Writes coords, payloadIds, and componentChunkIds. If <see cref="BackPointerSegment"/> is set,
-    /// updates back-pointers directly using the stored componentChunkIds (O(1) per entry, no EntityMap lookup).
+    /// Scatter leaf entries from temp buffers into a node using the permutation, fixing up payload handles as it goes.
     /// </summary>
-    private void ScatterLeafEntries(byte* nodeBase, int leafChunkId, Span<double> allCoords, Span<long> allIds, Span<int> allCompChunkIds,
-        Span<uint> allCategoryMasks, Span<int> perm, int permStart, int permEnd)
+    private void ScatterLeafEntries(byte* nodeBase, int leafChunkId, Span<double> allCoords, Span<long> allIds, Span<uint> allCategoryMasks, Span<int> perm, 
+        int permStart, int permEnd)
     {
         // Hoisted: the loop body stores through byte*, which the JIT must assume may alias this mutable field, so reading it inside would reload it every
         // iteration. Hoisting also fixes the reference for the whole scatter — see PayloadBackPointers' remarks on why a concurrent resize is unfixable here.
@@ -115,49 +110,13 @@ internal unsafe partial class SpatialRTree<TStore>
             SpatialNodeHelper.WriteLeafEntryCoords(nodeBase, dst,
                 allCoords.Slice(src * _desc.CoordCount, _desc.CoordCount), _desc);
             SpatialNodeHelper.WriteLeafEntityId(nodeBase, dst, allIds[src], _desc);
-            SpatialNodeHelper.WriteLeafCompChunkId(nodeBase, dst, allCompChunkIds[src], _desc);
             SpatialNodeHelper.WriteLeafCategoryMask(nodeBase, dst, allCategoryMasks[src], _desc);
 
-            // Payload back-pointer, folded into the loop that is already relocating the entry (#872 step 9). One store against four, on the only path that
+            // Payload back-pointer, folded into the loop that is already relocating the entry (#872 step 9). One store against three, on the only path that
             // can move an entry between slots — the alternative is a handle that silently names a different payload after the next split.
             if (payloadBackPointers != null)
             {
                 WritePayloadHandle(payloadBackPointers, allIds[src], PackHandle(leafChunkId, dst));
-            }
-        }
-
-        // Update back-pointers for all scattered entries using stored componentChunkIds
-        if (BackPointerSegment != null)
-        {
-            var bpAccessor = BackPointerSegment.CreateChunkAccessor();
-            try
-            {
-                // Read TreeSelector from the first valid entry (same for all entries in this tree)
-                byte treeSelector = 0;
-                for (int i = permStart; i < permEnd; i++)
-                {
-                    int compChunkId = allCompChunkIds[perm[i]];
-                    if (compChunkId != 0)
-                    {
-                        treeSelector = SpatialBackPointerHelper.Read(ref bpAccessor, compChunkId).TreeSelector;
-                        break;
-                    }
-                }
-
-                for (int i = permStart; i < permEnd; i++)
-                {
-                    int src = perm[i];
-                    int dst = i - permStart;
-                    int compChunkId = allCompChunkIds[src];
-                    if (compChunkId != 0)
-                    {
-                        SpatialBackPointerHelper.Write(ref bpAccessor, compChunkId, leafChunkId, (short)dst, treeSelector);
-                    }
-                }
-            }
-            finally
-            {
-                bpAccessor.Dispose();
             }
         }
     }

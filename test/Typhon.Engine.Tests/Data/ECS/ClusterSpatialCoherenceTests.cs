@@ -509,17 +509,20 @@ class ClusterSpatialCoherenceTests : TestBase<ClusterSpatialCoherenceTests>
         Assert.That(cs1.CellClusterPool.GetClusterCount(cellKey), Is.EqualTo(1), "Archetype 1 pool sees its own cluster");
         Assert.That(cs2.CellClusterPool.GetClusterCount(cellKey), Is.EqualTo(1), "Archetype 2 pool sees its own cluster");
 
-        // Query isolation: querying each archetype returns only its own entity. WhereInAABB's 6-arg signature packs 2D bounds as (minX, minY, maxX, maxY, _, _)
+        // Query isolation: querying each archetype returns only its own entity. WhereInAABB takes
+        // (minX, minY, minZ, maxX, maxY, maxZ) for both dimensions; the Z arguments are ignored for a 2D component. It used to be packed
+        // (minX, minY, maxX, maxY, _, _) here to work around EcsQuery reading the max corner from the wrong slots — a defect fixed in #872 step 13, after
+        // which the workaround is the thing that breaks the query.
         // per the existing EcsQuery cluster 2D dispatch (CoordCount==4 path reads maxX from _spatialParams[2] and maxY from _spatialParams[3]).
         using (var tx = dbe.CreateQuickTransaction())
         {
-            var r1 = tx.Query<ClCohUnit>().WhereInAABB<ClCohPos>(0, 0, 300, 300, 0, 0).Execute();
+            var r1 = tx.Query<ClCohUnit>().WhereInAABB<ClCohPos>(0, 0, 0, 300, 300, 0).Execute();
             Assert.That(r1, Does.Contain(id1));
             Assert.That(r1, Does.Not.Contain(id2));
         }
         using (var tx = dbe.CreateQuickTransaction())
         {
-            var r2 = tx.Query<ClCohUnit2>().WhereInAABB<ClCohPos2>(0, 0, 300, 300, 0, 0).Execute();
+            var r2 = tx.Query<ClCohUnit2>().WhereInAABB<ClCohPos2>(0, 0, 0, 300, 300, 0).Execute();
             Assert.That(r2, Does.Contain(id2));
             Assert.That(r2, Does.Not.Contain(id1));
         }

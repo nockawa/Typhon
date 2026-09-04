@@ -16,12 +16,14 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <para><b>The frame conversion is exact.</b> Cluster bounds are <c>C15</c> cell-relative, so the ray has to be expressed in each cell's frame before the
     /// tree sees it — and a change of frame here is a pure TRANSLATION, so the origin shifts by the cell origin and the direction is untouched. Distances
     /// along the ray are therefore unchanged too, which is what lets results from different cells be merged on <c>t</c> without rescaling.</para>
+    /// <para><b><c>ordered</c> is <c>true</c> by default and worth passing <c>false</c>.</b> It controls only the final front-to-back sort; a caller that
+    /// treats the result as a SET — <c>EcsQuery</c> does — pays an <c>O(n log n)</c> sort whose output it then discards.</para>
     /// <para><b>Cells come from the segment's bounding box.</b> Every cell the ray passes through overlaps that box, so the walk is complete; some cells it
     /// visits will not be touched by the ray, and their clusters simply fail the slab test. A DDA traversal would visit fewer, and is the obvious follow-up if
     /// this ever shows up in a profile — but a broadphase that is merely wasteful is a different class of thing from one that is wrong.</para>
     /// </remarks>
     public int QueryRay(SpatialGrid grid, float originX, float originY, float originZ, float dirX, float dirY, float dirZ, float maxDistance,
-        Span<(long entityId, float distance)> results, uint categoryMask = uint.MaxValue)
+        Span<(long entityId, float distance)> results, uint categoryMask = uint.MaxValue, bool ordered = true)
     {
         if (results.Length == 0 || !SpatialSlot.HasSpatialIndex || PerCellIndex == null || ClusterSegment == null || ClusterAabbs == null)
         {
@@ -64,14 +66,25 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
 
         int count = 0;
+
+        // One read of ClusterAabbs for the whole query — see the same hoist in QueryFrustum for why re-reading the
+        // field per cluster can silently disable dedup for a range of ids.
+        var aabbs = ClusterAabbs;
+
+        // One bit per cluster, so a cluster reached twice is rejected once instead of every entity it holds being compared against the whole result set.
+        var visited = ClusterVisitSet.Rent(aabbs.Length);
         var accessor = ClusterSegment.CreateChunkAccessor();
         try
         {
-            for (int cz = cellMinZ; cz <= cellMaxZ; cz++)
+            // 🔴 `count < results.Length` at every level, as the frustum walk already did. Without it a filled buffer
+            // still visited every remaining cell, cluster and entity, ran the full slab test on each and threw the hit
+            // away. Invisible while the only callers passed a k-sized span and expected truncation; the EcsQuery growth
+            // loop made it the NORMAL case, because every attempt but the last ends with the buffer full.
+            for (int cz = cellMinZ; cz <= cellMaxZ && count < results.Length; cz++)
             {
-                for (int cy = cellMinY; cy <= cellMaxY; cy++)
+                for (int cy = cellMinY; cy <= cellMaxY && count < results.Length; cy++)
                 {
-                    for (int cx = cellMinX; cx <= cellMaxX; cx++)
+                    for (int cx = cellMinX; cx <= cellMaxX && count < results.Length; cx++)
                     {
                         if (!grid.TryGetCellKey(cx, cy, cz, out int cellKey) || cellKey >= PerCellIndex.Length)
                         {
@@ -86,29 +99,28 @@ internal sealed unsafe partial class ArchetypeClusterState
 
                         grid.CellOrigin(cellKey, out float cellOriginX, out float cellOriginY, out float cellOriginZ);
                         RayScanHalf(slot, isStatic: false, ref accessor, cellOriginX, cellOriginY, cellOriginZ,
-                            originX, originY, originZ, dirX, dirY, dirZ, maxDistance, is3D, categoryMask, results, ref count);
+                            originX, originY, originZ, dirX, dirY, dirZ, maxDistance, is3D, categoryMask, aabbs, ref visited, results, ref count);
                         RayScanHalf(slot, isStatic: true, ref accessor, cellOriginX, cellOriginY, cellOriginZ,
-                            originX, originY, originZ, dirX, dirY, dirZ, maxDistance, is3D, categoryMask, results, ref count);
+                            originX, originY, originZ, dirX, dirY, dirZ, maxDistance, is3D, categoryMask, aabbs, ref visited, results, ref count);
                     }
                 }
             }
         }
         finally
         {
+            visited.Dispose();
             accessor.Dispose();
         }
 
         // Front-to-back is part of the contract, and cells are walked in grid order rather than along the ray, so the merge happens here.
-        for (int i = 1; i < count; i++)
+        //
+        // 🔴 Comparison sort, not insertion sort, and skippable. The input is grouped by cell in GRID order, which is not
+        // near-sorted by distance in the general case — so the old insertion sort was quadratic, not the "almost sorted"
+        // linear it looks like. Harmless at the handful of hits a picking ray returns; the EcsQuery growth loop can now
+        // reach millions from user code, and that caller discards the ordering entirely.
+        if (ordered && count > 1)
         {
-            var pending = results[i];
-            int j = i - 1;
-            while (j >= 0 && results[j].distance > pending.distance)
-            {
-                results[j + 1] = results[j];
-                j--;
-            }
-            results[j + 1] = pending;
+            results[..count].Sort(static (a, b) => a.distance.CompareTo(b.distance));
         }
 
         return count;
@@ -116,7 +128,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     private void RayScanHalf(PerCellSpatialSlot slot, bool isStatic, ref ChunkAccessor<PersistentStore> accessor, float cellOriginX, float cellOriginY, 
         float cellOriginZ, float originX, float originY, float originZ, float dirX, float dirY, float dirZ, float maxDistance, bool is3D, uint categoryMask,
-        Span<(long entityId, float distance)> results, ref int count)
+        ClusterSpatialAabb[] aabbs, ref ClusterVisitSet visited, Span<(long entityId, float distance)> results, ref int count)
     {
         var tree = slot.ReadTree(isStatic);   // acquire — see PerCellSpatialSlot.PublishDynamicTree
         if (tree != null)
@@ -134,7 +146,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             foreach (var hit in tree.Tree.QueryRay(rayOrigin, rayDir, maxDistance, null, 0))
             {
                 RayScanCluster((int)hit.PayloadId, ref accessor, originX, originY, originZ, dirX, dirY, dirZ, maxDistance, is3D, categoryMask,
-                    results, ref count);
+                    aabbs, ref visited, results, ref count);
             }
             return;
         }
@@ -167,18 +179,23 @@ internal sealed unsafe partial class ArchetypeClusterState
             }
 
             RayScanCluster(linear.ClusterIds[i], ref accessor, originX, originY, originZ, dirX, dirY, dirZ, maxDistance, is3D, categoryMask,
-                results, ref count);
+                aabbs, ref visited, results, ref count);
         }
     }
 
     private void RayScanCluster(int clusterChunkId, ref ChunkAccessor<PersistentStore> accessor, float originX, float originY, float originZ, float dirX, 
-        float dirY, float dirZ, float maxDistance, bool is3D, uint categoryMask, Span<(long entityId, float distance)> results, ref int count)
+        float dirY, float dirZ, float maxDistance, bool is3D, uint categoryMask, ClusterSpatialAabb[] aabbs, ref ClusterVisitSet visited,
+        Span<(long entityId, float distance)> results, ref int count)
     {
-        if ((uint)clusterChunkId >= (uint)ClusterAabbs.Length)
+        if ((uint)clusterChunkId >= (uint)aabbs.Length)
         {
             return;
         }
-        if (categoryMask != 0 && (ClusterAabbs[clusterChunkId].CategoryMask & categoryMask) == 0)
+        if (!visited.TryVisit(clusterChunkId))
+        {
+            return;
+        }
+        if (categoryMask != 0 && (aabbs[clusterChunkId].CategoryMask & categoryMask) == 0)
         {
             return;
         }
@@ -218,22 +235,8 @@ internal sealed unsafe partial class ArchetypeClusterState
 
             long entityId = *(long*)(clusterBase + Layout.EntityIdsOffset + (slot * 8));
 
-            // A cluster can be reached through both halves of a cell only if it is in both, which C13 forbids — but the tree path and the linear path can
-            // both be walked for one cell when the two halves use different structures, so the guard against a duplicate id stays cheap and explicit.
-            bool already = false;
-            for (int i = 0; i < count; i++)
-            {
-                if (results[i].entityId == entityId)
-                {
-                    already = true;
-                    break;
-                }
-            }
-            if (already)
-            {
-                continue;
-            }
-
+            // No entity-level duplicate check: an entity lives in exactly one cluster slot, so the only way to report one twice is to scan its cluster twice,
+            // and ClusterVisitSet has already refused that above.
             if (count < results.Length)
             {
                 results[count++] = (entityId, t);

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Typhon.Schema.Definition;
 
@@ -198,6 +199,27 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </remarks>
     private readonly Dictionary<int, ulong> _repairNoOpGeometry = [];
 
+    /// <summary>
+    /// Source slots already named by a request sitting in this tick's drain prefix, keyed by cluster chunk id (#877).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why the repair planner needs one at all.</b> <c>DetectDriftersInCluster</c> has always excluded the slots the outlier guard claimed, and its
+    /// comment states the hazard exactly: <i>"queueing one entity for both would have two requests naming the same source slot, and whichever drained second
+    /// would find it empty."</i> The repair planner gathers from the raw occupancy mask and had no equivalent, so a cell-crossing filed by
+    /// <c>DetectClusterMigrations</c> earlier in the same Prep and a repair re-pack of the cluster that entity is leaving would BOTH name it. Measured on the
+    /// first fence of every seed of <c>--profile-openmut</c>: 4 of 4.</para>
+    /// <para><b>The collision is usually survivable, which is what made it hard to see.</b> The crossing drains first, clears the slot, and
+    /// <c>ExecuteMigrations</c>' stale-source guard skips the repair request — no entity is lost and no counter disagrees. It stops being survivable when the
+    /// slot is REFILLED before the repair request drains, which the repair path itself makes likely: it allocates fresh destination clusters and frees the
+    /// drained sources in the same fence, so chunk ids recycle inside one tick. The repair then moves whichever entity now occupies the slot into a
+    /// destination slot reserved for a different one, and the two entities' EntityMap entries and index rows disagree with where they actually live. That is
+    /// the <c>InvalidOperationException: Entity ... not found or not visible</c> and the <c>B+Tree bulk update reached an invalid child</c> of #877.</para>
+    /// <para><b>Cleared and rebuilt once per plan</b>, not maintained incrementally: repairs filed by an earlier cell in the same tick cannot collide with a
+    /// later one, because a cluster belongs to exactly one cell. Only the producers that ran BEFORE the planner — the crossing detector, the outlier guard,
+    /// and last tick's surviving relocations — can, and they are all in the prefix when the plan starts.</para>
+    /// </remarks>
+    private readonly Dictionary<int, ulong> _repairSourceExclusions = [];
+
     // ══════════════════════════════════════════════════════════════════════════════
     // Intra-cell Morton encoding
     // ══════════════════════════════════════════════════════════════════════════════
@@ -374,6 +396,9 @@ internal sealed unsafe partial class ArchetypeClusterState
             AccrueQueueMaintenance(queue, maintenanceStart);
             return 0;
         }
+
+        // Every source slot the queue has already spoken for, before a single unit is planned (#877). O(prefix) once, against a planner that walks entities.
+        BuildRepairSourceExclusions();
 
         // Ranked, not sorted by cell key. §5.6: "round-robin is the wrong policy" — a region nobody queries never needs tight clusters. Lazy, so a tick
         // whose nominations changed nothing pays a comparison rather than a sort (AC-11.5).
@@ -618,9 +643,22 @@ internal sealed unsafe partial class ArchetypeClusterState
             valveFired = projectedNs > remainingNs;
         }
 
+        // Captured before the plan runs, because the memo below must not record a verdict that the exclusions caused (#877). A unit whose entities are
+        // partly spoken for produces a DIFFERENT partition from the one the same geometry will produce next tick, once those requests have drained — so
+        // "this geometry re-packs to nothing" is not a conclusion this tick is entitled to draw.
+        var unitHadExclusions = UnitHasExcludedSources(candidates, unitClusters);
+
         var moved = ExecuteRepairPlan(cellKey, grid, ref accessor, candidates, unitClusters, population);
         if (moved == 0)
         {
+            if (unitHadExclusions)
+            {
+                // Left in the queue, unmemoised, to age. The cell is not converged; it is temporarily un-repackable because some of its entities are already
+                // on their way somewhere else. Memoising here would drop it from the queue against a geometry hash that will still match next tick — and
+                // nomination only re-queues a cell whose BOUNDS move, which for a cell whose contents are merely being reshuffled may be never.
+                return 0;
+            }
+
             // Remembered against the geometry that produced it, so the next tick's nomination costs a dictionary probe
             // rather than a gather and a sort. Recorded here rather than inside ExecuteRepairPlan because this is where
             // the hash is in scope and where the budget decision lives.
@@ -660,11 +698,59 @@ internal sealed unsafe partial class ArchetypeClusterState
         var population = 0;
         for (var i = 0; i < unitClusters; i++)
         {
-            var clusterBase = accessor.GetChunkAddress(candidates[i].ChunkId);
-            population += BitOperations.PopCount(*(ulong*)clusterBase & Layout.FullMask);
+            var chunkId = candidates[i].ChunkId;
+            var clusterBase = accessor.GetChunkAddress(chunkId);
+            var occupied = *(ulong*)clusterBase & Layout.FullMask;
+
+            // Excluded here and not only at the gather, so the budget projection matches the work that will actually happen. Charging for entities the
+            // gather is about to skip would refuse a later candidate to pay for moves nobody makes — the opposite of what RP-01's projection is for.
+            population += BitOperations.PopCount(occupied & ~ExcludedSourceSlots(chunkId));
         }
 
         return population;
+    }
+
+    /// <summary>Slots of <paramref name="clusterChunkId"/> that a queued request already names as its source; <c>0</c> when none do.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ulong ExcludedSourceSlots(int clusterChunkId) => _repairSourceExclusions.Count == 0 ? 0UL : _repairSourceExclusions.GetValueOrDefault(clusterChunkId);
+
+    /// <summary>Does any cluster in the unit hold a slot another request already claims?</summary>
+    private bool UnitHasExcludedSources(RepairCandidate[] candidates, int unitClusters)
+    {
+        if (_repairSourceExclusions.Count == 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < unitClusters; i++)
+        {
+            if (_repairSourceExclusions.ContainsKey(candidates[i].ChunkId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Rebuild <see cref="_repairSourceExclusions"/> from the requests already queued for this tick.</summary>
+    /// <remarks>
+    /// The whole prefix, not just the crossings: an admitted relocation names a source slot for exactly the same reason and collides in exactly the same
+    /// way. A repair request cannot appear here, because the map is built before the first unit is planned.
+    /// </remarks>
+    private void BuildRepairSourceExclusions()
+    {
+        _repairSourceExclusions.Clear();
+
+        var queued = PendingMigrationCount;
+        var requests = PendingMigrations;
+        for (var i = 0; i < queued; i++)
+        {
+            ref readonly var request = ref requests[i];
+            var slotBit = 1UL << request.SourceSlotIndex;
+            ref var mask = ref CollectionsMarshal.GetValueRefOrAddDefault(_repairSourceExclusions, request.SourceClusterChunkId, out _);
+            mask |= slotBit;
+        }
     }
 
     /// <summary>
@@ -690,7 +776,11 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             var chunkId = candidates[i].ChunkId;
             var centres = GatherClusterCentres(chunkId, ref accessor, centreScratch);
-            var bits = centres.ValidMask;
+
+            // #877. A slot another request already claims is NOT re-packed: the entity is leaving this cluster under that request, and a second request
+            // naming the same source would drain against whatever occupies the slot by then. Excluding it costs the unit one entity and keeps the cell
+            // repairable next tick, which is the trade DetectDriftersInCluster already makes for the outlier guard.
+            var bits = centres.ValidMask & ~ExcludedSourceSlots(chunkId);
             while (bits != 0 && count < population)
             {
                 var slot = BitOperations.TrailingZeroCount(bits);

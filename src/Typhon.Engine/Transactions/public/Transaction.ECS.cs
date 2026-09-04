@@ -246,17 +246,6 @@ public unsafe partial class Transaction
         => new(this, false, sourceFile, sourceLine, sourceMethod);
 
     /// <summary>
-    /// Create a zero-allocation spatial query handle for component type <typeparamref name="T"/>.
-    /// Requires <typeparamref name="T"/> to have a <c>[SpatialIndex]</c> field.
-    /// </summary>
-    internal SpatialQuery<T> SpatialQuery<T>() where T : unmanaged
-    {
-        var table = _dbe.GetComponentTable<T>();
-        CheckConfig.Require(CheckConfig.Enabled, table?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
-        return new SpatialQuery<T>(table!.SpatialIndex);
-    }
-
-    /// <summary>
     /// O(1) metadata count of live entities for <typeparamref name="TArchetype"/> and descendants.
     /// Uses LinearHash.EntryCount — fast but includes entities with DiedTSN set (not yet cleaned up).
     /// For exact counts respecting visibility, use <c>Query&lt;T&gt;().Count()</c>.
@@ -1923,11 +1912,6 @@ public unsafe partial class Transaction
             }
         }
 
-        // Pre-size spatial tree segments to avoid CBS overflow during bulk insert.
-        // Each entity needs ~1/leafCapacity leaf chunks. Splits add ~30% overhead for internal nodes.
-        // Also pre-size the back-pointer segment (1 chunk per entity).
-        PreGrowSpatialSegments(_spawnedEntities.Count);
-
         using var guard = EpochGuard.Enter(_epochManager);
 
         // Hoist stackalloc outside the loop — cluster record is the largest: 19B base + 16 × 4B Versioned = 83B (≥ legacy 78B)
@@ -2614,76 +2598,6 @@ public unsafe partial class Transaction
         }
     }
 
-    /// <summary>
-    /// Pre-grow spatial tree and back-pointer CBS segments to accommodate a bulk spawn.
-    /// Prevents CBS overflow when FinalizeSpawns inserts many entities in a single commit.
-    /// </summary>
-    private void PreGrowSpatialSegments(int spawnCount)
-    {
-        if (spawnCount < 64)
-        {
-            return; // Small batch — CBS can handle organic growth
-        }
-
-        // Scan archetypes for spatial-indexed component tables (same dedup pattern as EntityMap pre-size above)
-        Span<int> seenTableIds = stackalloc int[16];
-        int seenCount = 0;
-
-        foreach (var entry in _spawnedEntities)
-        {
-            var archId = entry.Id.ArchetypeId;
-            var es = _dbe._archetypeStates[archId];
-            if (es == null)
-            {
-                continue;
-            }
-
-            for (int slot = 0; slot < es.SlotToComponentTable.Length; slot++)
-            {
-                var table = es.SlotToComponentTable[slot];
-                if (table?.SpatialIndex == null)
-                {
-                    continue;
-                }
-
-                // Dedup by table identity (use RootPageIndex as stable ID)
-                int tableId = table.ComponentSegment.RootPageIndex;
-                bool alreadySeen = false;
-                for (int i = 0; i < seenCount; i++)
-                {
-                    if (seenTableIds[i] == tableId) { alreadySeen = true; break; }
-                }
-                if (alreadySeen)
-                {
-                    continue;
-                }
-                if (seenCount < 16)
-                {
-                    seenTableIds[seenCount++] = tableId;
-                }
-
-                var state = table.SpatialIndex;
-                var tree = state.ActiveTree;
-                int leafCapacity = state.Descriptor.LeafCapacity;
-
-                // Estimate chunks needed: entities/leafCapacity leaves + 30% for internal nodes from splits + 1 metadata chunk
-                int estimatedLeaves = (spawnCount + leafCapacity - 1) / leafCapacity;
-                int estimatedTotal = tree.EntityCount > 0 ? (int)((tree.EntityCount + spawnCount) / (leafCapacity * 0.7)) + 10 : (int)(estimatedLeaves * 1.3) + 10;
-                tree.Segment.EnsureCapacity(estimatedTotal, _changeSet);
-
-                // Back-pointer segment: addressed by componentChunkId (same as component segment)
-                // Must be large enough to cover the component segment's max chunkId after spawns
-                int compCapNeeded = table.ComponentSegment.AllocatedChunkCount + spawnCount + 10;
-                state.BackPointerSegment.EnsureCapacity(compCapNeeded, _changeSet);
-            }
-
-            // Issue #230 Phase 3 Option B: the per-archetype R-Tree + back-pointer segment pre-grow is gone (those segments no longer exist). The per-cell
-            // cluster index is grown lazily on first cluster insert into a cell (AddClusterToPerCellIndex), so there's nothing to pre-size here.
-
-            break; // All entries in a single spawn batch share the same archetype — one pass suffices
-        }
-    }
-
     private void FlushPendingDestroys()
     {
         if (_pendingDestroys == null || _pendingDestroys.Count == 0)
@@ -3055,12 +2969,10 @@ public unsafe partial class Transaction
 
                         // The per-ComponentTable index removal that stood here is gone (#629). Destroy removes per-archetype entries — including the view
                         // deletion delta — through FlushPendingDestroys / RemoveClusterIndexEntries, for both the persistent and the transient home.
-
-                        // Remove from spatial index immediately (no shadow needed — back-pointer provides O(1) lookup).
-                        if (table.SpatialIndex != null)
-                        {
-                            SpatialMaintainer.RemoveFromSpatial(pk, chunkId, table, _changeSet);
-                        }
+                        //
+                        // The entity-level spatial removal that stood beside it is gone too (#872 step 13): this branch is guarded on
+                        // `!meta.IsClusterEligible`, which #666 made unreachable by making every archetype cluster-backed, so the tree it removed from had
+                        // been empty for as long as this code could not run.
                     }
                 }
             }

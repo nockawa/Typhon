@@ -148,37 +148,6 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         Assert.That(table.SpatialIndex, Is.Null);
     }
 
-    [Test]
-    public void Schema_CellSizeZero_NoHashmap()
-    {
-        using var dbe = SetupEngine();
-        var table = dbe.GetComponentTable<SpatialShip>();
-        // SpatialShip uses [SpatialIndex(5.0f)] — CellSize defaults to 0
-        Assert.That(table.SpatialIndex.OccupancyMap, Is.Null);
-    }
-
-    [Test]
-    public void CellKey2D_Lossless_DifferentInputs_DifferentKeys()
-    {
-        // Verify 2D lossless packing produces unique keys for distinct cell coords
-        var keys = new HashSet<long>();
-        // coordCount=4 (2D): coords = [minX, minY, maxX, maxY], center = ((min+max)/2)
-        // Hoisted out of the loop: a stackalloc inside a loop is never released until the method returns (CA2014).
-        Span<double> coords = stackalloc double[4];
-        for (int x = -10; x <= 10; x++)
-        {
-            for (int y = -10; y <= 10; y++)
-            {
-                double cx = x * 100.0 + 50;
-                double cy = y * 100.0 + 50;
-                coords[0] = cx - 1; coords[1] = cy - 1; coords[2] = cx + 1; coords[3] = cy + 1;
-                long key = SpatialMaintainer.ComputeCellKey(coords, 4, 1.0f / 100.0f);
-                Assert.That(keys.Add(key), Is.True, $"Duplicate key for cell ({x},{y})");
-            }
-        }
-        Assert.That(keys.Count, Is.EqualTo(21 * 21));
-    }
-
     // ── Spawn + Query ────────────────────────────────────────────────────
 
     [Test]
@@ -507,8 +476,6 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         var table = dbe.GetComponentTable<SpatialTerrain>();
         Assert.That(table.SpatialIndex, Is.Not.Null);
         Assert.That(table.SpatialIndex.FieldInfo.Mode, Is.EqualTo(SpatialMode.Static));
-        Assert.That(table.SpatialIndex.StaticTree, Is.Not.Null);
-        Assert.That(table.SpatialIndex.DynamicTree, Is.Null);
     }
 
     [Test]
@@ -519,8 +486,6 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
         using var dbe = SetupEngine();
         var table = dbe.GetComponentTable<SpatialShip>();
         Assert.That(table.SpatialIndex.FieldInfo.Mode, Is.EqualTo(SpatialMode.Dynamic));
-        Assert.That(table.SpatialIndex.DynamicTree, Is.Not.Null);
-        Assert.That(table.SpatialIndex.StaticTree, Is.Null);
     }
 
     // Note: BackPointer_TreeSelector_Roundtrip was removed in issue #230 Option B. It asserted on the per-archetype back-pointer CBS segment which is
@@ -604,20 +569,17 @@ class SpatialEcsIntegrationTests : TestBase<SpatialEcsIntegrationTests>
             t.Commit();
         }
 
-        var table = dbe.GetComponentTable<SpatialTerrain>();
-        int entityCountBefore = table.SpatialIndex.ActiveTree.EntityCount;
-        int nodeCountBefore = table.SpatialIndex.ActiveTree.NodeCount;
+        // The structural counts this test used to read — the entity R-Tree's EntityCount and NodeCount — belonged to an index that no longer exists
+        // (#872 step 13), and the pass it was checking got skipped (ProcessSpatialEntries) is gone with it. What is still observable, and is what the test
+        // was actually protecting, is that a tick which changes nothing leaves the static archetype's query answer alone.
+        int countBefore = CountTerrainEntities(dbe);
 
-        // Modify the component data (simulating an update) — for static mode, tick fence should NOT process this
-        // The DirtyBitmap marks the chunk dirty, but ProcessSpatialEntries should skip it
         using (var t = dbe.CreateQuickTransaction())
         {
-            // Just opening and committing should trigger a tick fence, but no spatial update for static
+            // Opening and committing drives a tick fence; a static archetype has no drift to detect and nothing to relocate.
             t.Commit();
         }
 
-        // Tree should be unchanged (no reinserts, no structural changes)
-        Assert.That(table.SpatialIndex.ActiveTree.EntityCount, Is.EqualTo(entityCountBefore));
-        Assert.That(table.SpatialIndex.ActiveTree.NodeCount, Is.EqualTo(nodeCountBefore));
+        Assert.That(CountTerrainEntities(dbe), Is.EqualTo(countBefore), "a fence over an unchanged static archetype must not lose or duplicate entities");
     }
 }

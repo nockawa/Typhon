@@ -11,14 +11,13 @@ internal unsafe partial class SpatialRTree<TStore>
     /// </summary>
     /// <param name="segment">Pre-allocated CBS with stride matching the variant's descriptor</param>
     /// <param name="variant">Spatial variant (2D/3D × f32/f64)</param>
-    /// <param name="payloadIds">EntityId for each entry</param>
-    /// <param name="componentChunkIds">Component CBS chunk ID for each entry</param>
+    /// <param name="payloadIds">Opaque 64-bit identity for each entry</param>
     /// <param name="coords">Flat array: entityCount × coordCount doubles, ordered [min0, min1, ..., max0, max1, ...] per entity</param>
     /// <param name="categoryMasks">Category bitmask for each entry</param>
     /// <param name="changeSet">ChangeSet for WAL participation (null for non-WAL)</param>
     /// <returns>A fully constructed tree. Returns an empty tree if input is empty.</returns>
     internal static SpatialRTree<TStore> BulkLoad(ChunkBasedSegment<TStore> segment, SpatialVariant variant, ReadOnlySpan<long> payloadIds,
-        ReadOnlySpan<int> componentChunkIds, ReadOnlySpan<double> coords, ReadOnlySpan<uint> categoryMasks, ChangeSet changeSet = null)
+        ReadOnlySpan<double> coords, ReadOnlySpan<uint> categoryMasks, ChangeSet changeSet = null)
     {
         // Phase 3: Spatial:RTree:BulkLoad span. EntityCount/LeafCount filled at exit.
         var bulkScope = TyphonEvent.BeginSpatialRTreeBulkLoad(payloadIds.Length);
@@ -90,8 +89,7 @@ internal unsafe partial class SpatialRTree<TStore>
                             for (int j = 0; j < count; j++)
                             {
                                 int srcIdx = sortIndex[start + j];
-                                tree.WriteLeafEntry(leafBase, j, payloadIds[srcIdx], componentChunkIds[srcIdx],
-                                    coords.Slice(srcIdx * coordCount, coordCount), categoryMasks[srcIdx]);
+                                tree.WriteLeafEntry(leafBase, j, payloadIds[srcIdx], coords.Slice(srcIdx * coordCount, coordCount), categoryMasks[srcIdx]);
                             }
 
                             SpatialNodeHelper.SetCount(leafBase, count);

@@ -2219,6 +2219,40 @@ public sealed partial class TyphonRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// Last tick's Prep phase — cell-crossing detection, the relocation throttle and the repair planner.
+    /// </summary>
+    /// <remarks>
+    /// <b>Exposed because a fence measured only at Migrate, IndexMassUpdate and EntityMapUpdate leaves most of its cost unattributed.</b> #872's partition
+    /// campaign measured a 128 000-entity fence at 47 ms of which migration accounted for 10.4 ms, and had no instrumentation to say what the other 36.7 ms
+    /// was — which made the largest term in the measurement the one nobody could name. Prep, AabbRefresh and Finalize are where it lives, and all three
+    /// already keep the counters; only the accessors were missing.
+    /// </remarks>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastPrepStats
+        => _fencePrepExec == null
+            ? (0, 0, 0, 0)
+            : (_fencePrepExec.PhaseSpanTicks, _fencePrepExec.TotalWallTicks, _fencePrepExec.TotalUnitCount, _fencePrepExec.PlanForTest.ChunkCount);
+
+    /// <summary>Last tick's AabbRefresh phase — cluster bound recompute, drift detection and the outlier guard.</summary>
+    /// <inheritdoc cref="LastPrepStats" path="/remarks"/>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastAabbRefreshStats
+        => _fenceAabbRefreshExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceAabbRefreshExec.PhaseSpanTicks,
+               _fenceAabbRefreshExec.TotalWallTicks,
+               _fenceAabbRefreshExec.TotalUnitCount,
+               _fenceAabbRefreshExec.PlanForTest.ChunkCount);
+
+    /// <summary>Last tick's Finalize phase — bookkeeping clear, dormancy sweep, cluster finalization and the WAL emit.</summary>
+    /// <inheritdoc cref="LastPrepStats" path="/remarks"/>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastFinalizeStats
+        => _fenceFinalizeExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceFinalizeExec.PhaseSpanTicks,
+               _fenceFinalizeExec.TotalWallTicks,
+               _fenceFinalizeExec.TotalUnitCount,
+               _fenceFinalizeExec.PlanForTest.ChunkCount);
+
     /// <summary>Last tick's Migrate phase, in the same shape. Needed to compare the inline EntityMap path against the staged one: the inline path's cost
     /// lands here, the staged path's in <see cref="LastEntityMapUpdateStats"/>.</summary>
     internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastMigrateStats

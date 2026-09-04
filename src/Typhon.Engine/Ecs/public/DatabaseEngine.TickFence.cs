@@ -339,22 +339,10 @@ public partial class DatabaseEngine
             // (#629) — a cluster-backed archetype maintains its own trees through the cluster shadow bitmap — and instrumenting this branch across the full
             // suite showed it was never entered. `hasShadow` is still reported on the tick-fence span below.
 
-            // Spatial index maintenance: iterate dirty entities, update R-Tree positions.
-            // Uses dirtyBits snapshot (still in scope from DirtyBitmap.Snapshot above).
-            // Spatial doesn't need shadows — back-pointers provide O(1) leaf lookup, and the containment check
-            // uses the fat AABB stored in the tree node. Only the final position matters.
-            if (hasSpatial)
-            {
-                var spatialScope = TyphonEvent.BeginWriteTickFenceSpatial(table.WalTypeId, entryCount);
-                try
-                {
-                    spatialScope.EscapedCount = ProcessSpatialEntries(table, dirtyBits, changeSet);
-                }
-                finally
-                {
-                    spatialScope.Dispose();
-                }
-            }
+            // The per-entity spatial pass that used to run here rebuilt the entity-level R-Tree from this table's dirty bitmap. That tree is gone (#872 step
+            // 13) — cluster AABBs are refreshed by the fence's own AabbRefresh phase, from cluster storage, in parallel — so there is nothing table-scoped
+            // left to do. `hasSpatial` now gates NOTHING: the ring archive below is unconditional, and the flag's only remaining reader is the trace byte on
+            // the tick-fence span, where it still answers "is this table spatial at all".
 
             // Archive dirty bitmap into ring buffer for interest management delta queries
             table.SpatialIndex?.InterestSystem?.DirtyRing.Archive(tickNumber, dirtyBits, dirtyBits.Length);
@@ -886,8 +874,13 @@ public partial class DatabaseEngine
             // path that keeps cells from needing repair in the first place.
             if (hasWork)
             {
+                var tailStart = Stopwatch.GetTimestamp();
                 var remainingBudgetNs = pending.ApplyMigrationThrottle(_spatialGrid);
+                var throttleEnd = Stopwatch.GetTimestamp();
+                pending.PrepThrottleTicks += throttleEnd - tailStart;
+
                 PlanArchetypeRepairs(pending, changeSet, tickNumber, remainingBudgetNs);
+                pending.PrepPlanTicks += Stopwatch.GetTimestamp() - throttleEnd;
             }
             else
             {
@@ -898,6 +891,10 @@ public partial class DatabaseEngine
             }
 
             pending.PendingMigrationDrainCount = hasWork ? pending.PendingMigrationCount : 0;
+
+            // Every producer has now filed: crossings and the outlier guard in the core above, relocations carried from last tick's AabbRefresh, and repair
+            // units from the planner. CR-05 is checkable exactly here and nowhere earlier (#877).
+            pending.AssertNoDuplicateMigrationSources(tickNumber);
         }
 
         return hasWork;
@@ -988,6 +985,7 @@ public partial class DatabaseEngine
         }
 
         clusterState.ResetThrottleTickState();
+        clusterState.ResetPrepSubSpans();
         clusterState.PreviousTickMigrationCount = clusterState.LastTickMigrationCount;
         clusterState.LastTickMigrationCount = 0;
         clusterState.LastTickMigrationExecuteMs = 0d;
@@ -1143,7 +1141,9 @@ public partial class DatabaseEngine
         var clusterScope = TyphonEvent.BeginWriteTickFenceCluster(meta.ArchetypeId);
         try
         {
+            var subSpan = Stopwatch.GetTimestamp();
             var dirtyBits = clusterState.ClusterDirtyBitmap.Snapshot();
+            clusterState.PrepSnapshotTicks += Stopwatch.GetTimestamp() - subSpan;
 
             // Snapshot-and-clear the written-slot union in the same step as the dirty bitmap (#559 §4.5), so Finalize reads a
             // stable value while writers for the NEXT tick start from zero.
@@ -1155,6 +1155,7 @@ public partial class DatabaseEngine
             {
                 var entryCount = 0;
                 var dirtyClusterCount = 0;
+                subSpan = Stopwatch.GetTimestamp();
                 for (var i = 0; i < dirtyBits.Length; i++)
                 {
                     if (dirtyBits[i] == 0)
@@ -1171,6 +1172,8 @@ public partial class DatabaseEngine
                     entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
                 }
 
+                clusterState.PrepMaskTicks += Stopwatch.GetTimestamp() - subSpan;
+                clusterState.PrepDirtyClusters = dirtyClusterCount;
                 clusterScope.DirtyClusterCount = dirtyClusterCount;
                 clusterScope.EntryCount = entryCount;
 
@@ -1182,6 +1185,7 @@ public partial class DatabaseEngine
                 {
                     clusterScope.HasShadow = 1;
                     var shadowScope = TyphonEvent.BeginWriteTickFenceClusterShadow(meta.ArchetypeId, dirtyClusterCount);
+                    subSpan = Stopwatch.GetTimestamp();
                     try
                     {
                         shadowScope.TotalShadowEntries = ProcessClusterShadowEntries(clusterState, engineState, changeSet);
@@ -1190,14 +1194,21 @@ public partial class DatabaseEngine
                     {
                         shadowScope.Dispose();
                     }
+
+                    clusterState.PrepShadowTicks += Stopwatch.GetTimestamp() - subSpan;
+
+                    subSpan = Stopwatch.GetTimestamp();
                     RecomputeClusterZoneMaps(clusterState, dirtyBits);
+                    clusterState.PrepZoneMapTicks += Stopwatch.GetTimestamp() - subSpan;
                 }
 
                 // Detect migrations: populates clusterState.PendingMigrations. Spatial-only — Dynamic mode.
                 if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
                 {
                     clusterScope.HasSpatial = 1;
+                    subSpan = Stopwatch.GetTimestamp();
                     DetectClusterMigrations(clusterState, engineState, meta.ArchetypeId, dirtyBits, ref accessor);
+                    clusterState.PrepDetectTicks += Stopwatch.GetTimestamp() - subSpan;
                 }
             }
             finally
@@ -1222,7 +1233,9 @@ public partial class DatabaseEngine
         // trivial. On-demand grow under _finalizeLock (ArchetypeClusterState.GrowFenceDirtyBitsForChunkId) remains as a safety net for pathological cases.
         var existingLen = clusterState.FenceDirtyBits?.Length ?? 0;
         var upperBound = Math.Max(clusterState.PrimarySegmentCapacity, existingLen) + 2 * clusterState.PendingMigrationCount + 64;
+        var preSizeStart = Stopwatch.GetTimestamp();
         clusterState.PreSizeMigrationBuffers(upperBound);
+        clusterState.PrepPreSizeTicks += Stopwatch.GetTimestamp() - preSizeStart;
 
         // Memoize popcount of ClusterProcessBitmap so the AabbRefresh planner doesn't redo it on TickDriver (D-4).
         // Only meaningful in BarrierOnly mode; Legacy mode reads ActiveClusterCount directly.

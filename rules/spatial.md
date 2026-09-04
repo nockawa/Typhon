@@ -71,11 +71,11 @@
             cluster migration, and leaf-slot swap. A key that can be re-minted while the payload is alive is
             not a valid back-pointer key, however convenient it is to reach.
   note 🔴 the key is a PAYLOAD id, not necessarily an entity id. SpatialRTree is generic over what it indexes:
-       the entity-level trees key on EntityId, the per-cell cluster trees of #872 step 9 key on a CLUSTER chunk
+       the entity-level trees keyed on EntityId, the per-cell cluster trees of #872 step 9 key on a CLUSTER chunk
        id. The field was called EntityId until step 9 renamed it to PayloadId, which read as a type guarantee
-       it never made.
-  scope: SpatialMaintainer.InsertSpatial / UpdateSpatialCore / RemoveFromSpatial,
-         SpatialRTree.Insert (the new-entry write), ScatterLeafEntries, Remove,
+       it never made. Since #872 step 13 there is only the cluster kind — see SH-01 — so the payload id is
+       always a cluster chunk id and PayloadBackPointers is the only back-pointer store left.
+  scope: SpatialRTree.Insert (the new-entry write), ScatterLeafEntries, Remove,
          CellClusterTree.Add / UpdateAt / RemoveAt (which read the array rather than holding a handle)
   on_violation: the lookup misses, the update falls through to a fresh Insert, the prior leaf entry is orphaned →
     duplicate EntityIds in the tree (TreeValidator "R5 violation"); or update/remove targets the wrong leaf slot
@@ -155,7 +155,10 @@
 ### SQ-05: Traversal buffer safety `[silent]`
   invariant stackTop < 256 for all DFS-based queries
   invariant RayEnumerator never drops a child that hits within maxDist while below MaxRayHeapCapacity
-  scope: AABBQueryEnumerator, OccupantQueryEnumerator, FrustumEnumerator, CountInAABB, RayEnumerator
+  scope: AABBQueryEnumerator, FrustumEnumerator, CountInAABB, RayEnumerator
+  note OccupantQueryEnumerator was a fifth DFS enumerator here until #872 step 13. It yielded the payload id AND
+       the owning component's chunk id, which only the entity-level tree could supply; its last two callers were
+       the interest and trigger systems' entity-tree paths, removed with that tree.
   on_violation: children silently dropped → incomplete results with no error indication.
     The overflow branch records SpatialRTreeDiagnostics.RecordDfsStackOverflow — an always-on counter, deliberately
     non-throwing because an optimistic read latch is held. Corrected 2026-07-27: this rule previously said
@@ -178,16 +181,13 @@
 
 ## Module: Fat AABB Updates
 
-### SF-01: Fat AABB containment — fast vs slow path `[perf]`
-  invariant E.tightAABB ⊂ E.fatAABB → no tree mutation (fast path, ~25ns)
-  invariant E.tightAABB ⊄ E.fatAABB → remove + reinsert with new fat AABB (slow path, ~500ns)
-  scope: SpatialMaintainer.UpdateSpatial
-  on_violation: entity position diverges from tree position; queries return stale spatial data
-
-### SF-02: Static tree skip `[perf]`
-  never tick fence / batch update processing visits static tree entities
-  scope: SpatialMaintainer, SpatialIndexState
-  on_violation: wasted CPU on immutable data; potential accidental mutation of bulk-loaded tree
+> 🔴 **RETIRED by #872 step 13, kept as a record of what the rules used to constrain.** `SF-01` and `SF-02`
+> described the entity-level R-Tree's per-entity maintenance: a fat-AABB containment test deciding between an
+> in-place update and a remove-plus-reinsert, and a static-mode skip at the tick fence. Both scoped
+> `SpatialMaintainer` methods that had had no caller since #666 made every archetype cluster-backed, and step 13
+> deleted them along with the tree. The equivalent invariants on the surviving mechanism are `ST-07` (the
+> escape-bound in-place update, which is the same fast/slow split one level up, on CLUSTER bounds) and `CA-01`
+> (containment). Nothing was weakened; the subject moved.
 
 ---
 
@@ -197,7 +197,12 @@
   invariant ∀ entity transition (outside→inside) between consecutive evaluations → exactly one Enter event
   invariant ∀ entity transition (inside→outside) between consecutive evaluations → exactly one Leave event
   never an entity inside at both evaluations produces Enter or Leave (only Stay if subscribed)
-  scope: SpatialTriggerSystem.EvaluateRegion
+  invariant 🔴 occupancy is tracked by ENTITY ID, never by a bitmap over component chunk ids. Cluster storage has
+            its own chunk-id namespace, so a bitmap indexed by the component table's would collide two different
+            entities onto one bit and report neither transition. The bitmap form was correct for the entity-level
+            tree, whose payload WAS a component chunk id; #872 step 13 removed that tree and with it the last
+            thing that could populate one.
+  scope: SpatialTriggerSystem.EvaluateRegion, CollectClusterOccupants
   on_violation: game logic misses zone transitions or fires duplicate events
 
 ### TV-02: Frequency contract `[perf]`
@@ -227,6 +232,22 @@
   never Versioned tables participate in ring buffer system
   scope: SpatialInterestSystem
   on_violation: DirtyBitmap infrastructure doesn't exist for Versioned → crash or undefined behavior
+
+### IM-04: Both systems read the cluster index, and both are reachable from production `[fatal]`
+  invariant SpatialInterestSystem and SpatialTriggerSystem resolve entities ONLY through the per-cell cluster
+            index — QueryAabb for a region, the per-ARCHETYPE ClusterDirtyRing for a delta. Neither may acquire
+            an entity-level index of its own (SH-01 forbids one existing).
+  invariant 🔴 each has a PUBLIC entry point, and a test drives it through that entry point rather than through
+            the internal factory. This is not a style preference: before #872 step 13 the only callers were tests
+            and benchmarks reaching `GetOrCreate…System` directly, and the one production reference was a
+            null-conditional read of a field production never assigned. A subsystem whose sole exercise is a test
+            that constructs it by hand cannot be distinguished from a subsystem that has quietly stopped working,
+            which is exactly what had happened: the half of each that read the entity tree had been querying an
+            empty index since #666.
+  scope: SpatialObserverExtensions.SpatialObservers, SpatialObserverExtensions.SpatialTriggers,
+         SpatialInterestSystem.GetSpatialChanges, SpatialTriggerSystem.EvaluateRegion
+  on_violation: an observer or region silently reports nothing, and no test notices because none reaches the code
+    the way a caller would
 
 ---
 
@@ -519,6 +540,57 @@
 
 ---
 
+### CR-05: One source slot, one request `[fatal][silent]`
+  invariant no two entries of a tick's drain prefix — PendingMigrations[0, PendingMigrationDrainCount) — may name
+    the same (SourceClusterChunkId, SourceSlotIndex). The prefix has four producers (the cell-crossing detector and
+    the outlier guard in Prep's core, relocations carried from last tick's AabbRefresh, and the repair planner), and
+    nothing downstream reconciles them
+  invariant 🔴 ExecuteMigrations does NOT enforce this and must not be read as if it did. Its step-0 stale-source
+    guard tests OCCUPANCY — (srcOcc & (1UL << srcSlot)) == 0 — not IDENTITY. It therefore covers only the case where
+    the freed slot is still empty when the second request drains. When any ClaimSlotInCell in the same Migrate pass
+    has handed that slot to an unrelated migrant, the second request migrates THAT entity to a destination chosen
+    for someone else, and the victim's EntityMap entry and index rows then describe storage it does not occupy
+  invariant the two exclusions are separate mechanisms because the collisions have different lifetimes, and neither
+    subsumes the other:
+    cross-tick — a relocation is detected in AabbRefresh and decided by the NEXT Prep, by which time the crossing
+                 detector may have filed a CellCrossing for the same entity. The throttle DROPS the relocation:
+                 mandatory outranks quality, and the relocation's destination was the least-enlargement choice
+                 against last tick's AABBs for an entity that has since left the cell entirely
+    same-tick  — the crossing detector and the repair planner both run in Prep, so the planner must not GATHER a
+                 slot the queue already claims. Excluded at UnitPopulation as well as at the gather, so the budget
+                 projection matches the work that will actually happen
+  invariant a superseded relocation is counted separately from a throttled one (RelocationsSuperseded, not
+    RelocationsThrottled). A throttled relocation is one the BUDGET refused and is the signal that the budget is too
+    small; a superseded one was refused by nothing — its entity migrates regardless. Folding them reports budget
+    pressure that does not exist, against the number step 11's controller is tuned on. TH-02's identity therefore
+    reads DriftersDetected = admitted + throttled + superseded + unplaced
+  invariant a repair unit whose clusters held an excluded slot must NOT be memoised as a no-op. The no-op memo keys
+    on the unit's bounds hash, and exclusions change the partition without changing any bound — so memoising would
+    drop the cell from the queue against a hash that still matches next tick, and nomination only re-queues a cell
+    whose bounds move. Such a unit is left in the queue, unmemoised, to age
+  invariant only MANDATORY requests supersede. Detection visits each slot of each cluster once and a throttled
+    relocation is dropped rather than carried, so the queue never holds two relocations for one slot; recording
+    relocation sources as claims would drop a legitimate re-filing on some later tick
+  scope: ArchetypeClusterState.ApplyMigrationThrottle, ArchetypeClusterState.BuildRepairSourceExclusions,
+    ArchetypeClusterState.ExcludedSourceSlots, ArchetypeClusterState.UnitHasExcludedSources,
+    ArchetypeClusterState.AssertNoDuplicateMigrationSources, SpatialMigrationTelemetry.RelocationsSuperseded
+  verified: ClusterMigrationSourceExclusivityTests — the supersede rule and its two negative controls driven
+    directly against the queue, plus an end-to-end arm on a world where crossings, drift and repair all fire, whose
+    own guard fails if the workload never produced a collision. AssertNoDuplicateMigrationSources runs on every Prep
+    in DEBUG, so the whole suite is a net for this. Ablated: disabling the throttle's supersede filter reddens two
+    of the three; disabling the planner's exclusion reddens the end-to-end arm with the CR-05 message
+  on_violation:
+    the common outcome is benign — the crossing drains first and the stale-source guard skips the second request —
+      which is what let this survive step 12, step 11 and a 5 800-test suite
+    when the slot has been refilled: an entity is silently moved by a request filed for a different entity. Observed
+      as three unrelated-looking symptoms from one cause — "Entity(...) not found or not visible" on a later
+      OpenMut, "B+Tree bulk update reached an invalid child", and an AccessViolationException (#877)
+    peak damage is at a MIDDLING budget, not a large one: below the cliff the planner admits nothing and above it a
+      cell is repaired in one unit. Measured 0/12 seeds at 0.5 ms, 6/12 at 1.0 ms, 3/12 at 4.0 ms, 0/12 at 16 ms —
+      so a fixture at an arbitrary budget would very likely have sat in a clean band
+
+---
+
 ## Module: Cell repair — the full Morton re-sort (Issue #872 step 12)
 
 ### RP-01: A repair unit is admitted whole or not at all `[fatal][silent]`
@@ -733,9 +805,13 @@
     zero read as "disable relocation" → placement silently reverts to first fit with every counter reading zero
 
 ### TH-02: Every detected drifter is accounted for exactly once `[silent]`
-  invariant over one tick's detection: DriftersDetected == admitted + throttled + unplaced, where `admitted` and
-    `throttled` are observed on the FOLLOWING tick — detection runs in AabbRefresh, which follows Migrate, so its
-    requests are decided by the next tick's Prep
+  invariant over one tick's detection: DriftersDetected == admitted + throttled + superseded + unplaced, where
+    `admitted`, `throttled` and `superseded` are observed on the FOLLOWING tick — detection runs in AabbRefresh,
+    which follows Migrate, so its requests are decided by the next tick's Prep
+  invariant `superseded` (CR-05) is a term of its own and not a kind of throttling. A relocation dropped because a
+    cell crossing already claims its source slot was refused by nothing; counting it as throttled would report
+    budget pressure that does not exist. It is zero on any tick with no crossings, which is why the verifying
+    fixture — a single-cell world — never observes it and a fixture that means to must cross cells
   invariant 🔴 `admitted` means RELOCATIONS admitted. MigrationCount stands in for it only where the tick carries
     no cell crossings and no repair moves, because that counter sums all three kinds; the verifying fixture pins
     both away deliberately. State the precondition rather than reading the identity as unconditional
@@ -747,7 +823,7 @@
     from "this cell has run out of room"; those have opposite remedies
   scope: ArchetypeClusterState.DetectDriftersInCluster, SpatialMigrationTelemetry.DriftersDetected,
     SpatialMigrationTelemetry.DriftAbsorbedCount, SpatialMigrationTelemetry.DriftersUnplaced,
-    SpatialMigrationTelemetry.RelocationsThrottled
+    SpatialMigrationTelemetry.RelocationsThrottled, SpatialMigrationTelemetry.RelocationsSuperseded
   verified: ClusterThrottleBudgetTests.EveryDetectedDrifterIsAccountedForExactlyOnce asserts the lagged identity
     on every tick of a nine-tick run, having first established that both absorption and throttling occurred
   on_violation:
@@ -813,6 +889,77 @@
   on_violation:
     invalidate omitted → the re-packed cluster inherits a stale wide bound and prunes nothing
     invalidate without a following widen → the map reads "unknown", which is conservative but buys no pruning
+
+---
+
+## Module: One spatial index home (Issue #872 step 13)
+
+### SH-01: There is exactly one spatial index, and it is the per-cell cluster index `[fatal][silent]`
+  invariant no SpatialRTree is constructed, held or handed out anywhere outside the per-cell cluster layer.
+    CellClusterTree owns the only instances; SpatialRTree itself may return one (bulk load); TreeValidator may be
+    handed one to check. Nothing else — no ComponentTable, no SpatialIndexState, no query path, no maintenance
+    helper — may acquire one
+  invariant a component carrying [SpatialIndex] allocates NO StorageSegmentKind.Spatial segment. Three used to be
+    allocated per spatial component — the tree, its back-pointer segment, and a Layer-1 occupancy hashmap —
+    persisted into the file and reloaded on open
+  invariant SpatialIndexState carries FIELD metadata (offset, shape, mode, category) and the cluster-archetype
+    fan-out list. It carries no index. Everything it describes is derived from the schema attribute, so nothing
+    about it is persisted and the load path builds it exactly as the create path does
+  invariant every query shape — AABB, radius, ray, frustum — resolves through the cluster path. None may throw
+    NotSupportedException for want of a cluster implementation, which is what EcsQuery did for ray and frustum
+    until this step wired in the step-9 implementations
+  note 🔴 the danger of a SECOND home is not that it is slow, it is that it is EMPTY and nobody notices. #666 made
+       IsClusterEligible unconditionally true, which left every entity-tree writer either behind a
+       `!IsClusterEligible` guard or with no caller at all — verified at runtime with throw probes at
+       InsertSpatial / RemoveFromSpatial / UpdateSpatialBatch: zero trips across 5 771 tests. The tree stayed
+       allocated, persisted, reloaded and TRAVERSED BY EVERY SPATIAL QUERY for three issues, contributing nothing
+       and costing a full descent of an empty structure each time. A rule stating "one home" is the only thing
+       that makes a second one a violation rather than an oversight
+  scope: ComponentTable.BuildSpatialIndex, SpatialIndexState, EcsQuery.ExecuteSpatial, CellClusterTree,
+    SpatialRTree, PagedMMF.DatabaseFormatRevision
+  verified: EntityIndexRetirementTests.NoTypeOutsideTheCellLayerHoldsASpatialRTree walks every field, property,
+    method return and parameter in the engine assembly by REFLECTION rather than by text search — a grep for
+    `new SpatialRTree` misses a factory and stops matching on a rename, where naming the type through typeof
+    breaks the build instead; ASpatialComponentAllocatesNoSpatialSegment counts segments by kind, which is what
+    makes "allocated but unread" observable at all; EveryQueryShape_AgreesWithBruteForce and the promoted /
+    unpromoted arms of Ray_MatchesBruteForce and Frustum_MatchesBruteForce establish SQ-01 across the whole
+    surface against an independent oracle; SpatialGridReopenTests asserts the NEGATIVE of what it asserted before
+    the step, which is the polarity flip that makes the removal a fact rather than a claim
+  on_violation:
+    a second home appears → it is empty, every query pays to traverse it, and no test fails
+    a Spatial segment is still allocated → the file carries pages nothing reads, and the format is a lie
+    a shape throws instead of resolving → the capability is lost with the tree that used to provide it
+
+### SH-02: The leaf entry carries a payload id and a category mask, and nothing else `[fatal][silent]`
+  invariant leafEntrySize == CoordCount * CoordSize + 8 + 4. A 4-byte ComponentChunkId column sat between the two
+    until this step; it named the owning component's chunk so a two-pass compound query could reach component
+    storage without an EntityMap lookup — a service only the ENTITY-level tree could offer, since a cluster tree's
+    payload IS a cluster chunk id and it wrote zero there
+  invariant removing it RAISES LeafCapacity, and the numbers are stated rather than derived at review time:
+    R2Df32 15 -> 17, R3Df32 11 -> 13, R2Df64 9 -> 10, R3Df64 11 -> 11 (its 704-byte entry area divides by 60 the
+    same way it divided by 64 — the freed bytes are not yet a whole entry)
+  invariant the layout is now PROCESS-LOCAL: after #872 step 13 no persisted structure uses it. CellClusterTree is
+    SpatialRTree<TransientStore> over a heap-backed segment, so the leaf entry is never written to a file
+  invariant 🔴 the step still carries a DatabaseFormatRevision bump, for the SEGMENTS rather than the layout. A v7 file
+    holds up to three StorageSegmentKind.Spatial segments per spatial component plus a `spatial.<component>` bootstrap
+    entry; this build allocates, reads and frees none of them, so those pages would be allocated and owned by nothing —
+    unnameable by the page classifier, unreachable by the integrity checker, never reclaimed
+  note 🔴 CORRECTED. This rule first justified the bump by the leaf layout, asserting that the cluster trees share it
+       and "ARE written". They are not. The bump is right and the reason was wrong, which is the worse failure of the
+       two: the next person weighing a layout change weighs it against a hazard that does not exist
+  scope: SpatialNodeDescriptor, SpatialNodeHelper.ReadLeafEntityId / WriteLeafEntityId / CopyLeafEntry,
+    SpatialRTree.Insert, ScatterLeafEntries, BulkLoad, PagedMMF.DatabaseFormatRevision
+  verified: SpatialNodeDescriptorTests.KnownCapacities_MatchDesignDoc states all four capacities as literals;
+    LeafSoaLayout_HasNoGapBetweenPayloadIdsAndCategoryMasks asserts the OFFSETS rather than the derived capacity,
+    so a future change that removes one column and adds another of the same width cannot leave the fan-out numbers
+    looking right; SegmentGeometryPersistenceTests.ABundleFromAnOlderRevisionIsRefusedByTheVersionGate forges an
+    older revision and requires the refusal to name both revisions — reading the expected one from the engine
+    constant rather than as a literal, because hard-coding it made every bump redden a test about message shape
+  on_violation:
+    layout changed without the bump → an old file opens and serves wrong clusters, silently
+    capacity numbers drift from the rule → the arithmetic is no longer reviewable and the next change is a guess
+
+---
 
 ## Module: ClusterCellMap (Issue #229)
 

@@ -119,6 +119,16 @@ public partial class DatabaseEngine
             // limit of what a reader can check, and six more would make a mis-ordered pair of ints a silent telemetry bug rather than a compile error.
             MigrationTotalMs = clusterState.LastTickMigrationTotalMs,
             RelocationsThrottled = clusterState.LastTickRelocationsThrottled,
+            RelocationsSuperseded = clusterState.LastTickRelocationsSuperseded,
+            PrepSnapshotMs = TicksToMs(clusterState.PrepSnapshotTicks),
+            PrepMaskMs = TicksToMs(clusterState.PrepMaskTicks),
+            PrepShadowMs = TicksToMs(clusterState.PrepShadowTicks),
+            PrepZoneMapMs = TicksToMs(clusterState.PrepZoneMapTicks),
+            PrepDetectMs = TicksToMs(clusterState.PrepDetectTicks),
+            PrepThrottleMs = TicksToMs(clusterState.PrepThrottleTicks),
+            PrepPlanMs = TicksToMs(clusterState.PrepPlanTicks),
+            PrepPreSizeMs = TicksToMs(clusterState.PrepPreSizeTicks),
+            PrepDirtyClusters = clusterState.PrepDirtyClusters,
             DriftersUnplaced = clusterState.LastTickDriftersUnplaced,
             RepairValveFires = clusterState.LastTickRepairValveFires,
             RepairQueueDepth = clusterState.RepairQueue?.Count ?? 0,
@@ -129,6 +139,9 @@ public partial class DatabaseEngine
     }
 
     /// <summary>One archetype's queue-maintenance time in milliseconds, or zero when it has no queue yet.</summary>
+    /// <summary>Stopwatch ticks to milliseconds. The sub-spans are accumulated as raw timestamps to keep the bracket to one subtraction.</summary>
+    private static double TicksToMs(long ticks) => ticks * 1000d / System.Diagnostics.Stopwatch.Frequency;
+
     private static double QueueMaintenanceMs(ArchetypeClusterState clusterState) =>
         clusterState.RepairQueue == null ? 0d : clusterState.RepairQueue.LastTickMaintenanceTicks * 1000d / Stopwatch.Frequency;
 
@@ -161,6 +174,7 @@ public partial class DatabaseEngine
         var repairRefused = 0;
         var migrationTotalMs = 0d;
         var relocationsThrottled = 0;
+        var relocationsSuperseded = 0;
         var driftersUnplaced = 0;
         var valveFires = 0;
         var queueDepth = 0;
@@ -192,6 +206,7 @@ public partial class DatabaseEngine
             repairRefused += clusterState.LastTickRepairUnitsRefused;
             migrationTotalMs += clusterState.LastTickMigrationTotalMs;
             relocationsThrottled += clusterState.LastTickRelocationsThrottled;
+            relocationsSuperseded += clusterState.LastTickRelocationsSuperseded;
             driftersUnplaced += clusterState.LastTickDriftersUnplaced;
             valveFires += clusterState.LastTickRepairValveFires;
             queueDepth += clusterState.RepairQueue?.Count ?? 0;
@@ -213,6 +228,7 @@ public partial class DatabaseEngine
         {
             MigrationTotalMs = migrationTotalMs,
             RelocationsThrottled = relocationsThrottled,
+            RelocationsSuperseded = relocationsSuperseded,
             DriftersUnplaced = driftersUnplaced,
             RepairValveFires = valveFires,
             RepairQueueDepth = queueDepth,

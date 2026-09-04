@@ -480,18 +480,22 @@ public enum TraceEventKind : byte
     /// <summary>TierClusterIndex version-skip — rebuild bypassed because version unchanged. Payload: <c>archetypeId: u16</c>, <c>version: i32</c>, <c>reason: u8</c>.</summary>
     SpatialTierIndexVersionSkip = 137,
 
-    // ── Spatial Maintain pipeline ──
+    // ── Spatial Maintain pipeline — RETIRED by #872 step 13 ──
+    //
+    // All four described the entity-level R-Tree's per-entity maintenance, which was removed with the tree. The values
+    // are RESERVED rather than deleted: this enum is a wire format, and handing a retired number to a new event would
+    // make an old trace decode as something it is not. Nothing emits them.
 
-    /// <summary>Maintain.InsertSpatial — wraps RTree.Insert + back-pointer + occupancy. Payload: <c>entityPK: i64</c>, <c>componentTypeId: u16</c>, <c>didDegenerate: u8</c>.</summary>
+    /// <summary>RETIRED (#872 step 13). Was: Maintain.InsertSpatial — RTree.Insert + back-pointer + occupancy.</summary>
     SpatialMaintainInsert = 138,
 
-    /// <summary>Maintain.UpdateSpatial slow-path — escape detected, remove + reinsert. Payload: <c>entityPK: i64</c>, <c>componentTypeId: u16</c>, <c>escapeDistSq: f32</c>.</summary>
+    /// <summary>RETIRED (#872 step 13). Was: Maintain.UpdateSpatial slow path — escape detected, remove + reinsert.</summary>
     SpatialMaintainUpdateSlowPath = 139,
 
-    /// <summary>Degenerate AABB validation failure. Payload: <c>entityPK: i64</c>, <c>componentTypeId: u16</c>, <c>opcode: u8</c> (0=insert, 1=update, 2=remove).</summary>
+    /// <summary>RETIRED (#872 step 13). Was: degenerate AABB validation failure on the entity-tree write path.</summary>
     SpatialMaintainAabbValidate = 140,
 
-    /// <summary>Spatial back-pointer write (componentChunkId → leafChunkId+slotIndex). Payload: <c>componentChunkId: i32</c>, <c>leafChunkId: i32</c>, <c>slotIndex: u16</c>.</summary>
+    /// <summary>RETIRED (#872 step 13). Was: spatial back-pointer write (componentChunkId → leafChunkId + slotIndex).</summary>
     SpatialMaintainBackPointerWrite = 141,
 
     // ── Spatial Trigger system ──
@@ -1028,10 +1032,8 @@ public enum TraceEventKind : byte
     /// Gated on <c>RuntimeWriteTickFenceShadowActive</c>.</summary>
     WriteTickFenceShadow = 252,
 
-    /// <summary>Per-tick span around <c>ProcessSpatialEntries</c> for one ComponentTable (R-Tree position update for dirty entities).
-    /// Required payload: <c>componentTypeId: u16</c>, <c>dirtyEntryCount: i32</c>.
-    /// Optional payload: <c>escapedCount: i32</c> (entities whose new position escaped their fat AABB and got reinserted).
-    /// Gated on <c>RuntimeWriteTickFenceSpatialActive</c>.</summary>
+    /// <summary>RETIRED (#872 step 13). Was: per-tick span around <c>ProcessSpatialEntries</c> for one ComponentTable.
+    /// That pass maintained the entity-level R-Tree, which no longer exists; the value is reserved, not reused.</summary>
     WriteTickFenceSpatial = 253,
 
     // Cluster-scope per-archetype fence spans live at IDs 61-63 (next to ClusterMigration = 60).

@@ -1,0 +1,1578 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Typhon.Engine;
+using Typhon.Engine.Internals;
+using Typhon.Schema.Definition;
+
+namespace Typhon.Benchmark;
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// #872 — the spatial partitioning matrix.
+//
+// ONE workload, run across a cross product of world shape, motion model, density and population, with the same
+// instrumentation taken every time. The point is not any single number: it is which axis each cost actually tracks.
+// The design's own open questions are the ones this answers with measurements rather than estimates — Q2 (escape
+// rate), Q4 (ns/entity for re-clustering), Q6 (the budget → tightness → selectivity curve) and Q7 (migration rate
+// under real motion, and how much hysteresis absorbs).
+//
+// Everything reported is either a wall-clock measurement taken here or a counter the engine already publishes on
+// SpatialMigrationTelemetry. Nothing is derived from a model.
+//
+// Run:  bin/Release/net10.0/Typhon.Benchmark.exe --profile-partition [--matrix A|B|C|D|all] [--ticks N] [--csv path]
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+[Component("Typhon.Benchmark.SpMat.Pos2", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct SpMatPos2
+{
+    [Field]
+    [SpatialIndex(1.0f)]
+    public AABB2F Bounds;
+
+    /// <summary>Indexed and non-unique — a realistic archetype pays index staging on every migration, and omitting it
+    /// would measure a shape nothing ships.</summary>
+    [Field]
+    [Index(AllowMultiple = true)]
+    public int Tag;
+}
+
+[Component("Typhon.Benchmark.SpMat.Pos3", 1, StorageMode = StorageMode.SingleVersion)]
+[StructLayout(LayoutKind.Sequential)]
+struct SpMatPos3
+{
+    [Field]
+    [SpatialIndex(1.0f)]
+    public AABB3F Bounds;
+
+    [Field]
+    [Index(AllowMultiple = true)]
+    public int Tag;
+}
+
+[Archetype]
+partial class SpMatUnit2 : Archetype<SpMatUnit2>
+{
+    public static readonly Comp<SpMatPos2> Pos = Register<SpMatPos2>();
+}
+
+[Archetype]
+partial class SpMatUnit3 : Archetype<SpMatUnit3>
+{
+    public static readonly Comp<SpMatPos3> Pos = Register<SpMatPos3>();
+}
+
+/// <summary>How entities move between ticks. The names are behavioural, not cosmetic — each stresses a different part.</summary>
+internal enum MotionModel
+{
+    /// <summary>Nothing moves. The floor: what a tick costs when the partition has no work at all.</summary>
+    Static,
+
+    /// <summary>Small jitter well inside a cell. No crossings; maximum INTRA-cell drift, which is what relocation and repair exist for.</summary>
+    Drift,
+
+    /// <summary>Steady motion crossing a cell every few ticks — the ordinary case the hysteresis margin is sized for.</summary>
+    Cruise,
+
+    /// <summary>A tenth of the population teleports to a random point each tick. The migration-storm shape.</summary>
+    Warp,
+
+    /// <summary>Circular motion about the world centre. Smooth, coherent, and every entity crosses cells at a predictable rate.</summary>
+    Orbit,
+
+    /// <summary>Groups whose centroids random-walk and whose members follow. Locality is PRESERVED while cells are crossed.</summary>
+    Swarm,
+}
+
+/// <summary>Where entities are at spawn.</summary>
+internal enum Distribution
+{
+    /// <summary>Even over the world. Every cell holds roughly the same count.</summary>
+    Uniform,
+
+    /// <summary>90 % of the population inside 5 % of the world. Cell occupancy is wildly uneven, which is what the repair queue ranks over.</summary>
+    Clustered,
+}
+
+/// <summary>One row of the matrix: everything measured for one (shape, motion, distribution, population, config) point.</summary>
+internal sealed class RunResult
+{
+    public string Matrix;
+    public int Dim;
+    public MotionModel Motion;
+    public Distribution Dist;
+    public int Entities;
+    public float CellSize;
+    public float BudgetMs;
+    public int Ticks;
+
+    // Build
+    public double SpawnMs;
+    public double FirstFenceMs;
+
+    /// <summary>
+    /// <c>RuntimeOptions.WorkerCount</c> the run was driven at — the variable this whole harness exists to sweep.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>The first version of this harness called <c>dbe.WriteTickFence()</c> directly and had no such field.</b> That entry point runs
+    /// <c>WriteTickFenceCore</c>, a serial <c>foreach</c> over component tables; the parallel fence is a DAG dispatched by <c>TyphonRuntime</c> through
+    /// <c>FenceWorkPlan</c>, and nothing but the runtime reaches it. Every migration and fence number that harness produced was therefore a
+    /// single-threaded measurement of a subsystem whose design is explicitly "parallel across cells, divided by W" — compared, in the write-up, against
+    /// per-worker projections. The numbers were not conservative, they were answering a different question.
+    /// </remarks>
+    public int Workers;
+
+    /// <summary>Whether positions were written through the spatial barrier rather than <c>OpenMut</c>.</summary>
+    public bool Barrier;
+
+    /// <summary>
+    /// Which branch of Prep the run actually took: 1 = clean-bitmap (barrier), 2 = dirty-bitmap (OpenMut), 0 = no work.
+    /// </summary>
+    /// <remarks>
+    /// Recorded rather than inferred from the flag, because declaring <c>SetSpatialBarrierOnly</c> and then writing
+    /// through <c>OpenMut</c> silently takes the dirty branch anyway — a contract break the telemetry tests warn about.
+    /// A run that means to measure path 1 and reports 2 has measured the wrong thing, which is exactly what happened
+    /// before this column existed.
+    /// </remarks>
+    public int FenceBranchPath;
+
+    /// <summary>Fraction of the population that moved per tick — 1.0 is the stress case, not the expected one.</summary>
+    public float MovingFraction = 1f;
+
+    // Steady-state tick cost. FenceSpanMs is WALL time — what a frame budget is actually spent against. The Cpu columns sum per-chunk time across workers,
+    // which is what the design's per-entity costs are quoted in and what the throttle's budget charges. Reporting one as the other is how a 12-thread box
+    // reads as a 12x regression, or a serial run as a pass.
+    public double TickMsMean;
+    public double TickMsP50;
+    public double TickMsP99;
+    public double TickMsMax;
+
+    // Per-phase, from TyphonRuntime's own instrumentation rather than a stopwatch wrapped around something adjacent. Span = wall, Cpu = summed across
+    // chunks. The six together are the whole fence, which is what makes the residual attributable.
+    public double PrepSpanUs, PrepCpuUs;
+    public double MigrateSpanUs, MigrateCpuUs;
+    public double IndexSpanUs, IndexCpuUs;
+    public double EntityMapSpanUs, EntityMapCpuUs;
+    public double AabbSpanUs, AabbCpuUs;
+    public double FinalizeSpanUs, FinalizeCpuUs;
+    public double FenceSpanUs, FenceCpuUs;
+    public long FenceChunks;
+    public double MoveMs;
+
+    // What the fence actually did, per tick
+    public double MigrationsPerTick;
+    public double MigrationExecuteMs;
+    public double MigrationTotalMs;
+    public double DriftersPerTick;
+    public double DriftAbsorbedPerTick;
+    public double HysteresisAbsorbedPerTick;
+    public double ThrottledPerTick;
+
+    /// <summary>Relocations dropped because a crossing already claimed the entity (#877) — a normal, healthy number on a moving world, not a defect signal.</summary>
+    public double SupersededPerTick;
+
+    /// <summary>Prep's internal split, ms/tick, in phase order — the measurement that gates the design's ranking of which step to optimise.</summary>
+    public double PrepSnapshotMs, PrepMaskMs, PrepShadowMs, PrepZoneMapMs, PrepDetectMs, PrepThrottleMs, PrepPlanMs, PrepPreSizeMs;
+
+    /// <summary>Clusters surviving the occupancy mask — the domain a sliced Prep would partition.</summary>
+    public double PrepDirtyClustersPerTick;
+    public double UnplacedPerTick;
+    public double ClustersScannedPerTick;
+
+    // Repair
+    public double RepairEntitiesPerTick;
+    public double RepairUnitsPerTick;
+    public double RepairRefusedPerTick;
+    public double BudgetUsedMs;
+    public double MeasuredNsPerEntity;
+    public double QueueDepth;
+    public long QueueEvicted;
+    public double QueueMaintenanceMs;
+    public long ValveFires;
+
+    // Partition shape
+    public int ActiveClusters;
+    public int LiveCells;
+    public double EntitiesPerCluster;
+    public double EntitiesPerCell;
+    public double TightnessPct;      // mean cluster max-axis extent as % of cell size — the selectivity proxy
+    public double TightnessP90Pct;
+
+    // Query cost (ns per query) and yield (hits per query)
+    public double AabbSmallNs, AabbSmallHits;
+    public double AabbMediumNs, AabbMediumHits;
+    public double AabbLargeNs, AabbLargeHits;
+    public double RadiusNs, RadiusHits;
+    public double RayNs, RayHits;
+    public double FrustumNs, FrustumHits;
+    public double BruteForceNs;      // same medium AABB, scanned entity by entity through the public API
+
+    /// <summary>Empty when the run completed; otherwise the exception that ended it. Recorded rather than thrown — see <c>RunOne</c>.</summary>
+    public string Failure = "";
+
+    public string Key => $"{Dim}D/{Motion}/{Dist}/{Entities}";
+}
+
+public static class SpatialPartitionMatrix
+{
+    /// <summary>
+    /// World side, in world units. <b>Fixed across every run on purpose</b> — query regions are expressed as fractions
+    /// of it, so holding it constant is what makes a query time from one run comparable to another's.
+    /// </summary>
+    private const float WorldExtent = 1_000f;
+
+    /// <summary>
+    /// Worker count every matrix but W runs at.
+    /// </summary>
+    /// <remarks>
+    /// <b>Fixed rather than auto-detected</b> (<c>WorkerCount = -1</c> resolves to <c>ProcessorCount - 4</c>, which is 28 on this box) so that rows from
+    /// different runs and different machines describe the same configuration. Eight is one CCD's worth of physical cores on the Zen 4 part this is
+    /// calibrated on, which is where the competitive benchmarks already cap: crossing the CCD boundary changes the memory system under the measurement,
+    /// and a partitioning study should not have that confounded into it. Matrix W is where the worker count is the variable.
+    /// </remarks>
+    private const int DefaultWorkers = 8;
+
+    /// <summary>
+    /// Write positions through <c>ClusterRef.WriteSpatial</c> (the spatial barrier) instead of <c>Transaction.OpenMut</c>.
+    /// </summary>
+    /// <remarks>
+    /// Selects which branch of Prep runs, and therefore which body of work is being measured — see the note beside
+    /// <c>SetSpatialBarrierOnly</c> in <c>RunOneTyped</c>. Every first-party workload declares barrier-only, so
+    /// <c>--barrier</c> is the configuration that corresponds to shipped code and the default is the one that does not.
+    /// </remarks>
+    private static bool Barrier;
+
+    /// <summary>
+    /// Fraction of the population that moves on any given tick. <c>1.0</c> (the default) means every entity moves every tick.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <b>1.0 is a stress case, not a workload.</b> Five of the six motion models moved every entity by construction, and the writer wrote
+    /// every entity whenever any had moved — so every cluster was dirty on every tick and the campaign reported "97-99 % of clusters dirty" as though
+    /// it were a property of moving worlds. A simulation in which a quarter of the entities move in a tick is already busy; most are far below that.
+    /// Since Prep's cost is what this harness exists to characterise, and Prep's per-cluster work is gated on dirtiness, the moving fraction is a
+    /// first-class variable rather than a constant nobody chose.
+    /// </remarks>
+    private static float MovingFraction = 1f;
+
+    /// <summary>
+    /// Cell size that puts <paramref name="entitiesPerCell"/> entities in the average cell for this population.
+    /// </summary>
+    /// <remarks>
+    /// <para>🔴 <b>Density is the variable that matters, and it is not the one anybody sets.</b> A first cut of this
+    /// harness fixed the world at 10 000 units and the cell at 250, which at 16 000 entities gives 64 000 cells and
+    /// <b>1.13 entities per cluster</b> — every cluster a singleton, whose AABB is the entity. Nothing can be
+    /// re-clustered, so the budget sweep measured seven identical partitions and reported that the budget buys nothing.
+    /// It buys nothing THERE, which is a fact about the geometry, not about the mechanism.</para>
+    /// <para>So the world stays fixed and the CELL is derived: cells = population / entitiesPerCell, and the side is
+    /// that count's square (2D) or cube (3D) root. Occupancy is then the controlled variable across every population,
+    /// and Matrix C sweeps it deliberately.</para>
+    /// </remarks>
+    private static float DeriveCellSize(int dim, int entities, int entitiesPerCell)
+    {
+        var cells = Math.Max(1d, (double)entities / entitiesPerCell);
+        var side = dim == 3 ? Math.Cbrt(cells) : Math.Sqrt(cells);
+        return (float)(WorldExtent / Math.Max(1d, side));
+    }
+
+    public static void Run(string[] args)
+    {
+        var which = ArgString(args, "--matrix", "all").ToUpperInvariant();
+        var ticks = ArgInt(args, "--ticks", 60);
+        var csvPath = ArgString(args, "--csv", "spatial-partition-matrix.csv");
+        Barrier = Array.IndexOf(args, "--barrier") >= 0;
+        MovingFraction = ArgFloat(args, "--moving", 1f);
+
+        var results = new List<RunResult>();
+        var sw = Stopwatch.StartNew();
+
+        Console.WriteLine("#872 spatial partitioning matrix");
+        Console.WriteLine($"  matrix={which}  ticks/run={ticks}  csv={csvPath}");
+        Console.WriteLine($"  cores={Environment.ProcessorCount}  config={(IsDebug() ? "DEBUG (numbers are not comparable to Release)" : "RELEASE")}");
+        Console.WriteLine();
+
+        // One discarded run before anything is recorded. Tiered compilation, the allocator and the page cache are all
+        // process-wide, so whichever matrix point happens to run first otherwise absorbs the warm-up and reports it as
+        // its own cost. Both dispatch paths, for the reason RunMatrixW records.
+        Console.WriteLine("  (warm-up, discarded)");
+        foreach (var warm in new[] { 1, 8 })
+        {
+            RunOne("warmup", 3, MotionModel.Cruise, Distribution.Uniform, 16_000, DeriveCellSize(3, 16_000, 64), budgetMs: 1.0f, ticks: 12, workers: warm);
+        }
+
+        if (which is "A" or "ALL")
+        {
+            RunMatrixA(results, ticks);
+        }
+        if (which is "B" or "ALL")
+        {
+            RunMatrixB(results, ticks);
+        }
+        if (which is "C" or "ALL")
+        {
+            RunMatrixC(results, ticks);
+        }
+        if (which is "D" or "ALL")
+        {
+            RunMatrixD(results, ticks);
+        }
+        if (which is "M" or "ALL")
+        {
+            RunMatrixM(results, ticks);
+        }
+        if (which is "W" or "ALL")
+        {
+            RunMatrixW(results, ticks);
+        }
+
+        sw.Stop();
+        WriteCsv(results, csvPath);
+        Console.WriteLine();
+        Console.WriteLine($"{results.Count} run(s) in {sw.Elapsed.TotalSeconds:F1}s -> {Path.GetFullPath(csvPath)}");
+    }
+
+    // ── Matrix A: the main cross product ────────────────────────────────────────────────────────────────────────
+    //
+    // Every combination of shape, motion and distribution at three populations. This is the matrix that says which
+    // axis each cost tracks; the others hold everything but one variable fixed to trace a curve.
+
+    private static void RunMatrixA(List<RunResult> results, int ticks)
+    {
+        Console.WriteLine("── Matrix A — shape × motion × distribution × population ──────────────────────────────────");
+        int[] populations = [2_000, 8_000, 32_000];
+        MotionModel[] motions = [MotionModel.Static, MotionModel.Drift, MotionModel.Cruise, MotionModel.Warp, MotionModel.Orbit, MotionModel.Swarm];
+        Distribution[] dists = [Distribution.Uniform, Distribution.Clustered];
+
+        foreach (var dim in new[] { 2, 3 })
+        {
+            foreach (var motion in motions)
+            {
+                foreach (var dist in dists)
+                {
+                    foreach (var n in populations)
+                    {
+                        // 64 per cell — one full cluster's worth, so a cell holds a handful of clusters and the
+                        // partition has something to be good or bad at.
+                        var r = RunOne("A", dim, motion, dist, n, DeriveCellSize(dim, n, 64), budgetMs: 1.0f, ticks: ticks);
+                        results.Add(r);
+                        Report(r);
+                    }
+                }
+            }
+        }
+        Console.WriteLine();
+    }
+
+    // ── Matrix B: the budget sweep — design question Q6 ─────────────────────────────────────────────────────────
+    //
+    // Everything fixed but ReclusterBudgetMs. Q6 asks how much selectivity a given frame budget actually buys; the
+    // exchange rate is (tightness gained) per (ms spent), and it is the number the whole architecture trades on.
+
+    private static void RunMatrixB(List<RunResult> results, int ticks)
+    {
+        Console.WriteLine("── Matrix B — budget sweep (Q6: budget → tightness → query cost) ──────────────────────────");
+        float[] budgets = [0f, 0.25f, 0.5f, 1f, 2f, 4f, 8f, 16f];
+
+        // 512 per cell — eight clusters deep, so a cell CAN degrade and a repair unit has something to re-pack. At the
+        // 64-per-cell default of Matrix A most clusters are close to singletons and the budget has nothing to spend on.
+        var cell = DeriveCellSize(3, 16_000, 512);
+        foreach (var b in budgets)
+        {
+            var r = RunOne("B", 3, MotionModel.Drift, Distribution.Uniform, 16_000, cell, budgetMs: b, ticks: ticks);
+            results.Add(r);
+            Report(r);
+        }
+        Console.WriteLine();
+    }
+
+    // ── Matrix C: density ───────────────────────────────────────────────────────────────────────────────────────
+    //
+    // Population and world held fixed, cell size swept so that occupancy runs from 4 to 4 096 entities per cell. This
+    // is the axis the whole design turns on: ADR-046 rejected a per-cell tree on the strength of ~16 entities per cell,
+    // and section 4.1 says the premise inverts at 100 K. A cell-size sweep and a density sweep are the same experiment;
+    // naming it density says which quantity the reader should watch.
+
+    private static void RunMatrixC(List<RunResult> results, int ticks)
+    {
+        Console.WriteLine("── Matrix C — density sweep (entities per cell) ───────────────────────────────────────────");
+        int[] perCell = [4, 16, 64, 256, 1_024, 4_096];
+        foreach (var d in perCell)
+        {
+            var r = RunOne("C", 3, MotionModel.Cruise, Distribution.Uniform, 16_000, DeriveCellSize(3, 16_000, d), budgetMs: 1.0f, ticks: ticks);
+            results.Add(r);
+            Report(r);
+        }
+        Console.WriteLine();
+    }
+
+    // ── Matrix D: population scaling ────────────────────────────────────────────────────────────────────────────
+    //
+    // One motion model, one distribution, population across a decade and a half. Whether tick cost and query cost
+    // scale linearly, sub-linearly or worse is the question the grid exists to answer.
+
+    private static void RunMatrixD(List<RunResult> results, int ticks)
+    {
+        Console.WriteLine("── Matrix D — population scaling ──────────────────────────────────────────────────────────");
+        int[] populations = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000];
+
+        // Density held at 64 per cell across the sweep, so the grid RESOLUTION scales with the population and what is
+        // being measured is the mechanism's scaling rather than the world getting emptier.
+        foreach (var n in populations)
+        {
+            var r = RunOne("D", 3, MotionModel.Cruise, Distribution.Uniform, n, DeriveCellSize(3, n, 64), budgetMs: 1.0f, ticks: ticks);
+            results.Add(r);
+            Report(r);
+        }
+        Console.WriteLine();
+    }
+
+    // ── Matrix M: how busy is the world? ────────────────────────────────────────────────────────────────────────
+    //
+    // The moving fraction is the variable nobody chose and everything depends on. Prep's per-cluster work is gated on
+    // a cluster being dirty, and a cluster is dirty if ANY of its ~31 entities moved — so the population that moves
+    // and the clusters that go dirty are related by an amplification, not a ratio. This matrix measures that curve
+    // rather than assuming a point on it.
+
+    private static void RunMatrixM(List<RunResult> results, int ticks)
+    {
+        Console.WriteLine("── Matrix M — moving fraction (how much of the world moves per tick) ──────────────────────");
+        float[] fractions = [1.0f, 0.50f, 0.25f, 0.10f, 0.05f, 0.01f];
+        var saved = MovingFraction;
+        var cell = DeriveCellSize(3, 64_000, 64);
+        foreach (var f in fractions)
+        {
+            MovingFraction = f;
+            var r = RunOne("M", 3, MotionModel.Cruise, Distribution.Uniform, 64_000, cell, budgetMs: 1.0f, ticks: ticks);
+            r.MovingFraction = f;
+            results.Add(r);
+            Report(r);
+        }
+
+        MovingFraction = saved;
+        Console.WriteLine();
+    }
+
+    // ── Matrix W: worker scaling — the one the first campaign could not ask ─────────────────────────────────────
+    //
+    // The design budgets the fence as "parallel across cells... divided by W". The first version of this harness drove
+    // dbe.WriteTickFence() directly, which is the SERIAL path, so every fence number it produced was W=1 measured
+    // against per-worker projections. This matrix is the correction: same workload, same population, W swept, and both
+    // the wall span and the summed CPU reported per phase so the two can be told apart.
+
+    private static void RunMatrixW(List<RunResult> results, int ticks)
+    {
+        Console.WriteLine("── Matrix W — worker scaling (the fence is designed to divide by W; does it?) ─────────────");
+        int[] workerCounts = [1, 2, 4, 8, 16];
+
+        // 512 per cell, the density Matrix B uses: deep enough that a cell holds several clusters, so Prep, AabbRefresh
+        // and the repair planner all have real work to slice. At 64 per cell most clusters are near-singletons and the
+        // parallel phases have nothing to divide.
+        var cell = DeriveCellSize(3, 64_000, 512);
+
+        // Discarded. Tiered compilation is process-wide, so without it the FIRST worker count measured absorbs the
+        // runtime warming up and reads slow — which, since the sweep runs W ascending, manufactures a speedup curve out
+        // of JIT. Measured: W=1 read 29.0 ms as the first run of a process and 12.4 ms once warm, turning a real 1.55x
+        // into a reported 3.85x. The same run is discarded by FenceIndexPhaseBench for the same reason.
+        // BOTH paths, because they are different code: DagScheduler.DispatchTrack branches on `_workerCount == 1` into
+        // RunTrackSingleThreaded, so warming only the multi-threaded path leaves the W=1 arm — the DENOMINATOR of every
+        // speedup below — measured cold. With a W=4-only warm-up, W=1 still read 27.2 ms on one run of three against
+        // 18.4 and 18.3 on the others.
+        foreach (var warm in new[] { 1, 8 })
+        {
+            RunOne("W", 3, MotionModel.Cruise, Distribution.Uniform, 64_000, cell, budgetMs: 1.0f, ticks: Math.Min(ticks, 12), workers: warm);
+        }
+
+        foreach (var w in workerCounts)
+        {
+            var r = RunOne("W", 3, MotionModel.Cruise, Distribution.Uniform, 64_000, cell, budgetMs: 1.0f, ticks: ticks, workers: w);
+            results.Add(r);
+            Report(r);
+        }
+        Console.WriteLine();
+    }
+
+    // ── One run ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Runs one matrix point, reporting rather than propagating a failure.
+    /// </summary>
+    /// <remarks>
+    /// <b>A failed run is DATA, not an excuse to stop.</b> The first full campaign died at run 25 of 96 on an
+    /// <c>InvalidOperationException</c> from <c>OpenMut</c> ("not found or not visible") and lost the 71 runs behind it.
+    /// The same scenario passes in isolation, so what it says is that something does not survive many engines in one
+    /// process — which is worth knowing and is recorded per row rather than swallowed. The row is emitted with
+    /// <c>Failure</c> set so it appears in the CSV as an outcome instead of as an absence.
+    /// </remarks>
+    private static RunResult RunOne(string matrix, int dim, MotionModel motion, Distribution dist, int entities, float cellSize, float budgetMs, int ticks,
+        int workers = DefaultWorkers, bool barrier = false)
+    {
+        try
+        {
+            return dim == 2
+                ? RunOneTyped<SpMatUnit2, SpMatPos2>(matrix, 2, motion, dist, entities, cellSize, budgetMs, ticks, workers, Barrier, SpMatUnit2.Pos, Write2, Read2, Tag2)
+                : RunOneTyped<SpMatUnit3, SpMatPos3>(matrix, 3, motion, dist, entities, cellSize, budgetMs, ticks, workers, Barrier, SpMatUnit3.Pos, Write3, Read3, Tag3);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  !! {matrix} {dim}D {motion} {dist} n={entities} cell={cellSize:F1} budget={budgetMs:F2} FAILED: {ex.GetType().Name}: {ex.Message}");
+            return new RunResult
+            {
+                Matrix = matrix, Dim = dim, Motion = motion, Dist = dist, Entities = entities,
+                CellSize = cellSize, BudgetMs = budgetMs, Ticks = ticks,
+                Failure = SanitizeForCsv($"{ex.GetType().Name}: {ex.Message}"),
+            };
+        }
+    }
+
+    private delegate void PosWriter<TPos>(ref TPos pos, float x, float y, float z, float half, int tag);
+
+    private delegate (float x, float y, float z) PosReader<TPos>(in TPos pos);
+
+    private static void Write2(ref SpMatPos2 p, float x, float y, float z, float half, int tag)
+    {
+        p.Bounds = new AABB2F { MinX = x - half, MinY = y - half, MaxX = x + half, MaxY = y + half };
+        p.Tag = tag;
+    }
+
+    private static (float, float, float) Read2(in SpMatPos2 p) => (0.5f * (p.Bounds.MinX + p.Bounds.MaxX), 0.5f * (p.Bounds.MinY + p.Bounds.MaxY), 0f);
+
+    private static int Tag2(in SpMatPos2 p) => p.Tag;
+
+    private static int Tag3(in SpMatPos3 p) => p.Tag;
+
+    private static void Write3(ref SpMatPos3 p, float x, float y, float z, float half, int tag)
+    {
+        p.Bounds = new AABB3F { MinX = x - half, MinY = y - half, MinZ = z - half, MaxX = x + half, MaxY = y + half, MaxZ = z + half };
+        p.Tag = tag;
+    }
+
+    private static (float, float, float) Read3(in SpMatPos3 p)
+        => (0.5f * (p.Bounds.MinX + p.Bounds.MaxX), 0.5f * (p.Bounds.MinY + p.Bounds.MaxY), 0.5f * (p.Bounds.MinZ + p.Bounds.MaxZ));
+
+    /// <summary>Recovers the entity's index from the component it is being written through — the barrier path has no id in hand.</summary>
+    private delegate int TagReader<TPos>(in TPos pos);
+
+    private static RunResult RunOneTyped<TArch, TPos>(string matrix, int dim, MotionModel motion, Distribution dist, int entities, float cellSize,
+        float budgetMs, int ticks, int workers, bool barrier, Comp<TPos> comp, PosWriter<TPos> write, PosReader<TPos> read, TagReader<TPos> tag)
+        where TArch : Archetype<TArch>
+        where TPos : unmanaged
+    {
+        var r = new RunResult
+        {
+            Matrix = matrix, Dim = dim, Motion = motion, Dist = dist, Entities = entities,
+            CellSize = cellSize, BudgetMs = budgetMs, Ticks = ticks, Workers = workers, MovingFraction = MovingFraction,
+        };
+
+        var sc = new ServiceCollection();
+        sc.AddLogging(b => b.SetMinimumLevel(LogLevel.Critical))
+          .AddResourceRegistry()
+          .AddMemoryAllocator()
+          .AddEpochManager()
+          .AddHighResolutionSharedTimer()
+          .AddDeadlineWatchdog()
+          .AddScopedManagedPagedMemoryMappedFile(o =>
+          {
+              o.DatabaseName = $"SpMat_{Environment.ProcessId}";
+              // 512 MiB. Not larger: the size reaches an int-typed allocation, and 2 GiB of pages overflows it into a
+              // negative size that surfaces as "Size must be positive" three frames away from the cause.
+              o.DatabaseCacheSize = (ulong)(64L * 1024 * PagedMMF.PageSize);
+              o.TestMode = true;
+              o.PagesDebugPattern = false;
+          })
+          .AddInMemoryWalEngine();
+
+        using var sp = sc.BuildServiceProvider();
+        sp.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        var dbe = sp.GetRequiredService<DatabaseEngine>();
+
+        dbe.RegisterComponentFromAccessor<TPos>();
+        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+            new Vector3(0, 0, 0),
+            new Vector3(WorldExtent, WorldExtent, dim == 3 ? WorldExtent : cellSize),
+            cellSize,
+            reclusterBudgetMs: budgetMs));
+        dbe.InitializeArchetypes();
+
+        // 🔴 The write path is a MEASUREMENT VARIABLE, not a detail — it selects which branch of Prep runs.
+        //
+        // Writing through Transaction.OpenMut sets ClusterDirtyBitmap and routes Prep down the dirty-bitmap branch,
+        // which runs the shadow drain, the zone-map recompute and the dormancy sweep. Writing through
+        // ClusterRef.WriteSpatial sets ClusterProcessBitmap and leaves the dirty bitmap clean, which routes Prep down
+        // the CLEAN branch, where all three of those are skipped and the only population-scaled work left is the
+        // spatialBits build.
+        //
+        // Barrier-only is opt-in by API and universal in first-party practice: AntHill declares it for all four of its
+        // archetypes, SpaceBattle for all five, and the guide sample for its one. So the dirty path this harness
+        // measured by default is the path no shipped workload uses, and comparing the two is the point.
+        if (barrier)
+        {
+            dbe.SetSpatialBarrierOnly<TArch>();
+        }
+
+        var archetypeId = Archetype<TArch>.Metadata.ArchetypeId;
+        var rng = new Random(20260904);
+
+        // ── spawn ──
+        var xs = new float[entities];
+        var ys = new float[entities];
+        var zs = new float[entities];
+        var groupOf = new int[entities];
+        const int groupCount = 64;
+        SeedPositions(dist, motion, rng, dim, entities, xs, ys, zs, groupOf, groupCount);
+
+        // An entity is 2 % of a cell across. Fixed as a FRACTION rather than in world units so the shape of the
+        // problem — how many entities fit in a cell, how much of a cluster's box is the entities' own size — is the
+        // same at every cell size the matrices sweep.
+        var halfExtent = cellSize * 0.01f;
+
+        var ids = new EntityId[entities];
+        var sw = Stopwatch.StartNew();
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var pos = default(TPos);
+            for (var i = 0; i < entities; i++)
+            {
+                write(ref pos, xs[i], ys[i], zs[i], halfExtent, i);
+                ids[i] = tx.Spawn<TArch>(comp.Set(in pos));
+            }
+            tx.Commit();
+        }
+        sw.Stop();
+        r.SpawnMs = sw.Elapsed.TotalMilliseconds;
+
+        sw.Restart();
+        dbe.WriteTickFence(1);
+        sw.Stop();
+        r.FirstFenceMs = sw.Elapsed.TotalMilliseconds;
+
+        // ── steady state, under the REAL runtime ───────────────────────────────────────────
+        //
+        // 🔴 Driven through TyphonRuntime and not dbe.WriteTickFence(), and the difference is the whole point of this
+        // harness. WriteTickFenceCore is a serial `foreach` over component tables; the parallel fence is a DAG the
+        // scheduler dispatches through FenceWorkPlan, and only the runtime reaches it. The design specifies this work as
+        // "parallel across cells... divided by W in the window", so a serial measurement of it is not a conservative
+        // version of the real number — it answers a different question.
+        //
+        // Motion runs as a system inside the tick, so the OpenMut writes are charged to the tick they belong to and the
+        // fence sees them through the same path production does. Sampling runs FIRST and reads the PREVIOUS tick's phase
+        // counters: the fence is the scheduler's tick-END callback, so no system can observe its own tick's fence.
+        var acc = new Accumulator();
+        var groupVx = new float[groupCount];
+        var groupVy = new float[groupCount];
+        var groupVz = new float[groupCount];
+        for (var g = 0; g < groupCount; g++)
+        {
+            groupVx[g] = (float)((rng.NextDouble() - 0.5) * cellSize * 0.5);
+            groupVy[g] = (float)((rng.NextDouble() - 0.5) * cellSize * 0.5);
+            groupVz[g] = dim == 3 ? (float)((rng.NextDouble() - 0.5) * cellSize * 0.5) : 0f;
+        }
+
+        var movedFlags = new bool[entities];
+        var phase = new PhaseAccumulator();
+        var moveMsTotal = 0d;
+        var observed = 0;
+        var motionTick = 0;
+        var toUs = 1_000_000d / Stopwatch.Frequency;
+
+        TyphonRuntime runtime = null;
+        runtime = TyphonRuntime.Create(dbe, schedule =>
+        {
+            var dag = schedule.PublicTrack.DeclareDag("Partition");
+
+            dag.CallbackSystem("Sample", _ =>
+            {
+                var n = Interlocked.Increment(ref observed);
+
+                // The first two ticks are discarded from the PHASE numbers: tick 1 has no previous fence to report, and
+                // tick 2 reports the first fence after spawn, which carries the page faults for every chunk it touches.
+                if (n <= 2)
+                {
+                    return;
+                }
+
+                var prep = runtime.LastPrepStats;
+                var mig = runtime.LastMigrateStats;
+                var idx = runtime.LastIndexMassUpdateStats;
+                var map = runtime.LastEntityMapUpdateStats;
+                var aabb = runtime.LastAabbRefreshStats;
+                var fin = runtime.LastFinalizeStats;
+
+                phase.Add(
+                    prep.SpanTicks * toUs, prep.CpuTicks * toUs,
+                    mig.SpanTicks * toUs, mig.CpuTicks * toUs,
+                    idx.SpanTicks * toUs, idx.CpuTicks * toUs,
+                    map.SpanTicks * toUs, map.CpuTicks * toUs,
+                    aabb.SpanTicks * toUs, aabb.CpuTicks * toUs,
+                    fin.SpanTicks * toUs, fin.CpuTicks * toUs,
+                    prep.Chunks + mig.Chunks + idx.Chunks + map.Chunks + aabb.Chunks + fin.Chunks);
+
+                acc.Add(dbe.GetSpatialTelemetry(archetypeId));
+            });
+
+            dag.CallbackSystem("Move", ctx =>
+            {
+                var t = motionTick++;
+                var moveSw = Stopwatch.StartNew();
+                var moved = ApplyMotion(motion, rng, dim, entities, cellSize, xs, ys, zs, groupOf, groupVx, groupVy, groupVz, t, movedFlags);
+                if (moved > 0)
+                {
+                    var tx = ctx.Transaction;
+                    if (barrier)
+                    {
+                        // 🔴 Fails LOUDLY. ClusterRef.WriteSpatial supports AABB2F only (ClusterRef.cs:335-342), so a 3D archetype throws
+                        // NotSupportedException on the first slot of every tick. The scheduler did not surface that: the run completed, reported
+                        // drift = 0 / migrations = 0 / fence = 0.077 ms, and looked like a 100x speedup rather than a workload that never moved.
+                        // A measurement harness must never be able to report that outcome as a result.
+
+                        // The spatial write barrier: iterate clusters, recover each entity's index from the Tag field it
+                        // was spawned with, and write the position the motion model computed for THAT entity. Preserving
+                        // the tag mapping is what keeps the two arms comparable — a barrier arm that wrote arbitrary
+                        // positions per slot would be a different workload, not the same workload on a different path.
+                        // Disposed in a finally, as ClusterThrottleBudgetTests.MoveAll does. Without it the writes do not
+                        // reach storage: the first version of this arm reported drift = 0 and migrations = 0 on a
+                        // quarter-cell Cruise workload, i.e. it measured a world where nothing moved and called the
+                        // result a 100x speedup.
+                        var acc2 = tx.For<TArch>();
+                        try
+                        {
+                            foreach (var cluster in acc2.GetClusterEnumerator())
+                            {
+                                var bits = cluster.OccupancyBits;
+                                while (bits != 0)
+                                {
+                                    var slot = BitOperations.TrailingZeroCount(bits);
+                                    bits &= bits - 1;
+
+                                    var idx = tag(in cluster.GetReadOnly(comp, slot));
+                                    if ((uint)idx >= (uint)entities || !movedFlags[idx])
+                                    {
+                                        continue;
+                                    }
+
+                                    var next = default(TPos);
+                                    write(ref next, xs[idx], ys[idx], zs[idx], halfExtent, idx);
+                                    cluster.WriteSpatial(comp, slot, in next);
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            acc2.Dispose();
+                        }
+                    }
+                    else
+                    {
+                        // Only the entities the motion model actually moved. Writing the whole population regardless was what
+                        // dirtied every cluster on every tick and made the campaign's dirty fraction an artefact of this loop.
+                        for (var i = 0; i < entities; i++)
+                        {
+                            if (!movedFlags[i])
+                            {
+                                continue;
+                            }
+
+                            ref var p = ref tx.OpenMut(ids[i]).Write(comp);
+                            write(ref p, xs[i], ys[i], zs[i], halfExtent, i);
+                        }
+                    }
+                }
+
+                moveSw.Stop();
+                moveMsTotal += moveSw.Elapsed.TotalMilliseconds;
+            }, after: "Sample");
+        }, new RuntimeOptions
+        {
+            WorkerCount = workers,
+
+            // Deliberately below what a heavy fence needs, so the loop is never rate-limited into idling and ticks run
+            // back to back. The scheduler falls behind rather than breaking; what is measured is each phase's own span,
+            // not the tick period, so a missed deadline costs wall-clock and nothing else.
+            BaseTickRate = 200,
+            EnableParallelFence = true,
+
+            // 🔴 OFF, and that is a measurement decision worth stating. With the live cost model on, FenceWorkPlan
+            // picks its chunk count from the PREVIOUS ticks' observed cost, so a W-sweep would partly measure the model
+            // adapting rather than the work parallelising, and two runs of one point would not be comparable. Production
+            // leaves it on; a scaling study cannot.
+            AdaptiveFenceCost = false,
+        });
+
+        // 🔴 Exceptions raised once teardown has begun are DISCARDED, and this is a workaround for an engine defect
+        // rather than a convenience.
+        //
+        // DagScheduler.Dispose() disposes `_tickStartSignal` and only then calls base.Dispose(), which is what stops the
+        // TIMER thread. Shutdown() joins the WORKERS but explicitly does not wait for the tick in flight — its own
+        // remarks say so ("Neither this nor Shutdown is a quiescence point... Dispose the runtime when you need
+        // nothing is running"). So a tick already running can reach DispatchDeferredTracks -> DispatchTrackMultiThreaded
+        // -> _tickStartSignal.Reset() (DagScheduler.cs:2206) after that signal has been disposed, and throws
+        // ObjectDisposedException from the tick thread. Observed intermittently: run 1 clean, run 2 dead, run 3 clean.
+        //
+        // Every sample this harness reports has already been collected by then — the failure is in teardown, after the
+        // last tick was observed — so discarding it costs no data. It is NOT swallowed silently: an exception before
+        // teardown still fails the row, and the defect is filed rather than absorbed here.
+        var tearingDown = 0;
+        Exception unhandled = null;
+        runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) =>
+        {
+            if (Volatile.Read(ref tearingDown) == 0)
+            {
+                Interlocked.CompareExchange(ref unhandled, ex, null);
+            }
+        };
+
+        using (runtime)
+        {
+            runtime.Start();
+
+            // +2 for the two discarded warm-up ticks. The timeout is a backstop against a hung fence, not a budget: at
+            // 128 000 entities a tick legitimately takes tens of milliseconds and the loop simply runs behind.
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref observed) >= ticks + 2, TimeSpan.FromSeconds(180)))
+            {
+                r.Failure = $"runtime reached only {Volatile.Read(ref observed)} of {ticks + 2} ticks in 180 s";
+            }
+
+            Volatile.Write(ref tearingDown, 1);
+            runtime.Shutdown();
+        }
+
+        if (unhandled != null)
+        {
+            r.Failure = SanitizeForCsv($"{unhandled.GetType().Name}: {unhandled.Message} @ {unhandled.StackTrace}");
+            return r;
+        }
+
+        r.Workers = workers;
+        r.Barrier = barrier;
+        r.FenceBranchPath = ClusterStateBranchPath(dbe, archetypeId);
+        r.MoveMs = moveMsTotal / Math.Max(1, motionTick);
+        phase.Fill(r);
+        acc.FillPerTick(r, Math.Max(1, phase.Samples));
+
+        // The fence's WALL cost is the sum of its phase spans: the phases are sequenced by the DAG's After() edges, so
+        // they never overlap each other even though each is internally parallel.
+        r.TickMsMean = r.FenceSpanUs / 1000d;
+        r.TickMsP50 = phase.FenceSpanP50Us / 1000d;
+        r.TickMsP99 = phase.FenceSpanP99Us / 1000d;
+        r.TickMsMax = phase.FenceSpanMaxUs / 1000d;
+
+        // ── partition shape ──
+        MeasurePartition(dbe, archetypeId, r);
+
+        // ── queries ──
+        MeasureQueries<TArch, TPos>(dbe, dim, cellSize, r, read, comp, ids);
+
+        return r;
+    }
+
+    // ── Motion ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void SeedPositions(Distribution dist, MotionModel motion, Random rng, int dim, int n,
+        float[] xs, float[] ys, float[] zs, int[] groupOf, int groupCount)
+    {
+        // Hotspots for the clustered distribution: 90 % of the population inside 5 % of the world's linear extent.
+        var hotspots = new (float x, float y, float z)[8];
+        for (var h = 0; h < hotspots.Length; h++)
+        {
+            hotspots[h] = ((float)(rng.NextDouble() * WorldExtent), (float)(rng.NextDouble() * WorldExtent),
+                dim == 3 ? (float)(rng.NextDouble() * WorldExtent) : 0f);
+        }
+
+        var swarmCentres = new (float x, float y, float z)[groupCount];
+        for (var g = 0; g < groupCount; g++)
+        {
+            swarmCentres[g] = ((float)(rng.NextDouble() * WorldExtent), (float)(rng.NextDouble() * WorldExtent),
+                dim == 3 ? (float)(rng.NextDouble() * WorldExtent) : 0f);
+        }
+
+        for (var i = 0; i < n; i++)
+        {
+            groupOf[i] = i % groupCount;
+
+            if (motion == MotionModel.Swarm)
+            {
+                // A swarm's members start together whatever the distribution says — the model IS the distribution here.
+                var c = swarmCentres[groupOf[i]];
+                xs[i] = Clamp(c.x + (float)((rng.NextDouble() - 0.5) * 200));
+                ys[i] = Clamp(c.y + (float)((rng.NextDouble() - 0.5) * 200));
+                zs[i] = dim == 3 ? Clamp(c.z + (float)((rng.NextDouble() - 0.5) * 200)) : 0f;
+                continue;
+            }
+
+            if (dist == Distribution.Clustered && rng.NextDouble() < 0.9)
+            {
+                var h = hotspots[rng.Next(hotspots.Length)];
+                var spread = WorldExtent * 0.05f;
+                xs[i] = Clamp(h.x + (float)((rng.NextDouble() - 0.5) * spread));
+                ys[i] = Clamp(h.y + (float)((rng.NextDouble() - 0.5) * spread));
+                zs[i] = dim == 3 ? Clamp(h.z + (float)((rng.NextDouble() - 0.5) * spread)) : 0f;
+                continue;
+            }
+
+            xs[i] = (float)(rng.NextDouble() * WorldExtent);
+            ys[i] = (float)(rng.NextDouble() * WorldExtent);
+            zs[i] = dim == 3 ? (float)(rng.NextDouble() * WorldExtent) : 0f;
+        }
+    }
+
+    /// <summary>Advance the world one tick. Returns how many entities were touched.</summary>
+    /// <summary>
+    /// Advances the motion model and records WHICH entities moved in <paramref name="movedFlags"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>🔴 <b>The flags exist because the previous version of this harness ignored the count it returned.</b> The caller ran
+    /// <c>if (moved > 0) { for every entity: write }</c>, so a model that moved a tenth of the population still wrote all of it and dirtied every
+    /// cluster. That is what produced the "97-99 % of clusters are dirty every tick" figure the design was written against — a property of this loop,
+    /// not of any workload.</para>
+    /// <para><b>And five of the six models move every entity by construction anyway</b>, which is a stress case rather than a realistic one.
+    /// <see cref="MovingFraction"/> is the knob that makes the moving population a variable, so the partition can be measured at the 5-25 % that a
+    /// real simulation is likelier to produce.</para>
+    /// </remarks>
+    private static int ApplyMotion(MotionModel motion, Random rng, int dim, int n, float cellSize,
+        float[] xs, float[] ys, float[] zs, int[] groupOf, float[] gvx, float[] gvy, float[] gvz, int tick,
+        bool[] movedFlags)
+    {
+        Array.Clear(movedFlags, 0, n);
+        switch (motion)
+        {
+            case MotionModel.Static:
+                return 0;
+
+            case MotionModel.Drift:
+            {
+                // Deliberately sub-cell: no crossing is possible, so everything this produces is INTRA-cell drift,
+                // which is what relocation and the repair path exist to absorb.
+                var step = cellSize * 0.02f;
+                var movedD = 0;
+                for (var i = 0; i < n; i++)
+                {
+                    if (!Moves(rng))
+                    {
+                        continue;
+                    }
+
+                    movedFlags[i] = true;
+                    movedD++;
+                    xs[i] = Clamp(xs[i] + (float)((rng.NextDouble() - 0.5) * step));
+                    ys[i] = Clamp(ys[i] + (float)((rng.NextDouble() - 0.5) * step));
+                    if (dim == 3)
+                    {
+                        zs[i] = Clamp(zs[i] + (float)((rng.NextDouble() - 0.5) * step));
+                    }
+                }
+                return movedD;
+            }
+
+            case MotionModel.Cruise:
+            {
+                var step = cellSize * 0.25f;
+                var movedC = 0;
+                for (var i = 0; i < n; i++)
+                {
+                    if (!Moves(rng))
+                    {
+                        continue;
+                    }
+
+                    movedFlags[i] = true;
+                    movedC++;
+                    xs[i] = Clamp(xs[i] + (float)((rng.NextDouble() - 0.5) * step));
+                    ys[i] = Clamp(ys[i] + (float)((rng.NextDouble() - 0.5) * step));
+                    if (dim == 3)
+                    {
+                        zs[i] = Clamp(zs[i] + (float)((rng.NextDouble() - 0.5) * step));
+                    }
+                }
+                return movedC;
+            }
+
+            case MotionModel.Warp:
+            {
+                // A tenth of the population teleports. Every one of those is a guaranteed cell crossing, usually a long
+                // one — the shape that produces a migration storm and the case the throttle is sized against.
+                var count = Math.Max(1, (int)(n / 10 * MovingFraction));
+                var movedW = 0;
+                for (var k = 0; k < count; k++)
+                {
+                    var i = rng.Next(n);
+                    if (!movedFlags[i])
+                    {
+                        movedFlags[i] = true;
+                        movedW++;
+                    }
+
+                    xs[i] = (float)(rng.NextDouble() * WorldExtent);
+                    ys[i] = (float)(rng.NextDouble() * WorldExtent);
+                    zs[i] = dim == 3 ? (float)(rng.NextDouble() * WorldExtent) : 0f;
+                }
+                return movedW;
+            }
+
+            case MotionModel.Orbit:
+            {
+                // Rigid rotation about the world centre. Every entity moves, coherently, at a rate set by its radius —
+                // so the crossing rate varies across the population without any randomness in it at all.
+                const float centre = WorldExtent / 2f;
+                var theta = 0.02f;
+                var cos = MathF.Cos(theta);
+                var sin = MathF.Sin(theta);
+                var movedO = 0;
+                for (var i = 0; i < n; i++)
+                {
+                    if (!Moves(rng))
+                    {
+                        continue;
+                    }
+
+                    movedFlags[i] = true;
+                    movedO++;
+                    var dx = xs[i] - centre;
+                    var dy = ys[i] - centre;
+                    xs[i] = Clamp(centre + ((dx * cos) - (dy * sin)));
+                    ys[i] = Clamp(centre + ((dx * sin) + (dy * cos)));
+                }
+                return movedO;
+            }
+
+            case MotionModel.Swarm:
+            {
+                // Group centroids random-walk; members follow with jitter. Locality is preserved across cell crossings,
+                // which is the case a cluster-based partition should handle best and a per-entity index worst.
+                for (var g = 0; g < gvx.Length; g++)
+                {
+                    if ((tick % 20) == 0)
+                    {
+                        gvx[g] = (float)((rng.NextDouble() - 0.5) * cellSize * 0.5);
+                        gvy[g] = (float)((rng.NextDouble() - 0.5) * cellSize * 0.5);
+                        gvz[g] = dim == 3 ? (float)((rng.NextDouble() - 0.5) * cellSize * 0.5) : 0f;
+                    }
+                }
+                var movedS = 0;
+                for (var i = 0; i < n; i++)
+                {
+                    if (!Moves(rng))
+                    {
+                        continue;
+                    }
+
+                    movedFlags[i] = true;
+                    movedS++;
+                    var g = groupOf[i];
+                    xs[i] = Clamp(xs[i] + gvx[g] + (float)((rng.NextDouble() - 0.5) * 4));
+                    ys[i] = Clamp(ys[i] + gvy[g] + (float)((rng.NextDouble() - 0.5) * 4));
+                    if (dim == 3)
+                    {
+                        zs[i] = Clamp(zs[i] + gvz[g] + (float)((rng.NextDouble() - 0.5) * 4));
+                    }
+                }
+                return movedS;
+            }
+
+            default:
+                return 0;
+        }
+    }
+
+    /// <summary>Does this entity move on this tick? <c>true</c> for every entity at the default <see cref="MovingFraction"/> of 1.</summary>
+    private static bool Moves(Random rng) => MovingFraction >= 1f || rng.NextDouble() < MovingFraction;
+
+    private static float Clamp(float v) => Math.Clamp(v, 5f, WorldExtent - 5f);
+
+    // ── Instrumentation ─────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Sums the per-tick telemetry so the report can quote a rate rather than one arbitrary tick.</summary>
+    /// <summary>
+    /// Per-tick fence phase timings, kept as span and CPU separately.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Span is wall time, CPU is the sum across chunks, and conflating them is the mistake this type exists to prevent.</b> A phase that runs
+    /// 8-way at 1 ms of span costs 8 ms of CPU; quoting the CPU figure as the tick cost makes a healthy parallel fence look like an 8x regression, and
+    /// quoting span as the per-entity cost understates what the throttle's budget is actually spending. The design quotes per-entity costs in CPU; a frame
+    /// budget is spent in span. Both are recorded, both are labelled.</para>
+    /// <para>The fence total is the SUM of the six phase spans rather than a stopwatch around the lot: the phases are sequenced by the fence DAG's
+    /// <c>After()</c> edges, so they do not overlap one another, and summing the instrumented spans excludes the scheduler's own dispatch gaps — which
+    /// belong to the runtime rather than to the partitioning this harness is measuring.</para>
+    /// </remarks>
+    private sealed class PhaseAccumulator
+    {
+        private double _prepSpan, _prepCpu, _migSpan, _migCpu, _idxSpan, _idxCpu;
+        private double _mapSpan, _mapCpu, _aabbSpan, _aabbCpu, _finSpan, _finCpu;
+        private long _chunks;
+        private readonly List<double> _fenceSpans = [];
+
+        public int Samples => _fenceSpans.Count;
+
+        public double FenceSpanP50Us => Percentile(0.50);
+
+        public double FenceSpanP99Us => Percentile(0.99);
+
+        public double FenceSpanMaxUs => _fenceSpans.Count == 0 ? 0d : Sorted()[^1];
+
+        public void Add(double prepSpan, double prepCpu, double migSpan, double migCpu, double idxSpan, double idxCpu,
+            double mapSpan, double mapCpu, double aabbSpan, double aabbCpu, double finSpan, double finCpu, long chunks)
+        {
+            _prepSpan += prepSpan; _prepCpu += prepCpu;
+            _migSpan += migSpan; _migCpu += migCpu;
+            _idxSpan += idxSpan; _idxCpu += idxCpu;
+            _mapSpan += mapSpan; _mapCpu += mapCpu;
+            _aabbSpan += aabbSpan; _aabbCpu += aabbCpu;
+            _finSpan += finSpan; _finCpu += finCpu;
+            _chunks += chunks;
+            _fenceSpans.Add(prepSpan + migSpan + idxSpan + mapSpan + aabbSpan + finSpan);
+        }
+
+        public void Fill(RunResult r)
+        {
+            var n = Math.Max(1, _fenceSpans.Count);
+            r.PrepSpanUs = _prepSpan / n; r.PrepCpuUs = _prepCpu / n;
+            r.MigrateSpanUs = _migSpan / n; r.MigrateCpuUs = _migCpu / n;
+            r.IndexSpanUs = _idxSpan / n; r.IndexCpuUs = _idxCpu / n;
+            r.EntityMapSpanUs = _mapSpan / n; r.EntityMapCpuUs = _mapCpu / n;
+            r.AabbSpanUs = _aabbSpan / n; r.AabbCpuUs = _aabbCpu / n;
+            r.FinalizeSpanUs = _finSpan / n; r.FinalizeCpuUs = _finCpu / n;
+            r.FenceSpanUs = r.PrepSpanUs + r.MigrateSpanUs + r.IndexSpanUs + r.EntityMapSpanUs + r.AabbSpanUs + r.FinalizeSpanUs;
+            r.FenceCpuUs = r.PrepCpuUs + r.MigrateCpuUs + r.IndexCpuUs + r.EntityMapCpuUs + r.AabbCpuUs + r.FinalizeCpuUs;
+            r.FenceChunks = _chunks / n;
+        }
+
+        private List<double> Sorted()
+        {
+            _fenceSpans.Sort();
+            return _fenceSpans;
+        }
+
+        private double Percentile(double q)
+        {
+            if (_fenceSpans.Count == 0)
+            {
+                return 0d;
+            }
+
+            var sorted = Sorted();
+            return sorted[Math.Clamp((int)(sorted.Count * q), 0, sorted.Count - 1)];
+        }
+    }
+
+    private sealed class Accumulator
+    {
+        private double _migrations, _migExecMs, _migTotalMs, _drifters, _driftAbsorbed, _hyst, _throttled, _superseded, _unplaced, _scanned;
+        private double _repairEntities, _repairUnits, _repairRefused, _budgetUsed, _measuredNs, _queueDepth, _queueMaint;
+        private long _queueEvicted, _valveFires;
+        private double _prepSnapshot, _prepMask, _prepShadow, _prepZoneMap, _prepDetect, _prepThrottle, _prepPlan, _prepPreSize;
+        private double _prepDirtyClusters;
+        private int _measuredSamples;
+
+        public void Add(in SpatialMigrationTelemetry t)
+        {
+            _migrations += t.MigrationCount;
+            _migExecMs += t.MigrationExecuteMs;
+            _migTotalMs += t.MigrationTotalMs;
+            _drifters += t.DriftersDetected;
+            _driftAbsorbed += t.DriftAbsorbedCount;
+            _hyst += t.HysteresisAbsorbedCount;
+            _throttled += t.RelocationsThrottled;
+            _superseded += t.RelocationsSuperseded;
+            _prepSnapshot += t.PrepSnapshotMs;
+            _prepMask += t.PrepMaskMs;
+            _prepShadow += t.PrepShadowMs;
+            _prepZoneMap += t.PrepZoneMapMs;
+            _prepDetect += t.PrepDetectMs;
+            _prepThrottle += t.PrepThrottleMs;
+            _prepPlan += t.PrepPlanMs;
+            _prepPreSize += t.PrepPreSizeMs;
+            _prepDirtyClusters += t.PrepDirtyClusters;
+            _unplaced += t.DriftersUnplaced;
+            _scanned += t.ClustersScanned;
+            _repairEntities += t.RepairedEntityCount;
+            _repairUnits += t.RepairUnitCount;
+            _repairRefused += t.RepairUnitsRefused;
+            _budgetUsed += t.ReclusterBudgetUsedMs;
+            _queueDepth += t.RepairQueueDepth;
+            _queueMaint += t.RepairQueueMaintenanceMs;
+            _queueEvicted = Math.Max(_queueEvicted, t.RepairQueueEvicted);
+            _valveFires += t.RepairValveFires;
+
+            // Averaging a zero from a tick that measured nothing would drag the estimate toward zero and report a cost
+            // model that never converged.
+            if (t.MeasuredNsPerEntity > 0d)
+            {
+                _measuredNs += t.MeasuredNsPerEntity;
+                _measuredSamples++;
+            }
+        }
+
+        public void FillPerTick(RunResult r, int ticks)
+        {
+            r.MigrationsPerTick = _migrations / ticks;
+            r.SupersededPerTick = _superseded / ticks;
+            r.PrepSnapshotMs = _prepSnapshot / ticks;
+            r.PrepMaskMs = _prepMask / ticks;
+            r.PrepShadowMs = _prepShadow / ticks;
+            r.PrepZoneMapMs = _prepZoneMap / ticks;
+            r.PrepDetectMs = _prepDetect / ticks;
+            r.PrepThrottleMs = _prepThrottle / ticks;
+            r.PrepPlanMs = _prepPlan / ticks;
+            r.PrepPreSizeMs = _prepPreSize / ticks;
+            r.PrepDirtyClustersPerTick = _prepDirtyClusters / ticks;
+            r.MigrationExecuteMs = _migExecMs / ticks;
+            r.MigrationTotalMs = _migTotalMs / ticks;
+            r.DriftersPerTick = _drifters / ticks;
+            r.DriftAbsorbedPerTick = _driftAbsorbed / ticks;
+            r.HysteresisAbsorbedPerTick = _hyst / ticks;
+            r.ThrottledPerTick = _throttled / ticks;
+            r.UnplacedPerTick = _unplaced / ticks;
+            r.ClustersScannedPerTick = _scanned / ticks;
+            r.RepairEntitiesPerTick = _repairEntities / ticks;
+            r.RepairUnitsPerTick = _repairUnits / ticks;
+            r.RepairRefusedPerTick = _repairRefused / ticks;
+            r.BudgetUsedMs = _budgetUsed / ticks;
+            r.QueueDepth = _queueDepth / ticks;
+            r.QueueMaintenanceMs = _queueMaint / ticks;
+            r.QueueEvicted = _queueEvicted;
+            r.ValveFires = _valveFires;
+            r.MeasuredNsPerEntity = _measuredSamples > 0 ? _measuredNs / _measuredSamples : 0d;
+        }
+    }
+
+    /// <summary>
+    /// Cluster tightness — the mean and 90th percentile of each cluster's largest axis extent, as a percentage of the
+    /// cell size.
+    /// </summary>
+    /// <remarks>
+    /// This is the design's own selectivity proxy: a query opens a cluster when its box overlaps, so a cluster spanning
+    /// 100 % of its cell is opened by every query that touches the cell, and one spanning 25 % by a sixteenth of them in
+    /// 2D. It is measured here rather than inferred because it is the quantity the whole re-clustering budget is spent
+    /// buying, and section 1.1's headline factor is a claim about it.
+    /// </remarks>
+    private static void MeasurePartition(DatabaseEngine dbe, int archetypeId, RunResult r)
+    {
+        var cs = dbe._archetypeStates[archetypeId].ClusterState;
+        if (cs?.ClusterAabbs == null)
+        {
+            return;
+        }
+
+        var cellSize = dbe.SpatialGrid.Config.CellSize;
+        var extents = new List<double>(cs.ActiveClusterCount);
+        for (var i = 0; i < cs.ActiveClusterCount; i++)
+        {
+            var id = cs.ActiveClusterIds[i];
+            if ((uint)id >= (uint)cs.ClusterAabbs.Length)
+            {
+                continue;
+            }
+
+            ref var b = ref cs.ClusterAabbs[id];
+            var ex = Math.Max(b.MaxX - b.MinX, Math.Max(b.MaxY - b.MinY, b.MaxZ - b.MinZ));
+            if (float.IsFinite(ex) && ex >= 0f)
+            {
+                extents.Add(100d * ex / cellSize);
+            }
+        }
+
+        r.ActiveClusters = cs.ActiveClusterCount;
+        r.LiveCells = dbe.SpatialGrid.CellCount;
+        r.EntitiesPerCluster = r.ActiveClusters > 0 ? (double)r.Entities / r.ActiveClusters : 0d;
+        r.EntitiesPerCell = r.LiveCells > 0 ? (double)r.Entities / r.LiveCells : 0d;
+
+        if (extents.Count == 0)
+        {
+            return;
+        }
+
+        extents.Sort();
+        var s = 0d;
+        foreach (var e in extents)
+        {
+            s += e;
+        }
+        r.TightnessPct = s / extents.Count;
+        r.TightnessP90Pct = extents[Math.Min(extents.Count - 1, (int)(extents.Count * 0.9))];
+    }
+
+    private static void MeasureQueries<TArch, TPos>(DatabaseEngine dbe, int dim, float cellSize, RunResult r,
+        PosReader<TPos> read, Comp<TPos> comp, EntityId[] ids)
+        where TArch : Archetype<TArch>
+        where TPos : unmanaged
+    {
+        const int reps = 24;
+        var rng = new Random(777);
+        var sw = new Stopwatch();
+
+        // 🔴 Warm-up, discarded. Every query shape below is generic over the archetype, so the FIRST call of each one
+        // pays JIT for a fresh instantiation — measured at 300-450 us against a 5 us steady-state cost, which landed
+        // entirely on whichever shape happened to be timed first and read as a partitioning result. One pass of every
+        // shape, thrown away, before any of them is timed.
+        WarmUpQueries<TArch, TPos>(dbe, dim);
+
+        // Three AABB sizes as fractions of the WORLD, not of the cell.
+        //
+        // 🔴 Scaling them by cell size made the numbers meaningless the moment Matrix C swept it: at 4 cells across, a
+        // "medium" query covered the whole world at large cell sizes and returned all 16 000 entities, so the column
+        // read as a query-cost regression when it was really a query-SIZE change. As world fractions the selectivity is
+        // the same experiment at every point in every matrix, which is what makes the times comparable.
+        (r.AabbSmallNs, r.AabbSmallHits) = TimeAabb<TArch, TPos>(dbe, dim, reps, rng, sw, WorldExtent * 0.01f);
+        (r.AabbMediumNs, r.AabbMediumHits) = TimeAabb<TArch, TPos>(dbe, dim, reps, rng, sw, WorldExtent * 0.05f);
+        (r.AabbLargeNs, r.AabbLargeHits) = TimeAabb<TArch, TPos>(dbe, dim, reps, rng, sw, WorldExtent * 0.20f);
+
+        // Radius
+        {
+            var totalTicks = 0L;
+            var hits = 0L;
+            for (var k = 0; k < reps; k++)
+            {
+                var cx = rng.NextDouble() * WorldExtent;
+                var cy = rng.NextDouble() * WorldExtent;
+                var cz = dim == 3 ? rng.NextDouble() * WorldExtent : 0d;
+                using var tx = dbe.CreateQuickTransaction();
+                sw.Restart();
+                var res = tx.Query<TArch>().WhereNearby<TPos>(cx, cy, cz, WorldExtent * 0.05f).Execute();
+                sw.Stop();
+                totalTicks += sw.ElapsedTicks;
+                hits += res.Count;
+            }
+            r.RadiusNs = TicksToNs(totalTicks) / reps;
+            r.RadiusHits = (double)hits / reps;
+        }
+
+        // Ray — a full diagonal traverse, which is the worst case for the cell walk.
+        {
+            var totalTicks = 0L;
+            var hits = 0L;
+            for (var k = 0; k < reps; k++)
+            {
+                var ox = rng.NextDouble() * WorldExtent;
+                var oy = rng.NextDouble() * WorldExtent;
+                var oz = dim == 3 ? rng.NextDouble() * WorldExtent : 0d;
+                var inv = 1d / Math.Sqrt(dim == 3 ? 3d : 2d);
+                using var tx = dbe.CreateQuickTransaction();
+                sw.Restart();
+                var res = tx.Query<TArch>().WhereRay<TPos>(ox, oy, oz, inv, inv, dim == 3 ? inv : 0d, WorldExtent).Execute();
+                sw.Stop();
+                totalTicks += sw.ElapsedTicks;
+                hits += res.Count;
+            }
+            r.RayNs = TicksToNs(totalTicks) / reps;
+            r.RayHits = (double)hits / reps;
+        }
+
+        // Frustum — an axis-aligned box expressed as six planes, sized like the medium AABB so the two are comparable
+        // and the difference is the plane classification rather than the region.
+        {
+            var totalTicks = 0L;
+            var hits = 0L;
+            var half = WorldExtent * 0.05f;
+            for (var k = 0; k < reps; k++)
+            {
+                var cx = rng.NextDouble() * WorldExtent;
+                var cy = rng.NextDouble() * WorldExtent;
+                var cz = dim == 3 ? rng.NextDouble() * WorldExtent : 0d;
+                double minX = cx - half, minY = cy - half, minZ = cz - half;
+                double maxX = cx + half, maxY = cy + half, maxZ = cz + half;
+
+                double[] planes = dim == 3
+                    ? [+1, 0, 0, -minX, -1, 0, 0, +maxX, 0, +1, 0, -minY, 0, -1, 0, +maxY, 0, 0, +1, -minZ, 0, 0, -1, +maxZ]
+                    : [+1, 0, -minX, -1, 0, +maxX, 0, +1, -minY, 0, -1, +maxY];
+                var planeCount = dim == 3 ? 6 : 4;
+
+                using var tx = dbe.CreateQuickTransaction();
+                sw.Restart();
+                var res = tx.Query<TArch>().WhereFrustum<TPos>(planes, planeCount, minX, minY, minZ, maxX, maxY, maxZ).Execute();
+                sw.Stop();
+                totalTicks += sw.ElapsedTicks;
+                hits += res.Count;
+            }
+            r.FrustumNs = TicksToNs(totalTicks) / reps;
+            r.FrustumHits = (double)hits / reps;
+        }
+
+        // Brute force over the same medium region — the number the index has to beat, measured through the public API
+        // rather than estimated. Few repetitions on purpose: it is O(population) per query and the point is the RATIO.
+        {
+            const int bfReps = 4;
+            var totalTicks = 0L;
+            var half = WorldExtent * 0.05f;
+            for (var k = 0; k < bfReps; k++)
+            {
+                var cx = rng.NextDouble() * WorldExtent;
+                var cy = rng.NextDouble() * WorldExtent;
+                var cz = dim == 3 ? rng.NextDouble() * WorldExtent : 0d;
+                using var tx = dbe.CreateQuickTransaction();
+                sw.Restart();
+                var found = 0;
+                for (var i = 0; i < ids.Length; i++)
+                {
+                    ref readonly var p = ref tx.Open(ids[i]).Read(comp);
+                    var (x, y, z) = read(in p);
+                    if (Math.Abs(x - cx) <= half && Math.Abs(y - cy) <= half && (dim == 2 || Math.Abs(z - cz) <= half))
+                    {
+                        found++;
+                    }
+                }
+                sw.Stop();
+                totalTicks += sw.ElapsedTicks;
+                GC.KeepAlive(found);
+            }
+            r.BruteForceNs = TicksToNs(totalTicks) / bfReps;
+        }
+    }
+
+    /// <summary>Times an AABB query over a random region of the given half-extent.</summary>
+    /// <remarks>
+    /// <b>The arguments are the same shape for both dimensions</b>, and that is worth a note because it was not always
+    /// true. <c>EcsQuery</c> used to read a 2D component's max corner from slots 2 and 3 — the caller's <c>minZ</c> and
+    /// <c>maxX</c> — producing a degenerate box and a silently empty answer. This harness's first full run reported
+    /// <c>0 hits</c> on every one of its 2D rows for that reason, and it read as a partitioning result rather than an
+    /// engine defect. Fixed in #872 step 13; the harness passes <c>(min, max)</c> uniformly again.
+    /// </remarks>
+    /// <summary>Runs one of every query shape and discards the result, so JIT does not land on the first timed shape.</summary>
+    private static void WarmUpQueries<TArch, TPos>(DatabaseEngine dbe, int dim)
+        where TArch : Archetype<TArch>
+        where TPos : unmanaged
+    {
+        var h = WorldExtent * 0.05f;
+        double[] planes = dim == 3
+            ? [+1, 0, 0, -0d, -1, 0, 0, +WorldExtent, 0, +1, 0, -0d, 0, -1, 0, +WorldExtent, 0, 0, +1, -0d, 0, 0, -1, +WorldExtent]
+            : [+1, 0, -0d, -1, 0, +WorldExtent, 0, +1, -0d, 0, -1, +WorldExtent];
+        var planeCount = dim == 3 ? 6 : 4;
+
+        using var tx = dbe.CreateQuickTransaction();
+        _ = tx.Query<TArch>().WhereInAABB<TPos>(0, 0, 0, h, h, h).Execute().Count;
+        _ = tx.Query<TArch>().WhereNearby<TPos>(h, h, dim == 3 ? h : 0d, h).Execute().Count;
+        _ = tx.Query<TArch>().WhereRay<TPos>(0, 0, 0, 1, 0, 0, WorldExtent).Execute().Count;
+        _ = tx.Query<TArch>().WhereFrustum<TPos>(planes, planeCount, 0, 0, 0, WorldExtent, WorldExtent, WorldExtent).Execute().Count;
+    }
+
+    private static (double ns, double hits) TimeAabb<TArch, TPos>(DatabaseEngine dbe, int dim, int reps, Random rng, Stopwatch sw, float half)
+        where TArch : Archetype<TArch>
+        where TPos : unmanaged
+    {
+        var totalTicks = 0L;
+        var hits = 0L;
+        for (var k = 0; k < reps; k++)
+        {
+            var cx = rng.NextDouble() * WorldExtent;
+            var cy = rng.NextDouble() * WorldExtent;
+            var cz = dim == 3 ? rng.NextDouble() * WorldExtent : 0d;
+            using var tx = dbe.CreateQuickTransaction();
+            sw.Restart();
+            var res = tx.Query<TArch>()
+                .WhereInAABB<TPos>(cx - half, cy - half, cz - half, cx + half, cy + half, cz + half)
+                .Execute();
+            sw.Stop();
+            totalTicks += sw.ElapsedTicks;
+            hits += res.Count;
+        }
+
+        return (TicksToNs(totalTicks) / reps, (double)hits / reps);
+    }
+
+    private static double TicksToNs(long ticks) => ticks * (1_000_000_000d / Stopwatch.Frequency);
+
+    // ── Output ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+    private static void Report(RunResult r)
+    {
+        if (r.Failure.Length > 0)
+        {
+            return;   // already reported by RunOne, and every column below would be zero
+        }
+
+        // Span AND cpu, side by side, because the ratio between them is the headline this harness exists to produce: it is the fence's actual parallel
+        // efficiency, and the serial version of this harness could not report it at all.
+        var par = r.FenceSpanUs > 0d ? r.FenceCpuUs / r.FenceSpanUs : 0d;
+
+        Console.WriteLine(
+            $"  {r.Matrix} {r.Dim}D {r.Motion,-7} {r.Dist,-9} n={r.Entities,-6} cell={r.CellSize,-6:F1} bud={r.BudgetMs,-4:F2} W={r.Workers,-2} | "
+            + $"fence {r.TickMsMean,7:F3} ms wall (p99 {r.TickMsP99,7:F3}) cpu {r.FenceCpuUs / 1000d,8:F3} ms = {par,5:F2}x | "
+            + $"prep {r.PrepSpanUs / 1000d,6:F2} mig {r.MigrateSpanUs / 1000d,6:F2} idx {r.IndexSpanUs / 1000d,6:F2} "
+            + $"map {r.EntityMapSpanUs / 1000d,6:F2} aabb {r.AabbSpanUs / 1000d,6:F2} fin {r.FinalizeSpanUs / 1000d,6:F2} | "
+            + $"mig/t {r.MigrationsPerTick,8:F1} | tight {r.TightnessPct,6:F1}% | clusters {r.ActiveClusters,6} | "
+            + $"aabbM {r.AabbMediumNs / 1000d,7:F1} us | bf {r.BruteForceNs / 1000d,8:F1} us");
+    }
+
+    private static void WriteCsv(List<RunResult> results, string path)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(string.Join(',',
+            "matrix", "dim", "motion", "dist", "entities", "cellSize", "budgetMs", "ticks", "workers", "barrier", "branchPath", "movingFraction",
+            "spawnMs", "firstFenceMs", "moveMs",
+            "fenceSpanMs", "fenceSpanP50Ms", "fenceSpanP99Ms", "fenceSpanMaxMs", "fenceCpuUs", "fenceChunks",
+            "prepSpanUs", "prepCpuUs", "migrateSpanUs", "migrateCpuUs", "indexSpanUs", "indexCpuUs",
+            "entityMapSpanUs", "entityMapCpuUs", "aabbSpanUs", "aabbCpuUs", "finalizeSpanUs", "finalizeCpuUs",
+            "migrationsPerTick", "migrationExecuteMs", "migrationTotalMs", "driftersPerTick", "driftAbsorbedPerTick",
+            "hysteresisAbsorbedPerTick", "throttledPerTick", "prepSnapshotMs", "prepMaskMs", "prepShadowMs", "prepZoneMapMs", "prepDetectMs", "prepThrottleMs", "prepPlanMs", "prepPreSizeMs",
+            "prepDirtyClusters", "supersededPerTick", "unplacedPerTick", "clustersScannedPerTick",
+            "repairEntitiesPerTick", "repairUnitsPerTick", "repairRefusedPerTick", "budgetUsedMs", "measuredNsPerEntity",
+            "queueDepth", "queueEvicted", "queueMaintenanceMs", "valveFires",
+            "activeClusters", "liveCells", "entitiesPerCluster", "entitiesPerCell", "tightnessPct", "tightnessP90Pct",
+            "aabbSmallNs", "aabbSmallHits", "aabbMediumNs", "aabbMediumHits", "aabbLargeNs", "aabbLargeHits",
+            "radiusNs", "radiusHits", "rayNs", "rayHits", "frustumNs", "frustumHits", "bruteForceNs", "failure"));
+
+        var c = CultureInfo.InvariantCulture;
+        foreach (var r in results)
+        {
+            sb.AppendLine(string.Join(',',
+                r.Matrix, r.Dim, r.Motion, r.Dist, r.Entities,
+                r.CellSize.ToString(c), r.BudgetMs.ToString(c), r.Ticks, r.Workers, r.Barrier ? 1 : 0, r.FenceBranchPath, F(r.MovingFraction),
+                F(r.SpawnMs), F(r.FirstFenceMs), F(r.MoveMs),
+                F(r.TickMsMean), F(r.TickMsP50), F(r.TickMsP99), F(r.TickMsMax), F(r.FenceCpuUs), r.FenceChunks,
+                F(r.PrepSpanUs), F(r.PrepCpuUs), F(r.MigrateSpanUs), F(r.MigrateCpuUs), F(r.IndexSpanUs), F(r.IndexCpuUs),
+                F(r.EntityMapSpanUs), F(r.EntityMapCpuUs), F(r.AabbSpanUs), F(r.AabbCpuUs), F(r.FinalizeSpanUs), F(r.FinalizeCpuUs),
+                F(r.MigrationsPerTick), F(r.MigrationExecuteMs), F(r.MigrationTotalMs), F(r.DriftersPerTick), F(r.DriftAbsorbedPerTick),
+                F(r.HysteresisAbsorbedPerTick), F(r.ThrottledPerTick), F(r.PrepSnapshotMs), F(r.PrepMaskMs), F(r.PrepShadowMs), F(r.PrepZoneMapMs), F(r.PrepDetectMs), F(r.PrepThrottleMs),
+                F(r.PrepPlanMs), F(r.PrepPreSizeMs), F(r.PrepDirtyClustersPerTick), F(r.SupersededPerTick), F(r.UnplacedPerTick), F(r.ClustersScannedPerTick),
+                F(r.RepairEntitiesPerTick), F(r.RepairUnitsPerTick), F(r.RepairRefusedPerTick), F(r.BudgetUsedMs), F(r.MeasuredNsPerEntity),
+                F(r.QueueDepth), r.QueueEvicted, F(r.QueueMaintenanceMs), r.ValveFires,
+                r.ActiveClusters, r.LiveCells, F(r.EntitiesPerCluster), F(r.EntitiesPerCell), F(r.TightnessPct), F(r.TightnessP90Pct),
+                F(r.AabbSmallNs), F(r.AabbSmallHits), F(r.AabbMediumNs), F(r.AabbMediumHits), F(r.AabbLargeNs), F(r.AabbLargeHits),
+                F(r.RadiusNs), F(r.RadiusHits), F(r.RayNs), F(r.RayHits), F(r.FrustumNs), F(r.FrustumHits), F(r.BruteForceNs), r.Failure));
+        }
+
+        File.WriteAllText(path, sb.ToString());
+    }
+
+    private static int ClusterStateBranchPath(DatabaseEngine dbe, int archetypeId)
+    {
+        var st = dbe._archetypeStates[archetypeId]?.ClusterState;
+        return st?.FenceBranchPath ?? 0;
+    }
+
+    private static string F(double v) => v.ToString("F4", CultureInfo.InvariantCulture);
+
+    /// <summary>Flattens an exception message into one comma-free CSV cell.</summary>
+    private static string SanitizeForCsv(string text) => text.Replace(',', ';').Replace('\n', ' ').Replace('\r', ' ');
+
+    private static bool IsDebug()
+    {
+#if DEBUG
+        return true;
+#else
+        return false;
+#endif
+    }
+
+    private static float ArgFloat(string[] args, string name, float fallback)
+    {
+        var i = Array.IndexOf(args, name);
+        return i >= 0 && i + 1 < args.Length && float.TryParse(args[i + 1], CultureInfo.InvariantCulture, out var v) ? v : fallback;
+    }
+
+    private static int ArgInt(string[] args, string name, int fallback)
+    {
+        var i = Array.IndexOf(args, name);
+        return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out var v) ? v : fallback;
+    }
+
+    private static string ArgString(string[] args, string name, string fallback)
+    {
+        var i = Array.IndexOf(args, name);
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : fallback;
+    }
+}

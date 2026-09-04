@@ -1478,92 +1478,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
-    /// Iterate dirty entities from the tick fence snapshot and update spatial R-Tree positions.
-    /// For each dirty entity: if not destroyed, call UpdateSpatial (fat AABB containment check → possible reinsert).
-    /// </summary>
-    private unsafe int ProcessSpatialEntries(ComponentTable table, long[] dirtyBits, ChangeSet changeSet)
-    {
-        var state = table.SpatialIndex;
-
-        // Hoist accessor creation before the entity loop (same pattern as B+Tree batch index maintenance)
-        var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
-        var treeAccessor = state.ActiveTree.Segment.CreateChunkAccessor(changeSet);
-        var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
-        var dirtyCount = 0;
-        var escapeCount = 0;
-        try
-        {
-            for (var wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
-            {
-                var word = dirtyBits[wordIdx];
-                while (word != 0)
-                {
-                    var bit = BitOperations.TrailingZeroCount((ulong)word);
-                    var chunkId = wordIdx * 64 + bit;
-                    word &= word - 1; // clear lowest set bit
-
-                    if (table.IsChunkDestroyed(chunkId))
-                    {
-                        continue;
-                    }
-
-                    long entityPK = 0;
-                    if (table.Definition.EntityPKOverheadSize > 0)
-                    {
-                        var chunkPtr = compAccessor.GetChunkAddress(chunkId);
-                        entityPK = *(long*)chunkPtr;
-                    }
-
-                    dirtyCount++;
-                    if (SpatialMaintainer.UpdateSpatialBatch(entityPK, chunkId, table, ref compAccessor, ref treeAccessor, ref bpAccessor, changeSet))
-                    {
-                        escapeCount++;
-                    }
-                }
-            }
-        }
-        finally
-        {
-            bpAccessor.Dispose();
-            treeAccessor.Dispose();
-            compAccessor.Dispose();
-            // SaveChanges deliberately omitted: caller (WriteTickFence) owns the ChangeSet lifecycle.
-        }
-
-        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB.
-        // To silence: configure Microsoft.Extensions.Logging filter for "Typhon.Engine.Data.SpatialMaintainer" at Error level.
-        if (dirtyCount > 0)
-        {
-            var escapeRate = (double)escapeCount / dirtyCount;
-            if (escapeRate > 0.10)
-            {
-                SpatialMaintainer.LogHighEscapeRate(Logger, table.Definition.Name, escapeRate, escapeCount, dirtyCount);
-            }
-        }
-
-        return escapeCount;
-    }
-
-    /// <summary>
-    /// Persist spatial index segment root page indexes to BootstrapDictionary.
-    /// Written once at component registration; segment root pages are immutable after allocation.
-    /// </summary>
-    private void SaveSpatialBootstrap(ComponentTable table)
-    {
-        var state = table.SpatialIndex;
-        var fi = state.FieldInfo;
-        var key = $"spatial.{table.Definition.Name}";
-
-        // Tree SPIs + config packed into Int5: treeSPI, backPtrSPI, variant|mode|stride, margin bits, hmSPI (0 if no hashmap)
-        var activeTree = state.ActiveTree;
-        MMF.Bootstrap.Set(key, BootstrapDictionary.Value.FromInt5(activeTree.Segment.RootPageIndex, state.BackPointerSegment.RootPageIndex, 
-            (int)activeTree.Variant | ((int)fi.Mode << 4) | (state.Descriptor.Stride << 8), BitConverter.SingleToInt32Bits(fi.Margin),
-            state.OccupancyMap?.Segment.RootPageIndex ?? 0));
-
-        MMF.SaveBootstrap();
-    }
-
-    /// <summary>
     /// Persists the engine-wide <see cref="SpatialGridConfig"/> (world bounds, cell size, hysteresis — the 8 source floats; the rest is derived) so a generic
     /// opener that never calls <see cref="ConfigureSpatialGrid"/> can reconstruct the grid and fully initialize cluster-spatial archetypes. Floats are stored as
     /// their raw bit patterns in an Int8 bootstrap value.
@@ -1638,59 +1552,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             BitConverter.Int32BitsToSingle(v.GetInt(6)),
             BitConverter.Int32BitsToSingle(v.GetInt(7)));
         return true;
-    }
-
-    /// <summary>
-    /// Load spatial index from BootstrapDictionary and attach to the ComponentTable.
-    /// Called during database reopen for components with [SpatialIndex].
-    /// </summary>
-    private void LoadSpatialBootstrap(ComponentTable table)
-    {
-        var key = $"spatial.{table.Definition.Name}";
-        if (!MMF.Bootstrap.TryGet(key, out var val))
-        {
-            return; // No spatial index persisted (new attribute added after last save)
-        }
-
-        var treeSPI = val.GetInt();
-        var backPtrSPI = val.GetInt(1);
-        var variantStride = val.GetInt(2);
-
-        var variant = (SpatialVariant)(variantStride & 0x0F);
-        var mode = (SpatialMode)((variantStride >> 4) & 0x0F);
-        var stride = variantStride >> 8;
-        var descriptor = SpatialNodeDescriptor.FromVariant(variant, stride);
-
-        var treeSegment = MMF.LoadChunkBasedSegment(treeSPI, descriptor.Stride);
-        var backPtrSegment = MMF.LoadChunkBasedSegment(backPtrSPI, 8);
-
-        // Load Layer 1 occupancy hashmap if persisted (Int5[4] > 0)
-        PagedHashMap<long, int, PersistentStore> occupancyMap = null;
-        var hmSPI = val.GetInt(4);
-        if (hmSPI > 0)
-        {
-            var hmStride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
-            var hmSegment = MMF.LoadChunkBasedSegment(hmSPI, hmStride);
-            occupancyMap = PagedHashMap<long, int, PersistentStore>.Open(hmSegment);
-        }
-
-        var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, true);
-        tree.BackPointerSegment = backPtrSegment;
-
-        var sf = table.Definition.SpatialField;
-        var fieldInfo = new SpatialFieldInfo(table.ComponentOverhead + sf.OffsetInComponentStorage, sf.SizeInComponentStorage, sf.SpatialFieldType,
-            sf.SpatialMargin, sf.SpatialCellSize, mode, sf.SpatialCategory);
-
-        SpatialRTree<PersistentStore> staticTree = null, dynamicTree = null;
-        if (mode == SpatialMode.Static)
-        {
-            staticTree = tree;
-        }
-        else
-        {
-            dynamicTree = tree;
-        }
-        table.SpatialIndex = new SpatialIndexState(staticTree, dynamicTree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 
     private void ConstructComponentStore()
@@ -3002,10 +2863,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         changeSet: migrationChangeSet, restoreCollectionInfo: true);
                 }
 
-                // Load spatial index from bootstrap if present
+                // Spatial metadata is derived from the schema attribute, not reloaded: the segments a spatial component used to persist were the entity
+                // R-Tree's, and it no longer exists (#872 step 13). The load constructor builds SpatialIndex the same way the create constructor does.
                 if (definition.SpatialField != null)
                 {
-                    LoadSpatialBootstrap(componentTable);
+                    componentTable.BuildSpatialIndex();
                 }
 
                 // A newly declared index starts empty. The per-archetype trees are repopulated in InitializeArchetypes, which is the only place that knows
@@ -3071,12 +2933,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             if (_componentsTable != null)
             {
                 var saved = SaveInSystemSchema(componentTable);
-
-                // Persist spatial index segment SPIs in bootstrap (segment root pages are immutable after creation)
-                if (componentTable.SpatialIndex != null)
-                {
-                    SaveSpatialBootstrap(componentTable);
-                }
 
                 cs.SaveChanges();
                 MMF.FlushToDisk();

@@ -153,6 +153,18 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-partition"))
+            {
+                SpatialPartitionMatrix.Run(args);
+                return;
+            }
+
+            if (args.Contains("--profile-openmut"))
+            {
+                OpenMutLossProfile.Run(args);
+                return;
+            }
+
             if (args.Contains("--profile-delete"))
             {
                 BTreeDeleteProfile.Run();

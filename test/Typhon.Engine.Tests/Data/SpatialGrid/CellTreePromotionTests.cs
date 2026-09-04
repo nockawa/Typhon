@@ -55,7 +55,8 @@ class CellTreePromotionTests : TestBase<CellTreePromotionTests>
 
     private const float CellSize = 1_000f;
 
-    /// <summary>Low enough that a modest population crosses it, high enough that a leaf split is forced first (LeafCapacity is 11 for R3Df32).</summary>
+    /// <summary>Low enough that a modest population crosses it, high enough that a leaf split is forced first — R3Df32's LeafCapacity is 13 (11 before
+    /// #872 step 13 dropped the leaf's ComponentChunkId column).</summary>
     private const int PromoteAt = 24;
 
     private static ClCohPos PointAt(float x, float y) =>

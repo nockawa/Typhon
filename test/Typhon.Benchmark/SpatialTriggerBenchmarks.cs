@@ -414,7 +414,7 @@ public class TriggerStaticCacheBenchmarks : IDisposable
 
         var table = _dbe.GetComponentTable<TrigTerrain>();
         _ts = table.SpatialIndex.GetOrCreateTriggerSystem(table);
-        _handle = _ts.CreateRegion(stackalloc double[] { 4000, 4000, 6000, 6000 }, targetTree: TargetTreeMode.Both);
+        _handle = _ts.CreateRegion(stackalloc double[] { 4000, 4000, 6000, 6000 });
         _tick = 0;
     }
 

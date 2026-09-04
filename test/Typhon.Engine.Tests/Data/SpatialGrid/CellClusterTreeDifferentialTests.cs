@@ -111,7 +111,7 @@ unsafe class CellClusterTreeDifferentialTests
         // ChunkAccessor creation asserts an epoch scope; production callers are always inside the tick fence's.
         using var epoch = EpochGuard.Enter(_serviceProvider.GetRequiredService<EpochManager>());
 
-        const int ClusterCount = 220;   // well past LeafCapacity 11 — forces several splits and at least one root split
+        const int ClusterCount = 220;   // well past LeafCapacity 13 (11 before #872 step 13) — forces splits and at least one root split
         var backPointers = new int[ClusterCount + 1];
         Array.Fill(backPointers, SpatialRTree<TransientStore>.NullHandle);
 

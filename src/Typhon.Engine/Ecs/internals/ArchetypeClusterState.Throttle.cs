@@ -1,5 +1,7 @@
 using System;
 using System.Diagnostics;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace Typhon.Engine.Internals;
 
@@ -93,6 +95,77 @@ internal sealed partial class ArchetypeClusterState
     /// </summary>
     internal int LastTickRepairValveFires;
 
+    /// <summary>
+    /// Source slots named by this tick's mandatory requests, keyed by cluster chunk id — the supersede filter's claim set (#877).
+    /// </summary>
+    /// <remarks>Per-archetype and reused, so a steady-state tick allocates nothing; cleared at the top of every throttle pass.</remarks>
+    private readonly Dictionary<int, ulong> _mandatorySourceSlots = [];
+
+    /// <summary>
+    /// Relocations dropped because a mandatory request already names the same source slot — the fourth term of <c>TH-02</c>'s identity (#877).
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="LastTickRelocationsThrottled"/> on purpose. A throttled relocation is one the BUDGET refused and is the signal that the
+    /// budget is too small; a superseded one was refused by nothing — its entity is migrating anyway, under a request that outranks it. Folding the two
+    /// would make <c>RelocationsThrottled</c> report budget pressure that does not exist, which is the number step 11's whole controller is tuned against.
+    /// </remarks>
+    internal int LastTickRelocationsSuperseded;
+
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // Prep sub-spans (#872 — the measurement gate on claude/design/Runtime/11-prep-phase-optimisation.md §7)
+    // ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+    //
+    // Prep is the fence's dominant phase — 52 % of it at W = 8, 64 % at 128 000 entities — and until these existed
+    // its INTERNAL split was unknown. The design document ranks its steps from what each one touches rather than
+    // from what each one costs, which is precisely the mistake the prior document's R2 warned against one level up:
+    // "you may be optimising a 100 µs slice of a 960 µs span".
+    //
+    // Deliberately plain `long` fields bracketed with Stopwatch.GetTimestamp(), following RecordPlannerCost and
+    // AccrueQueueMaintenance directly below. NOT TyphonEvent spans: those are gate-conditional
+    // (Gate = "RuntimeWriteTickFenceClusterActive") and measure nothing in a default Release run, and their
+    // `using var` shape blocks JIT inlining. One timestamp pair is ~20 ns against a phase measured in milliseconds.
+
+    /// <summary>① draining the change list — the locked read-modify-write per word, plus its allocation.</summary>
+    internal long PrepSnapshotTicks;
+
+    /// <summary>② masking the change list against live occupancy, and on the clean branch REBUILDING it.</summary>
+    internal long PrepMaskTicks;
+
+    /// <summary>③ replaying index key-changes parked during the tick.</summary>
+    internal long PrepShadowTicks;
+
+    /// <summary>④ recomputing per-cluster min/max summaries.</summary>
+    internal long PrepZoneMapTicks;
+
+    /// <summary>⑤ testing which changed entities left their cell.</summary>
+    internal long PrepDetectTicks;
+
+    /// <summary>⑥ spending the re-clustering budget over the pending queue.</summary>
+    internal long PrepThrottleTicks;
+
+    /// <summary>⑦ ranking the repair queue and planning units. Includes queue maintenance; see <see cref="RecordPlannerCost"/>.</summary>
+    internal long PrepPlanTicks;
+
+    /// <summary>⑧ pre-sizing the fence buffers — an O(all clusters) resize every tick.</summary>
+    internal long PrepPreSizeTicks;
+
+    /// <summary>Clusters whose change word survived the occupancy mask — the map's actual domain size.</summary>
+    internal int PrepDirtyClusters;
+
+    /// <summary>Reset every Prep sub-span. Called from the counter-reset preamble, beside every other per-tick counter.</summary>
+    internal void ResetPrepSubSpans()
+    {
+        PrepSnapshotTicks = 0;
+        PrepMaskTicks = 0;
+        PrepShadowTicks = 0;
+        PrepZoneMapTicks = 0;
+        PrepDetectTicks = 0;
+        PrepThrottleTicks = 0;
+        PrepPlanTicks = 0;
+        PrepPreSizeTicks = 0;
+        PrepDirtyClusters = 0;
+    }
+
     /// <summary>The per-entity cost the budget is being spent against, in nanoseconds. Published every tick, whether or not anything was admitted.</summary>
     /// <remarks>
     /// Published so a reader can tell a budget that bought little because work was dear from one that bought little because none was queued — which needs
@@ -140,10 +213,49 @@ internal sealed partial class ArchetypeClusterState
         return RepairQueue;
     }
 
+    /// <summary>
+    /// One source slot, one request: the drain prefix must never name the same <c>(cluster, slot)</c> twice (<c>CR-05</c>, #877).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>DEBUG-only, for the same reason <c>BTree.AssertSortedAscending</c> is.</b> It is <c>O(prefix)</c> with a dictionary against a prefix whose
+    /// entries each cost ~1 500 ns to execute, so the ratio is defensible — but it runs on Prep, single-threaded, on every archetype of every tick, and the
+    /// release contract is upheld by the two producers rather than by this check. Debug enforces what Release maintains.</para>
+    /// <para><b>Why an assertion and not a filter.</b> A duplicate reaching here means one of the two exclusion points failed, and the entries carry no
+    /// information about which of the pair is the correct one to keep — the throttle's supersede rule and the planner's exclusion map both encode a
+    /// PRIORITY, and a late filter would have to guess it. Failing loudly at the point of detection is what turned #877 from three unrelated-looking
+    /// symptoms (a missing entity, an invalid B+Tree child, an access violation) into one defect with one cause.</para>
+    /// </remarks>
+    [Conditional("DEBUG")]
+    internal void AssertNoDuplicateMigrationSources(long tickNumber)
+    {
+        var prefix = PendingMigrationDrainCount;
+        if (prefix < 2)
+        {
+            return;
+        }
+
+        var seen = new Dictionary<long, int>(prefix);
+        var queue = PendingMigrations;
+        for (var i = 0; i < prefix; i++)
+        {
+            var key = ((long)queue[i].SourceClusterChunkId << 6) | (uint)queue[i].SourceSlotIndex;
+            if (seen.TryGetValue(key, out var first))
+            {
+                throw new InvalidOperationException(
+                    $"CR-05 violated on tick {tickNumber}: pending migrations {first} ({queue[first].Kind}) and {i} ({queue[i].Kind}) both name source "
+                    + $"cluster {queue[i].SourceClusterChunkId} slot {queue[i].SourceSlotIndex}. ExecuteMigrations' stale-source guard tests OCCUPANCY, not "
+                    + "identity, so whichever drains second migrates whatever occupies the slot by then — see #877.");
+            }
+
+            seen[key] = i;
+        }
+    }
+
     /// <summary>Reset the throttle's per-tick state. Called from the fence's counter-reset block, beside every other per-tick counter.</summary>
     internal void ResetThrottleTickState()
     {
         LastTickRelocationsThrottled = 0;
+        LastTickRelocationsSuperseded = 0;
         LastTickDriftersUnplaced = 0;
         LastTickRepairValveFires = 0;
 
@@ -356,6 +468,9 @@ internal sealed partial class ArchetypeClusterState
         // Everything that must happen, compacted to the front. A crossing charges the budget even when that drives it
         // negative — it cannot be refused, so the only honest accounting is to let it consume what it costs and leave
         // repair with nothing.
+        //
+        // The source slots are recorded as they go by, for the supersede filter below (#877).
+        _mandatorySourceSlots.Clear();
         var mandatory = 0;
         for (var i = 0; i < count; i++)
         {
@@ -364,8 +479,51 @@ internal sealed partial class ArchetypeClusterState
                 continue;
             }
 
+            ref var claimedMask = ref CollectionsMarshal.GetValueRefOrAddDefault(_mandatorySourceSlots, queue[i].SourceClusterChunkId, out _);
+            claimedMask |= 1UL << queue[i].SourceSlotIndex;
+
             queue[mandatory++] = queue[i];
             remainingNs -= estimateNs;
+        }
+
+        // ── A relocation whose entity is already leaving under a mandatory request is DROPPED, not admitted (#877) ───
+        //
+        // Drift detection runs in AabbRefresh, so its relocations are decided by the NEXT tick's Prep — and by then the
+        // crossing detector may have filed a CellCrossing for the same entity, because an entity that drifted to the edge
+        // of its cell is exactly the one most likely to leave it. Both requests then name the same source slot.
+        //
+        // ExecuteMigrations does not catch this. Its stale-source guard is an OCCUPANCY test, not an identity test
+        // (`(srcOcc & (1UL << srcSlot)) == 0` — ClusterMigration.cs step 0), so it only saves the case where the slot is
+        // still empty when the second request drains. The crossing runs first, frees the slot, and any later
+        // ClaimSlotInCell in the same pass may hand that slot to an unrelated migrant — whereupon the relocation moves
+        // THAT entity to a destination chosen for someone else, and its EntityMap entry and index rows point at a slot it
+        // does not occupy. Measured: `Entity(...) not found or not visible` and `B+Tree bulk update reached an invalid
+        // child`, 6 of 12 seeds at the default budget.
+        //
+        // Dropping is the right resolution and not merely the cheap one, for the reason T1 already gives for dropping
+        // rather than deferring: the relocation's DestClusterChunkId was the least-enlargement choice against LAST tick's
+        // AABBs, for an entity that has since left the cell entirely. Re-detecting after the crossing lands is more
+        // correct than executing a placement computed for a cell the entity no longer lives in.
+        //
+        // Only mandatory requests can supersede. Two relocations cannot name one slot — detection visits each slot of
+        // each cluster once, and a throttled relocation is dropped rather than carried — so the queue never holds two.
+        var superseded = 0;
+        if (_mandatorySourceSlots.Count > 0)
+        {
+            var kept = 0;
+            for (var i = 0; i < relocationCount; i++)
+            {
+                var claimed = _mandatorySourceSlots.GetValueOrDefault(relocations[i].SourceClusterChunkId);
+                if ((claimed & (1UL << relocations[i].SourceSlotIndex)) != 0UL)
+                {
+                    superseded++;
+                    continue;
+                }
+
+                relocations[kept++] = relocations[i];
+            }
+
+            relocationCount = kept;
         }
 
         // Then the relocations, from the copy, in encounter order until the budget runs out.
@@ -385,6 +543,7 @@ internal sealed partial class ArchetypeClusterState
 
         PendingMigrationCount = admitted;
         LastTickRelocationsThrottled = throttled;
+        LastTickRelocationsSuperseded = superseded;
         return remainingNs > 0d ? remainingNs : 0d;
     }
 }

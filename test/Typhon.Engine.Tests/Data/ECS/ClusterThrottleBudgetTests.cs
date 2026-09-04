@@ -249,9 +249,13 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
             // lag. `unplaced` is the exception: it is decided AT detection, so it belongs to the earlier tick's side.
             if (previousDetected >= 0)
             {
-                Assert.That(t.MigrationCount + t.RelocationsThrottled + previousUnplaced, Is.EqualTo(previousDetected),
+                // `superseded` is CR-05's term and is zero throughout THIS fixture — one cell, so no crossings, so nothing can supersede. It is in the
+                // identity anyway rather than assumed away: the fixture's isolation is a property of its configuration, and a later change that let a
+                // crossing in would otherwise turn a correct engine into a red test with a misleading message.
+                Assert.That(t.MigrationCount + t.RelocationsThrottled + t.RelocationsSuperseded + previousUnplaced, Is.EqualTo(previousDetected),
                     $"tick {tick}: {previousDetected} drifters detected on tick {tick - 1}, but {t.MigrationCount} moved + {t.RelocationsThrottled} "
-                    + $"throttled + {previousUnplaced} unplaced — a drifter was counted twice or lost between detection and admission");
+                    + $"throttled + {t.RelocationsSuperseded} superseded + {previousUnplaced} unplaced — a drifter was counted twice or lost between "
+                    + "detection and admission");
             }
 
             previousDetected = t.DriftersDetected;

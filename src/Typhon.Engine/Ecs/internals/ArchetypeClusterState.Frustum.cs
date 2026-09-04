@@ -7,6 +7,9 @@ namespace Typhon.Engine.Internals;
 /// </summary>
 internal sealed unsafe partial class ArchetypeClusterState
 {
+    /// <summary>Upper bound on a frustum query's plane count — the buffers it walks them in are stack-allocated.</summary>
+    private const int MaxFrustumPlanes = 64;
+
     /// <summary>
     /// Entities whose tight AABB is not fully outside a set of half-space planes. Returns how many were written to <paramref name="results"/>.
     /// </summary>
@@ -39,6 +42,15 @@ internal sealed unsafe partial class ArchetypeClusterState
             return 0;
         }
 
+        // 🔴 The plane count drives a stackalloc below, and again per promoted cell. This method is reachable from
+        // public API (EcsQuery.WhereFrustum), so the bound has to hold HERE and not only at the entry point: a stack
+        // overflow kills the process rather than raising something the caller can catch. EcsQuery enforces the same
+        // number so the message names the API the user called; this is the backstop for every other caller.
+        if (planeCount > MaxFrustumPlanes)
+        {
+            ThrowHelper.ThrowInvalidOp($"A frustum query is limited to {MaxFrustumPlanes} planes; got {planeCount}.");
+        }
+
         var ss = SpatialSlot;
         bool is3D = ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
         int dim = is3D ? 3 : 2;
@@ -63,6 +75,15 @@ internal sealed unsafe partial class ArchetypeClusterState
         Span<double> box = stackalloc double[6];
         int count = 0;
 
+        // 🔴 ONE read of ClusterAabbs for the whole query — the rent below, every bounds check, and every index.
+        // ArchetypeClusterState grows it with Array.Resize (a plain reference store), so re-reading the field per
+        // cluster can see a LONGER array than the visit set was sized for: ids in [oldLen, newLen) would then pass the
+        // bounds check while TryVisit reports them unvisited every time, silently turning dedup off for that range.
+        var aabbs = ClusterAabbs;
+
+        // One bit per cluster — see ClusterVisitSet. The frustum case is why it exists: its result sets are large enough for a per-entity rescan of the
+        // whole buffer to dominate the query.
+        var visited = ClusterVisitSet.Rent(aabbs.Length);
         var accessor = ClusterSegment.CreateChunkAccessor();
         try
         {
@@ -103,14 +124,17 @@ internal sealed unsafe partial class ArchetypeClusterState
 
                         ShiftPlanes(planes, shifted, planeCount, dim, originX, originY, is3D ? originZ : 0f);
 
-                        FrustumScanHalf(slot, isStatic: false, ref accessor, shifted, planes, planeCount, dim, is3D, categoryMask, box, results, ref count);
-                        FrustumScanHalf(slot, isStatic: true, ref accessor, shifted, planes, planeCount, dim, is3D, categoryMask, box, results, ref count);
+                        FrustumScanHalf(slot, isStatic: false, ref accessor, shifted, planes, planeCount, dim, is3D, categoryMask, box, aabbs,
+                            ref visited, results, ref count);
+                        FrustumScanHalf(slot, isStatic: true, ref accessor, shifted, planes, planeCount, dim, is3D, categoryMask, box, aabbs,
+                            ref visited, results, ref count);
                     }
                 }
             }
         }
         finally
         {
+            visited.Dispose();
             accessor.Dispose();
         }
 
@@ -142,7 +166,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     private void FrustumScanHalf(PerCellSpatialSlot slot, bool isStatic, ref ChunkAccessor<PersistentStore> accessor,
         ReadOnlySpan<double> cellPlanes, ReadOnlySpan<double> worldPlanes, int planeCount, int dim, bool is3D, uint categoryMask, Span<double> box,
-        Span<long> results, ref int count)
+        ClusterSpatialAabb[] aabbs, ref ClusterVisitSet visited, Span<long> results, ref int count)
     {
         var tree = slot.ReadTree(isStatic);   // acquire — see PerCellSpatialSlot.PublishDynamicTree
         if (tree != null)
@@ -154,7 +178,8 @@ internal sealed unsafe partial class ArchetypeClusterState
 
             foreach (var hit in tree.Tree.QueryFrustum(treePlanes, planeCount, null, 0))
             {
-                FrustumScanCluster((int)hit.PayloadId, ref accessor, worldPlanes, planeCount, dim, is3D, categoryMask, results, ref count);
+                FrustumScanCluster((int)hit.PayloadId, ref accessor, worldPlanes, planeCount, dim, is3D, categoryMask, aabbs, ref visited, results,
+                    ref count);
                 if (count == results.Length)
                 {
                     return;
@@ -186,7 +211,8 @@ internal sealed unsafe partial class ArchetypeClusterState
                 continue;
             }
 
-            FrustumScanCluster(linear.ClusterIds[i], ref accessor, worldPlanes, planeCount, dim, is3D, categoryMask, results, ref count);
+            FrustumScanCluster(linear.ClusterIds[i], ref accessor, worldPlanes, planeCount, dim, is3D, categoryMask, aabbs, ref visited, results,
+                ref count);
         }
     }
 
@@ -209,13 +235,17 @@ internal sealed unsafe partial class ArchetypeClusterState
     }
 
     private void FrustumScanCluster(int clusterChunkId, ref ChunkAccessor<PersistentStore> accessor, ReadOnlySpan<double> worldPlanes,
-        int planeCount, int dim, bool is3D, uint categoryMask, Span<long> results, ref int count)
+        int planeCount, int dim, bool is3D, uint categoryMask, ClusterSpatialAabb[] aabbs, ref ClusterVisitSet visited, Span<long> results, ref int count)
     {
-        if ((uint)clusterChunkId >= (uint)ClusterAabbs.Length)
+        if ((uint)clusterChunkId >= (uint)aabbs.Length)
         {
             return;
         }
-        if (categoryMask != 0 && (ClusterAabbs[clusterChunkId].CategoryMask & categoryMask) == 0)
+        if (!visited.TryVisit(clusterChunkId))
+        {
+            return;
+        }
+        if (categoryMask != 0 && (aabbs[clusterChunkId].CategoryMask & categoryMask) == 0)
         {
             return;
         }
@@ -265,19 +295,9 @@ internal sealed unsafe partial class ArchetypeClusterState
                 continue;
             }
 
-            long entityId = *(long*)(clusterBase + Layout.EntityIdsOffset + (slot * 8));
-            for (int i = 0; i < count; i++)
-            {
-                if (results[i] == entityId)
-                {
-                    entityId = 0;
-                    break;
-                }
-            }
-            if (entityId != 0)
-            {
-                results[count++] = entityId;
-            }
+            // No entity-level duplicate check: an entity lives in exactly one cluster slot, so the only way to report one twice is to scan its cluster
+            // twice, and ClusterVisitSet has already refused that above.
+            results[count++] = *(long*)(clusterBase + Layout.EntityIdsOffset + (slot * 8));
         }
     }
 

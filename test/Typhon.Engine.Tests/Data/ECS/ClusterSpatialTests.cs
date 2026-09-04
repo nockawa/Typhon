@@ -227,10 +227,16 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
         tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in pos), ClSpatialUnit.Meta.Set(in met));
         tx.Commit();
 
+        // The shared per-table R-Tree this test used to assert was empty is gone (#872 step 13), so emptiness is no longer a property that can hold or
+        // fail — what survives is that a spatial component still gets its FIELD metadata, which the cluster path decodes bounds with, and that the entity
+        // is reachable through the cluster index. AC-13.3 is what now guarantees no second index home has reappeared.
         var table = dbe.GetComponentTable<ClSpatialPos>();
-        Assert.That(table.SpatialIndex, Is.Not.Null);
-        Assert.That(table.SpatialIndex.DynamicTree.EntityCount, Is.EqualTo(0),
-            "Shared per-table R-Tree should be empty — cluster entities use per-archetype tree");
+        Assert.Multiple(() =>
+        {
+            Assert.That(table.SpatialIndex, Is.Not.Null, "a component with [SpatialIndex] must still carry its field metadata");
+            Assert.That(table.SpatialIndex.Descriptor.CoordCount, Is.EqualTo(6), "AABB3F is a 3D variant");
+            Assert.That(CountClSpatialEntities(dbe), Is.EqualTo(1), "the spawned entity is not reachable through the cluster index");
+        });
     }
 
     // ═══════════════════════════════════════════════════════════════════════

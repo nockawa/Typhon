@@ -115,13 +115,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     private readonly bool _mirrorMetadata;
 
     /// <summary>
-    /// Back-pointer CBS for O(1) leaf lookup. When set, split scatter updates back-pointers directly
-    /// using componentChunkIds stored in leaf entries. Null for standalone unit tests.
-    /// </summary>
-    internal ChunkBasedSegment<TStore> BackPointerSegment;
-
-    /// <summary>
-    /// Payload-indexed back-pointer array — the cluster-tree counterpart of <see cref="BackPointerSegment"/> (#872 step 9). Indexed by the payload id passed
+    /// Payload-indexed back-pointer array (#872 step 9). Indexed by the payload id passed
     /// to <see cref="Insert(long,System.ReadOnlySpan{double},ref ChunkAccessor{TStore},ChangeSet,uint)"/>; each element is a packed
     /// <c>(leafChunkId, slotIndex)</c> made by <see cref="PackHandle"/>. Null for every tree that does not use handles.
     /// </summary>
@@ -131,9 +125,10 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// <c>SharedSegmentRTreeHarnessTests.Claim1</c>: <b>43 of 60 handles wrong after splits, 20 of them pointing outside their leaf's live range</b>. A stale
     /// handle makes <c>C5</c>'s escape-bound update write one cluster's bound into another cluster's slot, which is <c>CA-01</c> violated in both directions
     /// and an <c>SQ-01</c> false negative with no exception anywhere near it.</para>
-    /// <para><b>Why an array rather than <see cref="BackPointerSegment"/>.</b> That path opens a <see cref="ChunkAccessor{TStore}"/> and does a paged lookup
-    /// and write per entry. The cluster payload IS a cluster chunk id and <c>ArchetypeClusterState.ClusterSpatialIndexSlot</c> is already an <c>int[]</c>
-    /// indexed by exactly that, so the fix-up is one array store folded into a scatter loop that is already writing four fields per entry.</para>
+    /// <para><b>Why an array rather than the chunk-based back-pointer segment this replaced.</b> That path — the entity tree's, removed in #872 step 13 —
+    /// opened a <see cref="ChunkAccessor{TStore}"/> and did a paged lookup and write per entry, keyed by the owning component's chunk id. The cluster payload
+    /// IS a cluster chunk id and <c>ArchetypeClusterState.ClusterSpatialIndexSlot</c> is already an <c>int[]</c> indexed by exactly that, so the fix-up is
+    /// one array store folded into a scatter loop that is already writing the entry's other fields.</para>
     /// <para><b>The array must be large enough BEFORE any mutation, and must not be resized while one is in flight.</b> It is indexed by payload id, so it
     /// has to cover the largest live one. A resize is not merely unsynchronised — it cannot be made safe by a writer-side lock alone:
     /// <see cref="ScatterLeafEntries"/> reads the field once and writes through that reference, so an <c>Array.Resize</c> concurrent with a split publishes
@@ -159,12 +154,15 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// <para>Packing into an <c>int</c> rather than widening to a <c>long</c> keeps <c>ClusterSpatialIndexSlot</c> the size it already is: one array per
     /// archetype sized by cluster count, so the width is paid per cluster forever. <c>-1</c> stays the "not in any tree" sentinel it already was, and is never
     /// a valid packed handle because leaf chunk 0 is the segment's reserved null chunk.</para>
-    /// <para><b>Five bits, not four, and the difference is not comfort.</b> Leaf capacities computed from
-    /// <see cref="SpatialNodeDescriptor"/>'s arithmetic are <c>R2Df32</c> 15, <c>R3Df32</c> 11, <c>R2Df64</c> 9, <c>R3Df64</c> 11 — so four bits fits the
-    /// widest variant with <i>exactly zero</i> headroom. A node stride change, a dropped header field, or the cluster-specific descriptor already discussed
-    /// as a follow-up (dropping the unused 8-byte entity id would take <c>R2Df32</c> to 20) each push it over, and the failure is a silently truncated slot
-    /// index — a handle naming the wrong entry, which is precisely the defect this whole mechanism exists to remove. Five bits costs one bit of chunk id,
-    /// leaving 67 M chunks per segment, and <see cref="AssertHandleCapacity"/> makes the remaining margin a startup failure rather than a silent wrap.</para>
+    /// <para><b>Five bits, not four — and #872 step 13 is why that mattered.</b> Leaf capacities computed from
+    /// <see cref="SpatialNodeDescriptor"/>'s arithmetic are <c>R2Df32</c> 17, <c>R3Df32</c> 13, <c>R2Df64</c> 10, <c>R3Df64</c> 11. Four bits holds 0-15, so
+    /// <b>the widest variant no longer fits in four</b>: when step 13 dropped the leaf entry's 4-byte <c>ComponentChunkId</c> column, <c>R2Df32</c> went 15 to
+    /// 17 and a four-bit handle would have started silently truncating the slot index — a handle naming the wrong entry, which is precisely the defect this
+    /// whole mechanism exists to remove. The step changed the capacities and did not touch this file; nothing broke because the five-bit choice had already
+    /// bought the headroom, and <see cref="AssertHandleCapacity"/> would have made it a startup failure rather than a silent wrap either way.</para>
+    /// <para>Five bits costs one bit of chunk id, leaving 67 M chunks per segment, and holds 0-31 against a current worst case of 17. <b>Restate these four
+    /// numbers whenever the leaf layout changes</b> — <c>SH-02</c> in <c>rules/spatial.md</c> carries them as an invariant for exactly this reason, and the
+    /// previous version of this paragraph reasoned from the pre-step-13 set for as long as it took a reviewer to notice.</para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static int PackHandle(int leafChunkId, int slotIndex)
