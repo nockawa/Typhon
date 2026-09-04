@@ -1029,6 +1029,11 @@ public partial class DatabaseEngine
         if (clusterState.ClusterSegment == null)
         {
             var clusterScopeT = TyphonEvent.BeginWriteTickFenceCluster(meta.ArchetypeId);
+
+            // This branch is `ClusterSegment == null`, so there is no cluster segment to open an accessor on and neither callee will take a cluster-segment
+            // address — both dispatch on the same `pureTransient` test. Passing the default rather than overloading keeps one shape for the two call sites
+            // (#882).
+            var noClusterAccessor = default(ChunkAccessor<PersistentStore>);
             try
             {
                 // Drain the archetype's own index shadow buffers (#655). This branch had none: a pure-Transient archetype could not carry per-archetype
@@ -1039,7 +1044,7 @@ public partial class DatabaseEngine
                     var transientShadowScope = TyphonEvent.BeginWriteTickFenceShadow(meta.ArchetypeId, clusterState.TransientIndexSlots.Length);
                     try
                     {
-                        transientShadowScope.TotalShadowEntries = ProcessClusterShadowEntries(clusterState, engineState, null);
+                        transientShadowScope.TotalShadowEntries = ProcessClusterShadowEntries(clusterState, engineState, null, ref noClusterAccessor);
                     }
                     finally
                     {
@@ -1062,7 +1067,7 @@ public partial class DatabaseEngine
                     // to, so Path B prunes away any cluster whose indexed field was later mutated OUT of that range — a silently empty query, not a stale
                     // count. Spawn widens eagerly, which is why the miss only shows after an in-place write.
                     clusterState.FenceWrittenSlots = Interlocked.Exchange(ref clusterState.WrittenSlotUnion, 0);
-                    RecomputeClusterZoneMaps(clusterState, transientDirtyBits);
+                    RecomputeClusterZoneMaps(clusterState, transientDirtyBits, ref noClusterAccessor);
 
                     for (var slot = 0; slot < clusterState.Layout.ComponentCount; slot++)
                     {
@@ -1188,7 +1193,7 @@ public partial class DatabaseEngine
                     subSpan = Stopwatch.GetTimestamp();
                     try
                     {
-                        shadowScope.TotalShadowEntries = ProcessClusterShadowEntries(clusterState, engineState, changeSet);
+                        shadowScope.TotalShadowEntries = ProcessClusterShadowEntries(clusterState, engineState, changeSet, ref accessor);
                     }
                     finally
                     {
@@ -1198,7 +1203,7 @@ public partial class DatabaseEngine
                     clusterState.PrepShadowTicks += Stopwatch.GetTimestamp() - subSpan;
 
                     subSpan = Stopwatch.GetTimestamp();
-                    RecomputeClusterZoneMaps(clusterState, dirtyBits);
+                    RecomputeClusterZoneMaps(clusterState, dirtyBits, ref accessor);
                     clusterState.PrepZoneMapTicks += Stopwatch.GetTimestamp() - subSpan;
                 }
 

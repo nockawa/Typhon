@@ -31,9 +31,15 @@ public partial class DatabaseEngine
     /// <c>ZoneMap?.Widen(dstChunkId, ...)</c> call below), so a cluster that only gained entities by migration is correct without a rescan here.
     /// </para>
     /// </remarks>
-    private void RecomputeClusterZoneMaps(ArchetypeClusterState clusterState, long[] dirtyBits)
+    /// <param name="clusterState">The archetype whose zone maps are being refreshed.</param>
+    /// <param name="dirtyBits">One word per cluster chunk id; a non-zero word marks a cluster whose summaries may be stale.</param>
+    /// <param name="clusterAccessor">
+    /// The caller's OPEN accessor on <see cref="ArchetypeClusterState.ClusterSegment"/>, or <c>default</c> when the archetype is pure-Transient and has no
+    /// cluster segment to accessorise. See the remarks on <see cref="ProcessClusterShadowEntries"/> for why this is threaded in rather than rented here.
+    /// </param>
+    private void RecomputeClusterZoneMaps(ArchetypeClusterState clusterState, long[] dirtyBits, ref ChunkAccessor<PersistentStore> clusterAccessor)
     {
-        // Nothing durable-or-indexed was written this tick ⇒ every zone map still describes its cluster exactly. Bail before renting an accessor.
+        // Nothing durable-or-indexed was written this tick ⇒ every zone map still describes its cluster exactly. Bail before touching anything.
         var writtenSlots = clusterState.FenceWrittenSlots;
         if (writtenSlots == 0)
         {
@@ -45,16 +51,8 @@ public partial class DatabaseEngine
         if (HasZoneMaps(clusterState.IndexSlots))
         {
             Debug.Assert(!pureTransient, "a pure-Transient archetype cannot own PersistentStore-backed index slots");
-            var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
-            try
-            {
-                RecomputeZoneMapsForHome(clusterState, dirtyBits, writtenSlots, clusterState.IndexSlots, clusterState.ClusterSegment, ref clusterAccessor,
-                    ref clusterAccessor);
-            }
-            finally
-            {
-                clusterAccessor.Dispose();
-            }
+            RecomputeZoneMapsForHome(clusterState, dirtyBits, writtenSlots, clusterState.IndexSlots, clusterState.ClusterSegment, ref clusterAccessor,
+                ref clusterAccessor);
         }
 
         if (HasZoneMaps(clusterState.TransientIndexSlots))
@@ -69,16 +67,8 @@ public partial class DatabaseEngine
                 }
                 else
                 {
-                    var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
-                    try
-                    {
-                        RecomputeZoneMapsForHome(clusterState, dirtyBits, writtenSlots, clusterState.TransientIndexSlots, clusterState.ClusterSegment,
-                            ref clusterAccessor, ref transientAccessor);
-                    }
-                    finally
-                    {
-                        clusterAccessor.Dispose();
-                    }
+                    RecomputeZoneMapsForHome(clusterState, dirtyBits, writtenSlots, clusterState.TransientIndexSlots, clusterState.ClusterSegment,
+                        ref clusterAccessor, ref transientAccessor);
                 }
             }
             finally
@@ -967,7 +957,24 @@ public partial class DatabaseEngine
     /// </list>
     /// For a SingleVersion / Versioned slot all three collapse onto the cluster segment, which is why this needed only one accessor before.
     /// </remarks>
-    private int ProcessClusterShadowEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ChangeSet changeSet)
+    /// <param name="clusterState">The archetype whose parked index key-changes are being replayed.</param>
+    /// <param name="engineState">Resolves a component slot to its table, for the view-registry notifications the drain emits.</param>
+    /// <param name="changeSet">Threaded into the index accessor for a persisted store; <c>null</c> for a Transient one, which logs nothing.</param>
+    /// <param name="clusterAccessor">
+    /// The caller's OPEN accessor on <see cref="ArchetypeClusterState.ClusterSegment"/>, or <c>default</c> when the archetype is pure-Transient (the
+    /// <c>ClusterSegment == null</c> branch of <c>PrepareArchetypeFenceCore</c>), where no cluster-segment address is ever taken.
+    /// </param>
+    /// <remarks>
+    /// <para><b>#882 — threaded in rather than rented here, and the reason is the page window.</b> Prep already holds an accessor on this very segment for
+    /// its occupancy mask and its crossing test. An accessor is a self-contained ~430-byte struct with its OWN 32-slot page window and its own clock hand —
+    /// two of them share nothing — so renting a second one here made both re-resolve the same pages and each pay
+    /// <c>IncrementSlotRefCount</c>/<c>DecrementSlotRefCount</c> on the same shared <c>PageInfo</c> cache lines. With
+    /// <see cref="RecomputeClusterZoneMaps"/> renting a third, one Prep opened three windows onto one segment and let them evict each other's entries.</para>
+    /// <para>Measured before the change: the shadow drain was <b>43 % of Prep</b> at the 25 % reference point of the #872 matrix, and 47 % under stress —
+    /// almost none of it B+Tree work.</para>
+    /// </remarks>
+    private int ProcessClusterShadowEntries(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ChangeSet changeSet,
+        ref ChunkAccessor<PersistentStore> clusterAccessor)
     {
         var totalShadowEntries = 0;
         var pureTransient = clusterState.ClusterSegment == null;
@@ -975,16 +982,8 @@ public partial class DatabaseEngine
         if (HasPendingShadow(clusterState.IndexSlots))
         {
             Debug.Assert(!pureTransient, "a pure-Transient archetype cannot own PersistentStore-backed index slots");
-            var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
-            try
-            {
-                totalShadowEntries += DrainClusterShadowSlots(clusterState, engineState, clusterState.IndexSlots, ref clusterAccessor, ref clusterAccessor,
-                    changeSet);
-            }
-            finally
-            {
-                clusterAccessor.Dispose();
-            }
+            totalShadowEntries += DrainClusterShadowSlots(clusterState, engineState, clusterState.IndexSlots, ref clusterAccessor, ref clusterAccessor,
+                changeSet);
         }
 
         if (HasPendingShadow(clusterState.TransientIndexSlots))
@@ -999,16 +998,8 @@ public partial class DatabaseEngine
                 }
                 else
                 {
-                    var clusterAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
-                    try
-                    {
-                        totalShadowEntries += DrainClusterShadowSlots(clusterState, engineState, clusterState.TransientIndexSlots, ref clusterAccessor,
-                            ref transientAccessor, changeSet);
-                    }
-                    finally
-                    {
-                        clusterAccessor.Dispose();
-                    }
+                    totalShadowEntries += DrainClusterShadowSlots(clusterState, engineState, clusterState.TransientIndexSlots, ref clusterAccessor,
+                        ref transientAccessor, changeSet);
                 }
             }
             finally
@@ -1079,13 +1070,24 @@ public partial class DatabaseEngine
                     totalShadowEntries += count;
 
                     ref var field = ref ixSlot.Fields[f];
+
+                    // Walk the buffer in ascending cluster order rather than in the order user code happened to write the entities (#882). The two
+                    // GetChunkAddress calls below are the drain's whole cost on the common path — the one where the indexed field did not actually change —
+                    // and in append order they miss the accessor's 32-page window on nearly every entry. See BuildShadowDrainOrder for the measurement.
+                    //
+                    // 🔴 One behaviour this reorders, deliberately: with two entities colliding on a UNIQUE key inside one drain,
+                    // Transaction.RejectUniqueIndexCollision below rejects whichever it reaches SECOND, so which of the two is rejected now follows cluster
+                    // order instead of write order. Both are legal and neither is promised by any rule — but NOTHING PINS IT: no fixture in this repo
+                    // declares a unique cluster index and drives two colliding writes through one drain, so this paragraph is the only record that the
+                    // choice moved.
+                    var order = clusterState.BuildShadowDrainOrder(buffer, count);
                     var idxAccessor = CreateIndexAccessor(field.Index.Segment, changeSet);
 
                     try
                     {
-                        for (var e = 0; e < count; e++)
+                        for (var k = 0; k < count; k++)
                         {
-                            ref var entry = ref buffer[e];
+                            ref var entry = ref buffer[order[k]];
                             var clusterChunkId = entry.ChunkId >> 6;   // entityIndex → chunkId
                             var slotIndex = entry.ChunkId & 0x3F;      // entityIndex → slot
 

@@ -218,7 +218,9 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// later one, because a cluster belongs to exactly one cell. Only the producers that ran BEFORE the planner — the crossing detector, the outlier guard,
     /// and last tick's surviving relocations — can, and they are all in the prefix when the plan starts.</para>
     /// </remarks>
-    private readonly Dictionary<int, ulong> _repairSourceExclusions = [];
+    /// <remarks>Flat rather than hashed since #882 — see <see cref="ClusterSlotClaimSet"/>. The semantics <c>CR-05</c> constrains are unchanged; only the
+    /// container is.</remarks>
+    private readonly ClusterSlotClaimSet _repairSourceExclusions = new();
 
     // ══════════════════════════════════════════════════════════════════════════════
     // Intra-cell Morton encoding
@@ -712,7 +714,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     /// <summary>Slots of <paramref name="clusterChunkId"/> that a queued request already names as its source; <c>0</c> when none do.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ulong ExcludedSourceSlots(int clusterChunkId) => _repairSourceExclusions.Count == 0 ? 0UL : _repairSourceExclusions.GetValueOrDefault(clusterChunkId);
+    private ulong ExcludedSourceSlots(int clusterChunkId) => _repairSourceExclusions.ClaimedSlots(clusterChunkId);
 
     /// <summary>Does any cluster in the unit hold a slot another request already claims?</summary>
     private bool UnitHasExcludedSources(RepairCandidate[] candidates, int unitClusters)
@@ -724,7 +726,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         for (var i = 0; i < unitClusters; i++)
         {
-            if (_repairSourceExclusions.ContainsKey(candidates[i].ChunkId))
+            if (_repairSourceExclusions.ContainsCluster(candidates[i].ChunkId))
             {
                 return true;
             }
@@ -747,9 +749,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         for (var i = 0; i < queued; i++)
         {
             ref readonly var request = ref requests[i];
-            var slotBit = 1UL << request.SourceSlotIndex;
-            ref var mask = ref CollectionsMarshal.GetValueRefOrAddDefault(_repairSourceExclusions, request.SourceClusterChunkId, out _);
-            mask |= slotBit;
+            _repairSourceExclusions.Claim(request.SourceClusterChunkId, request.SourceSlotIndex);
         }
     }
 

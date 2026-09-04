@@ -1,7 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
 
 namespace Typhon.Engine.Internals;
 
@@ -69,13 +67,23 @@ internal sealed partial class ArchetypeClusterState
     private int _lastTickPlannedEntities;
 
     /// <summary>
-    /// Relocations lifted out of the pending queue while the mandatory requests are compacted over them.
+    /// The relocations the budget ADMITTED, lifted out of the pending queue before the mandatory requests are compacted over them.
     /// </summary>
     /// <remarks>
     /// Per-archetype and reused across ticks, so its steady state is one allocation. See <see cref="ApplyMigrationThrottle"/> for why the copy is not
-    /// optional: an in-place partition overwrites the entries the second pass has yet to read.
+    /// optional: an in-place partition overwrites the entries a later pass has yet to read. It holds only the SURVIVORS — about 1 300 requests where it
+    /// used to hold every candidate, 54 800 of them, at the 25 % reference point of the #872 matrix (#882).
     /// </remarks>
     private MigrationRequest[] _throttleScratch = [];
+
+    /// <summary>
+    /// Queue indices of this tick's relocation candidates — the throttle's working set while it decides which survive.
+    /// </summary>
+    /// <remarks>
+    /// Four bytes per candidate against twenty for the request itself, and every decision the throttle makes about a relocation (is its source slot claimed,
+    /// does the budget still stretch) reads the queue through one of these rather than a copy. Per-archetype and reused (#882).
+    /// </remarks>
+    private int[] _relocationIndices = [];
 
     /// <summary>Intra-cell relocations dropped by the throttle in the most recently completed tick.</summary>
     internal int LastTickRelocationsThrottled;
@@ -98,8 +106,12 @@ internal sealed partial class ArchetypeClusterState
     /// <summary>
     /// Source slots named by this tick's mandatory requests, keyed by cluster chunk id — the supersede filter's claim set (#877).
     /// </summary>
-    /// <remarks>Per-archetype and reused, so a steady-state tick allocates nothing; cleared at the top of every throttle pass.</remarks>
-    private readonly Dictionary<int, ulong> _mandatorySourceSlots = [];
+    /// <remarks>
+    /// Per-archetype and reused, so a steady-state tick allocates nothing; cleared at the top of every throttle pass. Flat rather than hashed since #882:
+    /// the filter probes it once per queued relocation — 54 800 times per tick at the reference point — and that was the largest single term in a step
+    /// measured at 21 % of Prep. See <see cref="ClusterSlotClaimSet"/>.
+    /// </remarks>
+    private readonly ClusterSlotClaimSet _mandatorySourceSlots = new();
 
     /// <summary>
     /// Relocations dropped because a mandatory request already names the same source slot — the fourth term of <c>TH-02</c>'s identity (#877).
@@ -217,9 +229,12 @@ internal sealed partial class ArchetypeClusterState
     /// One source slot, one request: the drain prefix must never name the same <c>(cluster, slot)</c> twice (<c>CR-05</c>, #877).
     /// </summary>
     /// <remarks>
-    /// <para><b>DEBUG-only, for the same reason <c>BTree.AssertSortedAscending</c> is.</b> It is <c>O(prefix)</c> with a dictionary against a prefix whose
-    /// entries each cost ~1 500 ns to execute, so the ratio is defensible — but it runs on Prep, single-threaded, on every archetype of every tick, and the
-    /// release contract is upheld by the two producers rather than by this check. Debug enforces what Release maintains.</para>
+    /// <para><b>DEBUG-only, for the same reason <c>BTree.AssertSortedAscending</c> is.</b> It is <c>O(prefix)</c> against a prefix whose entries each cost
+    /// ~1 500 ns to execute, so the ratio is defensible — but it runs on Prep, single-threaded, on every archetype of every tick, and the release contract is
+    /// upheld by the two producers rather than by this check. Debug enforces what Release maintains.</para>
+    /// <para>It used to allocate a <c>Dictionary</c> sized to the prefix on every tick of every Debug run — the whole test suite's cost, for a check that
+    /// fires approximately never. It now reuses a <see cref="ClusterSlotClaimSet"/> and pays the quadratic rescan only on the failing path, where the
+    /// message's quality matters and the run is about to end anyway (#882).</para>
     /// <para><b>Why an assertion and not a filter.</b> A duplicate reaching here means one of the two exclusion points failed, and the entries carry no
     /// information about which of the pair is the correct one to keep — the throttle's supersede rule and the planner's exclusion map both encode a
     /// PRIORITY, and a late filter would have to guess it. Failing loudly at the point of detection is what turned #877 from three unrelated-looking
@@ -234,22 +249,40 @@ internal sealed partial class ArchetypeClusterState
             return;
         }
 
-        var seen = new Dictionary<long, int>(prefix);
+        var seen = _duplicateSourceGuard;
+        seen.Clear();
         var queue = PendingMigrations;
         for (var i = 0; i < prefix; i++)
         {
-            var key = ((long)queue[i].SourceClusterChunkId << 6) | (uint)queue[i].SourceSlotIndex;
-            if (seen.TryGetValue(key, out var first))
+            var chunkId = queue[i].SourceClusterChunkId;
+            var slotIndex = queue[i].SourceSlotIndex;
+            if ((seen.ClaimedSlots(chunkId) & (1UL << slotIndex)) != 0UL)
             {
+                // The claim set records membership, not the index that claimed it. Recover the earlier one by rescan: quadratic, but only ever on the path
+                // that is about to throw, and the index is what makes the message diagnosable.
+                var first = 0;
+                for (var j = 0; j < i; j++)
+                {
+                    if (queue[j].SourceClusterChunkId == chunkId && queue[j].SourceSlotIndex == slotIndex)
+                    {
+                        first = j;
+                        break;
+                    }
+                }
+
                 throw new InvalidOperationException(
                     $"CR-05 violated on tick {tickNumber}: pending migrations {first} ({queue[first].Kind}) and {i} ({queue[i].Kind}) both name source "
-                    + $"cluster {queue[i].SourceClusterChunkId} slot {queue[i].SourceSlotIndex}. ExecuteMigrations' stale-source guard tests OCCUPANCY, not "
+                    + $"cluster {chunkId} slot {slotIndex}. ExecuteMigrations' stale-source guard tests OCCUPANCY, not "
                     + "identity, so whichever drains second migrates whatever occupies the slot by then — see #877.");
             }
 
-            seen[key] = i;
+            seen.Claim(chunkId, slotIndex);
         }
     }
+
+    /// <summary>Reused membership set for <see cref="AssertNoDuplicateMigrationSources"/>. DEBUG-only in effect; the field costs one reference in
+    /// Release.</summary>
+    private readonly ClusterSlotClaimSet _duplicateSourceGuard = new();
 
     /// <summary>Reset the throttle's per-tick state. Called from the fence's counter-reset block, beside every other per-tick counter.</summary>
     internal void ResetThrottleTickState()
@@ -390,8 +423,10 @@ internal sealed partial class ArchetypeClusterState
     /// bounds that are current.</para>
     /// <para><b>Cell crossings are charged but never refused.</b> §5.7 makes them correctness — an entity whose position left its cell must move — so a
     /// heavy crossing tick starves repair rather than the other way round. That is deliberate: correctness first, selectivity second.</para>
-    /// <para><b>Stable within each class.</b> The partition is two passes over the queue writing into a scratch buffer in encounter order, not a sort, so
-    /// the surviving order is exactly the order the detectors produced. <c>AC-11.6</c> needs that; a partition that reordered would make the admitted set
+    /// <para><b>Stable within each class.</b> The partition walks the queue in encounter order and never sorts, so the surviving order is exactly the order
+    /// the detectors produced.<br/>Since #882 it is: one classifying pass recording relocations by INDEX, two passes over those indices to decide which
+    /// survive, a lift-out of the survivors alone, and only then the compaction — see the step comments in the body, where the ORDER of the five is the
+    /// invariant. <c>AC-11.6</c> needs that; a partition that reordered would make the admitted set
     /// depend on the partition's internals.</para>
     /// </remarks>
     internal double ApplyMigrationThrottle(SpatialGrid grid)
@@ -434,111 +469,149 @@ internal sealed partial class ArchetypeClusterState
         var queue = PendingMigrations;
         var remainingNs = budgetNs;
 
-        // ── Relocations are LIFTED OUT before anything is compacted ─────────────────────────────────────────────────
+        // -- The classes are SEPARATED before anything is compacted, and the ORDER of the five steps is the invariant --
         //
-        // 🔴 The obvious in-place two-pass partition is WRONG, silently, and loses data with an infinite budget. Pass one
-        // compacts the mandatory entries to the front; pass two then re-scans the SAME array for relocations — but every
-        // index below the compaction cursor has already been overwritten by a crossing. Traced on [R0, C1]: pass one
-        // writes C1 over index 0, pass two sees two crossings, and R0 is gone with nothing counted as throttled.
+        // 🔴 The obvious in-place two-pass partition is WRONG, silently, and loses data with an infinite budget. Pass one// compacts the mandatory entries to
+        // the front; pass two then re-scans the SAME array for relocations — but every index below the compaction cursor has already been overwritten by a
+        // crossing. Traced on [R0, C1]: pass one writes C1 over index 0, pass two sees two crossings, and R0 is gone with nothing counted as throttled.
         //
-        // The queue's own layout makes that the normal case rather than a corner. AabbRefresh appends this tick's
-        // relocations first and DetectClusterMigrations appends next tick's crossings behind them, so relocations occupy
-        // the low indices and exactly min(relocations, crossings) of them are destroyed — every one, on any tick with at
-        // least as many crossings as drifters, with RelocationsThrottled reading zero throughout. Step 10's placement
-        // would revert to first fit on precisely the busy ticks it matters most on.
+        // The queue's own layout makes that the normal case rather than a corner. AabbRefresh appends this tick's relocations first and DetectClusterMigrations
+        // appends next tick's crossings behind them, so relocations occupy the low indices and exactly min(relocations, crossings) of them are destroyed —
+        // every one, on any tick with at least as many crossings as drifters, with RelocationsThrottled reading zero throughout. Step 10's placement would
+        // revert to first fit on precisely the busy ticks it matters most on. TH-01 names this as an on_violation, and
+        // RelocationsSurviveATickThatAlsoCarriesCellCrossings is the arm that catches it end to end.
         //
-        // Copying them aside first is O(n) and one per-archetype buffer that reaches its steady size and stays there.
-        // Sized to the whole queue up front — relocations cannot outnumber it — so the copy loop below never has to grow mid-flight. Doubling rather than
-        // exact, because an exact fit reallocates on every tick a population creeps upward by one.
-        if (_throttleScratch.Length < count)
+        // 🔴 THE ORDERING BELOW IS WHAT KEEPS THAT SAFE, and it is not visible from any single step. Every read of a relocation's request happens BEFORE the
+        // compaction writes over the queue: steps 1-3 decide entirely from INDICES, step 4 lifts the survivors out, and only step 5 compacts. Moving step 5
+        // earlier reintroduces the measured bug exactly.
+        //
+        // What changed in #882: the lift-out used to copy the whole relocation set — 54 800 twenty-byte requests at the 25 % reference point of the #872 matrix,
+        // 1.1 MB written per tick, to admit about 1 300 of them. The decisions need only each candidate's queue INDEX, so the copy is now four bytes per
+        // candidate and twenty per survivor.
+        if (_relocationIndices.Length < count)
         {
-            _throttleScratch = new MigrationRequest[Math.Max(count, Math.Max(16, _throttleScratch.Length * 2))];
+            _relocationIndices = new int[Math.Max(count, Math.Max(16, _relocationIndices.Length * 2))];
         }
 
-        var relocations = _throttleScratch;
-        var relocationCount = 0;
-        for (var i = 0; i < count; i++)
-        {
-            if (queue[i].Kind == MigrationKind.Relocation)
-            {
-                relocations[relocationCount++] = queue[i];
-            }
-        }
-
-        // Everything that must happen, compacted to the front. A crossing charges the budget even when that drives it
-        // negative — it cannot be refused, so the only honest accounting is to let it consume what it costs and leave
-        // repair with nothing.
-        //
-        // The source slots are recorded as they go by, for the supersede filter below (#877).
-        _mandatorySourceSlots.Clear();
+        // Declared out here because step 5 needs them; the INDEX list deliberately is not — see the closing brace below.
         var mandatory = 0;
-        for (var i = 0; i < count; i++)
-        {
-            if (queue[i].Kind == MigrationKind.Relocation)
-            {
-                continue;
-            }
-
-            ref var claimedMask = ref CollectionsMarshal.GetValueRefOrAddDefault(_mandatorySourceSlots, queue[i].SourceClusterChunkId, out _);
-            claimedMask |= 1UL << queue[i].SourceSlotIndex;
-
-            queue[mandatory++] = queue[i];
-            remainingNs -= estimateNs;
-        }
-
-        // ── A relocation whose entity is already leaving under a mandatory request is DROPPED, not admitted (#877) ───
-        //
-        // Drift detection runs in AabbRefresh, so its relocations are decided by the NEXT tick's Prep — and by then the
-        // crossing detector may have filed a CellCrossing for the same entity, because an entity that drifted to the edge
-        // of its cell is exactly the one most likely to leave it. Both requests then name the same source slot.
-        //
-        // ExecuteMigrations does not catch this. Its stale-source guard is an OCCUPANCY test, not an identity test
-        // (`(srcOcc & (1UL << srcSlot)) == 0` — ClusterMigration.cs step 0), so it only saves the case where the slot is
-        // still empty when the second request drains. The crossing runs first, frees the slot, and any later
-        // ClaimSlotInCell in the same pass may hand that slot to an unrelated migrant — whereupon the relocation moves
-        // THAT entity to a destination chosen for someone else, and its EntityMap entry and index rows point at a slot it
-        // does not occupy. Measured: `Entity(...) not found or not visible` and `B+Tree bulk update reached an invalid
-        // child`, 6 of 12 seeds at the default budget.
-        //
-        // Dropping is the right resolution and not merely the cheap one, for the reason T1 already gives for dropping
-        // rather than deferring: the relocation's DestClusterChunkId was the least-enlargement choice against LAST tick's
-        // AABBs, for an entity that has since left the cell entirely. Re-detecting after the crossing lands is more
-        // correct than executing a placement computed for a cell the entity no longer lives in.
-        //
-        // Only mandatory requests can supersede. Two relocations cannot name one slot — detection visits each slot of
-        // each cluster once, and a throttled relocation is dropped rather than carried — so the queue never holds two.
         var superseded = 0;
-        if (_mandatorySourceSlots.Count > 0)
+        var throttled = 0;
+        var admittedRelocations = 0;
+        MigrationRequest[] survivors;
+
         {
-            var kept = 0;
-            for (var i = 0; i < relocationCount; i++)
+            // -- 1. Classify in ONE pass. Mandatory requests are counted and charged; relocations are remembered by index --
+            //
+            // A crossing charges the budget even when that drives it negative — it cannot be refused, so the only honest
+            // accounting is to let it consume what it costs and leave repair with nothing.
+            //
+            // The source slots are recorded as they go by, for the supersede filter below (#877).
+            _mandatorySourceSlots.Clear();
+            var relocIndices = _relocationIndices;
+            var relocationCount = 0;
+            for (var i = 0; i < count; i++)
             {
-                var claimed = _mandatorySourceSlots.GetValueOrDefault(relocations[i].SourceClusterChunkId);
-                if ((claimed & (1UL << relocations[i].SourceSlotIndex)) != 0UL)
+                ref readonly var request = ref queue[i];
+                if (request.Kind == MigrationKind.Relocation)
                 {
-                    superseded++;
+                    relocIndices[relocationCount++] = i;
                     continue;
                 }
 
-                relocations[kept++] = relocations[i];
+                _mandatorySourceSlots.Claim(request.SourceClusterChunkId, request.SourceSlotIndex);
+                mandatory++;
+                remainingNs -= estimateNs;
             }
 
-            relocationCount = kept;
+            // -- 2. A relocation whose entity is already leaving under a mandatory request is DROPPED, not admitted (#877) --
+            //
+            // Drift detection runs in AabbRefresh, so its relocations are decided by the NEXT tick's Prep — and by then the
+            // crossing detector may have filed a CellCrossing for the same entity, because an entity that drifted to the edge
+            // of its cell is exactly the one most likely to leave it. Both requests then name the same source slot.
+            //
+            // ExecuteMigrations does not catch this. Its stale-source guard is an OCCUPANCY test, not an identity test
+            // (srcOcc bit clear — ClusterMigration.cs step 0), so it only saves the case where the slot is still empty when
+            // the second request drains. The crossing runs first, frees the slot, and any later ClaimSlotInCell in the same
+            // pass may hand that slot to an unrelated migrant — whereupon the relocation moves THAT entity to a destination
+            // chosen for someone else, and its EntityMap entry and index rows point at a slot it does not occupy. Measured:
+            // "Entity(...) not found or not visible" and "B+Tree bulk update reached an invalid child", 6 of 12 seeds at the
+            // default budget.
+            //
+            // Dropping is the right resolution and not merely the cheap one, for the reason T1 already gives for dropping
+            // rather than deferring: the relocation's DestClusterChunkId was the least-enlargement choice against LAST tick's
+            // AABBs, for an entity that has since left the cell entirely. Re-detecting after the crossing lands is more
+            // correct than executing a placement computed for a cell the entity no longer lives in.
+            //
+            // Only mandatory requests can supersede. Two relocations cannot name one slot — detection visits each slot of
+            // each cluster once, and a throttled relocation is dropped rather than carried — so the queue never holds two.
+            if (_mandatorySourceSlots.Count > 0)
+            {
+                var kept = 0;
+                for (var r = 0; r < relocationCount; r++)
+                {
+                    ref readonly var request = ref queue[relocIndices[r]];
+                    var claimed = _mandatorySourceSlots.ClaimedSlots(request.SourceClusterChunkId);
+                    if ((claimed & (1UL << request.SourceSlotIndex)) != 0UL)
+                    {
+                        superseded++;
+                        continue;
+                    }
+
+                    relocIndices[kept++] = relocIndices[r];
+                }
+
+                relocationCount = kept;
+            }
+
+            // -- 3. Spend what is left, in encounter order. Decides HOW MANY survive; copies nothing ----------------------
+            for (var r = 0; r < relocationCount; r++)
+            {
+                if (remainingNs < estimateNs)
+                {
+                    throttled = relocationCount - r;
+                    break;
+                }
+
+                admittedRelocations++;
+                remainingNs -= estimateNs;
+            }
+
+            // -- 4. Lift the SURVIVORS out — the only entries step 5 could destroy ----------------------------------------
+            if (_throttleScratch.Length < admittedRelocations)
+            {
+                _throttleScratch = new MigrationRequest[Math.Max(admittedRelocations, Math.Max(16, _throttleScratch.Length * 2))];
+            }
+
+            survivors = _throttleScratch;
+            for (var r = 0; r < admittedRelocations; r++)
+            {
+                survivors[r] = queue[relocIndices[r]];
+            }
+
+            // 🔴 `relocIndices` and `relocationCount` DIE HERE, and the brace is the point. Past it the queue is rewritten, so an index into it means something
+            // else entirely — reading one would reproduce TH-01's measured failure, min(relocations, crossings) entries destroyed with RelocationsThrottled
+            // reading zero. A comment asking a future editor not to is weaker than the compiler refusing.
         }
 
-        // Then the relocations, from the copy, in encounter order until the budget runs out.
-        var admitted = mandatory;
-        var throttled = 0;
-        for (var i = 0; i < relocationCount; i++)
+        // -- 5. Only NOW compact the mandatory requests to the front, then append the survivors behind them ------------
+        var admitted = 0;
+        for (var i = 0; i < count; i++)
         {
-            if (remainingNs < estimateNs)
+            if (queue[i].Kind != MigrationKind.Relocation)
             {
-                throttled = relocationCount - i;
-                break;
+                queue[admitted++] = queue[i];
             }
+        }
 
-            queue[admitted++] = relocations[i];
-            remainingNs -= estimateNs;
+        // A tripwire, not a check: steps 1-4 write nothing to the queue, so today this cannot fail for any input. It exists so that an edit which DOES
+        // write to the queue before step 5 is caught here rather than by CR-01's unbounded-queue symptom twenty ticks later.
+        Debug.Assert(admitted == mandatory, "step 5 found a different mandatory set than step 1 counted — something before it now writes to the queue");
+        Debug.Assert(admitted + admittedRelocations <= count, "the throttle may only ever shorten the queue");
+
+        for (var r = 0; r < admittedRelocations; r++)
+        {
+            queue[admitted++] = survivors[r];
         }
 
         PendingMigrationCount = admitted;
