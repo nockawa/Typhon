@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -46,6 +47,18 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// quantisation the sort could distinguish, so the key never loses an ordering the geometry actually expresses.</para>
     /// </remarks>
     internal const int MortonBitsPerAxis = 21;
+
+    /// <summary>
+    /// Clusters in a safety-valve unit when the configuration asks for the whole cell — the bound on the one budget overshoot the engine permits.
+    /// </summary>
+    /// <remarks>
+    /// Matches <c>SpatialGridConfig.RepairWorstClustersPerUnit</c>'s default, so a valve admission costs what an ordinary unit costs. It cannot simply
+    /// READ that setting, because this branch exists precisely for the configuration where it is <c>0</c> ("the whole cell") and a whole cell is exactly
+    /// the unbounded overshoot the cap exists to prevent: at 64 slots a cluster, eight clusters is 512 entities, against the 100 K a large cell could hold.
+    /// <para>The agreement with that default is asserted by <c>ClusterRepairQueueTests.TheValveCapMatchesTheDefaultUnitSize</c>, because a duplicated
+    /// constant whose only tie to its twin is a sentence in a comment drifts the first time somebody tunes one of them.</para>
+    /// </remarks>
+    internal const int ValveClustersPerUnit = 8;
 
     /// <summary>One entity's place in the sort: its intra-cell Morton key, and where it currently lives.</summary>
     /// <remarks>
@@ -109,14 +122,51 @@ internal sealed unsafe partial class ArchetypeClusterState
     }
 
     /// <summary>
+    /// One cluster's vote that its cell needs repairing, and how badly (#872 step 11).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The degradation rides along because it is free here and expensive later.</b> The AabbRefresh pass has the cluster's fresh bound in
+    /// registers at the moment it decides to nominate; the planner, a phase later, would have to re-read every cluster of every candidate cell to recover
+    /// the same number. Step 12 discarded it and paid exactly that — its cell order was <c>Array.Sort</c> on the cell KEY, which is arbitrary with respect
+    /// to how much repairing any of them would buy.</para>
+    /// <para>A ratio, not an extent, so it is comparable across grids and directly comparable against
+    /// <c>SpatialGridConfig.ClusterRepairExtentRatio</c> and <c>ClusterRepairCriticalExtentRatio</c> without carrying the cell size alongside.</para>
+    /// </remarks>
+    internal readonly struct RepairNomination
+    {
+        internal RepairNomination(int cellKey, float degradation)
+        {
+            CellKey = cellKey;
+            Degradation = degradation;
+        }
+
+        /// <summary>The cell whose clusters need re-packing. The CELL, not the cluster: a repair unit is a cell's worst clusters, and which those are is a
+        /// ranking the planner performs over the whole cell rather than over whichever clusters one slice happened to hold.</summary>
+        internal int CellKey { get; }
+
+        /// <summary>The nominating cluster's largest axis extent as a fraction of the cell size. Above 1.0 the bound covers more than its own cell.</summary>
+        internal float Degradation { get; }
+    }
+
+    /// <summary>
     /// Cells nominated for repair by the AabbRefresh pass, consumed by the next tick's Prep. Appends go through <see cref="EnqueueRepairNominationsBulk"/>.
     /// </summary>
     /// <remarks>
     /// A list rather than a set: nomination fires per CLUSTER and a cell has many, so duplicates are the norm, and de-duplicating on the producer side would
-    /// put a hash lookup on the detection path to save a sort key on the rare planning one. The planner sorts and skips repeats, which it must do anyway to
-    /// give itself a deterministic cell order.
+    /// put a hash lookup on the detection path to save a merge on the rare planning one. The queue folds repeats by keeping the WORST degradation seen for
+    /// a cell, which is the number the ranking wants — a cell with one catastrophic cluster deserves servicing ahead of one with several mediocre ones.
     /// </remarks>
-    internal readonly List<int> RepairNominations = [];
+    internal readonly List<RepairNomination> RepairNominations = [];
+
+    /// <summary>Per-worker nomination buffer, filled by an AabbRefresh slice and merged into <see cref="RepairNominations"/> when the slice finishes.</summary>
+    /// <remarks>
+    /// <b><see cref="ThreadStaticAttribute"/> for the reason <c>CandidateScratch</c> is.</b> A fresh <c>List</c> per slice per tick is an allocation on the
+    /// default configuration — <c>ReclusterBudgetMs</c> is 1.0, so this path is live out of the box — and step 11 doubled the element from four bytes to
+    /// eight, so every growth doubling costs twice what it did. One list per worker, whose capacity converges to the worst slice that worker has scanned
+    /// and then stops growing. Never trimmed: reclaiming the capacity would reintroduce the growth sequence it exists to remove.
+    /// </remarks>
+    [ThreadStatic]
+    internal static List<RepairNomination> NominationScratch;
 
     /// <summary>Entities re-packed by the repair path this tick — the numerator of <c>AC-12.7</c>'s cost per entity.</summary>
     internal int LastTickRepairedEntityCount;
@@ -151,6 +201,22 @@ internal sealed unsafe partial class ArchetypeClusterState
     // ══════════════════════════════════════════════════════════════════════════════
     // Intra-cell Morton encoding
     // ══════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// The largest of a bound's three axis extents — the single number both the repair trigger and the step-11 ranking are expressed in.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Flat archetypes fall out rather than being special-cased.</b> A 2D cluster leaves Z at the <c>ClusterSpatialAabb.Empty</c> sentinel
+    /// (min <c>+Infinity</c>, max <c>-Infinity</c>), so its Z extent is <c>-Infinity</c> and <see cref="MathF.Max(float, float)"/> discards it.</para>
+    /// <para><b>NaN does NOT behave identically to the three-way <c>||</c> this replaced, and the difference is stated rather than glossed.</b>
+    /// <see cref="MathF.Max(float, float)"/> propagates NaN, so one non-finite axis makes the whole maximum NaN and every comparison against it false —
+    /// where testing the axes separately would still have fired on a finite axis that was genuinely over threshold. The direction is safe (a gate that
+    /// does not fire costs a deferred repair, not a wrong answer) and the input is not reachable through the bounds validation, but a comment claiming the
+    /// two are equivalent would be false.</para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static float MaxAxisExtent(in ClusterSpatialAabb bounds) =>
+        MathF.Max(bounds.MaxX - bounds.MinX, MathF.Max(bounds.MaxY - bounds.MinY, bounds.MaxZ - bounds.MinZ));
 
     /// <summary>Encode a cell-relative position as a 63-bit Morton key, X occupying the low bit of each triple.</summary>
     /// <param name="relX">Position minus cell origin on X. Values outside <c>[0, cellSize)</c> clamp into the cell.</param>
@@ -213,7 +279,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <summary>
     /// Append one slice's repair nominations to the archetype-wide list, under <c>_finalizeLock</c>. Called once per slice, never per cluster.
     /// </summary>
-    internal void EnqueueRepairNominationsBulk(List<int> nominations)
+    internal void EnqueueRepairNominationsBulk(List<RepairNomination> nominations)
     {
         if (nominations == null || nominations.Count == 0)
         {
@@ -248,73 +314,145 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <para><b>Single-threaded by contract.</b> Called from <c>PrepareArchetypeFenceCore</c>, which runs one work item per archetype. Everything here
     /// mutates archetype-local state and allocates clusters, and none of it is written to tolerate a sibling.</para>
     /// <para><b>The budget admits units; it never stops one (§5.6).</b> A Morton sort cannot be halved — a partly re-sorted cell has paid the cost and
-    /// banked only part of the benefit — so a unit whose projected cost exceeds the remaining budget is not begun at all (<c>AC-12.5</c>). Refused units are
-    /// counted, not queued: the priority queue that would let a refused cell jump ahead next tick is step 11's, and inventing half of it here would leave
-    /// two policies to reconcile.</para>
-    /// <para><b>Refusal continues rather than stopping.</b> The cell order is by cell key, which is arbitrary with respect to cost, so breaking out on the
-    /// first refusal would let one large cell at a low key permanently block every other cell. Continuing is first-fit-under-budget, which starves large
-    /// cells instead. Neither is a policy; choosing between them is exactly what step 11's ranking by expected selectivity gain exists to do, and the
-    /// variant that does some work was preferred to the variant that can do none.</para>
+    /// banked only part of the benefit — so a unit whose projected cost exceeds the remaining budget is not begun at all (<c>AC-12.5</c>). A refused unit is
+    /// counted AND left in the queue: since step 11 the candidate persists, ages, and is reached on a later tick, which is what makes no-starvation a
+    /// property of the arithmetic rather than of the workload.</para>
+    /// <para><b>Refusal now stops the scan, and that is a reversal.</b> Step 12 continued past a refusal, on the reasoning that its cell order was by cell
+    /// key — arbitrary with respect to cost — so breaking would let one large cell at a low key block every other. That reasoning expired with the ranking:
+    /// the order is now best-first and the cheapest admissible unit is two clusters, so once the budget cannot cover that, nothing later can be admitted
+    /// either. Continuing would mean ranking, sorting and hashing every remaining candidate to reach a conclusion already known — up to
+    /// <c>RepairQueueMaxCells</c> of them, on Prep, charged to no budget.</para>
     /// </remarks>
-    internal int PlanCellRepairs(SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor, out double budgetUsedMs)
+    internal int PlanCellRepairs(SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor, long tickNumber, double remainingBudgetNs,
+        out double budgetUsedMs)
     {
         budgetUsedMs = 0d;
         LastTickRepairedEntityCount = 0;
         LastTickRepairUnitCount = 0;
         LastTickRepairUnitsRefused = 0;
 
-        var nominationCount = RepairNominations.Count;
-        if (nominationCount == 0)
+        // Drained unconditionally, ahead of every early-out below, because the LIST is a per-tick handoff even though the QUEUE it feeds is not: a
+        // nomination describes the tick that produced it, and an archetype that stops meeting the preconditions would otherwise accumulate them for ever.
+        // What survives the tick is the queue's candidate, which carries the worst degradation seen and the tick it started waiting.
+        var nominations = RepairNominations;
+        var queue = EnsureRepairQueue(grid);
+        var maintenanceStart = Stopwatch.GetTimestamp();
+
+        // No CellClusterPool test: absorbing is what makes a nomination survive its tick (TH-03), and gating it on a structure the SCORE happens to read
+        // meant that on the paths where the pool was not yet built the nomination was cleared below and lost outright — the exact failure step 11 exists
+        // to remove. Score tolerates a missing pool by returning zero, which ranks the candidate last until the pool exists and it is re-ranked.
+        if (queue != null && nominations.Count > 0 && grid != null)
         {
+            queue.Absorb(nominations, grid, this, tickNumber);
+        }
+
+        nominations.Clear();
+
+        if (queue == null || queue.Count == 0)
+        {
+            AccrueQueueMaintenance(queue, maintenanceStart);
             return 0;
         }
 
-        // Drained unconditionally, ahead of every early-out below. A nomination describes the tick that produced it, so carrying one forward would repair a
-        // cell on evidence that has since been recomputed — and an archetype that stops meeting the preconditions would accumulate them without bound.
-        // Doubling, not exact. An exact fit reallocates on every tick a population creeps upward by one, and this runs on Prep — the single-threaded
-        // phase every archetype waits on. The three scratch buffers are per-archetype and live for the process, so their steady state is one allocation.
-        if (_repairCellScratch.Length < nominationCount)
-        {
-            _repairCellScratch = new int[Math.Max(nominationCount, Math.Max(16, _repairCellScratch.Length * 2))];
-        }
-        RepairNominations.CopyTo(_repairCellScratch, 0);
-        RepairNominations.Clear();
-
         if (grid == null || ClusterSegment == null || CellClusterPool == null || ClusterCellMap == null || ClusterAabbs == null)
         {
+            AccrueQueueMaintenance(queue, maintenanceStart);
             return 0;
         }
 
         if (!SpatialSlot.HasSpatialIndex || SpatialSlot.FieldInfo.Mode != SpatialMode.Dynamic)
         {
+            AccrueQueueMaintenance(queue, maintenanceStart);
             return 0;
         }
 
         ref readonly var cfg = ref grid.Config;
-        var budgetNs = cfg.ReclusterBudgetMs * 1_000_000d;
-        if (budgetNs <= 0d || cfg.RepairNsPerEntity <= 0f)
+        if (cfg.ReclusterBudgetMs <= 0f)
         {
+            // AC-11.8. The queue keeps absorbing and keeps evicting at its cap, so it stays bounded, and nothing is planned. Deliberately AFTER the absorb
+            // so a budget raised at runtime finds a populated queue rather than an empty one.
+            AccrueQueueMaintenance(queue, maintenanceStart);
             return 0;
         }
 
-        // Sorted so the cell order is a property of the cells, not of the order workers happened to nominate them in (AC-12.4). De-duplication rides along
-        // on the sort: nomination fires per cluster, so a badly degraded cell appears once per bad cluster it holds.
-        var cellKeys = _repairCellScratch;
-        Array.Sort(cellKeys, 0, nominationCount);
+        // Ranked, not sorted by cell key. §5.6: "round-robin is the wrong policy" — a region nobody queries never needs tight clusters. Lazy, so a tick
+        // whose nominations changed nothing pays a comparison rather than a sort (AC-11.5).
+        queue.Rerank(grid, this, tickNumber);
+        AccrueQueueMaintenance(queue, maintenanceStart);
 
-        var remainingNs = budgetNs;
+        var estimateNsPerEntity = RepairCostEstimateNs(in cfg);
+        var remainingNs = remainingBudgetNs;
         var totalMoved = 0;
-        var previousKey = -1;
-        for (var i = 0; i < nominationCount; i++)
-        {
-            var cellKey = cellKeys[i];
-            if (cellKey == previousKey)
-            {
-                continue;
-            }
-            previousKey = cellKey;
+        var criticalRatio = cfg.ClusterRepairCriticalExtentRatio;
 
-            totalMoved += RepairOneCell(cellKey, grid, ref accessor, ref remainingNs);
+        // A snapshot, because RepairOneCell removes serviced cells from the queue and the ranked array is the queue's own buffer. Copying the keys out
+        // first is cheaper than the alternative of deferring every removal to a second pass, and the count is the candidate count, not the entity count.
+        var ranked = queue.Ranked;
+        if (_repairCellScratch.Length < ranked.Length)
+        {
+            _repairCellScratch = new int[Math.Max(ranked.Length, Math.Max(16, _repairCellScratch.Length * 2))];
+        }
+        ranked.CopyTo(_repairCellScratch);
+        var rankedCount = ranked.Length;
+
+        // ── The critical candidate goes FIRST, and the scan stops when the budget is gone ───────────────────────────
+        //
+        // AC-11.2 says a cell past the hard threshold is serviced "regardless of queue depth", and serving it in rank order
+        // does not deliver that: criticality is a threshold on degradation while rank is a product of four terms, so a
+        // critical cell can sit anywhere in the order and be reached only after the budget has been spent on cells that
+        // merely scored well. Hoisting it is what makes the valve a queue-jump rather than a late consolation.
+        //
+        // 🔴 The scan then BREAKS rather than continuing, and over a persistent queue that is a different cost class from
+        // the per-tick list step 12 had. `continue` meant every remaining candidate — up to RepairQueueMaxCells, 4 096 by
+        // default — still paid GetClusters, the ranking loop, an Array.Sort and a geometry hash before failing the budget
+        // test, single-threaded on Prep and charged to no budget at all. One unit exhausting a 1 ms budget left 4 095
+        // cells fully planned for nothing.
+        //
+        // The break is safe because the ranking is monotone in what it can afford: candidates are ordered best-first and
+        // the cheapest possible unit is two clusters, so once the remaining budget cannot cover that, nothing later in the
+        // order can be admitted either — and the one admission that IS allowed to exceed the budget has already been tried.
+        //
+        // 🔴 "At most one overshoot per archetype per tick" is enforced STRUCTURALLY here, by the fact that exactly one call
+        // site below passes `valveAvailable: true`. It used to be a `_valveFiredThisTick` flag, which this hoist orphaned —
+        // the flag stayed assigned and reset for a while with no reader left, which is worse than no flag at all: it reads
+        // as the thing enforcing the bound while enforcing nothing. One call site is provable by inspection.
+        //
+        // What that narrows, stated because it is a real behaviour change: if a SECOND cell is also critical, it is offered
+        // no valve this tick and is refused like any other candidate. It ages, keeps its place in the queue and is the
+        // hoisted one on a later tick, so AC-11.2's "serviced within N ticks" still holds — with a larger N when several
+        // cells are critical at once, which is the case the budget is losing to anyway.
+        var criticalIndex = -1;
+        if (criticalRatio > 0f)
+        {
+            for (var i = 0; i < rankedCount; i++)
+            {
+                if (queue.DegradationOf(_repairCellScratch[i]) >= criticalRatio)
+                {
+                    criticalIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (criticalIndex >= 0)
+        {
+            totalMoved += RepairOneCell(_repairCellScratch[criticalIndex], grid, ref accessor, estimateNsPerEntity, true, ref remainingNs);
+        }
+
+        var minimumUnitNs = 2 * estimateNsPerEntity;
+        for (var i = 0; i < rankedCount; i++)
+        {
+            if (i == criticalIndex)
+            {
+                continue;   // already serviced above, at the head
+            }
+
+            if (remainingNs < minimumUnitNs)
+            {
+                break;
+            }
+
+            totalMoved += RepairOneCell(_repairCellScratch[i], grid, ref accessor, estimateNsPerEntity, false, ref remainingNs);
         }
 
         // ── Top up the deferred-drain list for everything the plan added ────────────────────────────────────────────
@@ -338,7 +476,11 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
 
         LastTickRepairedEntityCount = totalMoved;
-        budgetUsedMs = (budgetNs - remainingNs) / 1_000_000d;
+
+        // What the plan COMMITTED, which is what the budget gated on — not elapsed time, which would report a number that gated nothing (RP-01). A
+        // safety-valve admission drives `remainingNs` negative on purpose, which makes this LARGER than the budget rather than negative: the overshoot is
+        // reported rather than hidden, and LastTickRepairValveFires says which admission caused it.
+        budgetUsedMs = (remainingBudgetNs - remainingNs) / 1_000_000d;
         return totalMoved;
     }
 
@@ -346,12 +488,16 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// Plan one cell's repair unit: rank its clusters, admit the unit if the budget covers it, then hand off to <see cref="ExecuteRepairPlan"/>. Returns the
     /// number of entities the unit will move, or <c>0</c> when nothing was begun.
     /// </summary>
-    private int RepairOneCell(int cellKey, SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor, ref double remainingNs)
+    private int RepairOneCell(int cellKey, SpatialGrid grid, ref ChunkAccessor<PersistentStore> accessor, double estimateNsPerEntity, bool valveAvailable,
+        ref double remainingNs)
     {
         var clusters = CellClusterPool.GetClusters(cellKey);
         if (clusters.Length < 2)
         {
-            return 0; // A single cluster is already its own optimal packing — a sort cannot improve a partition of one.
+            // A single cluster is already its own optimal packing — a sort cannot improve a partition of one. Dropped from the queue rather than left to
+            // age, because no amount of waiting will make it repairable and an unrepairable candidate at the head is a slot the ranking cannot use.
+            RepairQueue?.Remove(cellKey);
+            return 0;
         }
 
         ref readonly var cfg = ref grid.Config;
@@ -404,35 +550,72 @@ internal sealed unsafe partial class ArchetypeClusterState
         var geometry = HashUnitGeometry(candidates, clusters.Length);
         if (_repairNoOpGeometry.TryGetValue(cellKey, out var lastNoOp) && lastNoOp == geometry)
         {
+            // Dropped from the queue, not merely skipped. The memo says this cell's geometry has not changed since it was found already packed, so it is
+            // not waiting for budget and ageing it to the head spends the head slot on a cell that cannot use it — and, in a CAPPED queue, evicts a cell
+            // that can. Nomination re-queues it the moment its geometry actually moves.
+            RepairQueue?.Remove(cellKey);
             return 0;
         }
 
+        // The unit is sized from the CONFIGURED value, unconditionally. The valve's cap is applied further down, and only if the valve is actually needed.
+        //
+        // 🔴 Capping here on `valveAvailable` — which means "this cell is critical and the valve is unspent", NOT "the valve is being used" — inverts the
+        // whole policy. Under the whole-cell configuration every critical cell reached while the valve was unspent had its unit forced down to eight
+        // clusters even when the budget covered the entire cell, and because the smaller unit then FIT, the valve was never marked as fired and the shrink
+        // repeated for every critical candidate in the tick. The most degraded cells got the smallest repairs, silently and without limit.
         var perUnit = cfg.RepairWorstClustersPerUnit;
         var unitClusters = perUnit <= 0 ? clusters.Length : Math.Min(perUnit, clusters.Length);
         if (unitClusters < 2)
         {
+            RepairQueue?.Remove(cellKey);
             return 0;
         }
 
         // Population first, because the budget decision has to precede every byte of work (AC-12.5). An occupancy popcount is one load per cluster; the
         // entity walk that follows is what costs, and it does not run unless the unit is admitted.
-        var population = 0;
-        for (var i = 0; i < unitClusters; i++)
-        {
-            var clusterBase = accessor.GetChunkAddress(candidates[i].ChunkId);
-            population += BitOperations.PopCount(*(ulong*)clusterBase & Layout.FullMask);
-        }
-
+        var population = UnitPopulation(candidates, unitClusters, ref accessor);
         if (population < 2)
         {
+            // Same reasoning as the no-op memo above: a unit of fewer than two entities has no permutation to find, so waiting cannot help it.
+            RepairQueue?.Remove(cellKey);
             return 0;
         }
 
-        var projectedNs = population * (double)cfg.RepairNsPerEntity;
+        // Measured, not the hand-set constant step 12 shipped — see RepairCostEstimateNs. The projection still PRECEDES the work, which is what RP-01
+        // requires; what changed is the number it is built from.
+        var projectedNs = population * estimateNsPerEntity;
+        var valveFired = false;
         if (projectedNs > remainingNs)
         {
-            LastTickRepairUnitsRefused++;
-            return 0;
+            if (!valveAvailable)
+            {
+                // Refused, and LEFT IN THE QUEUE. Step 12 discarded the nomination here, so a cell the budget could not afford was forgotten rather than
+                // deferred and only came back if it happened to be written again. Ageing now carries it to the head instead (AC-11.3).
+                LastTickRepairUnitsRefused++;
+                return 0;
+            }
+
+            // ── The valve, and the ONE place its cap belongs ────────────────────────────────────────────────────────
+            //
+            // The full unit does not fit and the cell is critical, so something has to give. Shrinking to the cap is
+            // tried FIRST, because a capped unit that fits is an ordinary admission — it spends only what the budget
+            // has, and leaves the tick's one overshoot for a cell that genuinely needs it. Only if even the capped
+            // unit overruns does the valve actually fire.
+            var cappedClusters = Math.Min(ValveClustersPerUnit, clusters.Length);
+            if (cappedClusters >= 2 && cappedClusters < unitClusters)
+            {
+                var cappedPopulation = UnitPopulation(candidates, cappedClusters, ref accessor);
+                if (cappedPopulation >= 2)
+                {
+                    unitClusters = cappedClusters;
+                    population = cappedPopulation;
+                    projectedNs = population * estimateNsPerEntity;
+                }
+            }
+
+            // AC-11.2. The accounting happens only if the unit actually moves something, below: spending the tick's single admission on a re-pack that
+            // turns out to be a no-op would refuse a genuinely critical cell later in the ranking for work that never happened.
+            valveFired = projectedNs > remainingNs;
         }
 
         var moved = ExecuteRepairPlan(cellKey, grid, ref accessor, candidates, unitClusters, population);
@@ -441,14 +624,47 @@ internal sealed unsafe partial class ArchetypeClusterState
             // Remembered against the geometry that produced it, so the next tick's nomination costs a dictionary probe
             // rather than a gather and a sort. Recorded here rather than inside ExecuteRepairPlan because this is where
             // the hash is in scope and where the budget decision lives.
+            //
+            // Dropped from the queue too: a unit whose sort would change nothing is not waiting for budget, so ageing it to the head would spend the
+            // head slot on a cell that cannot use it. The memo above is what stops it costing a gather next tick; nomination re-queues it the moment its
+            // geometry actually changes.
             _repairNoOpGeometry[cellKey] = geometry;
+            RepairQueue?.Remove(cellKey);
             return 0;
         }
 
         _repairNoOpGeometry.Remove(cellKey);
+
+        if (valveFired)
+        {
+            LastTickRepairValveFires++;
+        }
+
+        // Debited even when the valve overshot, so ReclusterBudgetUsedMs reports what was actually committed rather than what fitted. `remainingNs` goes
+        // negative in that case and every later candidate is refused, which is precisely the "at most one unit over" bound AC-11.1 asks for.
         remainingNs -= projectedNs;
         LastTickRepairUnitCount++;
+        RepairQueue?.Remove(cellKey);
         return moved;
+    }
+
+    /// <summary>
+    /// Entities held by the first <paramref name="unitClusters"/> of the ranked candidates — the number every budget projection is built from.
+    /// </summary>
+    /// <remarks>
+    /// One occupancy load per cluster and a popcount, so it is cheap enough to run twice: once for the configured unit, and again for the valve's smaller
+    /// one when the first does not fit. The entity walk that would actually cost something does not happen until the unit is admitted.
+    /// </remarks>
+    private int UnitPopulation(RepairCandidate[] candidates, int unitClusters, ref ChunkAccessor<PersistentStore> accessor)
+    {
+        var population = 0;
+        for (var i = 0; i < unitClusters; i++)
+        {
+            var clusterBase = accessor.GetChunkAddress(candidates[i].ChunkId);
+            population += BitOperations.PopCount(*(ulong*)clusterBase & Layout.FullMask);
+        }
+
+        return population;
     }
 
     /// <summary>
@@ -551,7 +767,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             var source = entries[i].SourceLocation;
             EnqueueMigration(new MigrationRequest((int)(source / MaxSlotsPerCluster), (int)(source % MaxSlotsPerCluster), cellKey,
-                destinations[i / capacity], i % capacity));
+                destinations[i / capacity], i % capacity, MigrationKind.Repair));
         }
 
         var emitted = count;

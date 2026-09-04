@@ -134,6 +134,89 @@ public readonly struct SpatialMigrationTelemetry
     public int RepairUnitsRefused { get; }
 
     /// <summary>
+    /// The whole cost of the most recently completed tick's migrations in milliseconds — the migrant loop <b>plus</b> the bulk index descent and the bulk
+    /// EntityMap patch, summed across every worker.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Read this, not <see cref="MigrationExecuteMs"/>, for cost per entity.</b> That one brackets the migrant loop alone, and since #872 step 6
+    /// the loop merely STAGES the index update — the descent that applies it happens in a later phase. The secondary index was measured at ~48 % of a
+    /// migration's cost, so the older field under-reports by roughly half. Step 11 added the two missing timers to produce this one, and it is what the
+    /// adaptive budget divides by <see cref="MigrationCount"/>.</para>
+    /// <para><b>CPU-milliseconds, not span.</b> W workers each busy for 1 ms report 4, not 1.</para>
+    /// </remarks>
+    public double MigrationTotalMs { get; init; }
+
+    /// <summary>
+    /// Intra-cell relocations the re-clustering budget refused during the most recently completed tick, and therefore dropped (#872 step 11).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Dropped, not deferred, and that is deliberate.</b> A relocation's chosen destination was the least-enlargement cluster as of the AABBs of
+    /// the tick that detected it; carrying it forward would apply a stale choice against bounds this tick's own migrations have moved. It is re-detected
+    /// next tick from current data, so what this counts is deferred WORK, not lost work.</para>
+    /// <para>Read against <see cref="DriftersDetected"/>: a persistently high ratio means the budget is below the world's drift rate, and equilibrium
+    /// tightness — not correctness — is what degrades. That is §5.6's stated failure mode, by design.</para>
+    /// </remarks>
+    public int RelocationsThrottled { get; init; }
+
+    /// <summary>
+    /// Drifters that were detected but for which placement found no better cluster, during the most recently completed tick.
+    /// </summary>
+    /// <remarks>
+    /// The gap <see cref="DriftersDetected"/>'s own remarks point at, now counted rather than inferred: a cell whose every cluster is equally bad produces
+    /// drifters and no migrations. Together the identity <c>DriftersDetected = admitted + RelocationsThrottled + DriftersUnplaced</c> holds over a tick,
+    /// which is what makes "a drifter is never both absorbed and throttled" checkable rather than merely asserted (<c>AC-11.7</c>).
+    /// </remarks>
+    public int DriftersUnplaced { get; init; }
+
+    /// <summary>
+    /// Repair units admitted by the safety valve during the most recently completed tick — begun despite insufficient remaining budget because the cell's
+    /// degradation had reached <c>SpatialGridConfig.ClusterRepairCriticalExtentRatio</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>The only budget overshoot the engine permits</b>, and it is bounded: the valve caps its unit at <c>RepairWorstClustersPerUnit</c> clusters and
+    /// fires at most once per tick per archetype. A persistently non-zero reading means degradation is outrunning the budget — the condition §5.6's valve
+    /// exists to bound rather than to hide, so raise <c>ReclusterBudgetMs</c> rather than treating the valve as the steady state.
+    /// </remarks>
+    public int RepairValveFires { get; init; }
+
+    /// <summary>Cells currently waiting in the repair priority queue. Unlike every other per-tick member this is a LEVEL, not a rate: it persists.</summary>
+    public int RepairQueueDepth { get; init; }
+
+    /// <summary>
+    /// Candidates evicted from the repair queue since this cluster state was created, because the queue was at
+    /// <c>SpatialGridConfig.RepairQueueMaxCells</c>. Cumulative.
+    /// </summary>
+    /// <remarks>
+    /// Read against <see cref="RepairQueueDepth"/>: a growing count while the depth sits at the cap says the cap is below what the world actually
+    /// degrades, and cells are being forgotten. Zero at a depth below the cap is the healthy reading.
+    /// </remarks>
+    public long RepairQueueEvicted { get; init; }
+
+    /// <summary>
+    /// Milliseconds spent maintaining the repair queue — absorbing nominations and re-ranking — during the most recently completed tick.
+    /// </summary>
+    /// <remarks>
+    /// <c>AC-11.5</c>'s numerator: "a queue that costs more to maintain than the work it schedules is a net loss". Read as a fraction of
+    /// <see cref="ReclusterBudgetUsedMs"/>. Re-ranking is lazy — triggered by new nominations or by a <c>SpatialGrid.TierVersion</c> change, not by the
+    /// tick — so a settled world should report near zero here.
+    /// </remarks>
+    public double RepairQueueMaintenanceMs { get; init; }
+
+    /// <summary>
+    /// The measured per-entity migration cost, in nanoseconds, that this tick's budget was actually spent against (#872 step 11).
+    /// </summary>
+    /// <remarks>
+    /// <para>An EWMA over <see cref="MigrationTotalMs"/> per migrant plus the repair planner's own measured cost, seeded from
+    /// <c>SpatialGridConfig.RepairNsPerEntity</c> and clamped to a band around it. It replaces that constant as the operative number: <c>AC-12.7</c>
+    /// measured the real cost at 22x to 117x the design's estimate, and a budget calibrated on the wrong constant admits units costing many times what it
+    /// thinks they do.</para>
+    /// <para><b>Blended across migration kinds.</b> Cell crossings, intra-cell relocations and repair moves all contribute; splitting them needs per-class
+    /// attribution inside the apply phases, where the staged records carry no kind. A blended measurement is nonetheless strictly better than a constant
+    /// that cannot track the machine at all.</para>
+    /// </remarks>
+    public double MeasuredNsPerEntity { get; init; }
+
+    /// <summary>
     /// Clusters currently live. The denominator for every ratio above — a migration count means nothing without the population it came from.
     /// </summary>
     public int ActiveClusterCount { get; }

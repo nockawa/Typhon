@@ -138,6 +138,47 @@ public readonly struct SpatialGridConfig
     /// </remarks>
     public readonly int RepairWorstClustersPerUnit;
 
+    /// <summary>
+    /// Degradation at which a cell may jump the repair queue and be serviced even when the budget cannot cover it. Default 1.0. Zero disables the valve.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>§5.6's safety valve: "degradation must be bounded".</b> A budget that never keeps up would otherwise let a cell degrade without limit,
+    /// because ranking only decides who goes FIRST, not who goes at all. At 1.0 the trigger is a cluster whose bound covers its entire cell — the worst
+    /// state reachable without the outlier guard firing, since a cluster holding only its own cell's entities tops out near
+    /// <c>1 + MigrationHysteresisRatio</c>. Strictly above <see cref="ClusterRepairExtentRatio"/>'s 0.75, so a critical cell has always been an ordinary
+    /// candidate first.</para>
+    /// <para><b>🔴 The overshoot this permits is CAPPED, and the cap is not optional.</b> <c>AC-11.1</c> allows exceeding the budget "by more than one
+    /// indivisible unit", which reads as licence until one notices that a whole cell is one indivisible unit and a 100 K-entity cell was measured at
+    /// ~133 ms — a 133x overrun that would still claim compliance. So a valve admission forces the unit down to
+    /// <see cref="RepairWorstClustersPerUnit"/> clusters and fires at most once per tick per archetype. Nothing else in the planner may exceed the
+    /// budget at all.</para>
+    /// </remarks>
+    public readonly float ClusterRepairCriticalExtentRatio;
+
+    /// <summary>
+    /// How much a queued cell's rank grows per tick spent waiting. Default 0.05 — a candidate doubles its score after 20 ticks. Zero disables ageing.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Ranking alone starves, and <c>AC-11.3</c> forbids that.</b> §5.6 asks for candidates ranked by expected selectivity gain and is explicit
+    /// that "round-robin is the wrong policy" — but a pure ranking never services a cell that is permanently outranked. The age factor is unbounded in
+    /// the tick count, so whatever a candidate's base score, enough waiting carries it to the head. That makes no-starvation a property of the arithmetic
+    /// rather than a hope about the workload.</para>
+    /// <para>0.05 is slow relative to the rate at which repairs actually happen: a cell that genuinely deserves servicing gets it long before ageing
+    /// matters, and ageing only decides the order among candidates the budget has been unable to reach.</para>
+    /// </remarks>
+    public readonly float RepairAgingRatePerTick;
+
+    /// <summary>
+    /// Hard cap on cells waiting in the repair queue. Default 4096. Beyond it the worst-ranked candidate is evicted to admit a better one.
+    /// </summary>
+    /// <remarks>
+    /// <b><c>AC-11.8</c>: the queue must not grow without bound.</b> Step 11's queue is persistent — that is what stops a refused nomination being
+    /// forgotten — so it needs an explicit ceiling that a per-tick list did not. Eviction is by score, so a full queue sheds the candidates whose repair
+    /// would buy least, and the eviction count is published: a non-zero rate against a full queue is the reading that says the cap is below what the world
+    /// actually degrades.
+    /// </remarks>
+    public readonly int RepairQueueMaxCells;
+
     // ── Derived values, computed in the constructor ────────────────────────
 
     /// <summary>
@@ -150,7 +191,7 @@ public readonly struct SpatialGridConfig
 
     /// <summary>
     /// Number of cells along the Z axis. <c>1</c> for a flat world built with
-    /// <see cref="Flat(Vector2,Vector2,float,float,float,float,float,float,float,int)"/>.
+    /// <see cref="Flat(Vector2,Vector2,float,float,float,float,float,float,float,int,float,float,int)"/>.
     /// </summary>
     public readonly int GridDepth;
 
@@ -174,18 +215,39 @@ public readonly struct SpatialGridConfig
     /// <param name="reclusterBudgetMs">Per-tick repair budget in milliseconds; 0 disables repair (default 1.0).</param>
     /// <param name="repairNsPerEntity">Projected repair cost per entity in nanoseconds (default 1500, measured).</param>
     /// <param name="repairWorstClustersPerUnit">Clusters per repair unit; 0 means the whole cell (default 8).</param>
+    /// <param name="clusterRepairCriticalExtentRatio">Degradation at which a cell jumps the queue regardless of budget; 0 disables it (default 1.0).</param>
+    /// <param name="repairAgingRatePerTick">Rank growth per tick a candidate waits; 0 disables ageing (default 0.05).</param>
+    /// <param name="repairQueueMaxCells">Hard cap on queued repair candidates (default 4096).</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="cellSize"/> is not positive, or the derived cell count does not fit a 32-bit cell key.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="worldMax"/> is not strictly greater than <paramref name="worldMin"/> on all three axes.</exception>
     public SpatialGridConfig(Vector3 worldMin, Vector3 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
         float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f, float clusterRepairExtentRatio = 0.75f,
-        float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8)
+        float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8,
+        float clusterRepairCriticalExtentRatio = 1.0f, float repairAgingRatePerTick = 0.05f, int repairQueueMaxCells = 4096)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cellSize);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(clusterTargetExtentRatio);
         ArgumentOutOfRangeException.ThrowIfNegative(clusterDriftMarginRatio);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(clusterRepairExtentRatio);
+        ArgumentOutOfRangeException.ThrowIfNegative(clusterRepairCriticalExtentRatio);
+
+        // Both bounds, and for the two reasons the ratio above is already bounded: a value that silently disables a feature is a configuration error, and
+        // so is one that fires it constantly. At or above the outlier guard's 1.2 the valve can never trigger, because a cluster confined to its own cell
+        // tops out near 1 + MigrationHysteresisRatio. At or below clusterRepairExtentRatio EVERY nominated cell is critical, so the valve overshoots the
+        // budget once per archetype on every tick for ever — which is a sustained overrun wearing a threshold as a disguise. Zero remains legal and means
+        // "no valve".
+        if (clusterRepairCriticalExtentRatio > 0f
+            && (clusterRepairCriticalExtentRatio <= clusterRepairExtentRatio || clusterRepairCriticalExtentRatio >= 1.2f))
+        {
+            throw new ArgumentOutOfRangeException(nameof(clusterRepairCriticalExtentRatio), clusterRepairCriticalExtentRatio,
+                $"ClusterRepairCriticalExtentRatio ({clusterRepairCriticalExtentRatio}) must sit strictly between ClusterRepairExtentRatio "
+                + $"({clusterRepairExtentRatio}) and the outlier guard's 1.2, or be 0 to disable the safety valve. At or below the repair ratio every "
+                + "nominated cell is critical and the valve overshoots the budget every tick; at or above 1.2 it can never fire at all.");
+        }
+        ArgumentOutOfRangeException.ThrowIfNegative(repairAgingRatePerTick);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(repairQueueMaxCells);
         // The UPPER bound only, and the asymmetry is deliberate. At or above the outlier guard's 1.2 the threshold can never be reached — a cluster confined
         // to its own cell tops out near 1 + MigrationHysteresisRatio — so the value silently disables the feature, which is a configuration error rather
         // than a tuning choice and deserves a throw.
@@ -218,6 +280,9 @@ public readonly struct SpatialGridConfig
         ReclusterBudgetMs = reclusterBudgetMs;
         RepairNsPerEntity = repairNsPerEntity;
         RepairWorstClustersPerUnit = repairWorstClustersPerUnit;
+        ClusterRepairCriticalExtentRatio = clusterRepairCriticalExtentRatio;
+        RepairAgingRatePerTick = repairAgingRatePerTick;
+        RepairQueueMaxCells = repairQueueMaxCells;
         InverseCellSize = 1.0f / cellSize;
 
         GridWidth  = (int)MathF.Ceiling((worldMax.X - worldMin.X) * InverseCellSize);
@@ -252,9 +317,14 @@ public readonly struct SpatialGridConfig
     /// <param name="reclusterBudgetMs">Per-tick repair budget in milliseconds; 0 disables repair (default 1.0).</param>
     /// <param name="repairNsPerEntity">Projected repair cost per entity in nanoseconds (default 1500, measured).</param>
     /// <param name="repairWorstClustersPerUnit">Clusters per repair unit; 0 means the whole cell (default 8).</param>
+    /// <param name="clusterRepairCriticalExtentRatio">Degradation at which a cell jumps the queue regardless of budget; 0 disables it (default 1.0).</param>
+    /// <param name="repairAgingRatePerTick">Rank growth per tick a candidate waits; 0 disables ageing (default 0.05).</param>
+    /// <param name="repairQueueMaxCells">Hard cap on queued repair candidates (default 4096).</param>
     public static SpatialGridConfig Flat(Vector2 worldMin, Vector2 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
         float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f, float clusterRepairExtentRatio = 0.75f,
-        float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8) =>
+        float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8,
+        float clusterRepairCriticalExtentRatio = 1.0f, float repairAgingRatePerTick = 0.05f, int repairQueueMaxCells = 4096) =>
         new(new Vector3(worldMin, 0f), new Vector3(worldMax, cellSize), cellSize, migrationHysteresisRatio, clusterTargetExtentRatio,
-            clusterDriftMarginRatio, clusterRepairExtentRatio, reclusterBudgetMs, repairNsPerEntity, repairWorstClustersPerUnit);
+            clusterDriftMarginRatio, clusterRepairExtentRatio, reclusterBudgetMs, repairNsPerEntity, repairWorstClustersPerUnit,
+            clusterRepairCriticalExtentRatio, repairAgingRatePerTick, repairQueueMaxCells);
 }

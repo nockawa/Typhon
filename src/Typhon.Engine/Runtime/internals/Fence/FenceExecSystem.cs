@@ -570,16 +570,21 @@ internal sealed class FenceEntityMapUpdateExecSystem : FencePhaseExecSystemBase
                     continue;
                 }
 
+                // #872 step 11: charged to the archetype whose migrations staged the work, so the parallel path's cost model sees the same phases the
+                // serial one does. This loop is per-archetype, so the attribution is exact even though the method walks every archetype.
+                var prepStart = Stopwatch.GetTimestamp();
                 staging.ClearPrepared();
                 var count = staging.MergeAndPartition(Math.Max(1, ctx.WorkerCount));
                 if (count == 0)
                 {
+                    Interlocked.Add(ref state.ClusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - prepStart);
                     continue;
                 }
 
                 var parts = state.EntityMap.PartitionByBucketRuns<EntityLocationUpdate, ClusterLocationBulkUpdater>(
                     staging.Prepared.AsSpan(0, count), Math.Max(1, ctx.WorkerCount), staging.Boundaries);
                 staging.SetPartCount(parts);
+                Interlocked.Add(ref state.ClusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - prepStart);
             }
         }
 
@@ -601,20 +606,30 @@ internal sealed class FenceEntityMapUpdateExecSystem : FencePhaseExecSystemBase
             return 0;
         }
 
-        var slice = staging.Prepared.AsSpan(item.SliceStart, item.SliceCount);
-        var accessor = state.EntityMap.Segment.CreateChunkAccessor(changeSet);
+        var applyStart = Stopwatch.GetTimestamp();
         try
         {
-            // This slice's buckets belong to it alone — the partition advances every cut to a bucket change — so no two workers are ever inside one bucket
-            // chunk, which is what makes the per-bucket latch uncontended rather than merely correct.
-            state.EntityMap.UpdateValuesBulk<EntityLocationUpdate, ClusterLocationBulkUpdater>(slice, ref accessor);
+            var slice = staging.Prepared.AsSpan(item.SliceStart, item.SliceCount);
+            var accessor = state.EntityMap.Segment.CreateChunkAccessor(changeSet);
+            try
+            {
+                // This slice's buckets belong to it alone — the partition advances every cut to a bucket change — so no two workers are ever inside one bucket
+                // chunk, which is what makes the per-bucket latch uncontended rather than merely correct.
+                state.EntityMap.UpdateValuesBulk<EntityLocationUpdate, ClusterLocationBulkUpdater>(slice, ref accessor);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+
+            ApplyVisibilityAndOrphans(clusterState, slice, changeSet);
         }
         finally
         {
-            accessor.Dispose();
+            // #872 step 11. Summed across every worker that took a slice, exactly as the Migrate phase sums its own — CPU, not span.
+            Interlocked.Add(ref clusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - applyStart);
         }
 
-        ApplyVisibilityAndOrphans(clusterState, slice, changeSet);
         return 0;
     }
 
@@ -784,7 +799,11 @@ internal sealed class FenceIndexMassUpdateExecSystem : FencePhaseExecSystemBase
                         continue;
                     }
 
+                    // #872 step 11: charged per archetype. This serial half is "the majority of this phase" by the comment above, so a cost model that
+                    // measured only DispatchItem would see a fraction of what the index actually costs.
+                    var prepStart = Stopwatch.GetTimestamp();
                     PrepareArchetype(clusterState, staging, ctx.WorkerCount);
+                    Interlocked.Add(ref clusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - prepStart);
                 }
             }
         }
@@ -855,6 +874,7 @@ internal sealed class FenceIndexMassUpdateExecSystem : FencePhaseExecSystemBase
         var stride = staging.Stride(item.FieldId);
         var buffer = staging.Prepared(item.FieldId);
 
+        var applyStart = Stopwatch.GetTimestamp();
         var accessor = tree.Segment.CreateChunkAccessor(changeSet);
         try
         {
@@ -865,6 +885,8 @@ internal sealed class FenceIndexMassUpdateExecSystem : FencePhaseExecSystemBase
         finally
         {
             accessor.Dispose();
+            // #872 step 11. Summed across workers AND across fields — a two-field archetype pays two descents per migrant and the model must see both.
+            Interlocked.Add(ref clusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - applyStart);
         }
 
         return 0;

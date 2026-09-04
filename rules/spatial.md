@@ -526,19 +526,54 @@
     has paid the cost and banked part of the benefit, and its downstream batches have already formed. So a unit
     whose projected cost exceeds the remaining budget is not begun — no entity of it is gathered, sorted or
     moved — and the refusal is counted
-  invariant the projection precedes the work and uses only the population: entities * RepairNsPerEntity, where
+  invariant the projection precedes the work and uses only the population: entities * estimateNsPerEntity, where
     the population is a popcount of the unit's occupancy words. Measuring instead of projecting would decide
     admission after the cost was already paid, which is the thing the whole-unit rule exists to prevent
+  invariant (step 11) estimateNsPerEntity is MEASURED, and RepairNsPerEntity is its seed and floor rather than
+    the operative value. The estimate is an EWMA over the previous tick's whole migration cost per migrant plus
+    the planner's own measured cost. "Whole" is load-bearing: LastTickMigrationExecuteMs brackets the migrant
+    loop, which merely STAGES the index update and the EntityMap patch, and the secondary index alone is ~48 %
+    of a migration — an estimator built on it over-admits by about 2x every tick. Use LastTickMigrationTotalMs
+  invariant (step 11) exactly one admission per archetype per tick may exceed the remaining budget: the safety
+    valve, on a cell whose degradation has reached ClusterRepairCriticalExtentRatio. Per ARCHETYPE, because the
+    planner runs one work item per archetype — an engine with N cluster-spatial archetypes can overshoot N times
+    in one tick, each by one capped unit
+  invariant (step 11) that bound is STRUCTURAL, not stateful: PlanCellRepairs pre-scans the ranked candidates for
+    the first critical one, services it at the head, and passes valveAvailable:true from that ONE call site.
+    Everything else in the loop is passed false. It was a _valveFiredThisTick flag until the pre-scan replaced
+    it, and the flag then sat assigned-and-reset with no reader for a while — which is worse than no flag, since
+    it reads as the thing enforcing the bound while enforcing nothing. One call site is provable by inspection
+  invariant (step 11) a SECOND critical cell in the same tick gets no valve. It is refused like any other
+    candidate, ages, keeps its queue place and is the hoisted one on a later tick — so AC-11.2's "within N ticks"
+    holds with a larger N when several cells are critical at once, which is the case the budget is already losing
+  invariant (step 11) the valve's unit is capped in CLUSTERS — RepairWorstClustersPerUnit, or ValveClustersPerUnit
+    when the configuration asks for the whole cell. AC-11.1's "by more than one indivisible unit" is not licence
+    for an uncapped one: a whole cell IS one indivisible unit, and a 100 K-entity cell was measured at ~133 ms, a
+    133x overrun that would still claim compliance. An earlier version capped with MaxSlotsPerCluster, which is 64
+    SLOTS used as a clusters count — 4 096 entities, eight times the documented bound
+  invariant (step 11) a valve admission that MOVES NOTHING does not consume the tick's one overshoot. Marking it
+    before the unit runs spends the allowance on a re-pack the no-op guard then declines, and refuses a genuinely
+    critical cell later in the ranking for work that never happened
   invariant ReclusterBudgetUsedMs reports the PROJECTED spend of admitted units, not elapsed time. The number
     that gates has to be the number that is reported, or the two drift and neither can be reasoned about
   invariant a refusal must not spend budget. remainingNs is decremented only after a unit has emitted requests
   scope: ArchetypeClusterState.PlanCellRepairs, ArchetypeClusterState.RepairOneCell,
+    ArchetypeClusterState.RepairCostEstimateNs, ArchetypeClusterState.ObserveMigrationCost,
     SpatialGridConfig.ReclusterBudgetMs, SpatialGridConfig.RepairNsPerEntity,
-    SpatialMigrationTelemetry.RepairUnitsRefused, SpatialMigrationTelemetry.ReclusterBudgetUsedMs
+    SpatialGridConfig.ClusterRepairCriticalExtentRatio,
+    SpatialMigrationTelemetry.RepairUnitsRefused, SpatialMigrationTelemetry.ReclusterBudgetUsedMs,
+    SpatialMigrationTelemetry.RepairValveFires, SpatialMigrationTelemetry.MeasuredNsPerEntity
   verified: ClusterRepairTests.ARepairIsNeverBegunWithoutTheBudgetToFinishIt drives the budget to 99 % of the
     projected cost and asserts nothing moved, nothing was spent and the refusal was counted;
     TheSameCellIsRepairedOnceTheBudgetCoversTheUnit is its control at 150 %, so the pair separates "the rule
-    fired" from "nothing was ever nominated"
+    fired" from "nothing was ever nominated".
+    ClusterRepairQueueTests.ACriticalCellIsServicedEvenWhenTheBudgetCannotAffordIt covers the valve and asserts
+    it fires at most once per tick; WithTheValveDisabledAnUnderBudgetQueueServicesNobody is its ablation arm, and
+    without it "nothing was repaired" cannot be told from "nothing needed repairing".
+    ClusterCostEstimatorTests covers the measured estimate: it tracks the machine from a contradicted seed and
+    settles (asserted as an ABSOLUTE spread, because two post-transient windows measure the same noise and noise
+    is not monotone), stays inside its clamp band, and does not move once the world has genuinely settled —
+    detected as three consecutive migration-free ticks, not assumed after a fixed count
   on_violation:
     budget stops a unit mid-way → a cell left in a state strictly worse than the one it started in
     refusal spends budget → later units in the same tick are starved by work that never happened
@@ -649,6 +684,115 @@
   on_violation:
     trigger left at 1.2 → the repair path never runs, and its test suite says nothing
     nomination below the skip → a degraded cell that stops moving is never repaired
+
+### TH-01: The throttle truncates the queue; it never defers `[fatal][silent]`
+  invariant re-clustering runs to a BUDGET, never to completion (design 5.6). Deferring a pass costs a tick of
+    looser bounds; overrunning the frame costs the frame
+  invariant the throttle lowers PendingMigrationCount itself, so the drain prefix still equals the count. It must
+    NOT shorten the prefix and leave the tail queued:
+      the serial fence passes PendingMigrationCount, not the prefix, so it would execute the tail AND retain it
+      SortPendingMigrationsByDestCellKey sorts [0, PendingMigrationCount) unstably, so it would permute tail
+        entries into the prefix
+      both land on CR-01's "prefix too SMALL" failure, measured at 224 854 migrations on the twentieth tick
+  invariant a throttled relocation is DROPPED, not carried. Its DestClusterChunkId was the least-enlargement
+    choice against the AABBs of the tick that DETECTED it; a tick later TryClaimPinnedSlot rejects the stale pin
+    (CR-02) and falls back to first fit, which is the placement #872 exists to repair. Re-detecting recomputes
+    the choice against current bounds
+  invariant a CELL-CROSSING is charged to the budget and never refused. It is a correctness move (design 5.7), so
+    a heavy crossing tick starves repair rather than the reverse
+  invariant the partition is single-threaded and order-preserving WITHIN each class, so given the same queue, the
+    same budget and the same estimate it admits the same set — every time
+  invariant 🔴 that does NOT make the admitted set worker-independent, and the two must not be conflated. Two
+    inputs to the decision vary with scheduling: AabbRefresh's worker-local drifter buffers merge in COMPLETION
+    order, and the budget is divided by a MEASURED per-entity cost. Measured: two W=1 runs of one motion schedule
+    agreed for four ticks and then separated, and the divergence compounds because a different set of entities
+    moved leaves different bounds to detect against. What holds at every W is the RULE — spend never exceeds what
+    the budget pays for, and every drifter is accounted for
+  invariant ReclusterBudgetMs == 0 means NO BUDGET ENFORCEMENT, not "do no re-clustering". It disabled repair
+    before step 11 and must keep meaning only that: dropping every relocation at zero would silently turn one
+    knob into a switch for step 10 as well, reverting placement to first fit
+  scope: ArchetypeClusterState.ApplyMigrationThrottle, ArchetypeClusterState.PendingMigrationCount,
+    MigrationRequest.Kind, MigrationKind, SpatialMigrationTelemetry.RelocationsThrottled
+  verified: ClusterThrottleBudgetTests.NoTickAdmitsMoreRelocationsThanTheBudgetPaysFor (bounded spend, guarded
+    against a zero estimate — the division saturates to int.MaxValue rather than throwing, so an unguarded bound
+    is no bound); RelocationsSurviveATickThatAlsoCarriesCellCrossings is the arm that catches an in-place
+    partition END TO END: every other engine-level fixture confines its entities to one cell and so produces no
+    crossings, which is exactly the case the bug cannot fire in. It is an INEQUALITY whose slack is the tick's
+    crossing count, so the exact net is ThePartitionIsAPureFunctionOfItsInputs below;
+    ThePartitionIsAPureFunctionOfItsInputs drives ApplyMigrationThrottle directly over a mixed queue, five times;
+    AZeroBudgetKeepsRelocatingAndKeepsEveryQueueBounded (the zero meaning, over thirty ticks);
+    ClusterThrottleParallelTests.TheThrottleEnforcesItsBudgetAtEveryWorkerCount drives a real TyphonRuntime at
+    W in {1,2,8} against the serial fence and checks the rule on every tick of each
+  on_violation:
+    prefix shortened instead of the count → CR-01's unbounded queue growth, with stale re-execution
+    partition done IN PLACE → the compaction overwrites relocations the second pass has yet to read, so
+      min(relocations, crossings) of them are destroyed with RelocationsThrottled reading zero. Not a corner:
+      AabbRefresh appends relocations and the next Prep appends crossings behind them, so the relocations are
+      exactly the entries at risk
+    crossing refused → an entity stranded in a cell it no longer belongs to; C13 and RebuildCellState both lie
+    zero read as "disable relocation" → placement silently reverts to first fit with every counter reading zero
+
+### TH-02: Every detected drifter is accounted for exactly once `[silent]`
+  invariant over one tick's detection: DriftersDetected == admitted + throttled + unplaced, where `admitted` and
+    `throttled` are observed on the FOLLOWING tick — detection runs in AabbRefresh, which follows Migrate, so its
+    requests are decided by the next tick's Prep
+  invariant 🔴 `admitted` means RELOCATIONS admitted. MigrationCount stands in for it only where the tick carries
+    no cell crossings and no repair moves, because that counter sums all three kinds; the verifying fixture pins
+    both away deliberately. State the precondition rather than reading the identity as unconditional
+  invariant an entity absorbed by the intra-cell drift margin is in NONE of those terms: DetectDriftersInCluster
+    increments driftAbsorbed and continues BEFORE driftersDetected. Design 5.6 requires that hysteresis and
+    throttling not both discount the same migration, or the budget model over-counts what it defers
+  invariant `unplaced` — a drifter for which placement found no better cluster — must be counted, not merely
+    skipped. Without it the identity cannot close, and "the world drifts faster than the budget" cannot be told
+    from "this cell has run out of room"; those have opposite remedies
+  scope: ArchetypeClusterState.DetectDriftersInCluster, SpatialMigrationTelemetry.DriftersDetected,
+    SpatialMigrationTelemetry.DriftAbsorbedCount, SpatialMigrationTelemetry.DriftersUnplaced,
+    SpatialMigrationTelemetry.RelocationsThrottled
+  verified: ClusterThrottleBudgetTests.EveryDetectedDrifterIsAccountedForExactlyOnce asserts the lagged identity
+    on every tick of a nine-tick run, having first established that both absorption and throttling occurred
+  on_violation:
+    absorbed leaks into throttled → the budget model over-states what it is deferring and under-admits for ever
+    unplaced uncounted → a saturated cell is indistinguishable from a saturated budget
+
+### TH-03: The repair queue is persistent, ranked and bounded `[silent]`
+  invariant a nomination SURVIVES its tick. Step 12 discarded whatever the budget refused, so a cell could be
+    nominated on every tick of a run and never once serviced. The queue keeps the candidate, with the worst
+    degradation seen and the tick it began waiting
+  invariant candidates are RANKED by expected selectivity gain, not round-robin — design 5.6 names round-robin as
+    the wrong policy: a region nobody queries never needs tight clusters. score = degradation * tierWeight *
+    clusterCount * ageFactor
+  invariant the age factor is UNBOUNDED in the tick count, so ranking cannot starve. Ranking alone always can:
+    whatever a candidate's base score, enough waiting must carry it to the head
+  invariant SimTier is a BIT FLAG (None=0, Tier0=1, Tier1=2, Tier2=4, Tier3=8), so the weight is over the INDEX,
+    and SimTier.None must weigh 1.0 rather than fall out of the formula. TrailingZeroCount(0) is 32, so the naive
+    1/(1+index) scores every cell in an untiered world at 1/33 — and an untiered world is the default, every
+    fixture, and any deployment with no SpatialInterestSystem. Absent information discounts nothing
+  invariant the queue is CAPPED at RepairQueueMaxCells and evicts by score, with the eviction count published. A
+    per-tick list could not leak; a persistent one can
+  invariant re-ranking is LAZY — on new nominations or a SpatialGrid.TierVersion change, never on a timer — and
+    its cost is reported. A queue that costs more to maintain than the work it schedules is a net loss
+  invariant 🔴 KNOWN GAP, narrowed not closed: PrepareArchetypeFenceCore returns false for an archetype nothing
+    wrote to, and the wrapper then skips planning entirely, because a plan allocates clusters THIS tick's Migrate
+    and Finalize must consume. So a queue full of candidates in a world that has gone completely still is not
+    drained. Closing it needs the fence re-armed by queue depth alone, which collides with AC-10.8
+  scope: CellRepairQueue, ArchetypeClusterState.RepairQueue, ArchetypeClusterState.AbsorbRepairNominations,
+    SpatialGridConfig.RepairAgingRatePerTick, SpatialGridConfig.RepairQueueMaxCells,
+    SpatialMigrationTelemetry.RepairQueueDepth, SpatialMigrationTelemetry.RepairQueueEvicted,
+    SpatialMigrationTelemetry.RepairQueueMaintenanceMs
+  verified: ClusterRepairQueueTests.AgeingCarriesEveryCandidateToTheHeadOfTheQueue drives CellRepairQueue
+    DIRECTLY — one service per tick over a lopsided candidate set — because the engine-level form cannot be made
+    machine-independent: the budget is spent against a MEASURED cost, Debug migrates at ~24 us and Release at
+    ~1.5 us, so one budget admits one unit per tick in one configuration and eighteen in the other. Ablated by
+    WithoutAgeingTheWorstCandidateStarvesEveryoneElse, which shows the same set starves at agingRate 0;
+    AnUntieredCellOutranksAnEquallyDegradedTieredOne — one Tier2 cell against five untiered ones of identical
+    degradation, because a UNIFORMLY untiered world cannot show the defect at all: the wrong weight is then a
+    constant factor and the ordering is bit-identical; TheQueueStopsAtItsCapAndReportsTheEvictions and
+    AHighScoringLateArrivalDisplacesAWeakerIncumbent (the bound, then the policy the bound does not pin);
+    QueueMaintenanceIsASmallFractionOfTheWorkItSchedules
+  on_violation:
+    nomination discarded on refusal → a cell nominated every tick and serviced never, with no counter to show it
+    SimTier.None mishandled → the ranking collapses in every untiered world, which is the default one
+    queue uncapped → unbounded growth under a permanently over-subscribed workload
 
 ### RP-05: A repair is the only thing that narrows a zone map `[perf][silent]`
   invariant ZoneMapArray.Widen is the only writer on the hot path and never narrows, so a cluster accumulates the

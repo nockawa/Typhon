@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using JetBrains.Annotations;
 
 namespace Typhon.Engine;
@@ -112,8 +113,24 @@ public partial class DatabaseEngine
             clusterState.TotalHysteresisAbsorbedCount,
             clusterState.LastTickRepairedEntityCount,
             clusterState.LastTickRepairUnitCount,
-            clusterState.LastTickRepairUnitsRefused);
+            clusterState.LastTickRepairUnitsRefused)
+        {
+            // #872 step 11's members ride an object initialiser rather than the constructor: at thirteen positional arguments the call was already at the
+            // limit of what a reader can check, and six more would make a mis-ordered pair of ints a silent telemetry bug rather than a compile error.
+            MigrationTotalMs = clusterState.LastTickMigrationTotalMs,
+            RelocationsThrottled = clusterState.LastTickRelocationsThrottled,
+            DriftersUnplaced = clusterState.LastTickDriftersUnplaced,
+            RepairValveFires = clusterState.LastTickRepairValveFires,
+            RepairQueueDepth = clusterState.RepairQueue?.Count ?? 0,
+            RepairQueueEvicted = clusterState.RepairQueue?.TotalEvicted ?? 0L,
+            RepairQueueMaintenanceMs = QueueMaintenanceMs(clusterState),
+            MeasuredNsPerEntity = clusterState.LastTickMeasuredNsPerEntity,
+        };
     }
+
+    /// <summary>One archetype's queue-maintenance time in milliseconds, or zero when it has no queue yet.</summary>
+    private static double QueueMaintenanceMs(ArchetypeClusterState clusterState) =>
+        clusterState.RepairQueue == null ? 0d : clusterState.RepairQueue.LastTickMaintenanceTicks * 1000d / Stopwatch.Frequency;
 
     /// <summary>
     /// Sums <see cref="GetSpatialTelemetry"/> across every archetype in this engine. Allocation-free; never throws.
@@ -142,6 +159,15 @@ public partial class DatabaseEngine
         var repairedEntities = 0;
         var repairUnits = 0;
         var repairRefused = 0;
+        var migrationTotalMs = 0d;
+        var relocationsThrottled = 0;
+        var driftersUnplaced = 0;
+        var valveFires = 0;
+        var queueDepth = 0;
+        var queueEvicted = 0L;
+        var queueMaintenanceMs = 0d;
+        var measuredNsPerEntity = 0d;
+        var measuredSamples = 0;
 
         for (var i = 0; i < states.Length; i++)
         {
@@ -164,9 +190,35 @@ public partial class DatabaseEngine
             repairedEntities += clusterState.LastTickRepairedEntityCount;
             repairUnits += clusterState.LastTickRepairUnitCount;
             repairRefused += clusterState.LastTickRepairUnitsRefused;
+            migrationTotalMs += clusterState.LastTickMigrationTotalMs;
+            relocationsThrottled += clusterState.LastTickRelocationsThrottled;
+            driftersUnplaced += clusterState.LastTickDriftersUnplaced;
+            valveFires += clusterState.LastTickRepairValveFires;
+            queueDepth += clusterState.RepairQueue?.Count ?? 0;
+            queueEvicted += clusterState.RepairQueue?.TotalEvicted ?? 0L;
+            queueMaintenanceMs += QueueMaintenanceMs(clusterState);
+
+            // AVERAGED, not summed, and it is the one member here that is. Every other value is an extensive quantity — more archetypes, more of it — but
+            // a cost per entity is intensive, and summing it would report an engine with four archetypes as four times as expensive per entity as each of
+            // them is. Only archetypes that actually produced an estimate contribute, so a quiet one does not drag the mean toward zero.
+            if (clusterState.LastTickMeasuredNsPerEntity > 0d)
+            {
+                measuredNsPerEntity += clusterState.LastTickMeasuredNsPerEntity;
+                measuredSamples++;
+            }
         }
 
         return new SpatialMigrationTelemetry(migrations, absorbed, executeMs, scanned, drifters, driftAbsorbed, budgetMs, activeClusters, totalMigrations,
-            totalAbsorbed, repairedEntities, repairUnits, repairRefused);
+            totalAbsorbed, repairedEntities, repairUnits, repairRefused)
+        {
+            MigrationTotalMs = migrationTotalMs,
+            RelocationsThrottled = relocationsThrottled,
+            DriftersUnplaced = driftersUnplaced,
+            RepairValveFires = valveFires,
+            RepairQueueDepth = queueDepth,
+            RepairQueueEvicted = queueEvicted,
+            RepairQueueMaintenanceMs = queueMaintenanceMs,
+            MeasuredNsPerEntity = measuredSamples > 0 ? measuredNsPerEntity / measuredSamples : 0d,
+        };
     }
 }

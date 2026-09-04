@@ -599,40 +599,51 @@ public partial class DatabaseEngine
             return;
         }
 
-        staging.ClearPrepared();
-        staging.SortChunk(0);
-        var count = staging.MergeAndPartition(1);
-        if (count == 0)
-        {
-            return;
-        }
-
-        var state = _archetypeStates[meta.ArchetypeId];
-        var slice = staging.Prepared.AsSpan(0, count);
-        var accessor = state.EntityMap.Segment.CreateChunkAccessor(changeSet);
+        // #872 step 11: this phase's cost belongs to the migration that staged the work, and until now nothing measured it. The sort and the merge are
+        // inside the bracket deliberately — at small batches they are the majority of the phase, and a cost model that skipped them would under-admit
+        // exactly where the bulk path stops paying for itself.
+        var applyStart = Stopwatch.GetTimestamp();
         try
         {
-            state.EntityMap.UpdateValuesBulk<EntityLocationUpdate, ClusterLocationBulkUpdater>(slice, ref accessor);
+            staging.ClearPrepared();
+            staging.SortChunk(0);
+            var count = staging.MergeAndPartition(1);
+            if (count == 0)
+            {
+                return;
+            }
+
+            var state = _archetypeStates[meta.ArchetypeId];
+            var slice = staging.Prepared.AsSpan(0, count);
+            var accessor = state.EntityMap.Segment.CreateChunkAccessor(changeSet);
+            try
+            {
+                state.EntityMap.UpdateValuesBulk<EntityLocationUpdate, ClusterLocationBulkUpdater>(slice, ref accessor);
+            }
+            finally
+            {
+                accessor.Dispose();
+            }
+
+            for (var i = 0; i < slice.Length; i++)
+            {
+                ref var entry = ref slice[i];
+                if (!entry.Found)
+                {
+                    clusterState.RollbackOrphanedDestinationSlot(entry.DstChunkId, entry.DstSlot, entry.EntityKey, changeSet);
+                    continue;
+                }
+
+                clusterState.NoteClusterBorn(entry.DstChunkId, entry.ObservedBornTsn);
+                if (entry.ObservedDiedTsn != 0)
+                {
+                    clusterState.NoteClusterDied(entry.DstChunkId, ArchetypeClusterState.VisibilityUnknown);
+                }
+            }
         }
         finally
         {
-            accessor.Dispose();
-        }
-
-        for (var i = 0; i < slice.Length; i++)
-        {
-            ref var entry = ref slice[i];
-            if (!entry.Found)
-            {
-                clusterState.RollbackOrphanedDestinationSlot(entry.DstChunkId, entry.DstSlot, entry.EntityKey, changeSet);
-                continue;
-            }
-
-            clusterState.NoteClusterBorn(entry.DstChunkId, entry.ObservedBornTsn);
-            if (entry.ObservedDiedTsn != 0)
-            {
-                clusterState.NoteClusterDied(entry.DstChunkId, ArchetypeClusterState.VisibilityUnknown);
-            }
+            Interlocked.Add(ref clusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - applyStart);
         }
     }
 
@@ -651,39 +662,48 @@ public partial class DatabaseEngine
             return;
         }
 
-        for (var fieldId = 0; fieldId < staging.FieldCount; fieldId++)
+        // #872 step 11: the largest single component of a migration's cost — measured at ~48 % — and until now entirely outside every timer.
+        var applyStart = Stopwatch.GetTimestamp();
+        try
         {
-            if (staging.StagedBytes(fieldId) == 0)
+            for (var fieldId = 0; fieldId < staging.FieldCount; fieldId++)
             {
-                continue;
+                if (staging.StagedBytes(fieldId) == 0)
+                {
+                    continue;
+                }
+
+                var fieldRef = staging.Field(fieldId);
+                ref var field = ref clusterState.IndexSlots[fieldRef.SlotIndex].Fields[fieldRef.FieldIndex];
+                var multi = field.AllowMultiple;
+
+                // The parallel path's Migrate workers sort their own chunk before leaving it; this path has no workers, so it sorts its single run here. The
+                // merge below then sees one sorted run and copies it, which is the degenerate case it already handles.
+                field.Index.SortBulkEntries(staging.ChunkSpan(0, fieldId), multi);
+
+                var merged = staging.MergeSortedRuns(fieldId, field.Index.BulkEntryStride(multi), field.Index, multi, out var byteCount);
+                if (byteCount == 0)
+                {
+                    continue;
+                }
+
+                var accessor = field.Index.Segment.CreateChunkAccessor(changeSet);
+                try
+                {
+                    field.Index.ApplyBulkEntries(merged.AsSpan(0, byteCount), multi, ref accessor, out _);
+                }
+                finally
+                {
+                    accessor.Dispose();
+                }
             }
 
-            var fieldRef = staging.Field(fieldId);
-            ref var field = ref clusterState.IndexSlots[fieldRef.SlotIndex].Fields[fieldRef.FieldIndex];
-            var multi = field.AllowMultiple;
-
-            // The parallel path's Migrate workers sort their own chunk before leaving it; this path has no workers, so it sorts its single run here. The
-            // merge below then sees one sorted run and copies it, which is the degenerate case it already handles.
-            field.Index.SortBulkEntries(staging.ChunkSpan(0, fieldId), multi);
-
-            var merged = staging.MergeSortedRuns(fieldId, field.Index.BulkEntryStride(multi), field.Index, multi, out var byteCount);
-            if (byteCount == 0)
-            {
-                continue;
-            }
-
-            var accessor = field.Index.Segment.CreateChunkAccessor(changeSet);
-            try
-            {
-                field.Index.ApplyBulkEntries(merged.AsSpan(0, byteCount), multi, ref accessor, out _);
-            }
-            finally
-            {
-                accessor.Dispose();
-            }
+            staging.BeginTick(1);   // consume: the entries have been applied and must not be applied again next tick
         }
-
-        staging.BeginTick(1);   // consume: the entries have been applied and must not be applied again next tick
+        finally
+        {
+            Interlocked.Add(ref clusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - applyStart);
+        }
     }
 
     /// <summary>
@@ -753,21 +773,25 @@ public partial class DatabaseEngine
         // Worker-local deferral buffer for promoted cells, same shape and lifetime as the outlier buffer above and merged the same way. Allocated only when
         // this archetype actually has a promoted cell — the overwhelmingly common case is none, and an empty List per slice per tick is not free.
         var promotedBuffer = clusterState.PromotedCellCount > 0 ? new List<ArchetypeClusterState.PromotedAabbApply>(0) : null;
-        // Worker-local repair nominations (#872 step 12), same shape and lifetime as the outlier buffer above and merged the same way. Allocated only when
-        // the grid has a repair budget at all: with ReclusterBudgetMs at zero the planner discards nominations unread, so producing them would be pure cost
-        // on the detection path. Capacity 0 — nomination fires only behind the cellSize x 1.2 guard, which is rare by design.
-        var repairBuffer = _spatialGrid != null && _spatialGrid.Config.ReclusterBudgetMs > 0f ? new List<int>(0) : null;
+        // Worker-local repair nominations (#872 step 12), merged the same way as the outlier buffer above — but held PER WORKER rather than allocated per
+        // slice. With ReclusterBudgetMs at its default of 1.0 this path is live out of the box, so a fresh List per slice per tick is a real per-tick
+        // allocation on the fence; step 11 also doubled the element width, so each growth doubling costs twice what it did. EnqueueRepairNominationsBulk
+        // clears it after the merge, so a reused list starts every slice empty. Still gated on the budget: with repair switched off the planner discards
+        // nominations unread, and producing them would be pure cost on the detection path.
+        var repairBuffer = _spatialGrid != null && _spatialGrid.Config.ReclusterBudgetMs > 0f
+            ? ArchetypeClusterState.NominationScratch ??= [] : null;
         try
         {
             clusterState.RecomputeDirtyClusterAabbsSlice(sliceStart, sliceCount, ref accessor, _spatialGrid, promotedBuffer, outlierBuffer, repairBuffer,
                 out var aabbsChanged, out var slotsScanned, out var outlierGuardFires, out var clustersScanned, out var driftersDetected,
-                out var driftAbsorbed);
+                out var driftAbsorbed, out var driftersUnplaced);
             // Interlocked, not plain adds: every AabbRefresh slice of this archetype reaches here, and the three counters are archetype-wide. They are reset
             // once per tick in PrepareArchetypeFence, so a lost add would under-report for that tick only — which is exactly the kind of quiet inaccuracy that
             // makes a measurement useless for tuning P4.
             Interlocked.Add(ref clusterState.LastTickClustersScanned, clustersScanned);
             Interlocked.Add(ref clusterState.LastTickDriftersDetected, driftersDetected);
             Interlocked.Add(ref clusterState.LastTickDriftAbsorbedCount, driftAbsorbed);
+            Interlocked.Add(ref clusterState.LastTickDriftersUnplaced, driftersUnplaced);
             clusterState.EnqueueMigrationsBulk(outlierBuffer);
             clusterState.EnqueuePromotedAppliesBulk(promotedBuffer);
             clusterState.EnqueueRepairNominationsBulk(repairBuffer);
@@ -846,17 +870,31 @@ public partial class DatabaseEngine
             // filed here would sit unexecuted and the clusters allocated for them would have no sweep to free them. Dropping
             // the nomination costs one deferred repair — the cluster re-nominates the next time it is written.
             //
-            // Known limit, worth naming: in barrier-only mode the AABB pass visits only clusters that were WRITTEN, so a cell
-            // that degrades and then goes completely still is never re-nominated and never repaired. The legacy branch walks
-            // every active cluster and does not have the gap. Step 11's priority queue, which ranks candidate cells rather
-            // than waiting to be handed them, is where that is properly answered.
+            // 🔴 KNOWN GAP, still open after step 11, and narrowed rather than closed. In barrier-only mode the AABB pass visits
+            // only clusters WRITTEN this tick, so a cell that degrades and then goes completely still is never re-NOMINATED.
+            // Step 11's queue fixes the half that was in reach — a nomination the budget refuses, or one that arrives on a tick
+            // that cannot plan, is now REMEMBERED rather than discarded, so a cell nominated once while it was moving is still
+            // repaired after it stops. What remains needs `hasWork |= queue.Count > 0`, which re-arms Migrate and Finalize for
+            // an otherwise idle archetype and collides head-on with AC-10.8 ("a tick with no movement does no relocation work
+            // and allocates nothing"). That trade is bigger than this step and is deliberately not taken here.
+            //
+            // ── The throttle runs BEFORE the planner, and the ordering is the policy (§5.6) ──────────────────────────────
+            //
+            // One budget, spent in priority order: cell crossings are correctness and take what they need, intra-cell
+            // relocations take what is left, and repair gets the remainder. So the relocation throttle both consumes and
+            // reports the budget the planner may then spend. Reversing the two would let a rare repair outbid the steady-state
+            // path that keeps cells from needing repair in the first place.
             if (hasWork)
             {
-                PlanArchetypeRepairs(pending, changeSet);
+                var remainingBudgetNs = pending.ApplyMigrationThrottle(_spatialGrid);
+                PlanArchetypeRepairs(pending, changeSet, tickNumber, remainingBudgetNs);
             }
             else
             {
-                pending.RepairNominations.Clear();
+                // The LIST is per-tick even though the QUEUE is not: it describes the tick that produced it. Absorbed into the
+                // persistent queue first — that is exactly the "refused or unplannable nomination is no longer lost" half above
+                // — and only then cleared.
+                pending.AbsorbRepairNominations(_spatialGrid, tickNumber);
             }
 
             pending.PendingMigrationDrainCount = hasWork ? pending.PendingMigrationCount : 0;
@@ -870,22 +908,42 @@ public partial class DatabaseEngine
     /// <c>try/finally</c> does not sit in the middle of the drain-prefix reasoning above.
     /// </summary>
     /// <remarks>
-    /// The accessor carries <paramref name="changeSet"/> because the planner allocates clusters and publishes their occupancy word, which is a write and
-    /// owes the WAL the same atomicity as every other fence write. Skipped entirely when the archetype has no cluster segment (pure-Transient) or when
-    /// nothing was nominated, so a settled world does not rent an accessor to discover it has nothing to do.
+    /// <para>The accessor carries <paramref name="changeSet"/> because the planner allocates clusters and publishes their occupancy word, which is a write
+    /// and owes the WAL the same atomicity as every other fence write.</para>
+    /// <para><b>Skipped when there is nothing to absorb AND nothing waiting</b> — not merely when nothing was nominated. The queue is persistent since step
+    /// 11, so a world that has stopped moving can still hold a backlog worth planning, and the early-out has to ask about both. The cost of that is stated
+    /// rather than hidden: an archetype whose queue the budget can never drain rents an accessor and ranks every tick for as long as the backlog lasts.
+    /// <c>PlanCellRepairs</c> bounds the per-tick work by stopping its scan once the budget cannot afford another unit; what it cannot avoid is the rent
+    /// and the rank themselves, and <c>RepairQueueMaintenanceMs</c> is what makes that visible.</para>
     /// </remarks>
-    private void PlanArchetypeRepairs(ArchetypeClusterState clusterState, ChangeSet changeSet)
+    private void PlanArchetypeRepairs(ArchetypeClusterState clusterState, ChangeSet changeSet, long tickNumber, double remainingBudgetNs)
     {
-        if (clusterState.ClusterSegment == null || clusterState.RepairNominations.Count == 0)
+        // 🔴 A pure-Transient archetype absorbs and DISCARDS rather than returning with the list intact. Returning here left RepairNominations untouched on
+        // the hasWork path while the !hasWork path both absorbed and cleared, so the list would grow across ticks. It is unreachable today only because a
+        // null cluster segment implies FenceBranchPath == 0 and therefore no AabbRefresh producer — an accidental guarantee, not a designed one.
+        if (clusterState.ClusterSegment == null)
+        {
+            clusterState.AbsorbRepairNominations(_spatialGrid, tickNumber);
+            return;
+        }
+
+        // The queue can hold candidates when nothing was nominated this tick — that is the whole point of it being persistent — so the early-out is on
+        // "nothing to absorb AND nothing waiting", not on the nomination list alone.
+        if (clusterState.RepairNominations.Count == 0 && (clusterState.RepairQueue == null || clusterState.RepairQueue.Count == 0))
         {
             return;
         }
 
         var accessor = clusterState.ClusterSegment.CreateChunkAccessor(changeSet);
+        var plannerStart = Stopwatch.GetTimestamp();
         try
         {
-            clusterState.PlanCellRepairs(_spatialGrid, ref accessor, out var budgetUsedMs);
+            var planned = clusterState.PlanCellRepairs(_spatialGrid, ref accessor, tickNumber, remainingBudgetNs, out var budgetUsedMs);
             clusterState.LastTickReclusterBudgetUsedMs = budgetUsedMs;
+
+            // Timed here rather than inside the planner so the bracket covers the accessor rent too, and fed back on the NEXT tick — the planner's own
+            // cost per entity is a term step 12's projection ignored entirely, and it is repair's alone: no crossing and no relocation pays it.
+            clusterState.RecordPlannerCost(Stopwatch.GetTimestamp() - plannerStart, planned);
         }
         finally
         {
@@ -922,9 +980,22 @@ public partial class DatabaseEngine
         // Snapshot before zeroing: DetectClusterMigrations pre-sizes PendingMigrations from last tick's migration count, and reading the field itself would read
         // the zero written on the line below — same fence, a few hundred lines earlier — so the estimate was always Max(16, 0) and the queue regrew from 16 on
         // every migration-heavy tick (#872).
+        // #872 step 11: BEFORE the counters below are zeroed, because it reads them. One sample per tick, folded into the per-entity cost model the repair
+        // budget is spent against — which is what makes RepairNsPerEntity a seed rather than the operative constant.
+        if (_spatialGrid != null)
+        {
+            clusterState.ObserveMigrationCost(in _spatialGrid.Config);
+        }
+
+        clusterState.ResetThrottleTickState();
         clusterState.PreviousTickMigrationCount = clusterState.LastTickMigrationCount;
         clusterState.LastTickMigrationCount = 0;
         clusterState.LastTickMigrationExecuteMs = 0d;
+        // #872 step 11: the apply phases accumulate into this from their own workers, exactly as the Migrate slices do into the line above — and it is
+        // zeroed the same PLAIN way, deliberately. Both counters are published by workers (an Interlocked.Add here, a compare-exchange loop there) and both
+        // are reset from Prep, and what orders the reset against those publications is the fence phase barrier, not a release on the store. Giving one of
+        // the pair a Volatile.Write and not the other would imply a distinction between them that does not exist.
+        clusterState.LastTickMigrationApplyTicks = 0L;
         clusterState.LastTickClustersScanned = 0;
         clusterState.LastTickDriftersDetected = 0;
         clusterState.LastTickDriftAbsorbedCount = 0;

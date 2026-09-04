@@ -185,7 +185,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </remarks>
     internal void DetectDriftersInCluster(int clusterChunkId, int cellKey, in ClusterSpatialAabb clusterAabb, SpatialGrid grid,
         ref ChunkAccessor<PersistentStore> accessor, in ClusterCentres centres, ulong guardClaimedSlots, List<MigrationRequest> driftBuffer,
-        List<RelocationCandidate> candidateScratch, ref int driftersDetected, ref int driftAbsorbed)
+        List<RelocationCandidate> candidateScratch, ref int driftersDetected, ref int driftAbsorbed, ref int driftersUnplaced)
     {
         ref readonly var cfg = ref grid.Config;
         var targetExtent = cfg.CellSize * cfg.ClusterTargetExtentRatio;
@@ -288,10 +288,14 @@ internal sealed unsafe partial class ArchetypeClusterState
             // and buys no selectivity, and the fallback claim would likely hand it back to the cluster it came from anyway.
             if (destCluster < 0)
             {
+                // Counted since #872 step 11, not merely skipped. A drifter with nowhere better to go and one the budget refused are the same absence from
+                // MigrationCount, and telling them apart is the difference between "the world is drifting faster than the budget" and "this cell has run
+                // out of room" — two problems with opposite remedies.
+                driftersUnplaced++;
                 continue;
             }
 
-            driftBuffer.Add(new MigrationRequest(clusterChunkId, slotIndex, cellKey, destCluster));
+            driftBuffer.Add(new MigrationRequest(clusterChunkId, slotIndex, cellKey, destCluster, MigrationRequest.AnySlot, MigrationKind.Relocation));
         }
     }
 

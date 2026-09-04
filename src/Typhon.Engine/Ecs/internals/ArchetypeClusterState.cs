@@ -496,7 +496,42 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     /// <summary>Telemetry counter: wall-clock duration of <see cref="DatabaseEngine.ExecuteMigrations"/> in milliseconds,
     /// for the most recently completed tick.</summary>
+    /// <remarks>
+    /// <b>The migrant LOOP only, which is well under half of what a migration costs.</b> Since #872 step 6 that loop <i>stages</i> each migrant's index
+    /// value updates and, since step 7, its EntityMap patch; both are applied later, by the IndexMassUpdate and EntityMapUpdate phases, outside this
+    /// bracket. The secondary index alone was measured at ~48 % of a migration's total cost, so anything deriving a per-entity cost from this field
+    /// under-counts by roughly half. Use <see cref="LastTickMigrationTotalMs"/> for that.
+    /// </remarks>
     public double LastTickMigrationExecuteMs;
+
+    /// <summary>
+    /// Telemetry counter: <see cref="Stopwatch"/> ticks spent APPLYING the migrant loop's staged work — the bulk index descent and the bulk EntityMap
+    /// patch — in the most recently completed tick, summed across every worker that took a slice (#872 step 11).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why it had to exist.</b> Step 11's budget admits repair units against a projected <c>entities x ns</c>, and step 12 shipped that
+    /// projection reading a hand-set constant. Replacing the constant with a measurement is only an improvement if the measurement covers the whole
+    /// migration: an estimator built on <see cref="LastTickMigrationExecuteMs"/> alone excludes both apply phases and would over-admit by about 2x every
+    /// tick — worse than the constant it replaces.</para>
+    /// <para><b>Ticks, not milliseconds, and <see cref="Interlocked"/> rather than a CAS loop.</b> Seven call sites accumulate into this from parallel
+    /// workers — the two serial helpers on <c>ProcessArchetypeFence</c>, and both the <c>Prepare</c> and <c>DispatchItem</c> halves of the two parallel
+    /// exec systems, the index one of which also accumulates once per indexed field. A <see cref="long"/> add is one uncontended
+    /// atomic; the double next door needs a compare-exchange loop because .NET has no <c>Interlocked.Add(double)</c>. The conversion to milliseconds
+    /// happens once, in <see cref="LastTickMigrationTotalMs"/>.</para>
+    /// </remarks>
+    public long LastTickMigrationApplyTicks;
+
+    /// <summary>
+    /// The whole cost of the most recently completed tick's migrations, in milliseconds: the migrant loop plus both apply phases, summed across workers.
+    /// This is the number a per-entity cost model divides by <see cref="LastTickMigrationCount"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>CPU-milliseconds, not span.</b> Every contributing site adds its own elapsed time, so W workers each busy for 1 ms report 4, not 1. That is the
+    /// unit <c>SpatialGridConfig.ReclusterBudgetMs</c> is defined in and the unit <c>RepairNsPerEntity</c> was measured in; reading it as a frame latency
+    /// would over-state the cost by up to W.
+    /// </remarks>
+    public double LastTickMigrationTotalMs =>
+        LastTickMigrationExecuteMs + (Volatile.Read(ref LastTickMigrationApplyTicks) * 1000d / Stopwatch.Frequency);
 
     /// <summary>
     /// Live accumulator for hysteresis-absorbed crossings on the <see cref="SpatialBarrierOnly"/> path, bumped by <c>ClusterRef.MaybeFlagMigration</c> as writes
@@ -3000,6 +3035,11 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </remarks>
     internal void RebuildClusterAabbs(SpatialGrid grid)
     {
+        // #872 step 11. Every queued repair candidate carries a degradation measured against the bounds this method is about to recompute, and a cell key
+        // that under the VDB grid is a POOL SLOT rather than a coordinate — so after a rebuild a retained candidate can rank a cell on evidence gathered
+        // somewhere else entirely. Dropped rather than migrated: the next AABB pass re-nominates whatever still deserves it, at its real degradation.
+        RepairQueue?.Clear();
+
         if (!SpatialSlot.HasSpatialIndex || ClusterSegment == null)
         {
             return;
@@ -3143,11 +3183,13 @@ internal sealed unsafe partial class ArchetypeClusterState
                 // No deferral buffer on the serial path: it is already the single writer, so a promoted cell's tree can be written directly and the drain
                 // below has nothing to do. Passing null is what selects that — see the divert in the slice.
                 RecomputeDirtyClusterAabbsSlice(0, totalWork, ref accessor, grid, null, outlierBuffer, repairNominationBuffer, out var aabbsChanged,
-                    out var slotsScanned, out var outlierGuardFires, out var clustersScanned, out var driftersDetected, out var driftAbsorbed);
+                    out var slotsScanned, out var outlierGuardFires, out var clustersScanned, out var driftersDetected, out var driftAbsorbed,
+                    out var driftersUnplaced);
                 EnqueueMigrationsBulk(outlierBuffer);
                 Interlocked.Add(ref LastTickClustersScanned, clustersScanned);
                 Interlocked.Add(ref LastTickDriftersDetected, driftersDetected);
                 Interlocked.Add(ref LastTickDriftAbsorbedCount, driftAbsorbed);
+                Interlocked.Add(ref LastTickDriftersUnplaced, driftersUnplaced);
                 refreshSpan.AabbsChanged = aabbsChanged;
                 refreshSpan.SlotsScanned = slotsScanned;
                 refreshSpan.OutlierGuardFires = outlierGuardFires;
@@ -3188,14 +3230,15 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </para>
     /// </summary>
     internal void RecomputeDirtyClusterAabbsSlice(int sliceStart, int sliceCount, ref ChunkAccessor<PersistentStore> accessor, SpatialGrid grid,
-        List<PromotedAabbApply> promotedApplyBuffer, List<MigrationRequest> outlierBuffer, List<int> repairNominationBuffer, out int aabbsChanged,
-        out int slotsScanned, out int outlierGuardFires, out int clustersScanned, out int driftersDetected, out int driftAbsorbed)
+        List<PromotedAabbApply> promotedApplyBuffer, List<MigrationRequest> outlierBuffer, List<RepairNomination> repairNominationBuffer, out int aabbsChanged,
+        out int slotsScanned, out int outlierGuardFires, out int clustersScanned, out int driftersDetected, out int driftAbsorbed, out int driftersUnplaced)
     {
         aabbsChanged = 0;
         slotsScanned = 0;
         outlierGuardFires = 0;
         clustersScanned = 0;
         driftersDetected = 0;
+        driftersUnplaced = 0;
         driftAbsorbed = 0;
 
         if (!SpatialSlot.HasSpatialIndex)
@@ -3225,6 +3268,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         var maxExtent = 0f;
         var cellSize = 0f;
+        var inverseCellSize = 0f;
         var outlierGuardActive = grid != null && (cellSize = grid.Config.CellSize) > 0f;
         var driftTargetExtent = 0f;
         // #872 step 12 (P7). A THIRD threshold, deliberately not one of the two above. The design proposes reusing the outlier guard's cellSize x 1.2, but
@@ -3237,6 +3281,9 @@ internal sealed unsafe partial class ArchetypeClusterState
             maxExtent = cellSize * 1.2f;
             driftTargetExtent = cellSize * grid.Config.ClusterTargetExtentRatio;
             repairExtent = repairNominationBuffer != null ? cellSize * grid.Config.ClusterRepairExtentRatio : 0f;
+            // Hoisted for the nomination's degradation ratio (#872 step 11). One reciprocal per slice against one division per nominated cluster, on a
+            // path whose whole justification is that the per-cluster test is three compares.
+            inverseCellSize = cellSize > 0f ? 1f / cellSize : 0f;
         }
 
         // Hoisted out of the per-cluster loop, which is the whole point of taking it as a parameter (D1). 64 slots is the cluster capacity ceiling and
@@ -3374,14 +3421,21 @@ internal sealed unsafe partial class ArchetypeClusterState
                     // repairExtent is strictly above driftTargetExtent, so testing it is free of its own gate. Appending the CELL, not the cluster: the
                     // repair unit is a cell's worst clusters, and which those are is a ranking the planner performs over the whole cell rather than over
                     // whichever clusters this slice happened to hold.
-                    var repairGated = repairExtent > 0f && ((fresh.MaxX - fresh.MinX) > repairExtent
-                                                            || (fresh.MaxY - fresh.MinY) > repairExtent
-                                                            || (fresh.MaxZ - fresh.MinZ) > repairExtent);
+                    // #872 step 11 takes the MAX of the three rather than short-circuiting on the first axis that trips, because the ranking needs to know
+                    // HOW degraded the cell is, not merely that it is. `max > t` and `any axis > t` agree on every finite input; they differ only on NaN,
+                    // where MathF.Max propagates and the whole comparison goes false while the old three-way `||` could still fire on a finite axis. See
+                    // MaxAxisExtent's own remarks — the direction is safe and the input is unreachable through bounds validation, but the two are not
+                    // identical and an earlier version of this comment claimed they were.
+                    //
+                    // Gated on repairExtent, so an archetype with repair switched off pays nothing for it: this runs once per scanned cluster per tick, and
+                    // ReclusterBudgetMs = 0 is a configuration that must not be perturbed by a feature it has turned off.
+                    var repairMaxExtent = repairExtent > 0f ? MaxAxisExtent(in fresh) : 0f;
+                    var repairGated = repairMaxExtent > repairExtent;
 
                     clustersScanned++;
                     if (repairGated)
                     {
-                        repairNominationBuffer.Add(cellKey);
+                        repairNominationBuffer.Add(new RepairNomination(cellKey, repairMaxExtent * inverseCellSize));
                     }
 
                     if (!guardFires && !driftGated)
@@ -3400,7 +3454,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                     if (driftGated)
                     {
                         DetectDriftersInCluster(chunkId, cellKey, in fresh, grid, ref accessor, in centres, guardClaimed, outlierBuffer,
-                            candidateScratch, ref driftersDetected, ref driftAbsorbed);
+                            candidateScratch, ref driftersDetected, ref driftAbsorbed, ref driftersUnplaced);
                     }
                 }
             }
@@ -3495,12 +3549,10 @@ internal sealed unsafe partial class ArchetypeClusterState
                 // holds only clusters written this tick, so there is no equivalent place to put this and a still cell in
                 // that mode is never nominated. Closing it needs a signal that ranks CELLS rather than reacting to cluster
                 // writes — which is exactly step 11's priority queue ("candidate cells ... re-ranked lazily", §5.6).
-                var repairGated = repairExtent > 0f && ((fresh.MaxX - fresh.MinX) > repairExtent
-                                                        || (fresh.MaxY - fresh.MinY) > repairExtent
-                                                        || (fresh.MaxZ - fresh.MinZ) > repairExtent);
-                if (repairGated)
+                var repairMaxExtent = repairExtent > 0f ? MaxAxisExtent(in fresh) : 0f;
+                if (repairMaxExtent > repairExtent)
                 {
-                    repairNominationBuffer.Add(cellKey);
+                    repairNominationBuffer.Add(new RepairNomination(cellKey, repairMaxExtent * inverseCellSize));
                 }
 
                 if (!boundsMoved && !IsClusterProcessBitSet(chunkId))
@@ -3559,7 +3611,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                 if (driftGated)
                 {
                     DetectDriftersInCluster(chunkId, cellKey, in fresh, grid, ref accessor, in centres, guardClaimed, outlierBuffer,
-                        candidateScratch, ref driftersDetected, ref driftAbsorbed);
+                        candidateScratch, ref driftersDetected, ref driftAbsorbed, ref driftersUnplaced);
                 }
             }
         }
