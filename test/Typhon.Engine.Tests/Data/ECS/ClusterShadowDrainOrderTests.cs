@@ -450,6 +450,10 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
     /// </remarks>
     [TestCase(64)]
     [TestCase(256)]
+    [TestCase(512)]
+    [TestCase(768)]
+    [TestCase(1024)]
+    [TestCase(EntityCount)]
     public void TheWholePopulationOnOneMultiValueKeyKeepsTheIndexAgreeingWithTheData(int shareCount)
     {
         using var dbe = SetupEngine();
@@ -470,6 +474,11 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
         dbe.WriteTickFence(2);
 
         Assert.That(CountWithTag(dbe, SharedTag), Is.EqualTo(shareCount), "every entity collapsed onto the shared key is findable under it");
+
+        // 🔴 NOT asserted here: querying a key every entity has LEFT. That is #884's exact trigger and it still KILLS THE PROCESS — no exception, no
+        // assertion, the host simply dies — so it cannot be carried even under Quarantine, because a crash takes its whole nightly shard's results rather
+        // than reporting one failure. #885's fix did not touch it; verified by adding the call back and watching it crash on every run.
+
         IndexDataOracle.AssertIndexAgreesWithData<ShDrainUnit>(dbe, "after collapsing onto one key");
     }
 }
