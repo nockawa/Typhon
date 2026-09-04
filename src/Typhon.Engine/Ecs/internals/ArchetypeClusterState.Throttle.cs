@@ -383,6 +383,48 @@ internal sealed partial class ArchetypeClusterState
         return _migrationNsPerEntityEwma > 0d ? _migrationNsPerEntityEwma : seed;
     }
 
+    /// <summary>
+    /// Relocation nominations this tick's drift scan has already produced. Reset by <c>ClearAabbRefreshBookkeeping</c>.
+    /// </summary>
+    internal int DriftNominationsThisTick;
+
+    /// <summary>
+    /// How many relocation nominations the drift scan may produce before it stops looking — <c>0</c> meaning "no limit".
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The measurement this exists for.</b> At the 25 % reference point the scan nominated <b>55 415</b> relocations per tick and
+    /// <see cref="ApplyMigrationThrottle"/> admitted <b>1 288</b> — a ratio of 43 : 1. Every one of the 54 127 rejects had already paid
+    /// <c>BuildRelocationCandidates</c>, three <c>AxisOvershoot</c> calls, a <c>ChooseRelocationTarget</c> descent over the cell's candidates (367 473 calls
+    /// per traced run) and a 20-byte append, and then went through four more full passes inside the throttle. The work was not merely wasted; it was the
+    /// largest single term in two different phases.</para>
+    /// <para><b>Why capping is EXACT here rather than an approximation.</b> The throttle does not rank relocations — <c>TH-01</c> requires it to preserve
+    /// queue order within each class, so it admits a PREFIX of them. A cap of <c>C</c> nominations therefore yields the identical admitted set as long as
+    /// <c>C</c> is at least what the budget can pay for, and the cap below is deliberately <b>double</b> that plus a floor. Ordering across parallel slices
+    /// was already nondeterministic (each worker appends its own buffer and bulk-enqueues), so nothing that was previously guaranteed is lost.</para>
+    /// <para><b>Zero budget still means no enforcement</b>, matching <see cref="ApplyMigrationThrottle"/>'s own reading of
+    /// <c>ReclusterBudgetMs = 0</c>: the fixtures that pin drift behaviour set exactly that, and they must keep seeing every drifter the oracle sees.</para>
+    /// </remarks>
+    internal int ComputeDriftNominationCap(in SpatialGridConfig cfg)
+    {
+        var budgetNs = cfg.ReclusterBudgetMs * 1_000_000d;
+        if (budgetNs <= 0d)
+        {
+            return 0;
+        }
+
+        var estimateNs = MigrationCostEstimateNs(in cfg);
+        if (estimateNs <= 0d)
+        {
+            return 0;
+        }
+
+        // x2 for the crossings that take budget ahead of relocations and for the EWMA drifting under the true cost, +256 so a tiny budget still lets the
+        // mechanism run at all. At the reference point this is ~2 800 against 55 415 produced today.
+        var affordable = budgetNs / estimateNs;
+        var cap = (int)Math.Min(affordable * 2d + 256d, int.MaxValue);
+        return cap > 0 ? cap : 0;
+    }
+
     /// <summary>Record one repair-planning pass so the next tick's <see cref="ObserveMigrationCost"/> has a sample.</summary>
     /// <remarks>
     /// <b>Queue maintenance is subtracted, not included.</b> The caller brackets the whole of <c>PlanCellRepairs</c>, which contains the absorb and the

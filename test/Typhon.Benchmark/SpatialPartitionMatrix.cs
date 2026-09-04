@@ -187,6 +187,16 @@ internal sealed class RunResult
     public double UnplacedPerTick;
     public double ClustersScannedPerTick;
 
+    /// <summary>
+    /// Entity slots the AABB refresh actually read, per tick — the refresh's cost in the unit that scales with the world.
+    /// </summary>
+    /// <remarks>
+    /// <c>ClustersScannedPerTick</c> counts clusters the pass decided had something to say, which is measured AFTER the skip; it cannot tell a pass that
+    /// opened ten clusters from one that opened two thousand. This one can, and it is the column that shows whether the fence is doing work proportional to
+    /// what MOVED or to what EXISTS.
+    /// </remarks>
+    public double SlotsScannedPerTick;
+
     // Repair
     public double RepairEntitiesPerTick;
     public double RepairUnitsPerTick;
@@ -331,6 +341,10 @@ public static class SpatialPartitionMatrix
         {
             RunMatrixW(results, ticks);
         }
+        if (which is "P")
+        {
+            RunMatrixP(results, ticks, args);
+        }
 
         sw.Stop();
         WriteCsv(results, csvPath);
@@ -456,6 +470,41 @@ public static class SpatialPartitionMatrix
         }
 
         MovingFraction = saved;
+        Console.WriteLine();
+    }
+
+    // ── Matrix P: ONE point, every knob on the command line ───────────────────────────────────
+    //
+    // The sweeps above each run six to sixteen points in one process, which is what makes their rows comparable and
+    // what makes them useless to a PROFILER: a tracing session over Matrix M reports one set of call counts covering
+    // every moving fraction at once, and the mixture cannot be unpicked afterwards. Matrix P exists so one scenario can
+    // be run alone, under a profiler, with the shape stated on the command line rather than compiled in.
+    //
+    //   --moving F  --workers W  --entities N  --percell K  --budget MS  --dim 2|3  --motion Cruise  --dist Uniform
+    //
+    // The warm-up in Run() still happens, so the profile does include a discarded 16 000-entity run. That is deliberate:
+    // without it the measured point absorbs tiered compilation, and a profile of the JIT is worse than a profile that
+    // contains a labelled warm-up.
+
+    private static void RunMatrixP(List<RunResult> results, int ticks, string[] args)
+    {
+        var dim = ArgInt(args, "--dim", 3);
+        var entities = ArgInt(args, "--entities", 64_000);
+        var perCell = ArgInt(args, "--percell", 64);
+        var workers = ArgInt(args, "--workers", DefaultWorkers);
+        var budget = ArgFloat(args, "--budget", 1.0f);
+        var motion = Enum.Parse<MotionModel>(ArgString(args, "--motion", "Cruise"), ignoreCase: true);
+        var dist = Enum.Parse<Distribution>(ArgString(args, "--dist", "Uniform"), ignoreCase: true);
+        var cell = DeriveCellSize(dim, entities, perCell);
+
+        Console.WriteLine("── Matrix P — one point ────────────────────────────────────────────────");
+        Console.WriteLine($"  dim={dim} motion={motion} dist={dist} n={entities} perCell={perCell} cell={cell:F2} " +
+            $"moving={MovingFraction:P0} W={workers} budget={budget:F2} barrier={Barrier}");
+
+        var r = RunOne("P", dim, motion, dist, entities, cell, budget, ticks, workers);
+        r.MovingFraction = MovingFraction;
+        results.Add(r);
+        Report(r);
         Console.WriteLine();
     }
 
@@ -677,6 +726,19 @@ public static class SpatialPartitionMatrix
         var movedFlags = new bool[entities];
         var phase = new PhaseAccumulator();
         var moveMsTotal = 0d;
+
+        // -- The Move system is inside a scheduler callback, and a callback that throws is not a callback that reported an error ------------------------
+        //
+        // 🔴 The 3D barrier arm threw NotSupportedException on its first WriteSpatial (ClusterRef.WriteSpatial supports AABB2F only), the scheduler absorbed
+        // it, and the run completed and reported fence = 0.33 ms, mig/t = 0, tightness = 96.7 % -- identical at all six moving fractions, because nothing had
+        // moved at any of them. The harness printed a motionless world as a RESULT. A comment two hundred lines below already said "A measurement harness must
+        // never be able to report that outcome as a result"; the guard it describes did not cover the exception route.
+        //
+        // Two independent nets, because either alone can be defeated: the exception is captured and surfaced as the row's Failure, AND the writes are counted
+        // so an arm that silently applies none is caught even when it throws nothing at all.
+        Exception moveFailure = null;
+        var spatialWritesApplied = 0L;
+        var entitiesRequestedToMove = 0L;
         var observed = 0;
         var motionTick = 0;
         var toUs = 1_000_000d / Stopwatch.Frequency;
@@ -721,6 +783,9 @@ public static class SpatialPartitionMatrix
                 var t = motionTick++;
                 var moveSw = Stopwatch.StartNew();
                 var moved = ApplyMotion(motion, rng, dim, entities, cellSize, xs, ys, zs, groupOf, groupVx, groupVy, groupVz, t, movedFlags);
+                entitiesRequestedToMove += moved;
+                try
+                {
                 if (moved > 0)
                 {
                     var tx = ctx.Transaction;
@@ -759,6 +824,7 @@ public static class SpatialPartitionMatrix
                                     var next = default(TPos);
                                     write(ref next, xs[idx], ys[idx], zs[idx], halfExtent, idx);
                                     cluster.WriteSpatial(comp, slot, in next);
+                                    spatialWritesApplied++;
                                 }
                             }
                         }
@@ -780,8 +846,15 @@ public static class SpatialPartitionMatrix
 
                             ref var p = ref tx.OpenMut(ids[i]).Write(comp);
                             write(ref p, xs[i], ys[i], zs[i], halfExtent, i);
+                            spatialWritesApplied++;
                         }
                     }
+                }
+                }
+                catch (Exception ex)
+                {
+                    // Recorded, not rethrown: throwing out of a scheduler callback is exactly how this became invisible. The row is failed below instead.
+                    moveFailure ??= ex;
                 }
 
                 moveSw.Stop();
@@ -852,6 +925,17 @@ public static class SpatialPartitionMatrix
         r.Barrier = barrier;
         r.FenceBranchPath = ClusterStateBranchPath(dbe, archetypeId);
         r.MoveMs = moveMsTotal / Math.Max(1, motionTick);
+
+        // A row that moved nothing is not a fast row, it is a broken one. Both nets report through Failure, which WriteCsv and Report already surface.
+        if (moveFailure != null)
+        {
+            r.Failure = SanitizeForCsv($"Move system threw and the scheduler absorbed it: {moveFailure.GetType().Name}: {moveFailure.Message}");
+        }
+        else if (entitiesRequestedToMove > 0 && spatialWritesApplied == 0)
+        {
+            r.Failure = SanitizeForCsv($"the motion model asked for {entitiesRequestedToMove} moves and the write path applied NONE - "
+                + "this run measured a motionless world");
+        }
         phase.Fill(r);
         acc.FillPerTick(r, Math.Max(1, phase.Samples));
 
@@ -1161,7 +1245,7 @@ public static class SpatialPartitionMatrix
 
     private sealed class Accumulator
     {
-        private double _migrations, _migExecMs, _migTotalMs, _drifters, _driftAbsorbed, _hyst, _throttled, _superseded, _unplaced, _scanned;
+        private double _migrations, _migExecMs, _migTotalMs, _drifters, _driftAbsorbed, _hyst, _throttled, _superseded, _unplaced, _scanned, _slotsScanned;
         private double _repairEntities, _repairUnits, _repairRefused, _budgetUsed, _measuredNs, _queueDepth, _queueMaint;
         private long _queueEvicted, _valveFires;
         private double _prepSnapshot, _prepMask, _prepShadow, _prepZoneMap, _prepDetect, _prepThrottle, _prepPlan, _prepPreSize;
@@ -1189,6 +1273,7 @@ public static class SpatialPartitionMatrix
             _prepDirtyClusters += t.PrepDirtyClusters;
             _unplaced += t.DriftersUnplaced;
             _scanned += t.ClustersScanned;
+            _slotsScanned += t.SlotsScanned;
             _repairEntities += t.RepairedEntityCount;
             _repairUnits += t.RepairUnitCount;
             _repairRefused += t.RepairUnitsRefused;
@@ -1228,6 +1313,7 @@ public static class SpatialPartitionMatrix
             r.ThrottledPerTick = _throttled / ticks;
             r.UnplacedPerTick = _unplaced / ticks;
             r.ClustersScannedPerTick = _scanned / ticks;
+            r.SlotsScannedPerTick = _slotsScanned / ticks;
             r.RepairEntitiesPerTick = _repairEntities / ticks;
             r.RepairUnitsPerTick = _repairUnits / ticks;
             r.RepairRefusedPerTick = _repairRefused / ticks;
@@ -1481,7 +1567,11 @@ public static class SpatialPartitionMatrix
     {
         if (r.Failure.Length > 0)
         {
-            return;   // already reported by RunOne, and every column below would be zero
+            // Printed HERE as well as recorded in the CSV. RunOne only prints failures it CAUGHT itself; a run that completed while its Move system was
+            // silently absorbed by the scheduler reaches this method with a Failure set and nothing on the console, which is how a motionless world got
+            // reported as a 0.33 ms fence for an entire campaign. Every column below would be zero or meaningless, so the row is the message.
+            Console.WriteLine($"  !! {r.Matrix} {r.Dim}D {r.Motion} {r.Dist} n={r.Entities} W={r.Workers} moving={r.MovingFraction:P0} INVALID: {r.Failure}");
+            return;
         }
 
         // Span AND cpu, side by side, because the ratio between them is the headline this harness exists to produce: it is the fence's actual parallel
@@ -1508,7 +1598,7 @@ public static class SpatialPartitionMatrix
             "entityMapSpanUs", "entityMapCpuUs", "aabbSpanUs", "aabbCpuUs", "finalizeSpanUs", "finalizeCpuUs",
             "migrationsPerTick", "migrationExecuteMs", "migrationTotalMs", "driftersPerTick", "driftAbsorbedPerTick",
             "hysteresisAbsorbedPerTick", "throttledPerTick", "prepSnapshotMs", "prepMaskMs", "prepShadowMs", "prepZoneMapMs", "prepDetectMs", "prepThrottleMs", "prepPlanMs", "prepPreSizeMs",
-            "prepDirtyClusters", "supersededPerTick", "unplacedPerTick", "clustersScannedPerTick",
+            "prepDirtyClusters", "supersededPerTick", "unplacedPerTick", "clustersScannedPerTick", "slotsScannedPerTick",
             "repairEntitiesPerTick", "repairUnitsPerTick", "repairRefusedPerTick", "budgetUsedMs", "measuredNsPerEntity",
             "queueDepth", "queueEvicted", "queueMaintenanceMs", "valveFires",
             "activeClusters", "liveCells", "entitiesPerCluster", "entitiesPerCell", "tightnessPct", "tightnessP90Pct",
@@ -1527,7 +1617,7 @@ public static class SpatialPartitionMatrix
                 F(r.EntityMapSpanUs), F(r.EntityMapCpuUs), F(r.AabbSpanUs), F(r.AabbCpuUs), F(r.FinalizeSpanUs), F(r.FinalizeCpuUs),
                 F(r.MigrationsPerTick), F(r.MigrationExecuteMs), F(r.MigrationTotalMs), F(r.DriftersPerTick), F(r.DriftAbsorbedPerTick),
                 F(r.HysteresisAbsorbedPerTick), F(r.ThrottledPerTick), F(r.PrepSnapshotMs), F(r.PrepMaskMs), F(r.PrepShadowMs), F(r.PrepZoneMapMs), F(r.PrepDetectMs), F(r.PrepThrottleMs),
-                F(r.PrepPlanMs), F(r.PrepPreSizeMs), F(r.PrepDirtyClustersPerTick), F(r.SupersededPerTick), F(r.UnplacedPerTick), F(r.ClustersScannedPerTick),
+                F(r.PrepPlanMs), F(r.PrepPreSizeMs), F(r.PrepDirtyClustersPerTick), F(r.SupersededPerTick), F(r.UnplacedPerTick), F(r.ClustersScannedPerTick), F(r.SlotsScannedPerTick),
                 F(r.RepairEntitiesPerTick), F(r.RepairUnitsPerTick), F(r.RepairRefusedPerTick), F(r.BudgetUsedMs), F(r.MeasuredNsPerEntity),
                 F(r.QueueDepth), r.QueueEvicted, F(r.QueueMaintenanceMs), r.ValveFires,
                 r.ActiveClusters, r.LiveCells, F(r.EntitiesPerCluster), F(r.EntitiesPerCell), F(r.TightnessPct), F(r.TightnessP90Pct),

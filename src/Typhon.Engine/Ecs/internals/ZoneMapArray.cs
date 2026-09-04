@@ -176,6 +176,77 @@ internal sealed unsafe class ZoneMapArray
     }
 
     /// <summary>
+    /// Widen the bounds to cover only the slots named by <paramref name="slotMask"/>, under ONE latch acquisition.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The cheap half of the tick's zone-map maintenance.</b> <c>Recompute</c> re-derives min/max from every OCCUPIED slot because narrowing
+    /// needs the whole population; the fence calls it once per dirty cluster per indexed field. But the fence also knows exactly WHICH slots changed — Prep's
+    /// occupancy-masked dirty word is a per-cluster slot mask — and at the reference point that is ~8 changed slots of ~32 occupied, and ~1.2 of ~32 on a
+    /// quiet tick. Re-reading the other 24 to 31 is work whose only product is a narrower bound.</para>
+    /// <para><b>Widening is always sound; narrowing is what needs the full scan.</b> A zone map that is too wide answers <see cref="MayContain"/> with
+    /// <c>true</c> more often, so a query opens a cluster it could have pruned — slower, never wrong, and explicitly permitted (RP-05 already allows the
+    /// widen-only path used on the commit and migration routes). Narrowing is recovered by the caller re-tightening on a rotation.</para>
+    /// <para>One latch for the whole mask rather than one per value, which is the difference between this and calling <see cref="Widen"/> in a loop: at eight
+    /// changed slots that loop would take eight uncontended acquisitions to save the same reads.</para>
+    /// </remarks>
+    public void WidenMasked(int clusterChunkId, ulong slotMask, byte* dataBase, ArchetypeClusterInfo layout, int compSlot, int fieldOffset)
+    {
+        if (slotMask == 0)
+        {
+            return;
+        }
+
+        // Decoded outside the latch, exactly as Recompute scans outside it: this reads cluster memory, which the latch does not protect.
+        var compSize = layout.ComponentSize(compSlot);
+        var compBase = dataBase + layout.ComponentOffset(compSlot);
+
+        var min = long.MaxValue;
+        var max = long.MinValue;
+        var bits = slotMask;
+        while (bits != 0)
+        {
+            var slotIndex = BitOperations.TrailingZeroCount(bits);
+            bits &= bits - 1;
+            var val = ReadFieldAsOrderedLong(compBase + slotIndex * compSize + fieldOffset);
+            if (val < min)
+            {
+                min = val;
+            }
+
+            if (val > max)
+            {
+                max = val;
+            }
+        }
+
+        var store = AcquireForWrite(clusterChunkId);
+        try
+        {
+            if (!store.Valid[clusterChunkId])
+            {
+                store.Mins[clusterChunkId] = min;
+                store.Maxs[clusterChunkId] = max;
+                store.Valid[clusterChunkId] = true;
+                return;
+            }
+
+            if (min < store.Mins[clusterChunkId])
+            {
+                store.Mins[clusterChunkId] = min;
+            }
+
+            if (max > store.Maxs[clusterChunkId])
+            {
+                store.Maxs[clusterChunkId] = max;
+            }
+        }
+        finally
+        {
+            ReleaseAfterWrite();
+        }
+    }
+
+    /// <summary>
     /// Widen bounds to include a new value (eager, on spawn). Never narrows.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -300,6 +300,30 @@ internal sealed unsafe partial class ArchetypeClusterState
     }
 
     /// <summary>
+    /// The bound-only half of <see cref="FlagClusterForShrinkRefresh"/>: mark every axis for re-derivation WITHOUT setting the process bit.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The process bit is not a synonym for "recompute me".</b> It means "visit this cluster and republish it", and the refresh acts on it — a set
+    /// bit takes a cluster past the <c>!boundsMoved</c> skip into <c>ApplyOrDeferClusterUpdate</c>, the overhang note, the outlier guard and drift detection.
+    /// For a cluster that merely lost a slot that is all wrong work: its geometry only ever gets SMALLER, so it cannot have started overhanging its cell or
+    /// drifting, and pushing it through detection perturbs relocation. Three <c>ClusterRelocationTests.Placement_*</c> cases caught exactly that — the extra
+    /// visits repacked the cell and the fixture's two half-full clusters became one.</para>
+    /// <para>The shrink mask alone is what a vacated slot needs, and it is enough: <c>ClusterNeedsAabbRecompute</c> tests these axes directly, so the refresh
+    /// re-derives the bound and the ordinary <c>boundsMoved</c> comparison then decides whether the index wants the new box.</para>
+    /// <para>🔴 <b>Barrier-only mode is deliberately NOT covered by this.</b> That arm iterates <see cref="ArchetypeClusterState.ClusterProcessBitmap"/>, so
+    /// without the bit it never visits the cluster at all — a destroy there stays invisible exactly as it is today. Closing that needs the bit, and the bit
+    /// costs what the paragraph above describes; it is a separate decision, not a side effect of this one.</para>
+    /// </remarks>
+    internal void FlagClusterShrinkAxesOnly(int chunkId)
+    {
+        var shrink = ClusterShrinkPendingAxes;
+        if (shrink != null && (uint)chunkId < (uint)shrink.Length)
+        {
+            InterlockedOrShrinkAxes(shrink, chunkId, 0x0F);
+        }
+    }
+
+    /// <summary>
     /// Mark a cluster as needing a full AABB recompute at this tick's refresh — every axis, and visible to the pass.
     /// </summary>
     /// <remarks>

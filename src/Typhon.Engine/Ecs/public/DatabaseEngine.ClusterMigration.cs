@@ -102,6 +102,16 @@ public partial class DatabaseEngine
     }
 
     /// <summary>
+    /// How often a cluster's zone map is re-derived exactly rather than widened. Power of two so the rotation is a mask.
+    /// </summary>
+    /// <remarks>
+    /// 16 ticks is ~0.27 s at 60 Hz. The cost of a larger value is selectivity: a bound stays as wide as the widest key any entity held since the last exact
+    /// pass, so a cluster whose extreme entity left keeps that entity's key in its range until its turn comes round. The cost of a smaller one is the scan
+    /// this whole path exists to avoid. Nothing depends on the exact figure — it is a knob, and the shape of the trade is monotone in both directions.
+    /// </remarks>
+    private const int ZoneMapRetightenPeriod = 16;
+
+    /// <summary>
     /// Recomputes one index home's zone maps over the dirty clusters. Same three-store split as <see cref="ProcessClusterShadowEntries"/>: the occupancy word
     /// comes from <paramref name="primaryAccessor"/>, the component column from <paramref name="dataAccessor"/>, and they are the same accessor for every home
     /// except a Transient slot on a mixed archetype.
@@ -117,6 +127,15 @@ public partial class DatabaseEngine
         where TPrimary : struct, IPageStore
         where TData : struct, IPageStore
     {
+        // Rotates the exact pass across ticks so a given cluster is re-derived every ZoneMapRetightenPeriod ticks rather than all of them landing together.
+        //
+        // Interlocked, though nothing today needs it: Prep is one atomic work item per archetype, so this runs single-threaded and a plain `++` is correct.
+        // It is written atomically anyway because it costs nothing at this call rate — three times per tick, once per index home — and because the plain form
+        // is a non-atomic read-modify-write on a field that a sliced Prep would have several workers touching at once. Losing increments there would not
+        // corrupt anything (the phase selects WHICH residue class of chunk ids is re-derived exactly, never whether one is, so 1/16 of clusters get an exact
+        // pass on every tick regardless), but it would be a silent counter bug of exactly the kind that survives a green suite.
+        var retightenPhase = (int)(Interlocked.Increment(ref clusterState.ZoneMapRetightenTick) & (ZoneMapRetightenPeriod - 1));
+
         for (var wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
         {
             if (dirtyBits[wordIdx] == 0)
@@ -135,6 +154,22 @@ public partial class DatabaseEngine
             var primaryBase = primaryAccessor.GetChunkAddress(clusterChunkId);
             var dataBase = dataAccessor.GetChunkAddress(clusterChunkId);
 
+            // ── Widen from the slots that CHANGED; re-derive exactly on a rotation ──────────────────────────────────
+            //
+            // The dirty word IS the per-cluster slot mask, already ANDed with occupancy by Prep step 2 — so the fence knows precisely which entities moved and
+            // was throwing that away, re-reading every occupied slot to recompute a min/max. Measured shape at the reference point: ~8 changed slots of ~32
+            // occupied, and ~1.2 of ~32 on a quiet tick. The other 24 to 31 reads exist only to let the bound NARROW.
+            //
+            // Widening is exact for growth and conservative for shrinkage: a bound that stayed wider than it needed to be makes MayContain say `true` where it
+            // could have said `false`, which costs a cluster open, never a wrong answer. RP-05 already sanctions widen-only maintenance — it is what the commit
+            // and migration routes do.
+            //
+            // The narrowing is not abandoned, it is amortised. `exactPass` re-derives the full min/max for a rotating 1/N of clusters each tick, keyed on the
+            // chunk id so every cluster is exact within N ticks (N = ZoneMapRetightenPeriod, 16 → ~0.27 s at 60 Hz) and the work is spread evenly rather than
+            // arriving as a periodic spike on all of them at once.
+            var exactPass = ((clusterChunkId + retightenPhase) & (ZoneMapRetightenPeriod - 1)) == 0;
+            var changedSlots = (ulong)dirtyBits[wordIdx];
+
             for (var s = 0; s < ixSlots.Length; s++)
             {
                 ref var ixSlot = ref ixSlots[s];
@@ -148,8 +183,20 @@ public partial class DatabaseEngine
 
                 for (var f = 0; f < ixSlot.Fields.Length; f++)
                 {
-                    ixSlot.Fields[f].ZoneMap?.Recompute(clusterChunkId, primaryBase, dataBase, clusterState.Layout, ixSlot.Slot,
-                        ixSlot.Fields[f].FieldOffset);
+                    var zoneMap = ixSlot.Fields[f].ZoneMap;
+                    if (zoneMap == null)
+                    {
+                        continue;
+                    }
+
+                    if (exactPass)
+                    {
+                        zoneMap.Recompute(clusterChunkId, primaryBase, dataBase, clusterState.Layout, ixSlot.Slot, ixSlot.Fields[f].FieldOffset);
+                    }
+                    else
+                    {
+                        zoneMap.WidenMasked(clusterChunkId, changedSlots, dataBase, clusterState.Layout, ixSlot.Slot, ixSlot.Fields[f].FieldOffset);
+                    }
                 }
             }
         }
@@ -1055,15 +1102,50 @@ public partial class DatabaseEngine
         // One shared write per drain instead of one per shadow entry per field (review M4). The fence drains archetypes in parallel, so this counter is a
         // store other cores may be watching; N of them bought nothing over one.
         var mutations = 0;
+            // ── Nothing wrote this component, so no key in it moved ────────────────────────────────────────────────
+            //
+            // Capture is per ENTITY, not per field: ShadowClusterIndexedFields runs on the first write to an entity and shadows EVERY indexed field of EVERY
+            // fence-maintained slot, because at that moment it cannot know which components the transaction is about to touch. The drain can know. A
+            // component absent from FenceWrittenSlots was not written by anyone this tick, so every one of its shadow entries is guaranteed to compare equal
+            // — and reaching that verdict costs a page-window probe and a key read each.
+            //
+            // Measured: the partitioning benchmark's archetype pairs a moving `Bounds` with an indexed `Tag` that nothing ever writes, which is the ordinary
+            // shape of a component, not a contrivance. At 100 % moving the drain walked 64 000 entries per tick to prove Tag had not changed — 22 % of the
+            // entire fence.
+            //
+            // 🔴 Gated on SlotReleasesThisTick as well, and that second term is what makes this exact rather than merely plausible. The loop below is not only
+            // a compare: its `occupancy == 0` branch is the destroy-side index REMOVAL for fence-maintained slots. An entity written for component T and then
+            // destroyed needs its indexed component S taken out of the tree, and S is precisely what the written-slot test would skip. With no releases at all
+            // this tick that case cannot exist. With releases, the drain runs in full, exactly as before.
+            //
+            // 🔴 `writtenSlots != 0` is the third term and it is a FAIL-SAFE, not an optimisation. Zero is ambiguous: it means "nothing was written" on the
+            // paths that maintain WrittenSlotUnion, and "this path does not maintain it" everywhere else — and a pure-Transient archetype is the second kind.
+            // Its writes never reach the SetDirty overload that records a component slot, so the union stays zero while the shadow buffers fill, and a gate
+            // that trusted the zero skipped every drain and left the tree on the pre-mutation key
+            // (ClusterPureTransientIndexTests.Mutate_MovesTheKeyInTheTreeAtTheFence, caught exactly this). A non-empty buffer with an empty union is a
+            // contradiction, and the honest response to a contradiction is to do the work.
+            var writtenSlots = clusterState.FenceWrittenSlots;
+            var skipUnwritten = writtenSlots != 0 && Volatile.Read(ref clusterState.SlotReleasesThisTick) == 0;
+
             for (var s = 0; s < ixSlots.Length; s++)
             {
                 ref var ixSlot = ref ixSlots[s];
+                var slotUnwritten = skipUnwritten && (writtenSlots & (1 << ixSlot.Slot)) == 0;
+
                 for (var f = 0; f < ixSlot.Fields.Length; f++)
                 {
                     var buffer = ixSlot.ShadowBuffers[f];
                     var count = buffer.Count;
                     if (count == 0)
                     {
+                        continue;
+                    }
+
+                    if (slotUnwritten)
+                    {
+                        // Reset, not skip: the entries describe THIS tick and must not be seen by the next one, whose FenceWrittenSlots may well include
+                        // this component. Leaving them queued would replay stale old-keys against a tree that has since moved.
+                        buffer.Reset();
                         continue;
                     }
 

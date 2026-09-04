@@ -153,6 +153,43 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
                 $"GetSpan on Versioned component bypasses revision chain. Use GetReadOnlySpan for reads, OpenMut+Write for writes.");
         }
         CheckStride<T>(slot);
+
+        // ── Handing out a mutable span over the SPATIAL column is a promise that positions may move ─────────────────
+        //
+        // 🔴 This is the one write path that signals nothing. WriteSpatial sets the process bit when the bound grew or a
+        // crossing fired; OpenMut sets the dirty bit; a destroy now flags a shrink. GetSpan sets NONE of them — its own
+        // contract is that the caller opts in via MarkDirty, and ClusterSpatialTests'
+        // TickFence_DirectSpanWrite_NoMarkSlotDirty_AABB_StillRefreshed exists precisely because real callers do not
+        // (AntHill's chase loop: a 1 000-radius query found the ant, an 80-radius kill missed it, because the cluster's
+        // AABB was frozen at spawn while the entities walked away — a silent zero-hit query, not a crash).
+        //
+        // The engine's answer used to be that the fence re-derived EVERY active cluster's bound every tick, which made
+        // the missing signal free and invisible. That walk is what the dirty gate removes, so the signal has to become
+        // real. One Interlocked.Or per GetSpan call — per CLUSTER, not per entity, on a call that is already resolving
+        // a slot and computing a base pointer — buys back exactly the coverage the full rescan was providing.
+        //
+        // 🔴 A PER-ARCHETYPE flag, not a per-cluster process bit, and the difference is the whole design.
+        //
+        // GetSpan returns a MUTABLE span; it does not observe whether the caller writes through it, and plenty of callers
+        // do not — ClusterRepairTests.ReadAll enumerates every cluster and reads positions through exactly this method.
+        // Setting the process bit here therefore marks a cluster "visit and republish" on a pure READ, which takes it past
+        // the !boundsMoved skip into the outlier guard and drift detection. Measured: doing that made a read-only helper
+        // relocate entities, reddening ARepairIsNeverBegunWithoutTheBudgetToFinishIt with "a refused repair still moved
+        // entities". A read must not perturb the partition.
+        //
+        // So the claim recorded here is the weakest one that is actually true: "somebody was handed the ability to move
+        // this archetype's positions without telling us which cluster". The refresh answers it by doing what it did before
+        // the dirty gate existed — walking every active cluster once, this tick. An archetype that uses GetSpan on its
+        // spatial column keeps exactly today's cost and today's behaviour; one that does not gets the gate. Nothing
+        // regresses, and the AntHill case (TickFence_DirectSpanWrite_NoMarkSlotDirty_AABB_StillRefreshed) stays covered
+        // for the reason it always was.
+        //
+        // Cleared in Finalize, after the refresh has consumed it — see ClearAabbRefreshBookkeeping.
+        if (_state.SpatialSlot.HasSpatialIndex && _state.SpatialSlot.Slot == slot)
+        {
+            Volatile.Write(ref _state.SpatialSpanHandedOut, 1);
+        }
+
         return new Span<T>(ResolveBase(slot) + _layout.ComponentOffset(slot), _layout.ClusterSize);
     }
 

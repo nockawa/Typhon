@@ -153,6 +153,12 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-aabb"))
+            {
+                ClusterAabbRecomputeProfile.Run(args);
+                return;
+            }
+
             if (args.Contains("--profile-partition"))
             {
                 SpatialPartitionMatrix.Run(args);

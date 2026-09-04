@@ -777,6 +777,7 @@ public partial class DatabaseEngine
             // once per tick in PrepareArchetypeFence, so a lost add would under-report for that tick only — which is exactly the kind of quiet inaccuracy that
             // makes a measurement useless for tuning P4.
             Interlocked.Add(ref clusterState.LastTickClustersScanned, clustersScanned);
+            Interlocked.Add(ref clusterState.LastTickSlotsScanned, slotsScanned);
             Interlocked.Add(ref clusterState.LastTickDriftersDetected, driftersDetected);
             Interlocked.Add(ref clusterState.LastTickDriftAbsorbedCount, driftAbsorbed);
             Interlocked.Add(ref clusterState.LastTickDriftersUnplaced, driftersUnplaced);
@@ -995,6 +996,7 @@ public partial class DatabaseEngine
         // the pair a Volatile.Write and not the other would imply a distinction between them that does not exist.
         clusterState.LastTickMigrationApplyTicks = 0L;
         clusterState.LastTickClustersScanned = 0;
+        clusterState.LastTickSlotsScanned = 0;
         clusterState.LastTickDriftersDetected = 0;
         clusterState.LastTickDriftAbsorbedCount = 0;
 
@@ -1107,10 +1109,32 @@ public partial class DatabaseEngine
                     {
                         var wordCount = clusterState.PrimarySegmentCapacity;
                         var spatialBits = new long[Math.Max(wordCount, 1)];
+
+                        // 🔴 Only the clusters that CARRY A SIGNAL, not every active cluster.
+                        //
+                        // This loop used to read the occupancy word of every active cluster and copy it in wholesale, which manufactured a dirty set the size
+                        // of the population on a tick where, by construction, the dirty bitmap was EMPTY. Everything downstream then treated a settled world
+                        // as a fully-moving one: DetectClusterMigrations scanned every live slot, and the AABB refresh re-derived every bound. Measured on a
+                        // 128-entity, 8-cluster fixture, a tick with no writes at all walked 128 of 128 entity slots.
+                        //
+                        // The branch's own justification is narrower than what it did. It exists because "WriteSpatial-only callers may have moved positions
+                        // without setting the dirty bitmap" — and WriteSpatial is not silent: it sets the process bit when the bound grew or a crossing was
+                        // flagged (ClusterRef.cs:405), and MaybeGrowAndFlagShrink sets ClusterShrinkPendingAxes when an extreme moved inward
+                        // (ClusterRef.cs:455). The remaining case — a WriteSpatial that moves a non-extreme entity within the existing bound — changes
+                        // neither the bound nor the cell, so there is nothing for this pass to re-derive.
+                        //
+                        // ClusterNeedsAabbRecompute is the SAME predicate the refresh itself uses, deliberately shared rather than restated: FenceDirtyBits is
+                        // null on this branch (cleared at the top of Prep, published at its end), so the helper falls through to exactly the shrink-flag and
+                        // process-bit tests named above. Two copies of this rule would be two things to keep in step.
                         for (var ai = 0; ai < clusterState.ActiveClusterCount; ai++)
                         {
                             var chId = clusterState.ActiveClusterIds[ai];
                             if (chId < 0 || chId >= spatialBits.Length)
+                            {
+                                continue;
+                            }
+
+                            if (!clusterState.ClusterNeedsAabbRecompute(chId))
                             {
                                 continue;
                             }

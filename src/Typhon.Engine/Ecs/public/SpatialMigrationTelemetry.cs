@@ -78,6 +78,18 @@ public readonly struct SpatialMigrationTelemetry
     public int ClustersScanned { get; }
 
     /// <summary>
+    /// Entity slots the AABB refresh pass actually read during the most recently completed tick.
+    /// </summary>
+    /// <remarks>
+    /// <para>The refresh's own cost, in the only unit that scales with the world: <see cref="ClustersScanned"/> is incremented after the pass has decided a
+    /// cluster had something to say, so it cannot distinguish a pass that opened ten clusters from one that opened two thousand.</para>
+    /// <para><b>What a healthy value looks like.</b> Roughly the occupied-slot count of the clusters that were WRITTEN this tick. If it tracks the whole
+    /// population instead — 63 000 on a 64 000-entity world where 640 entities moved — the pass has lost its dirty gate, which is exactly the regression
+    /// this counter was added to make visible.</para>
+    /// </remarks>
+    public int SlotsScanned { get; init; }
+
+    /// <summary>
     /// Entities found outside their cluster's target region during the most recently completed tick — candidates for intra-cell relocation.
     /// </summary>
     /// <remarks>

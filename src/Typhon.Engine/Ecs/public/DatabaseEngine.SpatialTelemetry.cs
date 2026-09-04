@@ -117,6 +117,7 @@ public partial class DatabaseEngine
         {
             // #872 step 11's members ride an object initialiser rather than the constructor: at thirteen positional arguments the call was already at the
             // limit of what a reader can check, and six more would make a mis-ordered pair of ints a silent telemetry bug rather than a compile error.
+            SlotsScanned = clusterState.LastTickSlotsScanned,
             MigrationTotalMs = clusterState.LastTickMigrationTotalMs,
             RelocationsThrottled = clusterState.LastTickRelocationsThrottled,
             RelocationsSuperseded = clusterState.LastTickRelocationsSuperseded,
@@ -163,6 +164,7 @@ public partial class DatabaseEngine
         var absorbed = 0;
         var executeMs = 0d;
         var scanned = 0;
+        var slotsScanned = 0;
         var drifters = 0;
         var driftAbsorbed = 0;
         var budgetMs = 0d;
@@ -195,6 +197,7 @@ public partial class DatabaseEngine
             absorbed += clusterState.LastTickHysteresisAbsorbedCount;
             executeMs += clusterState.LastTickMigrationExecuteMs;
             scanned += clusterState.LastTickClustersScanned;
+            slotsScanned += clusterState.LastTickSlotsScanned;
             drifters += clusterState.LastTickDriftersDetected;
             driftAbsorbed += clusterState.LastTickDriftAbsorbedCount;
             budgetMs += clusterState.LastTickReclusterBudgetUsedMs;
@@ -226,6 +229,7 @@ public partial class DatabaseEngine
         return new SpatialMigrationTelemetry(migrations, absorbed, executeMs, scanned, drifters, driftAbsorbed, budgetMs, activeClusters, totalMigrations,
             totalAbsorbed, repairedEntities, repairUnits, repairRefused)
         {
+            SlotsScanned = slotsScanned,
             MigrationTotalMs = migrationTotalMs,
             RelocationsThrottled = relocationsThrottled,
             RelocationsSuperseded = relocationsSuperseded,
