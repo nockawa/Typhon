@@ -497,18 +497,36 @@ public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentB
             // If we reached capacity, get a new chunk
             if (curChunkHeader.ElementCount == chunkCapacity)
             {
+                var previousChunkId = curChunkId;
+                int nextFreeChunkId;
+
                 // Take a free chunk or allocate a new one
                 if (firstFreeChunkId != 0)
                 {
                     curChunkId = firstFreeChunkId;
                     --totalFreeChunk;
+
+                    // 🔴 #884. The free list is a CHAIN through NextChunkId — BufferRelease pushes onto it with
+                    // `curChunk->NextChunkId = rootChunk.FirstFreeChunkId; rootChunk.FirstFreeChunkId = curChunkId;` — so popping its head means
+                    // taking that head's successor. This used to read the field back AFTER re-initialising the chunk to zero, which always yielded 0
+                    // and therefore truncated the list: every free chunk behind the head was orphaned, still owned by the buffer and never reused,
+                    // while TotalFreeChunk kept counting them. Read the successor here, before the re-initialisation below destroys it.
+                    nextFreeChunkId = Unsafe.AsRef<VariableSizedBufferChunkHeader>(accessor.GetChunkAddress(curChunkId, true)).NextChunkId;
                 }
                 else
                 {
                     curChunkId = accessor.Segment.AllocateChunk(false, accessor.ChangeSet);
+                    nextFreeChunkId = 0;
                 }
 
-                curChunkHeader.NextChunkId = curChunkId;
+                // 🔴 #884. Link the PREVIOUS chunk through a FRESHLY RESOLVED address, never through curChunkAddr.
+                //
+                // Both branches above can evict the previous chunk's slot from this accessor's page window — AllocateChunk demonstrably, and the free-list
+                // read above just as much — and curChunkAddr is a raw pointer into that window. Writing the chain link through it after an eviction lands
+                // on whatever page took the slot: the link is silently lost, the chain ends one chunk early, and every element appended from here on is
+                // unreachable to any reader that walks it. This is the same hazard the method's own preamble names for `rh` and re-resolves for at the end;
+                // the chunk header needed the identical treatment and did not have it.
+                Unsafe.AsRef<VariableSizedBufferChunkHeader>(accessor.GetChunkAddress(previousChunkId, true)).NextChunkId = curChunkId;
 
                 // Fetch the new chunk
                 curChunkAddr = accessor.GetChunkAddress(curChunkId, true);
@@ -517,8 +535,7 @@ public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentB
                 curChunkHeader.ElementCount = 0;
                 curChunkHeader.NextChunkId = 0;
 
-                // Update local: the free chunk we took has no next free (just zeroed above)
-                firstFreeChunkId = curChunkHeader.NextChunkId;
+                firstFreeChunkId = nextFreeChunkId;
 
                 // Update root and capacity as we switched to a new chunk
                 isRoot = bufferId == curChunkId;

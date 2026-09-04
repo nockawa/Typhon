@@ -394,8 +394,7 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
     }
 
     /// <summary>
-    /// 🔴 <b>#885, quarantined:</b> two consecutive ticks that each mutate hundreds of indexed values leave some of the new keys OUT of the B+Tree, while the
-    /// component data holds them.
+    /// <b>#885 (fixed):</b> two consecutive ticks that each mutate hundreds of indexed values must leave the B+Tree agreeing with the component data.
     /// </summary>
     /// <remarks>
     /// <para><b>Not a #882 regression, and the drain order is irrelevant.</b> Forcing the drain back to append order — an identity permutation from
@@ -408,7 +407,6 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
     /// why <see cref="AssertIndexKeys"/> exists.</para>
     /// </remarks>
     [Test]
-    [Category("Quarantine")]
     public void TwoLargeMutationWavesInSuccessionLeaveKeysOutOfTheIndex()
     {
         using var dbe = SetupEngine();
@@ -435,6 +433,43 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
 
             dbe.WriteTickFence(tick++);
             AssertIndexKeys(dbe, newKeys, []);
+
+            // The stronger statement, and the one that actually caught the defect: every leaf entry names a slot that holds its key, and every entity is
+            // reachable under the key it holds. AssertIndexKeys only asks whether a key is present.
+            IndexDataOracle.AssertIndexAgreesWithData<ShDrainUnit>(dbe, $"after generation {generation}");
         }
+    }
+
+    /// <summary>
+    /// The whole population collapsed onto ONE <c>AllowMultiple</c> key — the shape that grows a single VSBS buffer past its root chunk.
+    /// </summary>
+    /// <remarks>
+    /// Capped below the population at which <b>#884</b> still kills the process. The buffer's root chunk holds 56 elements, so anything above that walks the
+    /// chunk chain — which <c>IndexDataOracle</c> only does correctly since the <c>NextChunk()</c> fix that came out of this work. Before it, the oracle
+    /// stopped at 56 and reported every entity past that as missing, which is what made #884 look like index loss rather than a chain-walk crash.
+    /// </remarks>
+    [TestCase(64)]
+    [TestCase(256)]
+    public void TheWholePopulationOnOneMultiValueKeyKeepsTheIndexAgreeingWithTheData(int shareCount)
+    {
+        using var dbe = SetupEngine();
+        var ids = SpawnAcrossManyClusters(dbe, 1);
+        var order = ScrambledOrder(EntityCount, seed: 7);
+
+        const int SharedTag = 424_242;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var k = 0; k < shareCount; k++)
+            {
+                tx.OpenMut(ids[order[k]]).Write(ShDrainUnit.Comp) = new ShDrainComp { Tag = SharedTag, Payload = order[k] };
+            }
+
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(2);
+
+        Assert.That(CountWithTag(dbe, SharedTag), Is.EqualTo(shareCount), "every entity collapsed onto the shared key is findable under it");
+        IndexDataOracle.AssertIndexAgreesWithData<ShDrainUnit>(dbe, "after collapsing onto one key");
     }
 }

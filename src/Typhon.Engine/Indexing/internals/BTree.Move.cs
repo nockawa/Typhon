@@ -630,11 +630,24 @@ internal abstract partial class BTree<TKey, TStore>
             }
             else
             {
-                // newKey doesn't exist — create buffer and insert via AddOrUpdateCore
-                newBufferId = _storage.CreateBuffer(ref sibAccessor);
-                newElementId = _storage.Append(newBufferId, value, ref sibAccessor);
-                var insertArgs = new InsertArguments(newKey, newBufferId, Comparer, ref accessor, ref sibAccessor);
+                // newKey doesn't exist — let the insert core create the buffer.
+                //
+                // 🔴 #885. This used to pre-create a VSBS buffer, append the value into it, and then hand that BUFFER ID to AddOrUpdateCore as the value to
+                // insert. For an AllowMultiple tree that is a category error: CreateInsertValue creates a buffer of its OWN and appends whatever it was given
+                // into it, so the leaf ended up pointing at a second buffer whose single element was the id of the first. The real value was stranded in the
+                // orphaned buffer — unreachable through the index and never freed — and the element id handed back to the caller addressed that orphan, so the
+                // cluster's elementId tail was poisoned and every later MoveValue for that entity failed to find its element.
+                //
+                // It reached daylight only through this fallback, which the optimistic paths take when a leaf is full — so it needed a tree big enough to
+                // split before it could fire at all. Measured on a 64-entity archetype with one AllowMultiple field: 13 fallbacks, 13 corrupted keys.
+                // The optimistic paths never had the bug; they insert the buffer id as a raw leaf item, which is what a multi-value leaf actually holds.
+                //
+                // AddOrUpdateCore reports both halves back through the arguments — BufferRootId is the buffer it made, ElementId the element inside it — and
+                // it also handles the key-already-exists race by appending to the existing buffer, which pre-creating could not.
+                var insertArgs = new InsertArguments(newKey, value, Comparer, ref accessor, ref sibAccessor);
                 AddOrUpdateCorePessimistic(ref insertArgs);
+                newBufferId = insertArgs.BufferRootId;
+                newElementId = insertArgs.ElementId;
             }
             newHeadBufferId = newBufferId;
 
