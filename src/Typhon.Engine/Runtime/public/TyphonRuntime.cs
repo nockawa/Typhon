@@ -2212,6 +2212,7 @@ public sealed partial class TyphonRuntime : IDisposable
 
         if (Options.AdaptiveFenceCost)
         {
+            _liveFenceCost.UpdatePhase(FencePhase.Prep, _fencePrepExec.TotalWallTicks, _fencePrepExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.Migrate, _fenceMigrateExec.TotalWallTicks, _fenceMigrateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.IndexMassUpdate, _fenceIndexMassUpdateExec.TotalWallTicks, _fenceIndexMassUpdateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.EntityMapUpdate, _fenceEntityMapUpdateExec.TotalWallTicks, _fenceEntityMapUpdateExec.TotalUnitCount);

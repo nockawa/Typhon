@@ -653,8 +653,10 @@
 ### RP-02: The repair plan is produced serially and its destinations are pinned exactly `[fatal][silent]`
   invariant NOMINATION is parallel (AabbRefresh workers) and its output is consumed as a SET — sorted, with
     repeats skipped — so no permutation of the same cells changes the plan
-  invariant PLANNING is single-threaded: it runs in Prep, which dispatches one work item per archetype. The
-    cluster ranking, the Morton sort and the destination assignment all live there
+  invariant PLANNING is single-threaded: it runs once per archetype in Prep's serial tail — inside the archetype's
+    one ArchetypePrep item, or, when Prep ran as PrepSlice items (#886), in FenceMigrateExecSystem.Prepare, which is
+    single-threaded by construction. The cluster ranking, the Morton sort and the destination assignment all live
+    there; no slice plans
   invariant 🔴 a repair request pins the destination SLOT as well as the cluster, and the reason is the SORT, not
     the slicing. Before Migrate dispatches, SortPendingMigrationsByDestCellKey runs an Array.Sort — introsort,
     UNSTABLE — over a comparer reading DestCellKey alone, so every request a repair emits for one cell compares

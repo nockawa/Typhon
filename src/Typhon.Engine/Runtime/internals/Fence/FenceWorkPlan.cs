@@ -23,6 +23,13 @@ internal sealed class FenceWorkPlan
     private const int InitialItemCapacity = 64;
     private const int MinMigrationSliceSize = 32;     // tiny migration batches stay on one worker (entity count)
     private const int MinAabbSliceClusters = 32;      // tiny AABB sets stay on one worker — floor in CLUSTER units, converted to words in BarrierOnly mode
+
+    /// <summary>
+    /// Dirty-bitmap words per <see cref="FenceWorkKind.PrepSlice"/> (#886 lead D). Doc 11 §3.2 argued 64 — one cache line of validity flags — and 64 was
+    /// measured against 128 at W = 8: 128 won the 25 % reference point by 7–20 % (fewer accessors, fewer scopes, fewer plan lookups per dirty cluster) and
+    /// lost the 100 % stress point by 8–13 %. The reference point is where workloads live. A static so the partition harness can sweep it.
+    /// </summary>
+    internal static int PrepSliceWords = 128;
     private const int BitmapBitsPerWord = 64;
 
     /// <summary>
@@ -216,7 +223,7 @@ internal sealed class FenceWorkPlan
                 continue;   // nothing migrated for this archetype: no item, so the phase is skipped rather than dispatched empty
             }
 
-            var boundaries = staging.Boundaries;
+            var boundaries = staging!.Boundaries;
             for (var p = 0; p < parts; p++)
             {
                 var start = boundaries[p];
@@ -264,6 +271,14 @@ internal sealed class FenceWorkPlan
             var migHint = state.MigrationHint;
             state.MigrationHint = 0;
 
+            // The head already ran for this archetype (#886 lead D): its snapshot is in FenceDirtyBits and the bitmap is drained, so the atomic item's
+            // own HasDirty test below would read false. The slices are the item.
+            if (state.PrepSliceable && state.FenceDirtyBits != null)
+            {
+                EmitPrepSliceItems(meta, state, costModel);
+                continue;
+            }
+
             var hasDirty = state.ClusterDirtyBitmap.HasDirty;
             var spatialCleanRefresh = !hasDirty && state.SpatialSlot.HasSpatialIndex && state.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic
                                       && state.ActiveClusterCount > 0 && state.ClusterSegment != null;
@@ -274,6 +289,44 @@ internal sealed class FenceWorkPlan
                 Kind = FenceWorkKind.ArchetypePrep,
                 TargetId = meta.ArchetypeId,
                 Cost = cost,
+            });
+        }
+    }
+
+    /// <summary>
+    /// One <see cref="FenceWorkKind.PrepSlice"/> per <see cref="PrepSliceWords"/>-word range of the head's snapshot that holds at least one dirty word.
+    /// A range with nothing dirty gets no item at all — a slice that opens an accessor to find nothing is worse than none. Cost is per dirty cluster,
+    /// from the live model, so the FFD packer sees the bimodal reality of a tick where motion is spatially clustered.
+    /// </summary>
+    private void EmitPrepSliceItems(ArchetypeMetadata meta, ArchetypeClusterState state, LiveFenceCostModel costModel)
+    {
+        var bits = state.FenceDirtyBits;
+        var total = bits.Length;
+        for (var start = 0; start < total; start += PrepSliceWords)
+        {
+            var count = Math.Min(PrepSliceWords, total - start);
+            var dirty = 0;
+            for (var w = start; w < start + count; w++)
+            {
+                if (bits[w] != 0)
+                {
+                    dirty++;
+                }
+            }
+
+            if (dirty == 0)
+            {
+                continue;
+            }
+
+            AppendItem(new FenceWorkItem
+            {
+                Kind = FenceWorkKind.PrepSlice,
+                TargetId = meta.ArchetypeId,
+                Cost = Math.Max(0.5f, costModel.PrepCost * dirty),
+                SliceStart = start,
+                SliceCount = count,
+                UnitCount = dirty,
             });
         }
     }

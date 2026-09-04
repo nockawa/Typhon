@@ -25,6 +25,9 @@ internal sealed class LiveFenceCostModel
     public float MigrationCost;
     public float AabbCost;
 
+    /// <summary>Microseconds per dirty cluster of a sliced Prep (#886 lead D). Seeded from the shadow and spatial per-cluster costs; learned like the others.</summary>
+    public float PrepCost;
+
     /// <summary>µs per staged index value update. Calibrated exactly like <see cref="MigrationCost"/>, from the IndexMassUpdate phase's own chunk
     /// wall-time and unit counts.</summary>
     public float IndexUpdateCost;
@@ -59,6 +62,12 @@ internal sealed class LiveFenceCostModel
     private long _emSumWall;
     private long _emSumUnits;
 
+    private readonly long[] _prepWall = new long[WindowSize];
+    private readonly long[] _prepUnits = new long[WindowSize];
+    private int _prepCursor;
+    private long _prepSumWall;
+    private long _prepSumUnits;
+
     public LiveFenceCostModel(FenceCostModel seed)
     {
         ArgumentNullException.ThrowIfNull(seed);
@@ -68,6 +77,7 @@ internal sealed class LiveFenceCostModel
         EntityMapUpdateCost = seed.EntityMapUpdateCost;
         ShadowCost = seed.ShadowCost;
         SpatialCost = seed.SpatialCost;
+        PrepCost = seed.ShadowCost + seed.SpatialCost;
     }
 
     public void UpdatePhase(FencePhase phase, long wallTicks, long unitCount)
@@ -75,6 +85,19 @@ internal sealed class LiveFenceCostModel
         if (unitCount <= 0 || wallTicks <= 0) return;
         switch (phase)
         {
+            case FencePhase.Prep:
+                _prepSumWall  -= _prepWall[_prepCursor];
+                _prepSumUnits -= _prepUnits[_prepCursor];
+                _prepWall[_prepCursor]  = wallTicks;
+                _prepUnits[_prepCursor] = unitCount;
+                _prepSumWall  += wallTicks;
+                _prepSumUnits += unitCount;
+                _prepCursor = (_prepCursor + 1) & WindowMask;
+                if (_prepSumUnits > 0)
+                {
+                    PrepCost = (float)((_prepSumWall * TicksToMicros) / _prepSumUnits);
+                }
+                break;
             case FencePhase.Migrate:
                 _migSumWall  -= _migWall[_migCursor];
                 _migSumUnits -= _migUnits[_migCursor];

@@ -137,6 +137,10 @@ internal sealed partial class ArchetypeClusterState
     // (Gate = "RuntimeWriteTickFenceClusterActive") and measure nothing in a default Release run, and their
     // `using var` shape blocks JIT inlining. One timestamp pair is ~20 ns against a phase measured in milliseconds.
 
+    // Two meanings since #886. On an atomic Prep every sub-span is WALL time on the one worker. On a sliced Prep, ② ③ ④ ⑤ are SUMMED across the slices
+    // (CPU, Interlocked folds) while ① ⑥ ⑦ ⑧ stay wall — so on a sliced tick the four middle spans can exceed the phase's own span. Read them as work,
+    // not as latency.
+
     /// <summary>① draining the change list — the locked read-modify-write per word, plus its allocation.</summary>
     internal long PrepSnapshotTicks;
 

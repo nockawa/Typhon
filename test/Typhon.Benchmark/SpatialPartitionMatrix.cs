@@ -147,6 +147,17 @@ internal sealed class RunResult
     /// <summary>Fraction of the population that moved per tick — 1.0 is the stress case, not the expected one.</summary>
     public float MovingFraction = 1f;
 
+    /// <summary>Aging warm-up applied before the measured ticks (#886 lead B); zero for a fresh world.</summary>
+    public float ChurnFraction;
+    public int ChurnTicks;
+
+    /// <summary>
+    /// Adjacent inversions in <c>ActiveClusterIds</c> at the end of the run — how far from ascending the list is. Zero on a fresh world; ~half the list on
+    /// an aged one. Re-sorting it was measured as SLOWER and reverted (see <c>ArchetypeClusterState.RemoveFromActiveList</c>), so this column is the
+    /// evidence that the aging worked, not a number anything tries to drive to zero.
+    /// </summary>
+    public long ActiveListInversions;
+
     // Steady-state tick cost. FenceSpanMs is WALL time — what a frame budget is actually spent against. The Cpu columns sum per-chunk time across workers,
     // which is what the design's per-entity costs are quoted in and what the throttle's budget charges. Reporting one as the other is how a 12-thread box
     // reads as a 12x regression, or a serial run as a pass.
@@ -272,6 +283,23 @@ public static class SpatialPartitionMatrix
     /// </remarks>
     private static float MovingFraction = 1f;
 
+    // ── Aging (#886 lead B) ──────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // A freshly spawned world has its active cluster list in ascending chunk-id order by construction, and stays that way for the 40 ticks a matrix point
+    // runs. A server does not: every cluster free is a swap-with-last on that list, and after ~N·ln N frees it is statistically random — which is the
+    // state in which the AabbRefresh walk misses its page window three times more often and its workers' slices stop being disjoint page ranges. No
+    // motion model reaches that state, because motion never empties a cluster. Churn does: --churn <fraction> --churn-ticks <n> runs n warm-up ticks
+    // before the measured ones, alternating "destroy every entity in enough random cells to cover <fraction> of the population" with "respawn them at
+    // the positions they had". Population, cells and density are preserved; the cluster ids' order in the active list and the slot packing inside the
+    // cells are what change. Warm-up ticks are excluded from every reported number.
+    //
+    // 🔴 What it showed (#886 lead B): the scrambled list is NOT slower. Restoring ascending order was measured against leaving it alone, ten
+    // interleaved pairs across two variants, and lost every pair. The engine-side sort was reverted; the aging stays because the fresh world it replaces
+    // is the wrong world to measure a server against, and because an aged run at 25 % moving is 30-35 % FASTER than a fresh one — same migrations, same
+    // tightness — which nobody has explained yet.
+    private static float ChurnFraction;
+    private static int ChurnTicks;
+
     /// <summary>
     /// Cell size that puts <paramref name="entitiesPerCell"/> entities in the average cell for this population.
     /// </summary>
@@ -299,12 +327,30 @@ public static class SpatialPartitionMatrix
         var csvPath = ArgString(args, "--csv", "spatial-partition-matrix.csv");
         Barrier = Array.IndexOf(args, "--barrier") >= 0;
         MovingFraction = ArgFloat(args, "--moving", 1f);
+        ChurnFraction = ArgFloat(args, "--churn", 0f);
+        ChurnTicks = ArgInt(args, "--churn-ticks", 0);
+        // A/B switch for #886 lead D: same binary, the sliced Prep on (default) or the one-item-per-archetype path it replaces.
+        if (Array.IndexOf(args, "--no-prep-slice") >= 0)
+        {
+            DatabaseEngine.PrepSliceMinClusters = int.MaxValue;
+        }
+
+        FenceWorkPlan.PrepSliceWords = ArgInt(args, "--prep-slice-words", FenceWorkPlan.PrepSliceWords);
+        if (DatabaseEngine.PrepSliceMinClusters != int.MaxValue)
+        {
+            // The minimum is "two slices' worth" and is computed from the width once at static init; a swept width must carry it along.
+            DatabaseEngine.PrepSliceMinClusters = 2 * FenceWorkPlan.PrepSliceWords;
+        }
 
         var results = new List<RunResult>();
         var sw = Stopwatch.StartNew();
 
         Console.WriteLine("#872 spatial partitioning matrix");
         Console.WriteLine($"  matrix={which}  ticks/run={ticks}  csv={csvPath}");
+        if (ChurnTicks > 0)
+        {
+            Console.WriteLine($"  aging: churn={ChurnFraction:P0} x {ChurnTicks} warm-up ticks");
+        }
         Console.WriteLine($"  cores={Environment.ProcessorCount}  config={(IsDebug() ? "DEBUG (numbers are not comparable to Release)" : "RELEASE")}");
         Console.WriteLine();
 
@@ -499,7 +545,7 @@ public static class SpatialPartitionMatrix
 
         Console.WriteLine("── Matrix P — one point ────────────────────────────────────────────────");
         Console.WriteLine($"  dim={dim} motion={motion} dist={dist} n={entities} perCell={perCell} cell={cell:F2} " +
-            $"moving={MovingFraction:P0} W={workers} budget={budget:F2} barrier={Barrier}");
+            $"moving={MovingFraction:P0} W={workers} budget={budget:F2} barrier={Barrier} churn={ChurnFraction:P0}x{ChurnTicks}");
 
         var r = RunOne("P", dim, motion, dist, entities, cell, budget, ticks, workers);
         r.MovingFraction = MovingFraction;
@@ -617,6 +663,7 @@ public static class SpatialPartitionMatrix
         {
             Matrix = matrix, Dim = dim, Motion = motion, Dist = dist, Entities = entities,
             CellSize = cellSize, BudgetMs = budgetMs, Ticks = ticks, Workers = workers, MovingFraction = MovingFraction,
+            ChurnFraction = ChurnFraction, ChurnTicks = ChurnTicks,
         };
 
         var sc = new ServiceCollection();
@@ -743,6 +790,77 @@ public static class SpatialPartitionMatrix
         var motionTick = 0;
         var toUs = 1_000_000d / Stopwatch.Frequency;
 
+        // Aging state (#886 lead B). Cells are bucketed once, from the seeded positions, because motion is suspended during the warm-up.
+        var churnTicks = ChurnTicks;
+        var churnFraction = ChurnFraction;
+        List<int>[] churnCells = null;
+        int[] churnCellOf = null;
+        var churnPending = new List<int>();
+        // Its own seed, so the aged arm's motion draws the same random sequence as the fresh arm's.
+        var churnRng = new Random(20260905);
+        void ChurnTick(Transaction tx, int t)
+        {
+            if (churnCells == null)
+            {
+                var side = (int)Math.Ceiling(WorldExtent / cellSize) + 1;
+                var index = new Dictionary<long, int>();
+                var buckets = new List<List<int>>();
+                churnCellOf = new int[entities];
+                for (var i = 0; i < entities; i++)
+                {
+                    var cx = (int)(xs[i] / cellSize);
+                    var cy = (int)(ys[i] / cellSize);
+                    var cz = dim == 3 ? (int)(zs[i] / cellSize) : 0;
+                    var key = cx + (long)side * (cy + (long)side * cz);
+                    if (!index.TryGetValue(key, out var b))
+                    {
+                        b = buckets.Count;
+                        index[key] = b;
+                        buckets.Add(new List<int>());
+                    }
+                    buckets[b].Add(i);
+                    churnCellOf[i] = b;
+                }
+                churnCells = buckets.ToArray();
+            }
+
+            // Destroy on even ticks, respawn on odd — and never end the warm-up on a destroy, or the first motion tick opens dead ids.
+            if ((t & 1) == 0 && t != churnTicks - 1)
+            {
+                // Whole cells, so the clusters behind them actually empty and get freed at the fence — a per-entity destroy would only free slots that
+                // the respawn refills, and the active list would never move.
+                var target = (int)Math.Ceiling(churnFraction * entities);
+                var destroyed = 0;
+                var guard = 0;
+                while (destroyed < target && guard++ < churnCells.Length * 8)
+                {
+                    var cell = churnCells[churnRng.Next(churnCells.Length)];
+                    if (cell.Count == 0)
+                    {
+                        continue;
+                    }
+                    foreach (var i in cell)
+                    {
+                        tx.Destroy(ids[i]);
+                        churnPending.Add(i);
+                    }
+                    destroyed += cell.Count;
+                    cell.Clear();
+                }
+            }
+            else
+            {
+                foreach (var i in churnPending)
+                {
+                    var pos = default(TPos);
+                    write(ref pos, xs[i], ys[i], zs[i], halfExtent, i);
+                    ids[i] = tx.Spawn<TArch>(comp.Set(in pos));
+                    churnCells[churnCellOf[i]].Add(i);
+                }
+                churnPending.Clear();
+            }
+        }
+
         TyphonRuntime runtime = null;
         runtime = TyphonRuntime.Create(dbe, schedule =>
         {
@@ -754,7 +872,7 @@ public static class SpatialPartitionMatrix
 
                 // The first two ticks are discarded from the PHASE numbers: tick 1 has no previous fence to report, and
                 // tick 2 reports the first fence after spawn, which carries the page faults for every chunk it touches.
-                if (n <= 2)
+                if (n <= 2 + churnTicks)
                 {
                     return;
                 }
@@ -781,8 +899,21 @@ public static class SpatialPartitionMatrix
             dag.CallbackSystem("Move", ctx =>
             {
                 var t = motionTick++;
+                if (t < churnTicks)
+                {
+                    try
+                    {
+                        ChurnTick(ctx.Transaction, t);
+                    }
+                    catch (Exception ex)
+                    {
+                        moveFailure ??= ex;
+                    }
+                    return;
+                }
                 var moveSw = Stopwatch.StartNew();
-                var moved = ApplyMotion(motion, rng, dim, entities, cellSize, xs, ys, zs, groupOf, groupVx, groupVy, groupVz, t, movedFlags);
+                // Rebased past the warm-up so an aged arm samples the motion model at the same phase as a fresh one.
+                var moved = ApplyMotion(motion, rng, dim, entities, cellSize, xs, ys, zs, groupOf, groupVx, groupVy, groupVz, t - churnTicks, movedFlags);
                 entitiesRequestedToMove += moved;
                 try
                 {
@@ -906,9 +1037,9 @@ public static class SpatialPartitionMatrix
 
             // +2 for the two discarded warm-up ticks. The timeout is a backstop against a hung fence, not a budget: at
             // 128 000 entities a tick legitimately takes tens of milliseconds and the loop simply runs behind.
-            if (!SpinWait.SpinUntil(() => Volatile.Read(ref observed) >= ticks + 2, TimeSpan.FromSeconds(180)))
+            if (!SpinWait.SpinUntil(() => Volatile.Read(ref observed) >= ticks + 2 + churnTicks, TimeSpan.FromSeconds(180)))
             {
-                r.Failure = $"runtime reached only {Volatile.Read(ref observed)} of {ticks + 2} ticks in 180 s";
+                r.Failure = $"runtime reached only {Volatile.Read(ref observed)} of {ticks + 2 + churnTicks} ticks in 180 s";
             }
 
             Volatile.Write(ref tearingDown, 1);
@@ -924,7 +1055,9 @@ public static class SpatialPartitionMatrix
         r.Workers = workers;
         r.Barrier = barrier;
         r.FenceBranchPath = ClusterStateBranchPath(dbe, archetypeId);
-        r.MoveMs = moveMsTotal / Math.Max(1, motionTick);
+        r.ActiveListInversions = CountActiveListInversions(dbe, archetypeId);
+        // Motion ticks only: the churn warm-up increments motionTick without accumulating move time.
+        r.MoveMs = moveMsTotal / Math.Max(1, motionTick - churnTicks);
 
         // A row that moved nothing is not a fast row, it is a broken one. Both nets report through Failure, which WriteCsv and Report already surface.
         if (moveFailure != null)
@@ -1584,7 +1717,8 @@ public static class SpatialPartitionMatrix
             + $"prep {r.PrepSpanUs / 1000d,6:F2} mig {r.MigrateSpanUs / 1000d,6:F2} idx {r.IndexSpanUs / 1000d,6:F2} "
             + $"map {r.EntityMapSpanUs / 1000d,6:F2} aabb {r.AabbSpanUs / 1000d,6:F2} fin {r.FinalizeSpanUs / 1000d,6:F2} | "
             + $"mig/t {r.MigrationsPerTick,8:F1} | tight {r.TightnessPct,6:F1}% | clusters {r.ActiveClusters,6} | "
-            + $"aabbM {r.AabbMediumNs / 1000d,7:F1} us | bf {r.BruteForceNs / 1000d,8:F1} us");
+            + $"aabbM {r.AabbMediumNs / 1000d,7:F1} us | bf {r.BruteForceNs / 1000d,8:F1} us"
+            + (r.ChurnTicks > 0 ? $" | aged {r.ChurnFraction:P0}x{r.ChurnTicks} inv {r.ActiveListInversions}" : string.Empty));
     }
 
     private static void WriteCsv(List<RunResult> results, string path)
@@ -1603,7 +1737,8 @@ public static class SpatialPartitionMatrix
             "queueDepth", "queueEvicted", "queueMaintenanceMs", "valveFires",
             "activeClusters", "liveCells", "entitiesPerCluster", "entitiesPerCell", "tightnessPct", "tightnessP90Pct",
             "aabbSmallNs", "aabbSmallHits", "aabbMediumNs", "aabbMediumHits", "aabbLargeNs", "aabbLargeHits",
-            "radiusNs", "radiusHits", "rayNs", "rayHits", "frustumNs", "frustumHits", "bruteForceNs", "failure"));
+            "radiusNs", "radiusHits", "rayNs", "rayHits", "frustumNs", "frustumHits", "bruteForceNs",
+            "churnFraction", "churnTicks", "activeListInversions", "failure"));
 
         var c = CultureInfo.InvariantCulture;
         foreach (var r in results)
@@ -1622,10 +1757,32 @@ public static class SpatialPartitionMatrix
                 F(r.QueueDepth), r.QueueEvicted, F(r.QueueMaintenanceMs), r.ValveFires,
                 r.ActiveClusters, r.LiveCells, F(r.EntitiesPerCluster), F(r.EntitiesPerCell), F(r.TightnessPct), F(r.TightnessP90Pct),
                 F(r.AabbSmallNs), F(r.AabbSmallHits), F(r.AabbMediumNs), F(r.AabbMediumHits), F(r.AabbLargeNs), F(r.AabbLargeHits),
-                F(r.RadiusNs), F(r.RadiusHits), F(r.RayNs), F(r.RayHits), F(r.FrustumNs), F(r.FrustumHits), F(r.BruteForceNs), r.Failure));
+                F(r.RadiusNs), F(r.RadiusHits), F(r.RayNs), F(r.RayHits), F(r.FrustumNs), F(r.FrustumHits), F(r.BruteForceNs),
+                F(r.ChurnFraction), r.ChurnTicks, r.ActiveListInversions, r.Failure));
         }
 
         File.WriteAllText(path, sb.ToString());
+    }
+
+    /// <summary>Adjacent inversions in the archetype's active cluster list — zero when ascending. See <see cref="RunResult.ActiveListInversions"/>.</summary>
+    private static long CountActiveListInversions(DatabaseEngine dbe, int archetypeId)
+    {
+        var st = dbe._archetypeStates[archetypeId]?.ClusterState;
+        if (st == null)
+        {
+            return 0;
+        }
+        var ids = st.ActiveClusterIds;
+        var n = st.ActiveClusterCount;
+        var inv = 0L;
+        for (var i = 1; i < n; i++)
+        {
+            if (ids[i - 1] > ids[i])
+            {
+                inv++;
+            }
+        }
+        return inv;
     }
 
     private static int ClusterStateBranchPath(DatabaseEngine dbe, int archetypeId)

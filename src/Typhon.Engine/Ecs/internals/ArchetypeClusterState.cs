@@ -102,6 +102,199 @@ internal sealed unsafe partial class ArchetypeClusterState
     private int[] _shadowDrainCounts = [];
 
     // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // Prep slicing (#886 lead D). The parallel fence's Prep phase used to be one item per archetype; it is now a serial HEAD on the driver
+    // (DatabaseEngine.PrepareArchetypeFenceHead), N PrepSlice items over disjoint ranges of FenceDirtyBits words (DatabaseEngine.RunPrepSlice), and a
+    // serial TAIL in the Migrate phase's Prepare (DatabaseEngine.PrepareArchetypeFenceTail). Everything below is head-written, slice-read-or-folded,
+    // tail-consumed.
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Set by the head when this tick's Prep runs as slices; cleared by the tail, and by the atomic path so a serial tick never inherits it.</summary>
+    internal bool PrepSliceable;
+
+    /// <summary>The zone-map rotation phase for this tick, advanced ONCE per tick by <c>DatabaseEngine.BeginZoneMapTick</c> and read by every slice.</summary>
+    internal int ZoneMapRetightenPhase;
+
+    /// <summary>
+    /// Each slice's cell-crossing requests, keyed by the slice's first word. The tail concatenates them in ascending word order, which is the order the
+    /// serial detector appended in — so the queue the throttle sees is bit-identical to the unsliced one (TH-01 admits the same first N).
+    /// </summary>
+    internal readonly List<(int Start, List<MigrationRequest> Requests)> PrepSliceCrossings = [];
+
+    /// <summary>Hysteresis-absorbed count folded by the slices, applied to the per-tick counters by the tail.</summary>
+    internal int PrepSliceHysteresisAbsorbed;
+
+    /// <summary>
+    /// True on a worker while it runs a <c>PrepSlice</c>. A slice must never grow an array another slice can be reading; the sites that grow assert on it.
+    /// </summary>
+    [ThreadStatic]
+    internal static bool InPrepSlice;
+
+    /// <summary>Marks the current thread as inside a Prep slice. Compiled out with the asserts that read the flag, so Release pays nothing.</summary>
+    [Conditional("DEBUG")]
+    internal static void EnterPrepSlice() => InPrepSlice = true;
+
+    /// <inheritdoc cref="EnterPrepSlice"/>
+    [Conditional("DEBUG")]
+    internal static void ExitPrepSlice() => InPrepSlice = false;
+
+    /// <summary>
+    /// Forgets whatever a previous sliced tick left behind. Called from the per-tick reset, so a Prep that threw — its tail never ran (the scheduler
+    /// fails Migrate's dependency and skips its Prepare) — cannot hand stale slice lists to the next sliced tail, whose slots may since have changed hands.
+    /// </summary>
+    internal void ResetPrepSliceState()
+    {
+        PrepSliceable = false;
+        PrepSliceCrossings.Clear();
+        PrepSliceHysteresisAbsorbed = 0;
+    }
+
+    /// <summary>
+    /// Test hook: invoked once per archetype per tick at the end of Prep's serial tail — atomic item or sliced tail alike — with the drain prefix set.
+    /// The equivalence fixture uses it to snapshot <c>PendingMigrations[0, PendingMigrationDrainCount)</c> from inside the fence, which is the only
+    /// place the queue the throttle saw is observable. Null in production; the call is a null test.
+    /// </summary>
+    internal static Action<ArchetypeClusterState, long> PrepQueueProbe;
+
+    /// <summary>Test-visible count of <c>PrepSlice</c> items executed, process-wide. Proves a fixture exercised the sliced path, not the atomic one.</summary>
+    internal static int PrepSlicesRun;
+
+    /// <summary>Bumps <see cref="PrepSlicesRun"/>. Debug-only, so Release never shares a cache line across every engine and worker for a test counter.</summary>
+    [Conditional("DEBUG")]
+    internal static void NotePrepSliceRun() => Interlocked.Increment(ref PrepSlicesRun);
+
+    /// <summary>Files one slice's crossings for the tail. One lock acquisition per slice.</summary>
+    internal void RegisterPrepSliceCrossings(int sliceStart, List<MigrationRequest> requests)
+    {
+        ref var nullCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
+        try
+        {
+            PrepSliceCrossings.Add((sliceStart, requests));
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    private sealed class PrepSliceCrossingsByStart : IComparer<(int Start, List<MigrationRequest> Requests)>
+    {
+        public static readonly PrepSliceCrossingsByStart Instance = new();
+        public int Compare((int Start, List<MigrationRequest> Requests) x, (int Start, List<MigrationRequest> Requests) y) => x.Start.CompareTo(y.Start);
+    }
+
+    /// <summary>Appends every slice's crossings to <see cref="PendingMigrations"/> in ascending slice order, then forgets them. Tail only.</summary>
+    internal void DrainPrepSliceCrossings()
+    {
+        PrepSliceCrossings.Sort(PrepSliceCrossingsByStart.Instance);
+        for (var i = 0; i < PrepSliceCrossings.Count; i++)
+        {
+            EnqueueMigrationsBulk(PrepSliceCrossings[i].Requests);
+        }
+
+        PrepSliceCrossings.Clear();
+    }
+
+    /// <summary>
+    /// Grows <see cref="PendingMigrations"/> to what this tick's detection is expected to need — a quarter over last tick's count, and never below the
+    /// requests already retained — so that the per-slice detection never has to. Runs in the head; the atomic path calls it from the same place it
+    /// always did.
+    /// </summary>
+    /// <remarks>
+    /// 🔴 <c>[0, PendingMigrationCount)</c> holds LIVE requests when this runs (#877): a fresh array without the copy turned them into default-valued
+    /// requests — source cluster 0, slot 0, destination cell 0 — which Migrate then executed.
+    /// </remarks>
+    internal void EnsurePendingMigrationCapacityForTick()
+    {
+        var prevMigrations = PreviousTickMigrationCount;
+        var expectedCapacity = Math.Max(16, prevMigrations + (prevMigrations >> 2));
+        var retained = PendingMigrationCount;
+        expectedCapacity = Math.Max(expectedCapacity, retained);
+        if (PendingMigrations == null || PendingMigrations.Length < expectedCapacity)
+        {
+            var grown = new MigrationRequest[expectedCapacity];
+            if (PendingMigrations != null && retained > 0)
+            {
+                Array.Copy(PendingMigrations, grown, Math.Min(retained, PendingMigrations.Length));
+            }
+
+            PendingMigrations = grown;
+        }
+    }
+
+    /// <summary>Builds every non-empty shadow buffer's drain plan (see <see cref="FieldShadowBuffer.BuildDrainPlan"/>) — head only, once per tick.</summary>
+    internal void BuildShadowDrainPlans()
+    {
+        BuildShadowDrainPlans(IndexSlots);
+        BuildShadowDrainPlans(TransientIndexSlots);
+    }
+
+    private static void BuildShadowDrainPlans<TStore>(ClusterIndexSlot<TStore>[] ixSlots) where TStore : struct, IPageStore
+    {
+        if (ixSlots == null)
+        {
+            return;
+        }
+
+        for (var s = 0; s < ixSlots.Length; s++)
+        {
+            for (var f = 0; f < ixSlots[s].Fields.Length; f++)
+            {
+                ixSlots[s].ShadowBuffers[f].BuildDrainPlan();
+            }
+        }
+    }
+
+    /// <summary>Resets every shadow buffer of both index homes and the shadow bitmap: the tail's counterpart of the atomic drain's per-field reset.</summary>
+    internal void ResetShadowBuffersAfterSlices()
+    {
+        ResetShadowBuffers(IndexSlots);
+        ResetShadowBuffers(TransientIndexSlots);
+        ClusterShadowBitmap.Clear();
+    }
+
+    private static void ResetShadowBuffers<TStore>(ClusterIndexSlot<TStore>[] ixSlots) where TStore : struct, IPageStore
+    {
+        if (ixSlots == null)
+        {
+            return;
+        }
+
+        for (var s = 0; s < ixSlots.Length; s++)
+        {
+            for (var f = 0; f < ixSlots[s].Fields.Length; f++)
+            {
+                ixSlots[s].ShadowBuffers[f].ClearDrainPlan();
+                ixSlots[s].ShadowBuffers[f].Reset();
+            }
+        }
+    }
+
+    /// <summary>Pre-grows every zone map of both homes so no slice ever takes the grow latch exclusively.</summary>
+    internal void EnsureZoneMapCapacity(int capacity)
+    {
+        EnsureZoneMapCapacity(IndexSlots, capacity);
+        EnsureZoneMapCapacity(TransientIndexSlots, capacity);
+    }
+
+    private static void EnsureZoneMapCapacity<TStore>(ClusterIndexSlot<TStore>[] ixSlots, int capacity) where TStore : struct, IPageStore
+    {
+        if (ixSlots == null)
+        {
+            return;
+        }
+
+        for (var s = 0; s < ixSlots.Length; s++)
+        {
+            for (var f = 0; f < ixSlots[s].Fields.Length; f++)
+            {
+                ixSlots[s].Fields[f].ZoneMap?.EnsureCapacity(capacity);
+            }
+        }
+    }
+
+
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
     // Fence-tick intermediate state. Populated by the Prep phase of the parallel fence (DatabaseEngine.PrepareArchetypeFence), consumed by the Migrate phase
     // (ExecuteMigrationsSlice) and the Finalize phase (FinalizeArchetypeFence). Single-archetype-scoped; reset at the top of Prep each tick.
     // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -275,6 +468,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// PendingMigrationCount</c> — one new cluster per migration in the worst case.</param>
     internal void PreSizeMigrationBuffers(int upperBound)
     {
+        Debug.Assert(!InPrepSlice, "a Prep slice must not grow the per-cluster arrays another slice is reading (#886)");
         if (upperBound <= 0)
         {
             return;
@@ -1508,7 +1702,8 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <remarks>
     /// <c>internal</c> rather than private only so <c>ClusterIndexStatisticsTests</c> can take a <c>ref</c> to it and measure its distance from
     /// <see cref="ActiveClusterCount"/> — the padding is invisible to every other kind of test, and un-padding it would otherwise be a silent regression.
-    /// Write through <see cref="MutationsSinceRebuild"/>.
+    /// Write through <see cref="MutationsSinceRebuild"/> — with one exception: the tick fence's sliced shadow drain is the only writer that runs W-wide on
+    /// one archetype, and it folds through <c>Interlocked.Add</c> on this field (#886). The commit-path <c>+=</c> stays non-atomic, as the contract says.
     /// </remarks>
     internal CacheLinePaddedInt _mutationsSinceRebuild;
 
@@ -2906,6 +3101,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </summary>
     internal void EnsureClusterWriteBookkeepingCapacity(int requiredLength)
     {
+        Debug.Assert(!InPrepSlice, "a Prep slice must not grow the per-cluster arrays another slice is reading (#886)");
         // ClusterProcessBitmap: 1 bit per cluster → (requiredLength + 63) / 64 long words.
         var requiredWords = (requiredLength + 63) >> 6;
         if (ClusterProcessBitmap == null)
@@ -4616,6 +4812,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnqueueMigration(in MigrationRequest request)
     {
+        Debug.Assert(!InPrepSlice, "a Prep slice files its crossings through RegisterPrepSliceCrossings, never into the shared queue (#886)");
         if (PendingMigrations == null)
         {
             PendingMigrations = new MigrationRequest[16];
@@ -4806,6 +5003,17 @@ internal sealed unsafe partial class ArchetypeClusterState
     }
 
     /// <summary>Remove a cluster chunk ID from the active list (swap-with-last, O(1)).</summary>
+    /// <remarks>
+    /// 🔴 <b>Re-sorting the list in Prep was built, measured and REFUTED (#886 lead B) — do not re-add it without a new measurement.</b> The reasoning was
+    /// sound on its face: every swap-with-last displaces one id to a random earlier index, nothing ever puts it back, the AabbRefresh walk slices this list by
+    /// index range through a 32-page accessor window, and a fresh world (ascending by construction) is the only world a 40-tick benchmark ever sees. The
+    /// partition harness gained <c>--churn</c> to age a world first, and the aging is real: 1 000 adjacent inversions on 2 025 clusters after 60 warm-up
+    /// ticks. An ascending list was then measured against the scrambled one, interleaved, five pairs, Matrix P at 25 % moving and W = 8: <b>sorted every tick
+    /// 4.91 ms against 3.87 ms scrambled; sorted once and left alone 4.26 ms against 4.03 ms</b> — slower in ten of ten pairs, with CPU up in every phase,
+    /// not just AabbRefresh. On a fresh world the two arms are equal (5.96 / 5.90). The page-window argument does not survive contact: whatever locality an
+    /// ascending walk buys, the order the allocator produced is worth more, and the mechanism was not pinned down. What is known is that the answer is
+    /// "no", and the harness arm that shows it is <c>--churn 0.05 --churn-ticks 60</c>.
+    /// </remarks>
     public void RemoveFromActiveList(int chunkId)
     {
         for (var i = 0; i < ActiveClusterCount; i++)

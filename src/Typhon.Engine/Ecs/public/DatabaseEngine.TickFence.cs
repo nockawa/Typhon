@@ -111,6 +111,9 @@ public partial class DatabaseEngine
     /// <summary>Soft cap on a single fence <c>Append</c> frame; larger fences split into multiple Appends (each fence record is individually committed).</summary>
     private const int MaxFenceBatchBytes = 256 * 1024;
 
+    /// <summary>Descriptor capacity of one fence-block batch, sized so that <see cref="MaxFenceBatchBytes"/>, not this, closes a batch (#886).</summary>
+    internal const int MaxFenceBatchBlocks = 256;
+
     private long AppendFenceBatch(ref CommitBatchBuilder batch)
     {
         var wc = WaitContext.FromDeadline(Deadline.FromTimeout(TimeoutOptions.Current.DefaultCommitTimeout));
@@ -846,59 +849,366 @@ public partial class DatabaseEngine
         var pending = _archetypeStates[meta.ArchetypeId]?.ClusterState;
         if (pending != null)
         {
-            // ── #872 step 12: plan the repair BEFORE the prefix is taken ────────────────────────────────────────────────
-            //
-            // The requests a repair emits are meant for THIS tick's Migrate phase, not the next one, and the prefix below is
-            // what decides that. The whole reason planning lives in Prep rather than beside the nomination that feeds it is
-            // that the fresh destination clusters it allocates must be created and filled inside one exclusive window — with
-            // a tick in between, an ordinary spawn's first-fit scan would claim into them, and the sorted packing the planner
-            // just computed would be handed to the placement policy this issue exists to repair.
-            //
-            // Gated on hasWork, and the nominations are DISCARDED rather than carried when it is false. An archetype whose
-            // Prep found nothing has FenceBranchPath == 0, so neither Migrate nor Finalize runs for it this tick: requests
-            // filed here would sit unexecuted and the clusters allocated for them would have no sweep to free them. Dropping
-            // the nomination costs one deferred repair — the cluster re-nominates the next time it is written.
-            //
-            // 🔴 KNOWN GAP, still open after step 11, and narrowed rather than closed. In barrier-only mode the AABB pass visits
-            // only clusters WRITTEN this tick, so a cell that degrades and then goes completely still is never re-NOMINATED.
-            // Step 11's queue fixes the half that was in reach — a nomination the budget refuses, or one that arrives on a tick
-            // that cannot plan, is now REMEMBERED rather than discarded, so a cell nominated once while it was moving is still
-            // repaired after it stops. What remains needs `hasWork |= queue.Count > 0`, which re-arms Migrate and Finalize for
-            // an otherwise idle archetype and collides head-on with AC-10.8 ("a tick with no movement does no relocation work
-            // and allocates nothing"). That trade is bigger than this step and is deliberately not taken here.
-            //
-            // ── The throttle runs BEFORE the planner, and the ordering is the policy (§5.6) ──────────────────────────────
-            //
-            // One budget, spent in priority order: cell crossings are correctness and take what they need, intra-cell
-            // relocations take what is left, and repair gets the remainder. So the relocation throttle both consumes and
-            // reports the budget the planner may then spend. Reversing the two would let a rare repair outbid the steady-state
-            // path that keeps cells from needing repair in the first place.
-            if (hasWork)
-            {
-                var tailStart = Stopwatch.GetTimestamp();
-                var remainingBudgetNs = pending.ApplyMigrationThrottle(_spatialGrid);
-                var throttleEnd = Stopwatch.GetTimestamp();
-                pending.PrepThrottleTicks += throttleEnd - tailStart;
-
-                PlanArchetypeRepairs(pending, changeSet, tickNumber, remainingBudgetNs);
-                pending.PrepPlanTicks += Stopwatch.GetTimestamp() - throttleEnd;
-            }
-            else
-            {
-                // The LIST is per-tick even though the QUEUE is not: it describes the tick that produced it. Absorbed into the
-                // persistent queue first — that is exactly the "refused or unplannable nomination is no longer lost" half above
-                // — and only then cleared.
-                pending.AbsorbRepairNominations(_spatialGrid, tickNumber);
-            }
-
-            pending.PendingMigrationDrainCount = hasWork ? pending.PendingMigrationCount : 0;
-
-            // Every producer has now filed: crossings and the outlier guard in the core above, relocations carried from last tick's AabbRefresh, and repair
-            // units from the planner. CR-05 is checkable exactly here and nowhere earlier (#877).
-            pending.AssertNoDuplicateMigrationSources(tickNumber);
-        }
+            FinishArchetypeFencePrep(pending, hasWork, tickNumber, changeSet);        }
 
         return hasWork;
+    }
+
+
+    /// <summary>Per-tick state every Prep path starts from — the atomic item and the sliced head alike (#886 lead D).</summary>
+    private void ResetArchetypeFenceTickState(ArchetypeClusterState clusterState)
+    {
+        clusterState.ResetPrepSliceState();
+        clusterState.FenceBranchPath = 0;
+        clusterState.FenceDirtyBits = null;
+
+        // The pending-migration queue is deliberately NOT cleared here, nor in Finalize where it used to be. See
+        // ArchetypeClusterState.PendingMigrationDrainCount: the queue has producers on both sides of its consumer, so a per-tick reset destroyed
+        // everything filed by the AabbRefresh-side detectors. Finalize now compacts away exactly the prefix that was executed.
+        clusterState.FenceEntryCount = 0;
+        clusterState.FenceDirtyClusterCount = 0;
+        clusterState.FenceProcessBitmapClusterCount = -1; // recomputed in Prep when in BarrierOnly mode
+        // Snapshot before zeroing: DetectClusterMigrations pre-sizes PendingMigrations from last tick's migration count, and reading the field itself would read
+        // the zero written on the line below — same fence, a few hundred lines earlier — so the estimate was always Max(16, 0) and the queue regrew from 16 on
+        // every migration-heavy tick (#872).
+        // #872 step 11: BEFORE the counters below are zeroed, because it reads them. One sample per tick, folded into the per-entity cost model the repair
+        // budget is spent against — which is what makes RepairNsPerEntity a seed rather than the operative constant.
+        if (_spatialGrid != null)
+        {
+            clusterState.ObserveMigrationCost(in _spatialGrid.Config);
+        }
+
+        clusterState.ResetThrottleTickState();
+        clusterState.ResetPrepSubSpans();
+        clusterState.PreviousTickMigrationCount = clusterState.LastTickMigrationCount;
+        clusterState.LastTickMigrationCount = 0;
+        clusterState.LastTickMigrationExecuteMs = 0d;
+        // #872 step 11: the apply phases accumulate into this from their own workers, exactly as the Migrate slices do into the line above — and it is
+        // zeroed the same PLAIN way, deliberately. Both counters are published by workers (an Interlocked.Add here, a compare-exchange loop there) and both
+        // are reset from Prep, and what orders the reset against those publications is the fence phase barrier, not a release on the store. Giving one of
+        // the pair a Volatile.Write and not the other would imply a distinction between them that does not exist.
+        clusterState.LastTickMigrationApplyTicks = 0L;
+        clusterState.LastTickClustersScanned = 0;
+        clusterState.LastTickSlotsScanned = 0;
+        clusterState.LastTickDriftersDetected = 0;
+        clusterState.LastTickDriftAbsorbedCount = 0;
+
+        // LastTickHysteresisAbsorbedCount was NOT reset here until #872, and DetectClusterMigrations only ever ASSIGNED it (=, not +=). A tick in which
+        // detection did not run therefore reported the PREVIOUS tick's absorbed count as if it were this tick's — a stale reading indistinguishable from a live
+        // one, in the one counter that tunes MigrationHysteresisRatio. Detection is reached on a quiet tick only through the clean-bitmap branch below, which is
+        // gated on ActiveClusterCount > 0, so an archetype that empties out stopped updating it entirely.
+        //
+        // Drain rather than plain-zero: on the SpatialBarrierOnly path the count is accumulated live by ClusterRef.MaybeFlagMigration as writes happen, because
+        // that path never reaches the scan that would otherwise count it. Both producers now compose — this drains the live one, and DetectClusterMigrations
+        // adds its scan's tally with += rather than clobbering. Exactly one of the two is ever non-zero for a given archetype.
+        var absorbedLive = clusterState.HysteresisAbsorbedLive;
+        clusterState.HysteresisAbsorbedLive = 0;
+        clusterState.LastTickHysteresisAbsorbedCount = absorbedLive;
+        clusterState.TotalHysteresisAbsorbedCount += absorbedLive;
+
+        // ReclusterBudgetUsedMs is produced by the step-12 repair planner, which runs in the Prep WRAPPER — after this body returns — so this reset always
+        // precedes the write and never clobbers it. It reports the PROJECTED spend of the units admitted this tick, not a measured elapsed time: the budget
+        // decides admission before any work happens (AC-12.5), so the number that gates has to be the number that is reported. Step 11 replaces the constant
+        // behind the projection with a controller driven by the previous tick's measurement.
+        // ClustersScanned / DriftersDetected / DriftAbsorbed used to be reset HERE too, on the same "no producer yet" grounds. Step 10 gave them one, and their
+        // reset moved up beside LastTickMigrationCount where the rest of the per-tick counters live — a second zeroing of two of the three was worse than
+        // redundant, because it silently excluded the third and would have hidden a producer that ran between the two blocks.
+        clusterState.LastTickReclusterBudgetUsedMs = 0d;
+        clusterState.LastTickRepairedEntityCount = 0;
+        clusterState.LastTickRepairUnitCount = 0;
+        clusterState.LastTickRepairUnitsRefused = 0;
+        clusterState._drainedCount = 0; // deferred-drain list reset (review C-1 fix)
+    }
+
+    /// <summary>Step ⑧: the pre-size and the process-bitmap memo, run once per archetype after the map — by the atomic item or by the tail.</summary>
+    private static void PreSizeArchetypeFence(ArchetypeClusterState clusterState)
+    {
+        // Pre-size FenceDirtyBits + per-cluster arrays to a generous upper bound so the Migrate phase (parallel or serial) doesn't hit ExecuteMigrations'
+        // on-demand grow path under normal conditions. The strict bound (PrimarySegmentCapacity + PendingMigrationCount) under-estimates in practice when
+        // multiple Migrate workers each allocate new clusters and inter-archetype shadow/index allocations also grow segments — observed dstChunkId values
+        // exceeded this bound under AntHill loads. The doubled-plus-buffer bound covers worst-case interleavings; the cost is ~32KB extra per archetype,
+        // trivial. On-demand grow under _finalizeLock (ArchetypeClusterState.GrowFenceDirtyBitsForChunkId) remains as a safety net for pathological cases.
+        var existingLen = clusterState.FenceDirtyBits?.Length ?? 0;
+        var upperBound = Math.Max(clusterState.PrimarySegmentCapacity, existingLen) + 2 * clusterState.PendingMigrationCount + 64;
+        var preSizeStart = Stopwatch.GetTimestamp();
+        clusterState.PreSizeMigrationBuffers(upperBound);
+        clusterState.PrepPreSizeTicks += Stopwatch.GetTimestamp() - preSizeStart;
+
+        // Memoize popcount of ClusterProcessBitmap so the AabbRefresh planner doesn't redo it on TickDriver (D-4).
+        // Only meaningful in BarrierOnly mode; Legacy mode reads ActiveClusterCount directly.
+        if (clusterState.SpatialBarrierOnly && clusterState.ClusterProcessBitmap != null)
+        {
+            var total = 0;
+            var bm = clusterState.ClusterProcessBitmap;
+            for (var w = 0; w < bm.Length; w++)
+            {
+                total += BitOperations.PopCount((ulong)bm[w]);
+            }
+
+            clusterState.FenceProcessBitmapClusterCount = total;
+        }
+    }
+
+    /// <summary>Steps ⑥ and ⑦ and the drain prefix: serial by TH-01 and RP-02, run once per archetype after the whole map — atomic item or tail.</summary>
+    private void FinishArchetypeFencePrep(ArchetypeClusterState pending, bool hasWork, long tickNumber, ChangeSet changeSet)
+    {
+        // ── #872 step 12: plan the repair BEFORE the prefix is taken ────────────────────────────────────────────────
+        //
+        // The requests a repair emits are meant for THIS tick's Migrate phase, not the next one, and the prefix below is
+        // what decides that. The whole reason planning lives in Prep rather than beside the nomination that feeds it is
+        // that the fresh destination clusters it allocates must be created and filled inside one exclusive window — with
+        // a tick in between, an ordinary spawn's first-fit scan would claim into them, and the sorted packing the planner
+        // just computed would be handed to the placement policy this issue exists to repair.
+        //
+        // Gated on hasWork, and the nominations are DISCARDED rather than carried when it is false. An archetype whose
+        // Prep found nothing has FenceBranchPath == 0, so neither Migrate nor Finalize runs for it this tick: requests
+        // filed here would sit unexecuted and the clusters allocated for them would have no sweep to free them. Dropping
+        // the nomination costs one deferred repair — the cluster re-nominates the next time it is written.
+        //
+        // 🔴 KNOWN GAP, still open after step 11, and narrowed rather than closed. In barrier-only mode the AABB pass visits
+        // only clusters WRITTEN this tick, so a cell that degrades and then goes completely still is never re-NOMINATED.
+        // Step 11's queue fixes the half that was in reach — a nomination the budget refuses, or one that arrives on a tick
+        // that cannot plan, is now REMEMBERED rather than discarded, so a cell nominated once while it was moving is still
+        // repaired after it stops. What remains needs `hasWork |= queue.Count > 0`, which re-arms Migrate and Finalize for
+        // an otherwise idle archetype and collides head-on with AC-10.8 ("a tick with no movement does no relocation work
+        // and allocates nothing"). That trade is bigger than this step and is deliberately not taken here.
+        //
+        // ── The throttle runs BEFORE the planner, and the ordering is the policy (§5.6) ──────────────────────────────
+        //
+        // One budget, spent in priority order: cell crossings are correctness and take what they need, intra-cell
+        // relocations take what is left, and repair gets the remainder. So the relocation throttle both consumes and
+        // reports the budget the planner may then spend. Reversing the two would let a rare repair outbid the steady-state
+        // path that keeps cells from needing repair in the first place.
+        if (hasWork)
+        {
+            var tailStart = Stopwatch.GetTimestamp();
+            var remainingBudgetNs = pending.ApplyMigrationThrottle(_spatialGrid);
+            var throttleEnd = Stopwatch.GetTimestamp();
+            pending.PrepThrottleTicks += throttleEnd - tailStart;
+
+            PlanArchetypeRepairs(pending, changeSet, tickNumber, remainingBudgetNs);
+            pending.PrepPlanTicks += Stopwatch.GetTimestamp() - throttleEnd;
+        }
+        else
+        {
+            // The LIST is per-tick even though the QUEUE is not: it describes the tick that produced it. Absorbed into the
+            // persistent queue first — that is exactly the "refused or unplannable nomination is no longer lost" half above
+            // — and only then cleared.
+            pending.AbsorbRepairNominations(_spatialGrid, tickNumber);
+        }
+
+        pending.PendingMigrationDrainCount = hasWork ? pending.PendingMigrationCount : 0;
+
+        // Every producer has now filed: crossings and the outlier guard in the core above, relocations carried from last tick's AabbRefresh, and repair
+        // units from the planner. CR-05 is checkable exactly here and nowhere earlier (#877).
+        pending.AssertNoDuplicateMigrationSources(tickNumber);
+        ArchetypeClusterState.PrepQueueProbe?.Invoke(pending, tickNumber);
+    }
+
+    /// <summary>How many active clusters an archetype needs before its Prep is worth slicing: two slices' worth, so that one worker does not open two accessors
+    /// for the work one would have done.</summary>
+    /// <remarks>A static rather than a const so the partition harness can switch the sliced path off in the same binary (<c>--no-prep-slice</c>).</remarks>
+    internal static int PrepSliceMinClusters = 2 * FenceWorkPlan.PrepSliceWords;
+
+    /// <summary>
+    /// Phase 1, serial head (#886 lead D): decides per archetype whether this tick's Prep runs as slices, and does the part of Prep that must precede every
+    /// slice — the snapshot, the written-slot exchange, the queue and zone-map pre-grows, and the one-per-tick zone-map rotation. Runs on the driver in
+    /// <c>FencePrepExecSystem.Prepare</c>, before the plan is built, so the planner can slice <c>FenceDirtyBits</c> by word range.
+    /// </summary>
+    /// <remarks>
+    /// An archetype that does not qualify is left entirely alone: its single <c>ArchetypePrep</c> item runs <see cref="PrepareArchetypeFence"/> exactly
+    /// as before, snapshot included. Branch 1 (clean spatial refresh), the pure-Transient path and <c>SpatialBarrierOnly</c> archetypes never qualify —
+    /// none of them has the drain that makes slicing worth a barrier's worth of accessors.
+    /// </remarks>
+    internal void PrepareArchetypeFenceHeads(int workerCount)
+    {
+        var states = _archetypeStates;
+        if (states == null || workerCount < 2)
+        {
+            // One worker gains nothing from slices and pays for every one of them: Matrix W measured the sliced Prep at W = 1 as 3.63 ms against the
+            // atomic item's 3.03. Slicing starts at two workers, where it already halves the phase.
+            return;
+        }
+
+        foreach (var meta in ArchetypeRegistry.GetAllArchetypes())
+        {
+            if (!meta.IsClusterEligible || meta.ArchetypeId >= states.Length)
+            {
+                continue;
+            }
+
+            var clusterState = states[meta.ArchetypeId]?.ClusterState;
+            if (clusterState == null)
+            {
+                continue;
+            }
+
+            clusterState.PrepSliceable = false;
+            if (clusterState.ClusterSegment == null || clusterState.SpatialBarrierOnly || clusterState.ActiveClusterCount < PrepSliceMinClusters
+                || !clusterState.ClusterDirtyBitmap.HasDirty)
+            {
+                continue;
+            }
+
+            ResetArchetypeFenceTickState(clusterState);
+
+            var subSpan = Stopwatch.GetTimestamp();
+            var dirtyBits = clusterState.ClusterDirtyBitmap.Snapshot();
+            clusterState.PrepSnapshotTicks += Stopwatch.GetTimestamp() - subSpan;
+
+            // Snapshot-and-clear the written-slot union in the same step as the dirty bitmap (#559 §4.5), so Finalize reads a stable value while writers
+            // for the NEXT tick start from zero.
+            clusterState.FenceWrittenSlots = Interlocked.Exchange(ref clusterState.WrittenSlotUnion, 0);
+            clusterState.FenceDirtyBits = dirtyBits;
+            clusterState.FenceBranchPath = 2;
+
+            // Everything a slice must never grow.
+            clusterState.EnsurePendingMigrationCapacityForTick();
+
+            // Step (a) of detection — the crossings WriteSpatial flagged at write time — is whole-bitmap and appends to the shared queue, so it runs
+            // here, once, and the slices run step (b) only. The queue order is then the unsliced one: (a) first, (b) after.
+            if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
+            {
+                var preFlagged = 0;
+                var preFlaggedClusters = 0;
+                DrainPreFlaggedMigrations(clusterState, meta.ArchetypeId, ref preFlagged, ref preFlaggedClusters);
+            }
+
+            BeginZoneMapTick(clusterState);
+            clusterState.EnsureZoneMapCapacity(Math.Max(clusterState.PrimarySegmentCapacity, dirtyBits.Length));
+            clusterState.BuildShadowDrainPlans();
+            clusterState.PrepSliceable = true;
+        }
+    }
+
+    /// <summary>
+    /// Phase 1, one slice (#886 lead D): steps ② ③ ④ ⑤ over the dirty-bitmap words <c>[firstWord, firstWord + wordCount)</c> of one archetype, with a
+    /// private accessor, the head's drain plan and a pooled, item-private crossing list. Every write is to a chunk-id-indexed entry inside the range, to a tree
+    /// node under its own latch, to a multi-producer ring, or to an <c>Interlocked</c> fold.
+    /// </summary>
+    internal unsafe void RunPrepSlice(ArchetypeMetadata meta, int firstWord, int wordCount, ChangeSet changeSet, List<MigrationRequest> crossings)
+    {
+        var engineState = _archetypeStates[meta.ArchetypeId];
+        var clusterState = engineState?.ClusterState;
+        if (clusterState == null || !clusterState.PrepSliceable)
+        {
+            return;
+        }
+
+        var dirtyBits = clusterState.FenceDirtyBits;
+        var end = Math.Min(dirtyBits.Length, firstWord + wordCount);
+        var clusterScope = TyphonEvent.BeginWriteTickFenceCluster(meta.ArchetypeId);
+        var accessor = clusterState.ClusterSegment.CreateChunkAccessor();
+        ArchetypeClusterState.EnterPrepSlice();
+        ArchetypeClusterState.NotePrepSliceRun();
+        try
+        {
+            // ② mask this range's dirty bits with live occupancy, so destroyed entities whose dirty bit remained set drop out of every later step.
+            var entryCount = 0;
+            var dirtyClusterCount = 0;
+            var subSpan = Stopwatch.GetTimestamp();
+            for (var i = firstWord; i < end; i++)
+            {
+                if (dirtyBits[i] == 0)
+                {
+                    continue;
+                }
+
+                var occupancy = *(ulong*)accessor.GetChunkAddress(i);
+                dirtyBits[i] &= (long)occupancy;
+                if (dirtyBits[i] != 0)
+                {
+                    dirtyClusterCount++;
+                }
+
+                entryCount += BitOperations.PopCount((ulong)dirtyBits[i]);
+            }
+
+            Interlocked.Add(ref clusterState.PrepMaskTicks, Stopwatch.GetTimestamp() - subSpan);
+            clusterScope.DirtyClusterCount = dirtyClusterCount;
+            clusterScope.EntryCount = entryCount;
+
+            // ③ ④ — same gate as the atomic path (#655): either home may carry the index.
+            if (clusterState.IndexSlots != null || clusterState.TransientIndexSlots != null)
+            {
+                clusterScope.HasShadow = 1;
+                var shadowScope = TyphonEvent.BeginWriteTickFenceClusterShadow(meta.ArchetypeId, dirtyClusterCount);
+                subSpan = Stopwatch.GetTimestamp();
+                try
+                {
+                    shadowScope.TotalShadowEntries = ProcessClusterShadowEntriesRange(clusterState, engineState, changeSet, ref accessor, firstWord, wordCount, false);
+                }
+                finally
+                {
+                    shadowScope.Dispose();
+                }
+
+                Interlocked.Add(ref clusterState.PrepShadowTicks, Stopwatch.GetTimestamp() - subSpan);
+
+                subSpan = Stopwatch.GetTimestamp();
+                RecomputeClusterZoneMapsRange(clusterState, dirtyBits, ref accessor, firstWord, wordCount);
+                Interlocked.Add(ref clusterState.PrepZoneMapTicks, Stopwatch.GetTimestamp() - subSpan);
+            }
+
+            // ⑤ crossings, into a slice-private list the tail concatenates in slice order.
+            if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
+            {
+                clusterScope.HasSpatial = 1;
+                subSpan = Stopwatch.GetTimestamp();
+                // The list is the exec system's, pooled per work item and reused tick over tick; cleared here rather than trusted, because a tail that
+                // never ran (a failed Prep) leaves last tick's requests in it.
+                crossings.Clear();
+                DetectClusterMigrationsRange(clusterState, engineState, meta.ArchetypeId, dirtyBits, ref accessor, firstWord, wordCount, crossings);
+                if (crossings.Count > 0)
+                {
+                    clusterState.RegisterPrepSliceCrossings(firstWord, crossings);
+                }
+
+                Interlocked.Add(ref clusterState.PrepDetectTicks, Stopwatch.GetTimestamp() - subSpan);
+            }
+
+            Interlocked.Add(ref clusterState.FenceEntryCount, entryCount);
+            Interlocked.Add(ref clusterState.FenceDirtyClusterCount, dirtyClusterCount);
+            Interlocked.Add(ref clusterState.PrepDirtyClusters, dirtyClusterCount);
+        }
+        finally
+        {
+            ArchetypeClusterState.ExitPrepSlice();
+            accessor.Dispose();
+            clusterScope.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Phase 1, serial tail (#886 lead D): for every archetype whose Prep ran as slices, the crossings in slice order, the buffer resets, ⑧, then ⑥ ⑦ and
+    /// the drain prefix exactly as the atomic path runs them. Called from <c>FenceMigrateExecSystem.Prepare</c>, which is single-threaded by construction
+    /// and precedes the destination-cell sort that needs the queue complete. It is timed inside the Migrate span: ⑥ ⑦ ⑧ are relocated there, not removed,
+    /// and any phase table read after this change has to say so.
+    /// </summary>
+    internal void PrepareArchetypeFenceTails(long tickNumber, ChangeSet changeSet)
+    {
+        var states = _archetypeStates;
+        if (states == null)
+        {
+            return;
+        }
+
+        for (var aid = 0; aid < states.Length; aid++)
+        {
+            var clusterState = states[aid]?.ClusterState;
+            if (clusterState == null || !clusterState.PrepSliceable)
+            {
+                continue;
+            }
+
+            clusterState.PrepSliceable = false;
+            clusterState.DrainPrepSliceCrossings();
+            clusterState.LastTickHysteresisAbsorbedCount += clusterState.PrepSliceHysteresisAbsorbed;
+            clusterState.TotalHysteresisAbsorbedCount += clusterState.PrepSliceHysteresisAbsorbed;
+            clusterState.ResetShadowBuffersAfterSlices();
+            PreSizeArchetypeFence(clusterState);
+            FinishArchetypeFencePrep(clusterState, true, tickNumber, changeSet);
+        }
     }
 
     /// <summary>
@@ -966,65 +1276,7 @@ public partial class DatabaseEngine
 
         // Reset fence-tick intermediate state at the top of every Prep so a stale snapshot from a previous tick never leaks into the current tick's
         // Migrate / Finalize phases. The Migrate slices (Phase 2) Interlocked.Add into LastTickMigrationCount / LastTickMigrationExecuteMs — start at zero here.
-        clusterState.FenceBranchPath = 0;
-        clusterState.FenceDirtyBits = null;
-
-        // The pending-migration queue is deliberately NOT cleared here, nor in Finalize where it used to be. See
-        // ArchetypeClusterState.PendingMigrationDrainCount: the queue has producers on both sides of its consumer, so a per-tick reset destroyed
-        // everything filed by the AabbRefresh-side detectors. Finalize now compacts away exactly the prefix that was executed.
-        clusterState.FenceEntryCount = 0;
-        clusterState.FenceDirtyClusterCount = 0;
-        clusterState.FenceProcessBitmapClusterCount = -1; // recomputed in Prep when in BarrierOnly mode
-        // Snapshot before zeroing: DetectClusterMigrations pre-sizes PendingMigrations from last tick's migration count, and reading the field itself would read
-        // the zero written on the line below — same fence, a few hundred lines earlier — so the estimate was always Max(16, 0) and the queue regrew from 16 on
-        // every migration-heavy tick (#872).
-        // #872 step 11: BEFORE the counters below are zeroed, because it reads them. One sample per tick, folded into the per-entity cost model the repair
-        // budget is spent against — which is what makes RepairNsPerEntity a seed rather than the operative constant.
-        if (_spatialGrid != null)
-        {
-            clusterState.ObserveMigrationCost(in _spatialGrid.Config);
-        }
-
-        clusterState.ResetThrottleTickState();
-        clusterState.ResetPrepSubSpans();
-        clusterState.PreviousTickMigrationCount = clusterState.LastTickMigrationCount;
-        clusterState.LastTickMigrationCount = 0;
-        clusterState.LastTickMigrationExecuteMs = 0d;
-        // #872 step 11: the apply phases accumulate into this from their own workers, exactly as the Migrate slices do into the line above — and it is
-        // zeroed the same PLAIN way, deliberately. Both counters are published by workers (an Interlocked.Add here, a compare-exchange loop there) and both
-        // are reset from Prep, and what orders the reset against those publications is the fence phase barrier, not a release on the store. Giving one of
-        // the pair a Volatile.Write and not the other would imply a distinction between them that does not exist.
-        clusterState.LastTickMigrationApplyTicks = 0L;
-        clusterState.LastTickClustersScanned = 0;
-        clusterState.LastTickSlotsScanned = 0;
-        clusterState.LastTickDriftersDetected = 0;
-        clusterState.LastTickDriftAbsorbedCount = 0;
-
-        // LastTickHysteresisAbsorbedCount was NOT reset here until #872, and DetectClusterMigrations only ever ASSIGNED it (=, not +=). A tick in which
-        // detection did not run therefore reported the PREVIOUS tick's absorbed count as if it were this tick's — a stale reading indistinguishable from a live
-        // one, in the one counter that tunes MigrationHysteresisRatio. Detection is reached on a quiet tick only through the clean-bitmap branch below, which is
-        // gated on ActiveClusterCount > 0, so an archetype that empties out stopped updating it entirely.
-        //
-        // Drain rather than plain-zero: on the SpatialBarrierOnly path the count is accumulated live by ClusterRef.MaybeFlagMigration as writes happen, because
-        // that path never reaches the scan that would otherwise count it. Both producers now compose — this drains the live one, and DetectClusterMigrations
-        // adds its scan's tally with += rather than clobbering. Exactly one of the two is ever non-zero for a given archetype.
-        var absorbedLive = clusterState.HysteresisAbsorbedLive;
-        clusterState.HysteresisAbsorbedLive = 0;
-        clusterState.LastTickHysteresisAbsorbedCount = absorbedLive;
-        clusterState.TotalHysteresisAbsorbedCount += absorbedLive;
-
-        // ReclusterBudgetUsedMs is produced by the step-12 repair planner, which runs in the Prep WRAPPER — after this body returns — so this reset always
-        // precedes the write and never clobbers it. It reports the PROJECTED spend of the units admitted this tick, not a measured elapsed time: the budget
-        // decides admission before any work happens (AC-12.5), so the number that gates has to be the number that is reported. Step 11 replaces the constant
-        // behind the projection with a controller driven by the previous tick's measurement.
-        // ClustersScanned / DriftersDetected / DriftAbsorbed used to be reset HERE too, on the same "no producer yet" grounds. Step 10 gave them one, and their
-        // reset moved up beside LastTickMigrationCount where the rest of the per-tick counters live — a second zeroing of two of the three was worse than
-        // redundant, because it silently excluded the third and would have hidden a producer that ran between the two blocks.
-        clusterState.LastTickReclusterBudgetUsedMs = 0d;
-        clusterState.LastTickRepairedEntityCount = 0;
-        clusterState.LastTickRepairUnitCount = 0;
-        clusterState.LastTickRepairUnitsRefused = 0;
-        clusterState._drainedCount = 0; // deferred-drain list reset (review C-1 fix)
+        ResetArchetypeFenceTickState(clusterState);
 
         // Pure-Transient archetypes have no PersistentStore segment — nothing to persist to WAL, no migrations.
         // Entire flow runs inside Prep; Migrate and Finalize will see FenceBranchPath = 0 and skip.
@@ -1255,30 +1507,7 @@ public partial class DatabaseEngine
             clusterScope.Dispose();
         }
 
-        // Pre-size FenceDirtyBits + per-cluster arrays to a generous upper bound so the Migrate phase (parallel or serial) doesn't hit ExecuteMigrations'
-        // on-demand grow path under normal conditions. The strict bound (PrimarySegmentCapacity + PendingMigrationCount) under-estimates in practice when
-        // multiple Migrate workers each allocate new clusters and inter-archetype shadow/index allocations also grow segments — observed dstChunkId values
-        // exceeded this bound under AntHill loads. The doubled-plus-buffer bound covers worst-case interleavings; the cost is ~32KB extra per archetype,
-        // trivial. On-demand grow under _finalizeLock (ArchetypeClusterState.GrowFenceDirtyBitsForChunkId) remains as a safety net for pathological cases.
-        var existingLen = clusterState.FenceDirtyBits?.Length ?? 0;
-        var upperBound = Math.Max(clusterState.PrimarySegmentCapacity, existingLen) + 2 * clusterState.PendingMigrationCount + 64;
-        var preSizeStart = Stopwatch.GetTimestamp();
-        clusterState.PreSizeMigrationBuffers(upperBound);
-        clusterState.PrepPreSizeTicks += Stopwatch.GetTimestamp() - preSizeStart;
-
-        // Memoize popcount of ClusterProcessBitmap so the AabbRefresh planner doesn't redo it on TickDriver (D-4).
-        // Only meaningful in BarrierOnly mode; Legacy mode reads ActiveClusterCount directly.
-        if (clusterState.SpatialBarrierOnly && clusterState.ClusterProcessBitmap != null)
-        {
-            var total = 0;
-            var bm = clusterState.ClusterProcessBitmap;
-            for (var w = 0; w < bm.Length; w++)
-            {
-                total += BitOperations.PopCount((ulong)bm[w]);
-            }
-
-            clusterState.FenceProcessBitmapClusterCount = total;
-        }
+        PreSizeArchetypeFence(clusterState);
 
         return true;
     }
@@ -1549,7 +1778,11 @@ public partial class DatabaseEngine
             // Columnar emission (#559): one FenceBlock record per dirty cluster instead of one Slot record per (entity, component).
             // A cluster's entity keys and each component's values are already contiguous in the SoA, so every part of the payload
             // is a single bulk copy — the codec copies straight out of the page into the WAL claim, with no staging arena.
-            var blocks = _fenceBlocks ??= new RecordCodec.FenceBlockDescriptor[64];
+            // 256, not 64 (#886). MaxFenceBatchBytes is the cap this batch was designed around, and at the ~1 KB a one-entity block costs it binds at
+            // roughly 256 descriptors. The array used to hold 64, so it was the array that bound, every time, and Finalize paid a Measure -> TryClaim ->
+            // Write -> Publish round trip per 64 dirty clusters -- ~31 a tick at 2 000 dirty clusters instead of ~8. Durability-neutral: fence records are
+            // individually committed (LOG-04) and the byte cap still bounds the claim; the only thing that changes is how many claims a tick makes.
+            var blocks = _fenceBlocks ??= new RecordCodec.FenceBlockDescriptor[MaxFenceBatchBlocks];
             var blockCount = 0;
             var batchBytes = 0;
 

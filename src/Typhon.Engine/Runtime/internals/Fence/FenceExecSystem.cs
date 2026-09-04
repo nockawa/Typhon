@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 
@@ -262,16 +263,54 @@ internal sealed class FencePrepExecSystem : FencePhaseExecSystemBase
 
     protected override ChangeSet CreateChunkChangeSet() => Engine.MMF.RentChangeSet();
 
-    protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet)
+    // One crossing list per PrepSlice work item, pooled across ticks (#886 lead D): a slice files its list with the archetype and the tail drains and
+    // clears it, so the list must outlive the chunk and cannot be per-worker. Indexed by the item's position in the plan, which is unique per tick.
+    // Sized HERE, on the driver, before any worker runs — a worker growing a shared array while another indexes it is the race the dirty buffers'
+    // comment above warns about. The per-chunk cursor turns (chunk, i-th item) into that plan position without threading an index through DispatchItem.
+    private List<MigrationRequest>[] _crossingsPool = [];
+    private int[] _itemCursor = [];
+
+    protected override int Prepare(FenceContext ctx)
     {
-        if (item.Kind != FenceWorkKind.ArchetypePrep)
+        // The head is Prep work and is timed as such — the same way Migrate's Prepare claims its sort (#886 lead D).
+        PendingPhaseStart = Stopwatch.GetTimestamp();
+        Engine.PrepareArchetypeFenceHeads(ctx.WorkerCount);
+        var chunkCount = base.Prepare(ctx);
+        var itemCount = PlanForTest.ItemCount;
+        if (_crossingsPool.Length < itemCount)
         {
-            return 0;
+            Array.Resize(ref _crossingsPool, Math.Max(itemCount, _crossingsPool.Length * 2));
         }
 
-        var meta = ArchetypeRegistry.GetMetadata((ushort)item.TargetId);
-        Engine.PrepareArchetypeFence(meta, Context.TickNumber, changeSet);
-        return 0;
+        for (var i = 0; i < itemCount; i++)
+        {
+            _crossingsPool[i] ??= [];
+        }
+
+        if (_itemCursor.Length < chunkCount)
+        {
+            Array.Resize(ref _itemCursor, Math.Max(chunkCount, _itemCursor.Length * 2));
+        }
+
+        return chunkCount;
+    }
+
+    protected override void OnBeforeChunk(int chunkIndex) => _itemCursor[chunkIndex] = 0;
+
+    protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet)
+    {
+        switch (item.Kind)
+        {
+            case FenceWorkKind.ArchetypePrep:
+                Engine.PrepareArchetypeFence(ArchetypeRegistry.GetMetadata((ushort)item.TargetId), Context.TickNumber, changeSet);
+                return 0;
+            case FenceWorkKind.PrepSlice:
+                var planIndex = PlanForTest.ChunkStart[chunkIndex] + _itemCursor[chunkIndex]++;
+                Engine.RunPrepSlice(ArchetypeRegistry.GetMetadata((ushort)item.TargetId), item.SliceStart, item.SliceCount, changeSet, _crossingsPool[planIndex]);
+                return 0;
+            default:
+                return 0;
+        }
     }
 }
 
@@ -298,6 +337,24 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
     protected override int Prepare(FenceContext ctx)
     {
         PendingPhaseStart = Stopwatch.GetTimestamp();
+
+        // #886 lead D: the serial tail of every archetype whose Prep ran as slices — crossings concatenated in slice order, buffers reset, then ⑥ ⑦ ⑧
+        // exactly as the atomic path runs them. Before the sort below, which needs the queue complete. Single-threaded by construction, same as the
+        // sort; inside the fence window like a chunk, because the repair planner it runs opens cluster accessors and may allocate.
+        var tailChangeSet = Engine.MMF.RentChangeSet();
+        try
+        {
+            using (Engine.EpochManager.FenceWindow.EnterWorker())
+            using (EpochGuard.Enter(Engine.EpochManager))
+            {
+                Engine.PrepareArchetypeFenceTails(ctx.TickNumber, tailChangeSet);
+            }
+        }
+        finally
+        {
+            tailChangeSet.ReleaseDirtyMarks();
+            Engine.MMF.ReturnChangeSet(tailChangeSet);
+        }
 
         // Inter-phase serial step (was in RunParallelFence): sort each archetype's pending migrations by destCellKey so the slice planner can carve
         // cell-disjoint ranges. Runs single-threaded by construction (only one worker decrements the last predecessor dep to zero and reaches this Prepare).
@@ -442,8 +499,8 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
     // Per-chunk worker-local accumulator for dirty-bit deltas. Pooled across ticks — never reallocated per system execution. List<T>.Clear() preserves
     // capacity, so steady-state allocates zero. Indexed by chunkIndex so workers running concurrent chunks never share a buffer.
-    private System.Collections.Generic.List<DirtyBitDelta>[] _chunkDirtyBuffers
-        = new System.Collections.Generic.List<DirtyBitDelta>[16];
+    private List<DirtyBitDelta>[] _chunkDirtyBuffers
+        = new List<DirtyBitDelta>[16];
 
     /// <summary>
     /// Size and populate the per-chunk buffer array for this tick's chunk count. Called ONLY from <see cref="Prepare"/>, which the scheduler runs
@@ -461,14 +518,14 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
     {
         if (chunkCount > _chunkDirtyBuffers.Length)
         {
-            var grown = new System.Collections.Generic.List<DirtyBitDelta>[Math.Max(chunkCount, _chunkDirtyBuffers.Length * 2)];
+            var grown = new List<DirtyBitDelta>[Math.Max(chunkCount, _chunkDirtyBuffers.Length * 2)];
             Array.Copy(_chunkDirtyBuffers, grown, _chunkDirtyBuffers.Length);
             _chunkDirtyBuffers = grown;
         }
 
         for (int k = 0; k < chunkCount; k++)
         {
-            _chunkDirtyBuffers[k] ??= new System.Collections.Generic.List<DirtyBitDelta>(256);
+            _chunkDirtyBuffers[k] ??= new List<DirtyBitDelta>(256);
         }
     }
 
@@ -477,7 +534,7 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
     /// dispatches, so a worker only ever reads an element. An out-of-range index means the plan and the buffer array disagree, which is a defect rather
     /// than something to paper over with a lazy grow, so it is left to throw.
     /// </summary>
-    private System.Collections.Generic.List<DirtyBitDelta> GetChunkDirtyBuffer(int chunkIndex) => _chunkDirtyBuffers[chunkIndex];
+    private List<DirtyBitDelta> GetChunkDirtyBuffer(int chunkIndex) => _chunkDirtyBuffers[chunkIndex];
 
     protected override void OnBeforeChunk(int chunkIndex)
     {
