@@ -2249,8 +2249,12 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// Returns the cluster chunk ID and the slot index within the cluster.
     /// </summary>
     /// <remarks>
-    /// <para>Uses CAS on OccupancyBits for correctness under future concurrent commit scenarios.
-    /// FinalizeSpawns is single-writer (no concurrent commit), so CAS always succeeds on first try.</para>
+    /// <para><b>Multi-writer.</b> The sentence that stood here until #842 — "FinalizeSpawns is single-writer (no concurrent commit), so CAS always succeeds
+    /// on first try" — stopped being true at #708, which put concurrent Transient commits on this path, and the code kept being written as though it held:
+    /// the free-cluster head was read twice around its own test, and cluster allocation ran outside the finalize latch that <c>ClaimSlotInCell</c> takes
+    /// around the same work. Both are fixed below. What the CAS in <see cref="ClaimFreeBit"/> does cover is two claimants landing on the same cluster: each
+    /// takes a distinct slot or reads the cluster full and falls through to allocate, so the remaining races on the head itself cost at most one extra
+    /// allocation.</para>
     /// <para>The OccupancyBit is set immediately by this method. The caller MUST write component data and EntityKey before the next iteration boundary to
     /// maintain the invariant that occupied slots contain valid data.</para>
     /// <para><paramref name="bornTsn"/> is folded into the cluster's H1 visibility summary BEFORE the bit is published — see
