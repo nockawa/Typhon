@@ -246,11 +246,17 @@ internal sealed unsafe partial class ArchetypeClusterState
     }
 
     /// <summary>Resets every shadow buffer of both index homes and the shadow bitmap: the tail's counterpart of the atomic drain's per-field reset.</summary>
+    /// <remarks>
+    /// The bitmap is null for an archetype with no shadowable index, and this dereferenced it (#889). On such an archetype every sliced-Prep tick threw
+    /// here, inside Migrate's Prepare, and the scheduler recorded the exception in the phase's telemetry and skipped Index, EntityMap, AabbRefresh and
+    /// Finalize as DependencyFailed — no WAL emit and no dormancy sweep, on every tick with dirty data, with nothing thrown to the host. Found by
+    /// <c>FinalizeEmitSliceEquivalenceTests</c>, the first fixture to run a large index-less archetype through the parallel fence.
+    /// </remarks>
     internal void ResetShadowBuffersAfterSlices()
     {
         ResetShadowBuffers(IndexSlots);
         ResetShadowBuffers(TransientIndexSlots);
-        ClusterShadowBitmap.Clear();
+        ClusterShadowBitmap?.Clear();
     }
 
     private static void ResetShadowBuffers<TStore>(ClusterIndexSlot<TStore>[] ixSlots) where TStore : struct, IPageStore
@@ -508,9 +514,17 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
     }
 
+    /// <summary>A/B switch (#889): the stable radix sort in <see cref="RadixSortByDestCellKey"/>, or the <c>Array.Sort</c> it replaced.</summary>
+    internal static bool UseRadixDestCellSort = true;
+
+    // Ping-pong partner for the radix sort, the queue's capacity, grown with it. Only the Migrate phase's Prepare touches either.
+    private MigrationRequest[] _migrationSortScratch;
+    private int[] _radixCounts;
+
     /// <summary>
     /// Sort <see cref="PendingMigrations"/> in place by destination cell key so the parallel Migrate phase can give each worker a contiguous slice and have all
-    /// of that worker's destination cells be disjoint from every other worker's destination cells. Called by TickDriver between Prep and Migrate.
+    /// of that worker's destination cells be disjoint from every other worker's destination cells. Called from <c>FenceMigrateExecSystem.Prepare</c>, between
+    /// Prep and Migrate. Stable since #889 (<see cref="RadixSortByDestCellKey"/>).
     /// </summary>
     internal void SortPendingMigrationsByDestCellKey()
     {
@@ -519,7 +533,96 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        Array.Sort(PendingMigrations, 0, PendingMigrationCount, MigrationByDestCellKeyComparer.Instance);
+        if (!UseRadixDestCellSort)
+        {
+            Array.Sort(PendingMigrations, 0, PendingMigrationCount, MigrationByDestCellKeyComparer.Instance);
+            return;
+        }
+
+        RadixSortByDestCellKey(PendingMigrations, PendingMigrationCount);
+    }
+
+    /// <summary>
+    /// Orders the first <paramref name="count"/> requests by ascending <see cref="MigrationRequest.DestCellKey"/> — LSD radix over 11-bit digits, STABLE, so
+    /// requests sharing a cell keep the order they were enqueued in.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why not <c>Array.Sort</c> (#889).</b> Measured on Matrix M at 100 % moving: 0.71–0.88 ms per tick for ~5 000 requests, 150–175 ns a
+    /// request — introsort's <c>n log n</c> comparisons through an <c>IComparer</c> interface call, each moving a 20-byte struct. It ran on the driver
+    /// between the Prep tails and the Migrate dispatch, so every one of those microseconds was fence span. The keys are 32-bit cell ids of which a live
+    /// world uses a few thousand, so a radix sort is <c>O(n)</c> with a small constant: three passes at most, and any pass whose digit is the same for every
+    /// key is skipped after its histogram, which for a world whose cells sit in a narrow key range means one or two.</para>
+    /// <para><b>Signed order.</b> The sign bit is flipped before the digits are taken, so negative keys order before positive ones exactly as
+    /// <see cref="int.CompareTo(int)"/> would; nothing enqueues a negative destination today, and this costs an XOR.</para>
+    /// <para><b>Stable, where <c>Array.Sort</c> was not</b>, and that is a behaviour change worth stating: a cell's requests now apply in enqueue order —
+    /// ascending source cluster for crossings, the planner's emission order for repairs — where introsort permuted them. See the remark on
+    /// <see cref="MigrationRequest.DestSlotIndex"/>, which was written against the unstable sort.</para>
+    /// </remarks>
+    internal void RadixSortByDestCellKey(MigrationRequest[] items, int count)
+    {
+        const int DigitBits = 11;
+        const int Buckets = 1 << DigitBits;
+        const int DigitMask = Buckets - 1;
+        const uint SignFlip = 0x8000_0000u;
+
+        var min = uint.MaxValue;
+        var max = 0u;
+        for (var i = 0; i < count; i++)
+        {
+            var k = (uint)items[i].DestCellKey ^ SignFlip;
+            min = Math.Min(min, k);
+            max = Math.Max(max, k);
+        }
+
+        var differing = min ^ max;
+        if (differing == 0)
+        {
+            return;     // one cell: already sorted, and stable means untouched
+        }
+
+        if (_migrationSortScratch == null || _migrationSortScratch.Length < count)
+        {
+            _migrationSortScratch = new MigrationRequest[Math.Max(count, items.Length)];
+        }
+
+        var counts = _radixCounts ??= new int[Buckets];
+        var highestDifferingBit = 32 - BitOperations.LeadingZeroCount(differing);
+        var src = items;
+        var dst = _migrationSortScratch;
+        for (var shift = 0; shift < highestDifferingBit; shift += DigitBits)
+        {
+            Array.Clear(counts);
+            for (var i = 0; i < count; i++)
+            {
+                counts[(int)((((uint)src[i].DestCellKey ^ SignFlip) >> shift) & DigitMask)]++;
+            }
+
+            if (counts[(int)((min >> shift) & DigitMask)] == count)
+            {
+                continue;   // every key shares this digit: the pass would copy the array unchanged
+            }
+
+            var running = 0;
+            for (var b = 0; b < Buckets; b++)
+            {
+                var c = counts[b];
+                counts[b] = running;
+                running += c;
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                var d = (int)((((uint)src[i].DestCellKey ^ SignFlip) >> shift) & DigitMask);
+                dst[counts[d]++] = src[i];
+            }
+
+            (src, dst) = (dst, src);
+        }
+
+        if (!ReferenceEquals(src, items))
+        {
+            Array.Copy(src, items, count);   // an odd number of passes left the result in the scratch
+        }
     }
 
     private sealed class MigrationByDestCellKeyComparer : IComparer<MigrationRequest>
@@ -838,6 +941,58 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// happens once, in <see cref="LastTickMigrationTotalMs"/>.</para>
     /// </remarks>
     public long LastTickMigrationApplyTicks;
+
+    /// <summary>
+    /// <see cref="Stopwatch"/> ticks the last Finalize spent emitting this archetype's fence WAL records — the block loop and the collection-content walk —
+    /// against everything Finalize does before it. One plain store by the atomic item's worker, or an <c>Interlocked.Add</c> per emit slice (#889) — a CPU
+    /// sum, not a span, on a sliced tick. Read after the fence DAG has joined.
+    /// </summary>
+    public long LastTickFinalizeEmitTicks;
+
+    /// <summary>The part of <see cref="LastTickFinalizeEmitTicks"/> spent inside the WAL append (measure, claim, codec copy, publish), as opposed to walking
+    /// the dirty words and resolving cluster pages. Same summation convention.</summary>
+    public long LastTickFinalizeAppendTicks;
+
+    /// <summary>
+    /// The columns Finalize's head narrowed the WAL emit to, published for the emit slices (#889). Sized to the archetype's component count once and
+    /// reused tick over tick; only the head writes it and only after the AabbRefresh barrier, only the emit reads it and only before Finalize's own.
+    /// </summary>
+    internal sealed class FenceEmitPlan
+    {
+        public readonly int[] SlotIndices;
+        public readonly int[] CompSizes;
+        public readonly int[] CompOffsets;
+        public int ColumnCount;
+        public int TotalCompSize;
+        public int EntityIdsOffset;
+        public ulong[] ColumnHandleRanges = [];
+        public int HandleRangeCount;
+
+        public FenceEmitPlan(int componentCount)
+        {
+            SlotIndices = new int[componentCount];
+            CompSizes = new int[componentCount];
+            CompOffsets = new int[componentCount];
+        }
+
+        public void EnsureHandleRanges(int count)
+        {
+            if (ColumnHandleRanges.Length < count)
+            {
+                ColumnHandleRanges = new ulong[count];
+            }
+        }
+    }
+
+    /// <summary>See <see cref="FenceEmitPlan"/>. Null until the archetype's first emit.</summary>
+    internal FenceEmitPlan FenceEmit;
+
+    /// <summary>Finalize's head ran on the driver this tick (#889): the planner must not emit the atomic item, whatever <see cref="FinalizeSliceable"/>
+    /// says.</summary>
+    internal bool FinalizeHeadRan;
+
+    /// <summary>The head ran and found something to emit: the planner carves <c>FenceDirtyBits</c> into emit slices.</summary>
+    internal bool FinalizeSliceable;
 
     /// <summary>
     /// The whole cost of the most recently completed tick's migrations, in milliseconds: the migrant loop plus both apply phases, summed across workers.

@@ -352,6 +352,8 @@ public sealed partial class TyphonRuntime : IDisposable
     internal FenceMigrateExecSystem FenceMigrateExec => _fenceMigrateExec;
     internal FenceAabbRefreshExecSystem FenceAabbRefreshExec => _fenceAabbRefreshExec;
     internal FenceFinalizeExecSystem FenceFinalizeExec => _fenceFinalizeExec;
+    internal FenceIndexMassUpdateExecSystem FenceIndexMassUpdateExec => _fenceIndexMassUpdateExec;
+    internal FenceEntityMapUpdateExecSystem FenceEntityMapUpdateExec => _fenceEntityMapUpdateExec;
 
     /// <summary>
     /// Gracefully shuts down the runtime. Stops the subscription server, fires <see cref="OnShutdown"/>, then stops the scheduler.
@@ -2217,6 +2219,7 @@ public sealed partial class TyphonRuntime : IDisposable
             _liveFenceCost.UpdatePhase(FencePhase.IndexMassUpdate, _fenceIndexMassUpdateExec.TotalWallTicks, _fenceIndexMassUpdateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.EntityMapUpdate, _fenceEntityMapUpdateExec.TotalWallTicks, _fenceEntityMapUpdateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.AabbRefresh, _fenceAabbRefreshExec.TotalWallTicks, _fenceAabbRefreshExec.TotalUnitCount);
+            _liveFenceCost.UpdatePhase(FencePhase.Finalize, _fenceFinalizeExec.TotalWallTicks, _fenceFinalizeExec.TotalUnitCount);
         }
     }
 
@@ -2285,6 +2288,63 @@ public sealed partial class TyphonRuntime : IDisposable
                _fenceIndexMassUpdateExec.TotalWallTicks,
                _fenceIndexMassUpdateExec.TotalUnitCount,
                _fenceIndexMassUpdateExec.PlanForTest.ChunkCount);
+
+    /// <summary>
+    /// Last tick's fence from the start of Prep's Prepare to the end of the last phase that dispatched a chunk — the six spans PLUS the scheduler's gaps
+    /// between them. The sum of the six is what the partitioning costs; this is what the host waits.
+    /// </summary>
+    internal long LastFenceWallTicks
+    {
+        get
+        {
+            if (_fencePrepExec == null)
+            {
+                return 0;
+            }
+
+            var start = _fencePrepExec.PhaseStartTicks;
+            var end = Math.Max(
+                Math.Max(_fenceFinalizeExec.PhaseEndTicks, _fenceAabbRefreshExec.PhaseEndTicks),
+                Math.Max(Math.Max(_fenceEntityMapUpdateExec.PhaseEndTicks, _fenceIndexMassUpdateExec.PhaseEndTicks),
+                    Math.Max(_fenceMigrateExec.PhaseEndTicks, _fencePrepExec.PhaseEndTicks)));
+            return start > 0 && end > start ? end - start : 0;
+        }
+    }
+
+    /// <summary>
+    /// Last tick's serial steps inside the phases, in <see cref="Stopwatch"/> ticks: the #886 Prep tails and the destination-cell sort (Migrate's
+    /// Prepare), the merge and leaf-snap (index Prepare), the merge and bucket partition (EntityMap Prepare), and the WAL emit summed over every archetype
+    /// Finalize handled. Each is a piece of a phase span that no worker count can shrink, which is why they are reported apart from the spans.
+    /// </summary>
+    internal (long MigrateTail, long MigrateSort, long IndexMerge, long EntityMapMerge, long FinalizeEmit, long FinalizeAppend) LastFenceSerialTicks
+    {
+        get
+        {
+            if (_fenceMigrateExec == null)
+            {
+                return (0, 0, 0, 0, 0, 0);
+            }
+
+            long emit = 0;
+            long append = 0;
+            var states = Engine._archetypeStates;
+            if (states != null)
+            {
+                for (var aid = 0; aid < states.Length; aid++)
+                {
+                    var cs = states[aid]?.ClusterState;
+                    if (cs != null)
+                    {
+                        emit += cs.LastTickFinalizeEmitTicks;
+                        append += cs.LastTickFinalizeAppendTicks;
+                    }
+                }
+            }
+
+            return (_fenceMigrateExec.LastTailTicks, _fenceMigrateExec.LastSortTicks, _fenceIndexMassUpdateExec.LastSerialPrepareTicks,
+                _fenceEntityMapUpdateExec.LastSerialPrepareTicks, emit, append);
+        }
+    }
 
     /// <summary>
     /// Wraps a tick phase with paired profiler boundary events. When <see cref="TelemetryConfig.ProfilerActive"/> is false the JIT folds both Emit calls to

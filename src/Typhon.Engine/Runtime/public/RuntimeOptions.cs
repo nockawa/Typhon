@@ -164,6 +164,12 @@ public sealed record FenceCostModel(float MigrationCost, float AabbCost, float S
     public float EntityMapUpdateCost { get; init; } = 0.04f;
 
     /// <summary>
+    /// µs per dirty cluster of Finalize's WAL emit when it runs as slices (#889). Seeded from the measurement that motivated the slicing — 0.6 ms for
+    /// ~2 000 dirty clusters of 64 entities on Matrix M — and refined at runtime by <see cref="LiveFenceCostModel"/> like every other coefficient.
+    /// </summary>
+    public float FinalizeEmitCost { get; init; } = 0.3f;
+
+    /// <summary>
     /// Default coefficients, calibrated against AntHill traces: migration ≈ 33.3 µs/entity, AABB recompute ≈ 2.4 µs/cluster.
     /// Shadow and Spatial coefficients are placeholders (1.0) pending measurement — override them for shadow-heavy or spatial workloads.
     /// </summary>

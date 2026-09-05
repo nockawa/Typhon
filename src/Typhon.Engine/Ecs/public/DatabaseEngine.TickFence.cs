@@ -147,7 +147,9 @@ public partial class DatabaseEngine
         ReadOnlySpan<int> slotIndices,
         ReadOnlySpan<int> componentSizes,
         ReadOnlySpan<int> componentOffsets,
-        long tickNumber)
+        long tickNumber,
+        int firstWord,
+        int wordCount)
     {
         var arena = _fenceCollectionArena ??= new CommitBatchArena();
         arena.Reset();
@@ -155,7 +157,8 @@ public partial class DatabaseEngine
         var batchBytes = 0;
         long highestLSN = 0;
 
-        for (var wi = 0; wi < dirtyBits.Length; wi++)
+        var endWord = Math.Min(dirtyBits.Length, firstWord + wordCount);
+        for (var wi = firstWord; wi < endWord; wi++)
         {
             var word = dirtyBits[wi];
             while (word != 0)
@@ -815,7 +818,7 @@ public partial class DatabaseEngine
     /// plus per-cluster shadow buffers (per-cluster). Cell-descriptor mutations are deferred to ExecuteMigrationsSlice (Phase 2) and Finalize (Phase 3);
     /// Prep itself does not bump cell counters.</para>
     /// </remarks>
-    internal unsafe bool PrepareArchetypeFence(ArchetypeMetadata meta, long tickNumber, ChangeSet changeSet)
+    internal bool PrepareArchetypeFence(ArchetypeMetadata meta, long tickNumber, ChangeSet changeSet)
     {
         var hasWork = PrepareArchetypeFenceCore(meta, tickNumber, changeSet);
 
@@ -859,6 +862,8 @@ public partial class DatabaseEngine
     private void ResetArchetypeFenceTickState(ArchetypeClusterState clusterState)
     {
         clusterState.ResetPrepSliceState();
+        clusterState.FinalizeHeadRan = false;
+        clusterState.FinalizeSliceable = false;
         clusterState.FenceBranchPath = 0;
         clusterState.FenceDirtyBits = null;
 
@@ -1562,26 +1567,153 @@ public partial class DatabaseEngine
     }
 
     /// <summary>
-    /// Phase 3 of the parallel cluster tick fence: post-migration AABB recompute, dormancy sweep, dirty-ring archive, ComponentTable flag
-    /// propagation, and WAL chunk serialization for the archetype's post-migration <see cref="ArchetypeClusterState.FenceDirtyBits"/>.
-    /// Safe to call concurrently across DISTINCT archetypes. Returns the highest LSN published by this archetype's WAL chunks (0 if none).
+    /// Phase 4 of the parallel cluster tick fence for one archetype, end to end: the head (<see cref="FinalizeArchetypeFenceHead"/> — bookkeeping clear,
+    /// dormancy sweep, dirty-ring archive, ComponentTable flag propagation, column narrowing) and then the WAL emit over every dirty word
+    /// (<see cref="EmitArchetypeFenceRange"/>). Safe to call concurrently across DISTINCT archetypes. Returns the highest LSN published by this archetype's
+    /// WAL chunks (0 if none). The <see cref="FenceWorkKind.ArchetypeFinalize"/> item and the serial <see cref="WriteTickFence"/> path run this; when the
+    /// archetype's Finalize was sliced (#889) the head ran on the driver and the emit runs as <see cref="FenceWorkKind.FinalizeEmitSlice"/> items instead.
     /// </summary>
-    internal unsafe long FinalizeArchetypeFence(ArchetypeMetadata meta, long tickNumber, ChangeSet changeSet)
+    internal long FinalizeArchetypeFence(ArchetypeMetadata meta, long tickNumber, ChangeSet changeSet)
+    {
+        if (!FinalizeArchetypeFenceHead(meta, tickNumber))
+        {
+            return 0;
+        }
+
+        var engineState = _archetypeStates[meta.ArchetypeId];
+        var clusterState = engineState.ClusterState;
+        var dirtyBits = clusterState.FenceDirtyBits;
+        var accessor = clusterState.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            var emitStart = Stopwatch.GetTimestamp();
+            var highestLSN = EmitArchetypeFenceRange(engineState, clusterState, meta.ArchetypeId, tickNumber, ref accessor, 0, dirtyBits.Length);
+            clusterState.LastTickFinalizeEmitTicks = Stopwatch.GetTimestamp() - emitStart;
+            return highestLSN;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    /// <summary>How many POPULATED <see cref="FenceWorkPlan.FinalizeSliceWords"/>-word ranges an archetype's dirty bitmap needs before its Finalize emit is
+    /// worth slicing (#889): two, so that one worker does not open two accessors for the work one would have done and the head is not moved onto the
+    /// driver for a single slice. Counted on the words that are dirty, not on the bitmap's capacity — a 512-word archetype with three dirty words is one
+    /// slice's worth of emit.</summary>
+    /// <remarks>A static rather than a const so the partition harness can switch the sliced path off in the same binary (<c>--no-finalize-slice</c>,
+    /// which sets it to <see cref="int.MaxValue"/>).</remarks>
+    internal static int FinalizeSliceMinRanges = 2;
+
+    /// <summary>
+    /// Phase 4, serial head (#889): for every archetype whose emit is worth slicing, runs <see cref="FinalizeArchetypeFenceHead"/> here on the driver, in
+    /// <c>FenceFinalizeExecSystem.Prepare</c>, so the planner can carve the emit into <see cref="FenceWorkKind.FinalizeEmitSlice"/> items over
+    /// <see cref="ArchetypeClusterState.FenceDirtyBits"/> word ranges. An archetype that does not qualify is left alone: its
+    /// <see cref="FenceWorkKind.ArchetypeFinalize"/> item runs <see cref="FinalizeArchetypeFence"/> exactly as before, head included.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why the head is serial and the emit is not.</b> The head frees drained clusters, sweeps dormancy (<c>SleepingClusterCount++</c> is a plain
+    /// increment, DM-02), publishes <c>PreviousTickDirtySnapshot</c> as one store and narrows the emitted columns to one set per archetype — all of it
+    /// per-archetype, none of it divisible, and all of it cheap: a few array walks over the active clusters. The emit is the opposite: one
+    /// <c>FenceBlock</c> record per dirty cluster, each a bulk copy of the cluster's SoA bytes into its own WAL claim, and at 100 % moving it was 85 % of
+    /// Finalize and 0.6 ms of fence span on one worker while seven waited. Two slices never share a word, <c>_fenceBlocks</c> and the collection arena
+    /// are thread-static, <c>WalCommitBuffer.TryClaim</c> is MPSC, and fence records are individually committed (recovery applies them by LSN without a
+    /// commit marker), so which worker publishes which cluster's record changes the LSN order between clusters and nothing else.</para>
+    /// <para><b>The head ran ⇒ the atomic item must not.</b> A head that finds nothing to emit — every column Versioned or Transient, or a Checkpoint
+    /// archetype — has still swept dormancy and archived the ring; running the atomic item after it would sweep twice.
+    /// <see cref="ArchetypeClusterState.FinalizeHeadRan"/> is what the planner reads, and it emits nothing at all for such an archetype.</para>
+    /// </remarks>
+    internal void PrepareArchetypeFinalizeHeads(long tickNumber, int workerCount)
+    {
+        var states = _archetypeStates;
+        if (states == null)
+        {
+            return;
+        }
+
+        // Indexed, like the Migrate sort loop, rather than through GetAllArchetypes(): that is an iterator, and this runs on the fence path every tick.
+        for (var aid = 0; aid < states.Length; aid++)
+        {
+            var cs = states[aid]?.ClusterState;
+            if (cs == null)
+            {
+                continue;
+            }
+
+            cs.FinalizeHeadRan = false;
+            cs.FinalizeSliceable = false;
+            if (workerCount < 2 || cs.FenceBranchPath != 2 || cs.FenceDirtyBits == null
+                || FenceWorkPlan.CountPopulatedRanges(cs.FenceDirtyBits, FenceWorkPlan.FinalizeSliceWords) < FinalizeSliceMinRanges)
+            {
+                continue;
+            }
+
+            var meta = ArchetypeRegistry.GetMetadata((ushort)aid);
+            if (meta == null || !meta.IsClusterEligible)
+            {
+                continue;
+            }
+
+            // Set BEFORE the head runs, deliberately: a head that throws after its dormancy sweep must not be followed by the atomic item's second
+            // sweep. The phase is skipped on a throw anyway (#890) and the next Prep resets the flag; this is the belt to that brace.
+            cs.FinalizeHeadRan = true;
+            cs.FinalizeSliceable = FinalizeArchetypeFenceHead(meta, tickNumber);
+        }
+    }
+
+    /// <summary>One <see cref="FenceWorkKind.FinalizeEmitSlice"/>: the WAL emit for the dirty words in <c>[firstWord, firstWord + wordCount)</c> of an
+    /// archetype whose head ran on the driver. Returns the highest LSN it published.</summary>
+    internal long EmitArchetypeFenceSlice(ArchetypeMetadata meta, long tickNumber, int firstWord, int wordCount)
+    {
+        if (meta == null || meta.ArchetypeId >= _archetypeStates.Length)
+        {
+            return 0;
+        }
+
+        var engineState = _archetypeStates[meta.ArchetypeId];
+        var clusterState = engineState?.ClusterState;
+        if (clusterState == null || !clusterState.FinalizeSliceable)
+        {
+            return 0;
+        }
+
+        var accessor = clusterState.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            var emitStart = Stopwatch.GetTimestamp();
+            var highestLSN = EmitArchetypeFenceRange(engineState, clusterState, meta.ArchetypeId, tickNumber, ref accessor, firstWord, wordCount);
+            // Summed across the slices: CPU, not span, on a sliced tick — the same convention Prep's sub-spans follow (#886).
+            Interlocked.Add(ref clusterState.LastTickFinalizeEmitTicks, Stopwatch.GetTimestamp() - emitStart);
+            return highestLSN;
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Everything Finalize does before the WAL emit, for one archetype: drop the executed migration prefix, free drained clusters, clear the AABB-refresh
+    /// bookkeeping, apply and refit promoted cells, sweep dormancy, archive the dirty ring, publish the dirty snapshot and the ComponentTable flags, and
+    /// narrow the emitted columns into <see cref="ArchetypeClusterState.FenceEmit"/>. Returns true when there is something to emit.
+    /// </summary>
+    internal bool FinalizeArchetypeFenceHead(ArchetypeMetadata meta, long tickNumber)
     {
         if (meta == null || !meta.IsClusterEligible || meta.ArchetypeId >= _archetypeStates.Length)
         {
-            return 0;
+            return false;
         }
         var engineState = _archetypeStates[meta.ArchetypeId];
         var clusterState = engineState?.ClusterState;
         if (clusterState == null || clusterState.FenceBranchPath == 0)
         {
-            return 0;
+            return false;
         }
 
-        long highestLSN = 0;
         var dirtyBits = clusterState.FenceDirtyBits;
-        
+        clusterState.LastTickFinalizeEmitTicks = 0;
+        clusterState.LastTickFinalizeAppendTicks = 0;
+
         // Drop the prefix this tick executed and keep the rest. This replaced an outright `PendingMigrationCount = 0`, which discarded every request
         // enqueued AFTER the Migrate phase — all of them, for the two detectors that run inside AabbRefresh (FlagOutliersForMigration since #230, and step
         // 10's drift detection). Both are documented as executing "next tick"; neither ever did.
@@ -1591,250 +1723,276 @@ public partial class DatabaseEngine
         // after the Migrate/AabbRefresh phase barriers. By this point no concurrent ClaimSlotInCell can race with us — safe to free clean clusters.
         clusterState.DrainPendingClusterFinalizations(_spatialGrid);
 
-        var accessor = clusterState.ClusterSegment.CreateChunkAccessor();
-        try
+        // AABB recompute moved out of Finalize into the parallel AabbRefresh phase (FenceAabbRefreshExecSystem). Finalize is now responsible only for
+        // the post-AABB bookkeeping clear + dormancy sweep + WAL emit. The serial WriteTickFence wrapper (no-WAL path) calls RecomputeDirtyClusterAabbs
+        // directly before reaching FinalizeArchetypeFence, so it works equivalently.
+        //
+        // The bookkeeping clear lives here (single-threaded, per-archetype) — it ran inside the legacy RecomputeDirtyClusterAabbs tail before and must run
+        // AFTER all AABB slices finished, which the phase barrier guarantees.
+        if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
         {
+            clusterState.ClearAabbRefreshBookkeeping();
+        }
 
-            // AABB recompute moved out of Finalize into the parallel AabbRefresh phase (FenceAabbRefreshExecSystem). Finalize is now responsible only for
-            // the post-AABB bookkeeping clear + dormancy sweep + WAL emit. The serial WriteTickFence wrapper (no-WAL path) calls RecomputeDirtyClusterAabbs
-            // directly before reaching FinalizeArchetypeFence, so it works equivalently.
-            //
-            // The bookkeeping clear lives here (single-threaded, per-archetype) — it ran inside the legacy RecomputeDirtyClusterAabbs tail before and must run
-            // AFTER all AABB slices finished, which the phase barrier guarantees.
-            if (clusterState.SpatialSlot.HasSpatialIndex && clusterState.SpatialSlot.FieldInfo.Mode == SpatialMode.Dynamic)
+        // Deferred promoted-cell applies first, then the refit — in that order, because the refit has to see the tree those applies produce. Both are
+        // no-ops when nothing was promoted.
+        clusterState.DrainPromotedAabbApplies();
+
+        // ST-07's make-good, in the one place that satisfies both of its constraints: after every AABB slice (the phase barrier above guarantees it) and
+        // before any query can run. The in-place update path deliberately leaves leaf MBRs wider than the union of their entries, which is safe for
+        // queries and false for ST-01 read literally — so the looseness must not survive the fence.
+        clusterState.RefitPromotedCellTrees();
+
+        // Clean-spatial-refresh branch (path 1) stops here — no dormancy sweep change (already swept clean), no WAL emit.
+        if (clusterState.FenceBranchPath == 1)
+        {
+            return false;
+        }
+
+        // Dormancy sweep with the final post-migration dirty bits.
+        clusterState.DormancySweep(dirtyBits, tickNumber);
+
+        // Archive dirty bitmap into per-archetype DirtyBitmapRing for spatial interest management.
+        clusterState.ClusterDirtyRing?.Archive(tickNumber, dirtyBits, dirtyBits.Length);
+
+        var entryCount = clusterState.FenceEntryCount;
+        // Account for any net dirty-bit change from migrations: clears src bits, sets dst bits — net change is zero per migration in the common case, but a
+        // destination chunk that was previously not in the snapshot grows it. For simplicity we recompute entryCount by popcount; the migration count is
+        // small and this is one quick pass.
+        if (clusterState.LastTickMigrationCount > 0)
+        {
+            var recomputed = 0;
+            for (var i = 0; i < dirtyBits.Length; i++)
             {
-                clusterState.ClearAabbRefreshBookkeeping();
-            }
-
-            // Deferred promoted-cell applies first, then the refit — in that order, because the refit has to see the tree those applies produce. Both are
-            // no-ops when nothing was promoted.
-            clusterState.DrainPromotedAabbApplies();
-
-            // ST-07's make-good, in the one place that satisfies both of its constraints: after every AABB slice (the phase barrier above guarantees it) and
-            // before any query can run. The in-place update path deliberately leaves leaf MBRs wider than the union of their entries, which is safe for
-            // queries and false for ST-01 read literally — so the looseness must not survive the fence.
-            clusterState.RefitPromotedCellTrees();
-
-            // Clean-spatial-refresh branch (path 1) stops here — no dormancy sweep change (already swept clean), no WAL emit.
-            if (clusterState.FenceBranchPath == 1)
-            {
-                return 0;
-            }
-
-            // Dormancy sweep with the final post-migration dirty bits.
-            clusterState.DormancySweep(dirtyBits, tickNumber);
-
-            // Archive dirty bitmap into per-archetype DirtyBitmapRing for spatial interest management.
-            clusterState.ClusterDirtyRing?.Archive(tickNumber, dirtyBits, dirtyBits.Length);
-
-            var entryCount = clusterState.FenceEntryCount;
-            // Account for any net dirty-bit change from migrations: clears src bits, sets dst bits — net change is zero per migration in the common case, but a
-            // destination chunk that was previously not in the snapshot grows it. For simplicity we recompute entryCount by popcount; the migration count is
-            // small and this is one quick pass.
-            if (clusterState.LastTickMigrationCount > 0)
-            {
-                var recomputed = 0;
-                for (var i = 0; i < dirtyBits.Length; i++)
+                if (dirtyBits[i] != 0)
                 {
-                    if (dirtyBits[i] != 0)
-                    {
-                        recomputed += BitOperations.PopCount((ulong)dirtyBits[i]);
-                    }
+                    recomputed += BitOperations.PopCount((ulong)dirtyBits[i]);
                 }
-                entryCount = recomputed;
             }
+            entryCount = recomputed;
+        }
 
-            if (entryCount == 0)
+        if (entryCount == 0)
+        {
+            return false;
+        }
+
+        // Store dirty snapshot for change-filtered runtime dispatch.
+        clusterState.PreviousTickDirtySnapshot = dirtyBits;
+
+        // Propagate dirty status to ComponentTables for change-filtered runtime dispatch.
+        for (var slot = 0; slot < clusterState.Layout.ComponentCount; slot++)
+        {
+            var table = engineState.SlotToComponentTable[slot];
+            table.PreviousTickHadDirtyEntities = true;
+            table.PreviousTickDirtyBitmap ??= Array.Empty<long>();
+        }
+
+        // #568 — the declared durability window. Checkpoint archetypes emit NO fence WAL records; their SingleVersion values reach disk through the
+        // checkpoint, the same path cluster STRUCTURE has always used, so a crash costs up to one checkpoint interval of freshness (not existence).
+        //
+        // The gate sits HERE, after the dormancy sweep, the dirty-ring archive, PreviousTickDirtySnapshot and the ComponentTable flag propagation above,
+        // and NOT at the top of the method. The dirty bitmap has eleven consumers and WAL emit is one of them: zone-map recompute, migration detect and
+        // execute, AABB refresh, dormancy, the dirty ring, and both change-filtered dispatch surfaces all read it. Only the emission is optional.
+        //
+        // ClusterDurabilityTests pins both halves — the emission stops, and every other consumer keeps being fed.
+        //
+        // Versioned components are unaffected in either setting: their revision chain is logged at commit and is authoritative (see skipMask below), so
+        // no ClusterDurability value can lose a Versioned write.
+        if (meta.ClusterDurability == ClusterDurability.Checkpoint)
+        {
+            return false;
+        }
+
+        var layout = clusterState.Layout;
+        var plan = clusterState.FenceEmit ??= new ArchetypeClusterState.FenceEmitPlan(layout.ComponentCount);
+
+        // Slots excluded from fence emission:
+        //   Transient — never persisted at all.
+        //   Versioned — the cluster slot holds only a HEAD *cache*; the revision chain is the truth and is logged at commit.
+        //     On reopen the HEAD is rebuilt from the chain (ArchetypeClusterState.RebuildVersionedHeadFromChain), so a fence
+        //     record for a Versioned slot is written, fsynced, retained and then ignored. Pure waste — do not emit it.
+        var skipMask = meta.TransientSlotMask | meta.VersionedSlotMask;
+        // Precompute the durable component slots' WAL identity once per archetype. Each becomes one Slot record per dirty
+        // entity (M4); the entity PK is read from the cluster's id array, so fence records are logical, never physical.
+        // Sizes and offsets are hoisted here too — they are per-archetype constants, and reading them inside the per-entity loop
+        // costs one bounds-checked array load per record (100k+ per tick on a large archetype) for a value that never changes.
+        Span<int> durableSlots = stackalloc int[layout.ComponentCount];
+        Span<int> durableSizes = stackalloc int[layout.ComponentCount];
+        Span<int> durableOffsets = stackalloc int[layout.ComponentCount];
+        var durableCount = 0;
+        for (var slot = 0; slot < layout.ComponentCount; slot++)
+        {
+            if ((skipMask & (1 << slot)) != 0)
             {
-                return highestLSN;
+                continue;
             }
 
-            // Store dirty snapshot for change-filtered runtime dispatch.
-            clusterState.PreviousTickDirtySnapshot = dirtyBits;
+            durableSlots[durableCount] = slot;
+            durableSizes[durableCount] = layout.ComponentSize(slot);
+            durableOffsets[durableCount] = layout.ComponentOffset(slot);
+            durableCount++;
+        }
 
-            // Propagate dirty status to ComponentTables for change-filtered runtime dispatch.
-            for (var slot = 0; slot < clusterState.Layout.ComponentCount; slot++)
+        // Nothing durable to emit (every slot Transient and/or Versioned) — skip the whole walk rather than building empty batches.
+        if (durableCount == 0)
+        {
+            return false;
+        }
+
+        // #559 §4.5 — narrow the emitted columns to the component slots actually written this tick. The mask is a single union per ARCHETYPE, not one per
+        // cluster: per-cluster was implemented and measured first and is slower (+2.1 ms/tick median, ~10 ms spread) because the array is written by every
+        // worker on every dirty-marking write and false-shares. The emitter only ever consumes the union, so the finer granularity bought nothing it could
+        // use — hence one column set for all clusters of the archetype. The union is fail-safe: a writer that did not identify its component recorded
+        // AllSlotsWritten, so the archetype falls back to emitting everything.
+        var fenceWritten = clusterState.FenceWrittenSlots;
+        var durableMask = 0;
+        for (var d = 0; d < durableCount; d++)
+        {
+            durableMask |= 1 << durableSlots[d];
+        }
+
+        var activeMask = fenceWritten & durableMask;
+        if (activeMask == 0)
+        {
+            return false;   // dirty entities, but nothing durable was written to them
+        }
+
+        var columnCount = 0;
+        var totalCompSize = 0;
+        for (var d = 0; d < durableCount; d++)
+        {
+            if ((activeMask & (1 << durableSlots[d])) == 0)
             {
-                var table = engineState.SlotToComponentTable[slot];
-                table.PreviousTickHadDirtyEntities = true;
-                table.PreviousTickDirtyBitmap ??= Array.Empty<long>();
+                continue;
             }
 
-            // #568 — the declared durability window. Checkpoint archetypes emit NO fence WAL records; their SingleVersion values reach disk through the
-            // checkpoint, the same path cluster STRUCTURE has always used, so a crash costs up to one checkpoint interval of freshness (not existence).
-            //
-            // The gate sits HERE, after the dormancy sweep, the dirty-ring archive, PreviousTickDirtySnapshot and the ComponentTable flag propagation above,
-            // and NOT at the top of the method. The dirty bitmap has eleven consumers and WAL emit is one of them: zone-map recompute, migration detect and
-            // execute, AABB refresh, dormancy, the dirty ring, and both change-filtered dispatch surfaces all read it. Only the emission is optional.
-            //
-            // ClusterDurabilityTests pins both halves — the emission stops, and every other consumer keeps being fed.
-            //
-            // Versioned components are unaffected in either setting: their revision chain is logged at commit and is authoritative (see skipMask below), so
-            // no ClusterDurability value can lose a Versioned write.
-            if (meta.ClusterDurability == ClusterDurability.Checkpoint)
-            {
-                return highestLSN;
-            }
+            plan.SlotIndices[columnCount] = durableSlots[d];
+            plan.CompSizes[columnCount] = durableSizes[d];
+            plan.CompOffsets[columnCount] = durableOffsets[d];
+            totalCompSize += durableSizes[d];
+            columnCount++;
+        }
 
-            var layout = clusterState.Layout;
-            // Slots excluded from fence emission:
-            //   Transient — never persisted at all.
-            //   Versioned — the cluster slot holds only a HEAD *cache*; the revision chain is the truth and is logged at commit.
-            //     On reopen the HEAD is rebuilt from the chain (ArchetypeClusterState.RebuildVersionedHeadFromChain), so a fence
-            //     record for a Versioned slot is written, fsynced, retained and then ignored. Pure waste — do not emit it.
-            var skipMask = meta.TransientSlotMask | meta.VersionedSlotMask;
-            // Precompute the durable component slots' WAL identity once per archetype. Each becomes one Slot record per dirty
-            // entity (M4); the entity PK is read from the cluster's id array, so fence records are logical, never physical.
-            // Sizes and offsets are hoisted here too — they are per-archetype constants, and reading them inside the per-entity loop
-            // costs one bounds-checked array load per record (100k+ per tick on a large archetype) for a value that never changes.
-            Span<int> durableSlots = stackalloc int[layout.ComponentCount];
-            Span<int> durableSizes = stackalloc int[layout.ComponentCount];
-            Span<int> durableOffsets = stackalloc int[layout.ComponentCount];
-            var durableCount = 0;
-            for (var slot = 0; slot < layout.ComponentCount; slot++)
-            {
-                if ((skipMask & (1 << slot)) != 0)
-                {
-                    continue;
-                }
+        plan.ColumnCount = columnCount;
+        plan.TotalCompSize = totalCompSize;
+        plan.EntityIdsOffset = layout.EntityIdsOffset;
 
-                durableSlots[durableCount] = slot;
-                durableSizes[durableCount] = layout.ComponentSize(slot);
-                durableOffsets[durableCount] = layout.ComponentOffset(slot);
-                durableCount++;
-            }
+        // LOG-06 for the columnar path: collect the collection-handle byte ranges of every emitted column so the codec can zero them out of the copied
+        // SoA bytes. A cluster slot carries no component overhead, so a field's value-relative offset IS its slot-relative one — the same identity that
+        // lets ClusterCollectionSlot share the table's descriptor. Almost always empty; the two loops cost nothing when it is.
+        var handleRangeCount = 0;
+        for (var c = 0; c < columnCount; c++)
+        {
+            handleRangeCount += engineState.SlotToComponentTable[plan.SlotIndices[c]].CollectionFields.Length;
+        }
 
-            // Nothing durable to emit (every slot Transient and/or Versioned) — skip the whole walk rather than building empty batches.
-            if (durableCount == 0)
-            {
-                return highestLSN;
-            }
-
-            var entityIdsOffset = layout.EntityIdsOffset;
-
-            // #559 §4.5 — narrow the emitted columns to the component slots actually written this tick. The mask is a single union per ARCHETYPE, not one per
-            // cluster: per-cluster was implemented and measured first and is slower (+2.1 ms/tick median, ~10 ms spread) because the array is written by every
-            // worker on every dirty-marking write and false-shares. The emitter only ever consumes the union, so the finer granularity bought nothing it could
-            // use — hence one column set for all clusters of the archetype. The union is fail-safe: a writer that did not identify its component recorded
-            // AllSlotsWritten, so the archetype falls back to emitting everything.
-            var fenceWritten = clusterState.FenceWrittenSlots;
-            var durableMask = 0;
-            for (var d = 0; d < durableCount; d++)
-            {
-                durableMask |= 1 << durableSlots[d];
-            }
-
-            var activeMask = fenceWritten & durableMask;
-            if (activeMask == 0)
-            {
-                return highestLSN;   // dirty entities, but nothing durable was written to them
-            }
-
-            Span<int> slotIndices = stackalloc int[durableCount];
-            Span<int> compSizes = stackalloc int[durableCount];
-            Span<int> compOffsets = stackalloc int[durableCount];
-            var columnCount = 0;
-            var totalCompSize = 0;
-            for (var d = 0; d < durableCount; d++)
-            {
-                if ((activeMask & (1 << durableSlots[d])) == 0)
-                {
-                    continue;
-                }
-
-                slotIndices[columnCount] = durableSlots[d];
-                compSizes[columnCount] = durableSizes[d];
-                compOffsets[columnCount] = durableOffsets[d];
-                totalCompSize += durableSizes[d];
-                columnCount++;
-            }
-
-            slotIndices = slotIndices[..columnCount];
-            compSizes = compSizes[..columnCount];
-            compOffsets = compOffsets[..columnCount];
-
-            // LOG-06 for the columnar path: collect the collection-handle byte ranges of every emitted column so the codec can zero them out of the copied
-            // SoA bytes. A cluster slot carries no component overhead, so a field's value-relative offset IS its slot-relative one — the same identity that
-            // lets ClusterCollectionSlot share the table's descriptor. Almost always empty; the two loops cost nothing when it is.
-            var handleRangeCount = 0;
+        plan.EnsureHandleRanges(handleRangeCount);
+        plan.HandleRangeCount = handleRangeCount;
+        if (handleRangeCount > 0)
+        {
+            var hr = 0;
             for (var c = 0; c < columnCount; c++)
             {
-                handleRangeCount += engineState.SlotToComponentTable[slotIndices[c]].CollectionFields.Length;
-            }
-
-            Span<ulong> columnHandleRanges = handleRangeCount == 0 ? default : stackalloc ulong[handleRangeCount];
-            if (handleRangeCount > 0)
-            {
-                var hr = 0;
-                for (var c = 0; c < columnCount; c++)
+                foreach (var f in engineState.SlotToComponentTable[plan.SlotIndices[c]].CollectionFields)
                 {
-                    foreach (var f in engineState.SlotToComponentTable[slotIndices[c]].CollectionFields)
-                    {
-                        columnHandleRanges[hr++] = RecordCodec.PackColumnHandleRange(c, f.OffsetInComponentStorage, f.HandleSize);
-                    }
+                    plan.ColumnHandleRanges[hr++] = RecordCodec.PackColumnHandleRange(c, f.OffsetInComponentStorage, f.HandleSize);
                 }
-            }
-
-            // Columnar emission (#559): one FenceBlock record per dirty cluster instead of one Slot record per (entity, component).
-            // A cluster's entity keys and each component's values are already contiguous in the SoA, so every part of the payload
-            // is a single bulk copy — the codec copies straight out of the page into the WAL claim, with no staging arena.
-            // 256, not 64 (#886). MaxFenceBatchBytes is the cap this batch was designed around, and at the ~1 KB a one-entity block costs it binds at
-            // roughly 256 descriptors. The array used to hold 64, so it was the array that bound, every time, and Finalize paid a Measure -> TryClaim ->
-            // Write -> Publish round trip per 64 dirty clusters -- ~31 a tick at 2 000 dirty clusters instead of ~8. Durability-neutral: fence records are
-            // individually committed (LOG-04) and the byte cap still bounds the claim; the only thing that changes is how many claims a tick makes.
-            var blocks = _fenceBlocks ??= new RecordCodec.FenceBlockDescriptor[MaxFenceBatchBlocks];
-            var blockCount = 0;
-            var batchBytes = 0;
-
-            for (var wi = 0; wi < dirtyBits.Length; wi++)
-            {
-                var word = dirtyBits[wi];
-                if (word == 0)
-                {
-                    continue;
-                }
-
-                // Emit the contiguous slot RANGE that spans the dirty bits, not the whole cluster and not a gather: an all-dirty
-                // cluster degenerates to one copy per column, a single dirty entity to one entity. Clean entities inside the
-                // range ride along — redundant, never wrong — and DirtyMask records which ones actually changed.
-                var firstSlot = BitOperations.TrailingZeroCount((ulong)word);
-                var lastSlot = 63 - BitOperations.LeadingZeroCount((ulong)word);
-                var slotSpan = lastSlot - firstSlot + 1;
-                var recWire = RecordCodec.FenceBlockWireSize(columnCount, slotSpan, totalCompSize);
-
-                if (blockCount > 0 && (batchBytes + recWire > MaxFenceBatchBytes || blockCount == blocks.Length))
-                {
-                    highestLSN = Math.Max(highestLSN, AppendFenceBlockBatch(blocks, blockCount, meta.ArchetypeId, tickNumber,
-                        entityIdsOffset, slotIndices, compSizes, compOffsets, totalCompSize, columnHandleRanges));
-                    blockCount = 0;
-                    batchBytes = 0;
-                }
-
-                blocks[blockCount++] = new RecordCodec.FenceBlockDescriptor(
-                    (nint)accessor.GetChunkAddress(wi), wi, (byte)firstSlot, (byte)slotSpan, (ulong)word >> firstSlot);
-                batchBytes += recWire;
-            }
-
-            if (blockCount > 0)
-            {
-                highestLSN = Math.Max(highestLSN, AppendFenceBlockBatch(blocks, blockCount, meta.ArchetypeId, tickNumber,
-                    entityIdsOffset, slotIndices, compSizes, compOffsets, totalCompSize, columnHandleRanges));
-            }
-
-            // #389: the columnar record carries the SoA bytes with every collection handle zeroed, so on its own it would RESTORE a collection as empty —
-            // including one whose content was already safe on the checkpoint timeline. The content therefore rides alongside, in its own fence batch of
-            // CollectionDelta records. A separate Append rather than a new record kind inside the block: fence records are individually committed (LOG-04),
-            // so ordering between the two batches is by LSN, and recovery folds per (entity, slot, field) and flushes after the Slot apply regardless.
-            if (handleRangeCount > 0)
-            {
-                highestLSN = Math.Max(highestLSN, AppendClusterCollectionContent(
-                    engineState, dirtyBits, ref accessor, entityIdsOffset, slotIndices, compSizes, compOffsets, tickNumber));
             }
         }
-        finally
+
+        return true;
+    }
+
+    /// <summary>
+    /// The WAL emit for the dirty words in <c>[firstWord, firstWord + wordCount)</c> of one archetype's <see cref="ArchetypeClusterState.FenceDirtyBits"/>,
+    /// with the columns <see cref="FinalizeArchetypeFenceHead"/> narrowed into <see cref="ArchetypeClusterState.FenceEmit"/>. Two calls over disjoint
+    /// ranges may run concurrently (#889): each reads the cluster pages through its own accessor, batches descriptors in the thread-static
+    /// <c>_fenceBlocks</c> and claims its own WAL space. Returns the highest LSN it published, 0 when the range held no dirty word.
+    /// </summary>
+    internal unsafe long EmitArchetypeFenceRange(
+        ArchetypeEngineState engineState,
+        ArchetypeClusterState clusterState,
+        ushort archetypeId,
+        long tickNumber,
+        ref ChunkAccessor<PersistentStore> accessor,
+        int firstWord,
+        int wordCount)
+    {
+        var dirtyBits = clusterState.FenceDirtyBits;
+        var plan = clusterState.FenceEmit;
+        var endWord = Math.Min(dirtyBits.Length, firstWord + wordCount);
+        var slotIndices = plan.SlotIndices.AsSpan(0, plan.ColumnCount);
+        var compSizes = plan.CompSizes.AsSpan(0, plan.ColumnCount);
+        var compOffsets = plan.CompOffsets.AsSpan(0, plan.ColumnCount);
+        var columnHandleRanges = plan.ColumnHandleRanges.AsSpan(0, plan.HandleRangeCount);
+        var totalCompSize = plan.TotalCompSize;
+        var entityIdsOffset = plan.EntityIdsOffset;
+        long highestLSN = 0;
+
+        // Columnar emission (#559): one FenceBlock record per dirty cluster instead of one Slot record per (entity, component).
+        // A cluster's entity keys and each component's values are already contiguous in the SoA, so every part of the payload
+        // is a single bulk copy — the codec copies straight out of the page into the WAL claim, with no staging arena.
+        // 256, not 64 (#886). MaxFenceBatchBytes is the cap this batch was designed around, and at the ~1 KB a one-entity block costs it binds at
+        // roughly 256 descriptors. The array used to hold 64, so it was the array that bound, every time, and Finalize paid a Measure -> TryClaim ->
+        // Write -> Publish round trip per 64 dirty clusters -- ~31 a tick at 2 000 dirty clusters instead of ~8. Durability-neutral: fence records are
+        // individually committed (LOG-04) and the byte cap still bounds the claim; the only thing that changes is how many claims a tick makes.
+        var blocks = _fenceBlocks ??= new RecordCodec.FenceBlockDescriptor[MaxFenceBatchBlocks];
+        var blockCount = 0;
+        var batchBytes = 0;
+        long appendTicks = 0;
+
+        for (var wi = firstWord; wi < endWord; wi++)
         {
-            accessor.Dispose();
+            var word = dirtyBits[wi];
+            if (word == 0)
+            {
+                continue;
+            }
+
+            // Emit the contiguous slot RANGE that spans the dirty bits, not the whole cluster and not a gather: an all-dirty
+            // cluster degenerates to one copy per column, a single dirty entity to one entity. Clean entities inside the
+            // range ride along — redundant, never wrong — and DirtyMask records which ones actually changed.
+            var firstSlot = BitOperations.TrailingZeroCount((ulong)word);
+            var lastSlot = 63 - BitOperations.LeadingZeroCount((ulong)word);
+            var slotSpan = lastSlot - firstSlot + 1;
+            var recWire = RecordCodec.FenceBlockWireSize(plan.ColumnCount, slotSpan, totalCompSize);
+
+            if (blockCount > 0 && (batchBytes + recWire > MaxFenceBatchBytes || blockCount == blocks.Length))
+            {
+                var appendStart = Stopwatch.GetTimestamp();
+                highestLSN = Math.Max(highestLSN, AppendFenceBlockBatch(blocks, blockCount, archetypeId, tickNumber,
+                    entityIdsOffset, slotIndices, compSizes, compOffsets, totalCompSize, columnHandleRanges));
+                appendTicks += Stopwatch.GetTimestamp() - appendStart;
+                blockCount = 0;
+                batchBytes = 0;
+            }
+
+            blocks[blockCount++] = new RecordCodec.FenceBlockDescriptor(
+                (nint)accessor.GetChunkAddress(wi), wi, (byte)firstSlot, (byte)slotSpan, (ulong)word >> firstSlot);
+            batchBytes += recWire;
         }
+
+        if (blockCount > 0)
+        {
+            var appendStart = Stopwatch.GetTimestamp();
+            highestLSN = Math.Max(highestLSN, AppendFenceBlockBatch(blocks, blockCount, archetypeId, tickNumber,
+                entityIdsOffset, slotIndices, compSizes, compOffsets, totalCompSize, columnHandleRanges));
+            appendTicks += Stopwatch.GetTimestamp() - appendStart;
+        }
+
+        Interlocked.Add(ref clusterState.LastTickFinalizeAppendTicks, appendTicks);
+
+        // #389: the columnar record carries the SoA bytes with every collection handle zeroed, so on its own it would RESTORE a collection as empty —
+        // including one whose content was already safe on the checkpoint timeline. The content therefore rides alongside, in its own fence batch of
+        // CollectionDelta records. A separate Append rather than a new record kind inside the block: fence records are individually committed (LOG-04),
+        // so ordering between the two batches is by LSN, and recovery folds per (entity, slot, field) and flushes after the Slot apply regardless.
+        if (plan.HandleRangeCount > 0)
+        {
+            highestLSN = Math.Max(highestLSN, AppendClusterCollectionContent(
+                engineState, dirtyBits, ref accessor, entityIdsOffset, slotIndices, compSizes, compOffsets, tickNumber, firstWord, wordCount));
+        }
+
         return highestLSN;
     }
 }

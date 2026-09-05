@@ -101,16 +101,18 @@ internal readonly struct MigrationRequest
     /// <remarks>
     /// <para><b>Only the repair path (#872 step 12) sets this.</b> A full cell re-sort computes the ENTIRE destination layout up front — sort order
     /// determines which cluster and which slot every entity lands in — so the placement is an output of the planner, not of the claim.</para>
-    /// <para><b>What would break it is the SORT, not the slicing.</b> Before the Migrate phase dispatches,
-    /// <c>ArchetypeClusterState.SortPendingMigrationsByDestCellKey</c> runs an <c>Array.Sort</c> — introsort, <b>unstable</b> — over a comparer that reads
-    /// <c>DestCellKey</c> alone. Every request a repair emits for one cell compares equal, so the planner's emission order within that cell is permuted
-    /// arbitrarily, and first fit would then assign slots in the permuted order. That sort runs only on the parallel path
-    /// (<c>FenceExecSystem</c>), so the serial and parallel fences would produce different packings from identical input — which is exactly what
-    /// <c>AC-12.4</c> forbids. Pinning the slot makes the packing independent of it.</para>
+    /// <para><b>What would have broken it is the SORT, not the slicing.</b> Before the Migrate phase dispatches,
+    /// <c>ArchetypeClusterState.SortPendingMigrationsByDestCellKey</c> orders the queue by <c>DestCellKey</c> alone. Until #889 that was an
+    /// <c>Array.Sort</c> — introsort, <b>unstable</b> — so every request a repair emits for one cell compared equal and the planner's emission order
+    /// within that cell was permuted arbitrarily; first fit would then have assigned slots in the permuted order. That sort runs only on the parallel path
+    /// (<c>FenceExecSystem</c>), so the serial and parallel fences would have produced different packings from identical input — which is exactly what
+    /// <c>AC-12.4</c> forbids. Pinning the slot made the packing independent of it.</para>
     /// <para><i>Slicing is NOT the reason, and an earlier version of this comment said it was.</i>
     /// <c>FenceWorkPlan.EmitMigrationApplyItems</c> advances each slice boundary until <c>DestCellKey</c> changes, so one cell's run is never split across
-    /// workers and two workers can never claim into the same fresh cluster. Stated because the wrong reason is worse than none: whoever makes that sort
-    /// stable would, from it, correctly conclude this field is dead and delete it.</para>
+    /// workers and two workers can never claim into the same fresh cluster.</para>
+    /// <para><b>#889 made the sort stable</b> (<c>ArchetypeClusterState.RadixSortByDestCellKey</c>), so the emission order now survives it and the pin is
+    /// no longer what makes the packing deterministic. The field is kept for now: the fallback chain below is what every consumer is written against, and
+    /// retiring it is a change to the planner's contract rather than to the sort. Whoever takes that on has this paragraph as the licence.</para>
     /// <para><b>Still a preference, like the cluster pin.</b> The planner allocates its fresh clusters during Prep and publishes them into
     /// <c>CellClusterPool</c> immediately, so a same-tick cell-crossing migration whose own pinned cluster is full can fall through to
     /// <c>ClaimSlotInCell</c>'s first fit and take a slot this plan reserved. A previously-queued request can also have emptied a source slot, in which case

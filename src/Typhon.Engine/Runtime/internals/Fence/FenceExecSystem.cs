@@ -51,6 +51,10 @@ internal abstract class FencePhaseExecSystemBase : ChunkedCallbackSystem<FenceCo
     /// </remarks>
     protected long PendingPhaseStart;
 
+    /// <summary>Set by a derived <see cref="Prepare"/> to the ticks its own serial work took, before calling <c>base.Prepare</c>; published as
+    /// <see cref="LastSerialPrepareTicks"/> there.</summary>
+    protected long PendingSerialTicks;
+
     /// <summary>
     /// Wall-clock <see cref="Stopwatch"/> ticks from the start of <see cref="Prepare"/> to the moment the last chunk finished — how long the phase actually
     /// took, not how much CPU it consumed.
@@ -62,6 +66,22 @@ internal abstract class FencePhaseExecSystemBase : ChunkedCallbackSystem<FenceCo
     /// This is the number to quote for "how long did the phase take".
     /// </remarks>
     internal long PhaseSpanTicks => _phaseEndTicks > _phaseStartTicks ? _phaseEndTicks - _phaseStartTicks : 0;
+
+    /// <summary>When the phase's <see cref="Prepare"/> began, in <see cref="Stopwatch"/> ticks; zero before the first tick.</summary>
+    internal long PhaseStartTicks => _phaseStartTicks;
+
+    /// <summary>When the phase's last chunk finished; zero when the phase dispatched no chunk this tick.</summary>
+    internal long PhaseEndTicks => _phaseEndTicks;
+
+    /// <summary>
+    /// The serial part of the last <see cref="Prepare"/> that is NOT plan building: the Migrate phase's Prep tails and its destination-cell sort, the index
+    /// phase's merge and leaf-snap, the EntityMap phase's merge and bucket partition. Zero for phases whose Prepare is the plan alone.
+    /// </summary>
+    /// <remarks>
+    /// Exposed because a phase's span is Prepare plus dispatch, and only the dispatch scales with workers: at W = 8 the index phase's span was 0.69 ms
+    /// against 1.18 ms of summed chunk time, which says the serial half is the larger one without saying by how much. This is the number that says.
+    /// </remarks>
+    internal long LastSerialPrepareTicks { get; private set; }
 
     /// <summary>Test/diagnostic accessor for the last plan built by this system.</summary>
     internal FenceWorkPlan PlanForTest => _plan;
@@ -84,9 +104,19 @@ internal abstract class FencePhaseExecSystemBase : ChunkedCallbackSystem<FenceCo
         _phaseStartTicks = PendingPhaseStart != 0 ? PendingPhaseStart : Stopwatch.GetTimestamp();
         PendingPhaseStart = 0;
         _phaseEndTicks = 0;
+        LastSerialPrepareTicks = PendingSerialTicks;
+        PendingSerialTicks = 0;
 
         _plan.Build(Phase, Engine, ctx.CostModel, ctx.WorkerCount, ctx.ChunkOversubscription);
         EnsureChunkArrays(_plan.ChunkCount);
+        if (_plan.ChunkCount == 0)
+        {
+            // No chunk will end this phase, so end it here: the serial work Prepare just did — Migrate's tails and sort, the index merge, Finalize's
+            // heads for archetypes with nothing to emit — is fence time whether or not anything was dispatched after it, and PhaseSpanTicks and
+            // TyphonRuntime.LastFenceWallTicks would otherwise read it as zero (#889 review).
+            _phaseEndTicks = Stopwatch.GetTimestamp();
+        }
+
         return _plan.ChunkCount;
     }
 
@@ -334,6 +364,11 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
     protected override ChangeSet CreateChunkChangeSet() => Engine.MMF.RentChangeSet();
 
+    /// <summary>Ticks the last Prepare spent in the #886 Prep tails, and in the destination-cell sort, separately.</summary>
+    internal long LastTailTicks { get; private set; }
+
+    internal long LastSortTicks { get; private set; }
+
     protected override int Prepare(FenceContext ctx)
     {
         PendingPhaseStart = Stopwatch.GetTimestamp();
@@ -356,6 +391,9 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
             Engine.MMF.ReturnChangeSet(tailChangeSet);
         }
 
+        var afterTails = Stopwatch.GetTimestamp();
+        LastTailTicks = afterTails - PendingPhaseStart;
+
         // Inter-phase serial step (was in RunParallelFence): sort each archetype's pending migrations by destCellKey so the slice planner can carve
         // cell-disjoint ranges. Runs single-threaded by construction (only one worker decrements the last predecessor dep to zero and reaches this Prepare).
         var states = Engine._archetypeStates;
@@ -372,6 +410,9 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
                 st.SortPendingMigrationsByDestCellKey();
             }
         }
+
+        LastSortTicks = Stopwatch.GetTimestamp() - afterTails;
+        PendingSerialTicks = LastTailTicks + LastSortTicks;
 
         var chunkCount = base.Prepare(ctx);
         EnsureChunkDirtyBuffers(chunkCount);
@@ -631,7 +672,8 @@ internal sealed class FenceEntityMapUpdateExecSystem : FencePhaseExecSystemBase
                 // serial one does. This loop is per-archetype, so the attribution is exact even though the method walks every archetype.
                 var prepStart = Stopwatch.GetTimestamp();
                 staging.ClearPrepared();
-                var count = staging.MergeAndPartition(Math.Max(1, ctx.WorkerCount));
+                var desiredParts = Math.Max(1, ctx.WorkerCount);
+                var count = staging.MergeAndPartition(desiredParts);
                 if (count == 0)
                 {
                     Interlocked.Add(ref state.ClusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - prepStart);
@@ -639,12 +681,13 @@ internal sealed class FenceEntityMapUpdateExecSystem : FencePhaseExecSystemBase
                 }
 
                 var parts = state.EntityMap.PartitionByBucketRuns<EntityLocationUpdate, ClusterLocationBulkUpdater>(
-                    staging.Prepared.AsSpan(0, count), Math.Max(1, ctx.WorkerCount), staging.Boundaries);
+                    staging.Prepared.AsSpan(0, count), desiredParts, staging.Boundaries);
                 staging.SetPartCount(parts);
                 Interlocked.Add(ref state.ClusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - prepStart);
             }
         }
 
+        PendingSerialTicks = Stopwatch.GetTimestamp() - PendingPhaseStart;
         return base.Prepare(ctx);
     }
 
@@ -782,16 +825,39 @@ internal sealed class FenceFinalizeExecSystem : FencePhaseExecSystemBase
         .ChunkedParallel(1)
         .After(FenceAabbRefreshExecSystem.SystemName);
 
-    protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet)
+    /// <summary>Runs the serial Finalize head for every archetype whose emit will be sliced (#889), before the plan is built from what it decided.</summary>
+    /// <remarks>
+    /// Single-threaded by construction, like every phase Prepare. Inside the fence window and an epoch scope for the same reason the Migrate tails are: the
+    /// head frees drained clusters and refits promoted cell trees, work a chunk does under both.
+    /// </remarks>
+    protected override int Prepare(FenceContext ctx)
     {
-        if (item.Kind != FenceWorkKind.ArchetypeFinalize)
+        PendingPhaseStart = Stopwatch.GetTimestamp();
+        using (Engine.EpochManager.FenceWindow.EnterWorker())
+        using (EpochGuard.Enter(Engine.EpochManager))
         {
-            return 0;
+            Engine.PrepareArchetypeFinalizeHeads(ctx.TickNumber, ctx.WorkerCount);
         }
 
-        var meta = ArchetypeRegistry.GetMetadata((ushort)item.TargetId);
-        return Engine.FinalizeArchetypeFence(meta, Context.TickNumber, null); // Finalize doesn't touch ChangeSet
+        PendingSerialTicks = Stopwatch.GetTimestamp() - PendingPhaseStart;
+        return base.Prepare(ctx);
     }
+
+    protected override long DispatchItem(int chunkIndex, in FenceWorkItem item, ChangeSet changeSet) =>
+        item.Kind switch
+        {
+            FenceWorkKind.ArchetypeFinalize => Engine.FinalizeArchetypeFence(
+                ArchetypeRegistry.GetMetadata((ushort)item.TargetId),
+                Context.TickNumber,
+                null) // no ChangeSet
+            ,
+            FenceWorkKind.FinalizeEmitSlice => Engine.EmitArchetypeFenceSlice(
+                ArchetypeRegistry.GetMetadata((ushort)item.TargetId),
+                Context.TickNumber,
+                item.SliceStart,
+                item.SliceCount),
+            _ => 0
+        };
 }
 
 /// <summary>
@@ -858,17 +924,21 @@ internal sealed class FenceIndexMassUpdateExecSystem : FencePhaseExecSystemBase
 
                     // #872 step 11: charged per archetype. This serial half is "the majority of this phase" by the comment above, so a cost model that
                     // measured only DispatchItem would see a fraction of what the index actually costs.
+                    // W parts, not W × oversubscription: measured on Matrix M at W = 8 (#889), sixteen parts left the index span identical at every
+                    // point (136 vs 136 µs at 25 % moving) — the apply is ~90 µs of parallel work, and a part's dispatch overhead is what the better
+                    // balance would have bought back. Refuted; do not re-add without a new measurement.
                     var prepStart = Stopwatch.GetTimestamp();
-                    PrepareArchetype(clusterState, staging, ctx.WorkerCount);
+                    PrepareArchetype(clusterState, staging, Math.Max(1, ctx.WorkerCount));
                     Interlocked.Add(ref clusterState.LastTickMigrationApplyTicks, Stopwatch.GetTimestamp() - prepStart);
                 }
             }
         }
 
+        PendingSerialTicks = Stopwatch.GetTimestamp() - PendingPhaseStart;
         return base.Prepare(ctx);
     }
 
-    private static void PrepareArchetype(ArchetypeClusterState clusterState, IndexUpdateStaging staging, int workerCount)
+    private static void PrepareArchetype(ArchetypeClusterState clusterState, IndexUpdateStaging staging, int desiredParts)
     {
         staging.ClearPrepared();
 
@@ -894,7 +964,6 @@ internal sealed class FenceIndexMassUpdateExecSystem : FencePhaseExecSystemBase
                 continue;
             }
 
-            var desiredParts = Math.Max(1, workerCount);
             var boundaries = staging.RentBoundaries(fieldId, desiredParts);
 
             var accessor = tree.Segment.CreateChunkAccessor();

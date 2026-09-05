@@ -3,7 +3,8 @@ namespace Typhon.Engine.Internals;
 /// <summary>
 /// Discriminator for <see cref="FenceWorkItem"/>. The fence is a chain of six phases; each phase has its own kind(s). Finalize is archetype-atomic (one
 /// item per cluster-eligible archetype, end-to-end on one worker); Prep is atomic for small archetypes and <see cref="PrepSlice"/> items for large ones
-/// (#886). MigrationApply is sliceable — a single archetype's
+/// (#886), and Finalize likewise: atomic for small archetypes, a serial head plus <see cref="FinalizeEmitSlice"/> items for large ones (#889).
+/// MigrationApply is sliceable — a single archetype's
 /// <c>PendingMigrations</c> array is partitioned into contiguous slices sorted by destination cell key so multiple workers can apply migrations for the SAME
 /// archetype concurrently without contending on cell-level data.
 /// </summary>
@@ -43,6 +44,10 @@ internal enum FenceWorkKind : byte
     /// <summary>One range of an archetype's dirty-bitmap words, steps ② ③ ④ ⑤ of Prep (#886 lead D). <c>SliceStart</c> = first word, <c>SliceCount</c> = words,
     /// <c>UnitCount</c> = dirty clusters in the range.</summary>
     PrepSlice = 9,
+
+    /// <summary>One range of an archetype's dirty-bitmap words of Finalize's WAL emit (#889), after the head ran on the driver. Same fields as
+    /// <see cref="PrepSlice"/>.</summary>
+    FinalizeEmitSlice = 10,
 
     /// <summary>Phase 4 — per-archetype Finalize work: bookkeeping clear, dormancy sweep, dirty-ring archive, WAL emit. One item per cluster-eligible archetype.
     /// Must run AFTER all <see cref="AabbRefreshSlice"/> slices for the same archetype have completed.</summary>

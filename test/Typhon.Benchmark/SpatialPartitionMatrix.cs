@@ -178,6 +178,18 @@ internal sealed class RunResult
     public long FenceChunks;
     public double MoveMs;
 
+    /// <summary>Prep's Prepare start to the last chunk end of the last phase: the six spans plus the scheduler's gaps between them (µs/tick).</summary>
+    public double FenceWallUs;
+
+    /// <summary>The serial steps inside the phases, µs/tick: what no worker count shrinks. See <c>TyphonRuntime.LastFenceSerialTicks</c>.</summary>
+    public double MigrateTailUs, MigrateSortUs, IndexMergeUs, EntityMapMergeUs, FinalizeEmitUs;
+
+    /// <summary>The WAL-append part of <see cref="FinalizeEmitUs"/>, and the commit-buffer swaps the tick caused.</summary>
+    public double FinalizeAppendUs, WalSwapsPerTick;
+
+    /// <summary>Per-phase chunks the planner dispatched and items it packed into them, per tick — the parallel width each phase actually got.</summary>
+    public double PrepChunks, PrepItems, MigrateChunks, MigrateItems, IndexChunks, IndexItems, AabbChunks, AabbItems, FinalizeChunks, FinalizeItems;
+
     // What the fence actually did, per tick
     public double MigrationsPerTick;
     public double MigrationExecuteMs;
@@ -282,6 +294,7 @@ public static class SpatialPartitionMatrix
     /// first-class variable rather than a constant nobody chose.
     /// </remarks>
     private static float MovingFraction = 1f;
+    private static bool AdaptiveCost;
 
     // ── Aging (#886 lead B) ──────────────────────────────────────────────────────────────────────────────────────────
     //
@@ -336,6 +349,17 @@ public static class SpatialPartitionMatrix
         }
 
         FenceWorkPlan.PrepSliceWords = ArgInt(args, "--prep-slice-words", FenceWorkPlan.PrepSliceWords);
+
+        // A/B switches for #889: the worker-aware chunk count (default) against the 200 µs-per-chunk rule it replaces, the smallest chunk it will
+        // dispatch, and the live cost model in place of the pinned seeds (see the RuntimeOptions remark below for why pinned is the default here).
+        FenceWorkPlan.WorkerAwareChunking = Array.IndexOf(args, "--legacy-chunking") < 0;
+        FenceWorkPlan.MinUsefulChunkUs = Math.Min(FenceWorkPlan.MinChunkCostUs, ArgFloat(args, "--chunk-floor-us", FenceWorkPlan.MinUsefulChunkUs));
+        AdaptiveCost = Array.IndexOf(args, "--adaptive-cost") >= 0;
+        ArchetypeClusterState.UseRadixDestCellSort = Array.IndexOf(args, "--compare-sort") < 0;
+        if (Array.IndexOf(args, "--no-finalize-slice") >= 0)
+        {
+            DatabaseEngine.FinalizeSliceMinRanges = int.MaxValue;
+        }
         if (DatabaseEngine.PrepSliceMinClusters != int.MaxValue)
         {
             // The minimum is "two slices' worth" and is computed from the width once at static init; a swept width must carry it along.
@@ -772,6 +796,7 @@ public static class SpatialPartitionMatrix
 
         var movedFlags = new bool[entities];
         var phase = new PhaseAccumulator();
+        long lastSwapGen = -1;   // -1 = no sample yet; 0 is a legitimate generation on a buffer that has never swapped
         var moveMsTotal = 0d;
 
         // -- The Move system is inside a scheduler callback, and a callback that throws is not a callback that reported an error ------------------------
@@ -893,6 +918,14 @@ public static class SpatialPartitionMatrix
                     fin.SpanTicks * toUs, fin.CpuTicks * toUs,
                     prep.Chunks + mig.Chunks + idx.Chunks + map.Chunks + aabb.Chunks + fin.Chunks);
 
+                var serial = runtime.LastFenceSerialTicks;
+                var swapGen = dbe.WalManager?.CommitBuffer?.SwapGeneration ?? 0;
+                var swaps = lastSwapGen < 0 ? 0 : swapGen - lastSwapGen;
+                lastSwapGen = swapGen;
+                phase.AddSerial(runtime.LastFenceWallTicks * toUs, serial.MigrateTail * toUs, serial.MigrateSort * toUs, serial.IndexMerge * toUs,
+                    serial.EntityMapMerge * toUs, serial.FinalizeEmit * toUs, serial.FinalizeAppend * toUs, swaps);
+                phase.AddWidths(runtime);
+
                 acc.Add(dbe.GetSpatialTelemetry(archetypeId));
             });
 
@@ -1001,11 +1034,13 @@ public static class SpatialPartitionMatrix
             BaseTickRate = 200,
             EnableParallelFence = true,
 
-            // 🔴 OFF, and that is a measurement decision worth stating. With the live cost model on, FenceWorkPlan
+            // 🔴 OFF by default, and that is a measurement decision worth stating. With the live cost model on, FenceWorkPlan
             // picks its chunk count from the PREVIOUS ticks' observed cost, so a W-sweep would partly measure the model
             // adapting rather than the work parallelising, and two runs of one point would not be comparable. Production
-            // leaves it on; a scaling study cannot.
-            AdaptiveFenceCost = false,
+            // leaves it on; a scaling study cannot. `--adaptive-cost` turns it on for the runs that ask what production
+            // sees: the pinned index seed (0.06 µs/entry) is 7x below what this world measures (0.43), and a planner fed
+            // that number under-chunks the index phase in a way production never would (#889).
+            AdaptiveFenceCost = AdaptiveCost,
         });
 
         // 🔴 Exceptions raised once teardown has begun are DISCARDED, and this is a workaround for an engine defect
@@ -1320,6 +1355,9 @@ public static class SpatialPartitionMatrix
     {
         private double _prepSpan, _prepCpu, _migSpan, _migCpu, _idxSpan, _idxCpu;
         private double _mapSpan, _mapCpu, _aabbSpan, _aabbCpu, _finSpan, _finCpu;
+        private double _wall, _migTail, _migSort, _idxMerge, _mapMerge, _finEmit, _finAppend, _swaps;
+        private readonly double[] _phaseChunks = new double[5];
+        private readonly double[] _phaseItems = new double[5];
         private long _chunks;
         private readonly List<double> _fenceSpans = [];
 
@@ -1344,6 +1382,32 @@ public static class SpatialPartitionMatrix
             _fenceSpans.Add(prepSpan + migSpan + idxSpan + mapSpan + aabbSpan + finSpan);
         }
 
+        public void AddSerial(double wall, double migTail, double migSort, double idxMerge, double mapMerge, double finEmit, double finAppend, double swaps)
+        {
+            _wall += wall; _migTail += migTail; _migSort += migSort; _idxMerge += idxMerge; _mapMerge += mapMerge; _finEmit += finEmit;
+            _finAppend += finAppend; _swaps += swaps;
+        }
+
+        public void AddWidths(TyphonRuntime runtime)
+        {
+            AddWidth(0, runtime.FencePrepExec);
+            AddWidth(1, runtime.FenceMigrateExec);
+            AddWidth(2, runtime.FenceIndexMassUpdateExec);
+            AddWidth(3, runtime.FenceAabbRefreshExec);
+            AddWidth(4, runtime.FenceFinalizeExec);
+        }
+
+        private void AddWidth(int i, FencePhaseExecSystemBase exec)
+        {
+            if (exec == null)
+            {
+                return;
+            }
+
+            _phaseChunks[i] += exec.PlanForTest.ChunkCount;
+            _phaseItems[i] += exec.PlanForTest.ItemCount;
+        }
+
         public void Fill(RunResult r)
         {
             var n = Math.Max(1, _fenceSpans.Count);
@@ -1356,6 +1420,15 @@ public static class SpatialPartitionMatrix
             r.FenceSpanUs = r.PrepSpanUs + r.MigrateSpanUs + r.IndexSpanUs + r.EntityMapSpanUs + r.AabbSpanUs + r.FinalizeSpanUs;
             r.FenceCpuUs = r.PrepCpuUs + r.MigrateCpuUs + r.IndexCpuUs + r.EntityMapCpuUs + r.AabbCpuUs + r.FinalizeCpuUs;
             r.FenceChunks = _chunks / n;
+            r.FenceWallUs = _wall / n;
+            r.MigrateTailUs = _migTail / n; r.MigrateSortUs = _migSort / n; r.IndexMergeUs = _idxMerge / n;
+            r.EntityMapMergeUs = _mapMerge / n; r.FinalizeEmitUs = _finEmit / n;
+            r.FinalizeAppendUs = _finAppend / n; r.WalSwapsPerTick = _swaps / n;
+            r.PrepChunks = _phaseChunks[0] / n; r.PrepItems = _phaseItems[0] / n;
+            r.MigrateChunks = _phaseChunks[1] / n; r.MigrateItems = _phaseItems[1] / n;
+            r.IndexChunks = _phaseChunks[2] / n; r.IndexItems = _phaseItems[2] / n;
+            r.AabbChunks = _phaseChunks[3] / n; r.AabbItems = _phaseItems[3] / n;
+            r.FinalizeChunks = _phaseChunks[4] / n; r.FinalizeItems = _phaseItems[4] / n;
         }
 
         private List<double> Sorted()
@@ -1716,6 +1789,11 @@ public static class SpatialPartitionMatrix
             + $"fence {r.TickMsMean,7:F3} ms wall (p99 {r.TickMsP99,7:F3}) cpu {r.FenceCpuUs / 1000d,8:F3} ms = {par,5:F2}x | "
             + $"prep {r.PrepSpanUs / 1000d,6:F2} mig {r.MigrateSpanUs / 1000d,6:F2} idx {r.IndexSpanUs / 1000d,6:F2} "
             + $"map {r.EntityMapSpanUs / 1000d,6:F2} aabb {r.AabbSpanUs / 1000d,6:F2} fin {r.FinalizeSpanUs / 1000d,6:F2} | "
+            + $"wall {r.FenceWallUs / 1000d,6:F2} serial tail {r.MigrateTailUs / 1000d:F2} sort {r.MigrateSortUs / 1000d:F2} "
+            + $"idxMerge {r.IndexMergeUs / 1000d:F2} emit {r.FinalizeEmitUs / 1000d:F2} "
+            + $"(append {r.FinalizeAppendUs / 1000d:F2}, swaps {r.WalSwapsPerTick:F2}) | "
+            + $"chunks/items p {r.PrepChunks:F0}/{r.PrepItems:F0} m {r.MigrateChunks:F0}/{r.MigrateItems:F0} i {r.IndexChunks:F0}/{r.IndexItems:F0} "
+            + $"a {r.AabbChunks:F0}/{r.AabbItems:F0} f {r.FinalizeChunks:F0}/{r.FinalizeItems:F0} | "
             + $"mig/t {r.MigrationsPerTick,8:F1} | tight {r.TightnessPct,6:F1}% | clusters {r.ActiveClusters,6} | "
             + $"aabbM {r.AabbMediumNs / 1000d,7:F1} us | bf {r.BruteForceNs / 1000d,8:F1} us"
             + (r.ChurnTicks > 0 ? $" | aged {r.ChurnFraction:P0}x{r.ChurnTicks} inv {r.ActiveListInversions}" : string.Empty));
@@ -1738,7 +1816,10 @@ public static class SpatialPartitionMatrix
             "activeClusters", "liveCells", "entitiesPerCluster", "entitiesPerCell", "tightnessPct", "tightnessP90Pct",
             "aabbSmallNs", "aabbSmallHits", "aabbMediumNs", "aabbMediumHits", "aabbLargeNs", "aabbLargeHits",
             "radiusNs", "radiusHits", "rayNs", "rayHits", "frustumNs", "frustumHits", "bruteForceNs",
-            "churnFraction", "churnTicks", "activeListInversions", "failure"));
+            "churnFraction", "churnTicks", "activeListInversions",
+            "fenceWallUs", "migrateTailUs", "migrateSortUs", "indexMergeUs", "entityMapMergeUs", "finalizeEmitUs", "finalizeAppendUs", "walSwapsPerTick",
+            "prepChunks", "prepItems", "migrateChunks", "migrateItems", "indexChunks", "indexItems", "aabbChunks", "aabbItems", "finalizeChunks",
+            "finalizeItems", "failure"));
 
         var c = CultureInfo.InvariantCulture;
         foreach (var r in results)
@@ -1758,7 +1839,11 @@ public static class SpatialPartitionMatrix
                 r.ActiveClusters, r.LiveCells, F(r.EntitiesPerCluster), F(r.EntitiesPerCell), F(r.TightnessPct), F(r.TightnessP90Pct),
                 F(r.AabbSmallNs), F(r.AabbSmallHits), F(r.AabbMediumNs), F(r.AabbMediumHits), F(r.AabbLargeNs), F(r.AabbLargeHits),
                 F(r.RadiusNs), F(r.RadiusHits), F(r.RayNs), F(r.RayHits), F(r.FrustumNs), F(r.FrustumHits), F(r.BruteForceNs),
-                F(r.ChurnFraction), r.ChurnTicks, r.ActiveListInversions, r.Failure));
+                F(r.ChurnFraction), r.ChurnTicks, r.ActiveListInversions,
+                F(r.FenceWallUs), F(r.MigrateTailUs), F(r.MigrateSortUs), F(r.IndexMergeUs), F(r.EntityMapMergeUs), F(r.FinalizeEmitUs),
+                F(r.FinalizeAppendUs), F(r.WalSwapsPerTick),
+                F(r.PrepChunks), F(r.PrepItems), F(r.MigrateChunks), F(r.MigrateItems), F(r.IndexChunks), F(r.IndexItems), F(r.AabbChunks), F(r.AabbItems),
+                F(r.FinalizeChunks), F(r.FinalizeItems), r.Failure));
         }
 
         File.WriteAllText(path, sb.ToString());

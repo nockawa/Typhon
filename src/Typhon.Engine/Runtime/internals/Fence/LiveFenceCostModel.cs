@@ -35,6 +35,12 @@ internal sealed class LiveFenceCostModel
     /// <summary>µs per staged EntityMap location patch, calibrated from the EntityMapUpdate phase's own chunk wall time and unit counts.</summary>
     public float EntityMapUpdateCost;
 
+    /// <summary>µs per dirty cluster of a sliced Finalize emit (#889), calibrated from the Finalize phase's chunk wall time over the slices' dirty-cluster
+    /// counts. Atomic Finalize items carry no units, so a phase with only those never moves it; a tick that mixes sliced and atomic archetypes charges
+    /// the atomic items' wall to the slices' units and reads high — the same bias <see cref="PrepCost"/> has carried since #886, bounded by the
+    /// <c>2 × W × O</c> chunk cap, so it yields smaller slices and never a wrong plan.</summary>
+    public float FinalizeEmitCost;
+
     public readonly float ShadowCost;
     public readonly float SpatialCost;
 
@@ -68,6 +74,12 @@ internal sealed class LiveFenceCostModel
     private long _prepSumWall;
     private long _prepSumUnits;
 
+    private readonly long[] _finWall = new long[WindowSize];
+    private readonly long[] _finUnits = new long[WindowSize];
+    private int _finCursor;
+    private long _finSumWall;
+    private long _finSumUnits;
+
     public LiveFenceCostModel(FenceCostModel seed)
     {
         ArgumentNullException.ThrowIfNull(seed);
@@ -78,6 +90,7 @@ internal sealed class LiveFenceCostModel
         ShadowCost = seed.ShadowCost;
         SpatialCost = seed.SpatialCost;
         PrepCost = seed.ShadowCost + seed.SpatialCost;
+        FinalizeEmitCost = seed.FinalizeEmitCost;
     }
 
     public void UpdatePhase(FencePhase phase, long wallTicks, long unitCount)
@@ -137,6 +150,20 @@ internal sealed class LiveFenceCostModel
                 if (_idxSumUnits > 0)
                 {
                     IndexUpdateCost = (float)((_idxSumWall * TicksToMicros) / _idxSumUnits);
+                }
+                break;
+
+            case FencePhase.Finalize:
+                _finSumWall  -= _finWall[_finCursor];
+                _finSumUnits -= _finUnits[_finCursor];
+                _finWall[_finCursor]  = wallTicks;
+                _finUnits[_finCursor] = unitCount;
+                _finSumWall  += wallTicks;
+                _finSumUnits += unitCount;
+                _finCursor = (_finCursor + 1) & WindowMask;
+                if (_finSumUnits > 0)
+                {
+                    FinalizeEmitCost = (float)((_finSumWall * TicksToMicros) / _finSumUnits);
                 }
                 break;
 

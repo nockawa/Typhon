@@ -657,15 +657,18 @@
     one ArchetypePrep item, or, when Prep ran as PrepSlice items (#886), in FenceMigrateExecSystem.Prepare, which is
     single-threaded by construction. The cluster ranking, the Morton sort and the destination assignment all live
     there; no slice plans
-  invariant 🔴 a repair request pins the destination SLOT as well as the cluster, and the reason is the SORT, not
-    the slicing. Before Migrate dispatches, SortPendingMigrationsByDestCellKey runs an Array.Sort — introsort,
-    UNSTABLE — over a comparer reading DestCellKey alone, so every request a repair emits for one cell compares
-    equal and the planner's emission order within that cell is permuted arbitrarily. That sort runs only on the
-    parallel path, so first fit would give the serial and parallel fences different packings from identical
-    input. NOT slicing: FenceWorkPlan.EmitMigrationApplyItems advances each boundary until DestCellKey changes, so
-    one cell's run is never split and two workers can never claim into the same fresh cluster. Recorded because
-    the wrong reason is worse than none — whoever makes that sort stable would, from it, correctly conclude the
-    pinned slot is dead code
+  invariant 🔴 a repair request pins the destination SLOT as well as the cluster, and the reason WAS the SORT, not
+    the slicing. Until #889, SortPendingMigrationsByDestCellKey ran an Array.Sort — introsort, UNSTABLE — over a
+    comparer reading DestCellKey alone, so every request a repair emits for one cell compared equal and the
+    planner's emission order within that cell was permuted arbitrarily. That sort runs only on the parallel path,
+    so first fit would have given the serial and parallel fences different packings from identical input. NOT
+    slicing: FenceWorkPlan.EmitMigrationApplyItems advances each boundary until DestCellKey changes, so one cell's
+    run is never split and two workers can never claim into the same fresh cluster.
+  invariant #889 made the sort STABLE (ArchetypeClusterState.RadixSortByDestCellKey — LSD radix by DestCellKey,
+    enqueue order kept inside a cell), so the pin is no longer what makes the packing deterministic. The pin is
+    KEPT: every consumer is written against the fallback chain below, and retiring it is a change to the planner's
+    contract, not to the sort. Whoever retires it has this paragraph as the licence, and must keep the serial
+    and parallel packings equal without it
   invariant both pins remain PREFERENCES. The fallback chain is exact slot -> the pinned cluster's first free
     slot -> ClaimSlotInCell. A lost pin costs a worse box, never a wrong cell — CR-02 governs the rest
   invariant the sort's comparator is a TOTAL order — (mortonKey, sourceLocation) — so equal keys do not leave
@@ -765,8 +768,8 @@
   invariant the throttle lowers PendingMigrationCount itself, so the drain prefix still equals the count. It must
     NOT shorten the prefix and leave the tail queued:
       the serial fence passes PendingMigrationCount, not the prefix, so it would execute the tail AND retain it
-      SortPendingMigrationsByDestCellKey sorts [0, PendingMigrationCount) unstably, so it would permute tail
-        entries into the prefix
+      SortPendingMigrationsByDestCellKey sorts [0, PendingMigrationCount) by destination cell (stably since
+        #889, but the key is the cell, not the position), so it would move tail entries into the prefix
       both land on CR-01's "prefix too SMALL" failure, measured at 224 854 migrations on the twentieth tick
   invariant a throttled relocation is DROPPED, not carried. Its DestClusterChunkId was the least-enlargement
     choice against the AABBs of the tick that DETECTED it; a tick later TryClaimPinnedSlot rejects the stale pin

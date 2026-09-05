@@ -461,8 +461,9 @@ internal sealed partial class ArchetypeClusterState
     /// states that Migrate executes exactly <c>PendingMigrations[0 .. P)</c> where <c>P</c> is the count at Prep's return, and records what happens when
     /// that prefix is too small: "executed requests stay queued and re-execute against slots their entities have left, and the queue grows without bound"
     /// — measured at 224 854 migrations on the twentieth tick. Deferring the tail would reopen it, and would also need the serial fence (which passes
-    /// <c>PendingMigrationCount</c>, not the prefix) and <c>SortPendingMigrationsByDestCellKey</c> (which sorts the whole array, unstably) both taught
-    /// about the split. Lowering the COUNT leaves prefix == count, so nothing downstream changes and <c>CR-01</c> stays true verbatim.</para>
+    /// <c>PendingMigrationCount</c>, not the prefix) and <c>SortPendingMigrationsByDestCellKey</c> (which sorts the whole array — stably since #889, but
+    /// still by destination cell, so a tail entry can land inside the prefix) both taught about the split. Lowering the COUNT leaves prefix == count, so
+    /// nothing downstream changes and <c>CR-01</c> stays true verbatim.</para>
     /// <para><b>A dropped relocation is not a lost one, and is arguably the better outcome.</b> Its <c>DestClusterChunkId</c> was the least-enlargement
     /// choice against the AABBs of the tick that detected it, which this tick's own migrations have since moved; <c>TryClaimPinnedSlot</c> would reject
     /// the stale pin (<c>CR-02</c>) and fall back to the first fit this whole issue exists to repair. Re-detecting next tick recomputes the choice against
