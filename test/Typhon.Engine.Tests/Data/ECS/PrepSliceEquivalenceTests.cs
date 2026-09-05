@@ -376,14 +376,14 @@ class PrepSliceEquivalenceTests : TestBase<PrepSliceEquivalenceTests>
     public void SlicedPrep_BuildsTheSameQueueAsTheUnslicedPath_AtFourWorkers() => AssertArmMatchesSerial(4);
 
     /// <summary>
-    /// 🔴 This arm is what found #887. It failed ~45 % of runs at W = 8 — entities the index no longer listed, leaves naming unoccupied slots — and the
+    /// This arm is what found #887. It failed ~45 % of runs at W = 8 — entities the index no longer listed, leaves naming unoccupied slots — and the
     /// ablations located it exactly: 21 runs clean with Prep slicing off, 14 clean with only the shadow drain serialised. The defect was under the fence, in
     /// <c>BTree.MoveValue</c>'s pessimistic fallback (<c>BTreeMoveValueConcurrencyTests</c> reproduces both of its faces with no fence at all); the fence's
     /// part was merely calling it from W workers, which #886's slicing introduced. The drain was moved to one thread for a day, the tree was fixed, and the
     /// drain is back in the slices — 12 of 12 runs of this fixture clean on the fixed tree. Keep this arm un-quarantined: it is the fence-side guard for
     /// IXW-06, and if it reddens the tree's own verifier is the first thing to run.
     /// <para>
-    /// 🔴 <b>This CONTRADICTS what the doc here said before, and the contradiction is the point.</b> The 2026-09-04 note claimed the disagreement
+    /// <b>This CONTRADICTS what the doc here said before, and the contradiction is the point.</b> The 2026-09-04 note claimed the disagreement
     /// reproduced with slicing switched off, which is why #887 was filed as "not caused by #886". It does not: 21 clean runs say so. The earlier reading was
     /// taken while #890's defect was live — <c>FenceMigrateExecSystem.Prepare</c> was throwing on every dirty tick, so Index, EntityMap, AabbRefresh and
     /// Finalize were all being skipped as <c>DependencyFailed</c> and every arm was comparing against a fence that stopped half way. Measurements from that

@@ -561,7 +561,7 @@ internal abstract partial class BTree<TKey, TStore>
                         // just consumed, and the re-read was split across TWO accessors — `accessor` for self, `sibAccessor` for siblings — so one could serve a
                         // cached view of a page the other had just written through. Reading once, before any write, closes that.
                         //
-                        // 🔴 This is NOT the fix for #739, and saying so plainly because it was written as one. The crash survived it unchanged and simply moved
+                        // This is NOT the fix for #739, and saying so plainly because it was written as one. The crash survived it unchanged and simply moved
                         // to the `SetPrevious` below, which now consumes the value snapshotted BEFORE the merge — so the chain pointer was already corrupt when
                         // it was read, and read-after-consume was never the mechanism. Kept anyway because reading once before mutating is correct on its own
                         // terms and costs nothing, but it buys no correctness against #739.

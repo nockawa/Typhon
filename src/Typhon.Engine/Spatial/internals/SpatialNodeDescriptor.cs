@@ -60,7 +60,7 @@ internal readonly struct SpatialNodeDescriptor
 
         // +8 payload id (64-bit) + 4 CategoryMask (uint).
         //
-        // 🔴 A 4-byte ComponentChunkId sat between them until #872 step 13. It was the owning component's chunk id, carried so a two-pass compound query
+        // A 4-byte ComponentChunkId sat between them until #872 step 13. It was the owning component's chunk id, carried so a two-pass compound query
         // could reach component storage without an EntityMap lookup — a service only the ENTITY-level tree could offer, since a cluster tree's payload IS a
         // cluster chunk id and it passed zero here. With that tree retired the field was 4 bytes of zero per entry on the only trees left, and dropping it
         // raises LeafCapacity: R2Df32 15 -> 17, R3Df32 11 -> 13, R2Df64 9 -> 10. R3Df64 stays at 11 — its 704-byte entry area divides by 60 the same way it

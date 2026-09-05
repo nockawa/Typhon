@@ -108,7 +108,7 @@ class ClusterSlotClaimSetTests
     [Test]
     public void GrowthPastThePresizedBoundKeepsEveryEarlierClaim()
     {
-        // 🔴 Reachable on a NORMAL tick, not pathologically: the repair planner allocates fresh destination clusters mid-Prep via AllocateEmptyClusterForCell,
+        // Reachable on a NORMAL tick, not pathologically: the repair planner allocates fresh destination clusters mid-Prep via AllocateEmptyClusterForCell,
         // AFTER BuildRepairSourceExclusions has sized the set. A grow that dropped the low claims would reopen #877 silently.
         // 200 distinct clusters, deliberately past the touched list's first capacity (64) so its DOUBLING path runs. At 40 it never did, and the closing
         // assertion below claimed to cover it — a review caught the gap.

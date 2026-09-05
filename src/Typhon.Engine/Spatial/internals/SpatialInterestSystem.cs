@@ -179,7 +179,7 @@ internal sealed unsafe class SpatialInterestSystem
 
         // Effective head tick across the per-ARCHETYPE rings, which are the only rings anything reads the CONTENT of.
         //
-        // 🔴 The per-TABLE ring used to vote here, and must not. It is still archived every tick, but #872 step 13
+        // The per-TABLE ring used to vote here, and must not. It is still archived every tick, but #872 step 13
         // removed the walk that consumed it (it resolved dirty chunk ids through the entity tree's back-pointer
         // segment). It is archived on every tick, so its head is always current; a cluster ring's head is NOT, because
         // ClusterDirtyRing.Archive is skipped on the FenceBranchPath == 1 early return. Letting the always-current ring

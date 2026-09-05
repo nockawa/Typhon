@@ -54,7 +54,7 @@ internal sealed class PerCellSpatialSlot
     /// the reference before the writes that populated the tree — arm64 is a supported target, so "it works on x64" is not the test. The paired acquire is in
     /// <see cref="ReadDynamicTree"/>, <see cref="HasDynamicTree"/> and <see cref="DynamicClusterCount"/>; every reader must go through one of those rather
     /// than touching the field.</para>
-    /// <para><b>🔴 Tree FIRST, then clear the index, and both stores release.</b> The obvious order — clear the index, publish the tree — is not a race that
+    /// <para><b>Tree FIRST, then clear the index, and both stores release.</b> The obvious order — clear the index, publish the tree — is not a race that
     /// might not happen, it is the ordering the release store GUARANTEES: the null lands first, so a reader in that window sees no tree and no index and
     /// reads the cell as EMPTY. <see cref="DynamicClusterCount"/> returns 0 and the whole cell half drops out of the query, which is the silent SQ-01
     /// direction this type's discriminator exists to prevent. Publishing the tree first inverts it: a reader either sees the tree, or sees no tree and

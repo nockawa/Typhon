@@ -201,7 +201,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// always did.
     /// </summary>
     /// <remarks>
-    /// 🔴 <c>[0, PendingMigrationCount)</c> holds LIVE requests when this runs (#877): a fresh array without the copy turned them into default-valued
+    /// <c>[0, PendingMigrationCount)</c> holds LIVE requests when this runs (#877): a fresh array without the copy turned them into default-valued
     /// requests — source cluster 0, slot 0, destination cell 0 — which Migrate then executed.
     /// </remarks>
     internal void EnsurePendingMigrationCapacityForTick()
@@ -564,7 +564,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <summary>The queue sort's key: the destination cell only — that is what the slice planner carves on — sign-flipped so the radix order is
     /// <see cref="int"/> order.</summary>
     /// <remarks>
-    /// 🔴 <b>A secondary sort on the SOURCE cluster chunk id was tried here and REFUTED — do not re-add it without a new measurement.</b> The reasoning
+    /// <b>A secondary sort on the SOURCE cluster chunk id was tried here and REFUTED — do not re-add it without a new measurement.</b> The reasoning
     /// was sound on its face: the migrate loop's first act is <c>GetChunkAddress(srcChunkId, dirty: true)</c>, the accessor window holds three clusters per
     /// page, and <c>ChunkAccessor.LoadAndGet</c> is called 108 473 times in this phase per traced run — the same access pattern #882's counting sort removed
     /// from the shadow drain. An interleaved A/B over five pairs measured <b>0.95x to 1.13x on the Migrate phase, straddling 1.0</b>: no effect. (With a
@@ -666,7 +666,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             order[counts[(buffer[e].ChunkId >> 6) - min]++] = e;
         }
 
-        // 🔴 The clear is O(span), and span is the SPREAD of cluster ids rather than the amount of work: two entries at clusters 0 and 30 000 cost a
+        // The clear is O(span), and span is the SPREAD of cluster ids rather than the amount of work: two entries at clusters 0 and 30 000 cost a
         // 30 001-int memset to undo two increments. That is stated rather than hidden because an earlier revision of this comment claimed the cost was
         // proportional to the tick's work, and it is not.
         //
@@ -3963,7 +3963,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                         }
                     }
 
-                    // 🔴 The per-cell index is NOT a copy of ClusterAabbs, and deciding whether to write it by comparing ClusterAabbs against ITSELF was
+                    // The per-cell index is NOT a copy of ClusterAabbs, and deciding whether to write it by comparing ClusterAabbs against ITSELF was
                     // an SQ-01 false negative. ClusterAabbs has TWO writers — the write-time CAS in ClusterRef.MaybeGrowAndFlagShrink, whose own summary says
                     // a grow means "the cluster needs a fence-time PerCellIndex.UpdateAt with the fresh AABB" — while the index has ONE, this loop. When the
                     // CAS has already applied the grow, `stored` and `fresh` agree and the old short-circuit skipped the index, leaving it holding the
@@ -4096,7 +4096,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
                 // ── Recompute only what changed ────────────────────────────────────────────────────────────────────
                 //
-                // 🔴 This branch used to recompute UNCONDITIONALLY, and that was a regression, not a design. Before the
+                // This branch used to recompute UNCONDITIONALLY, and that was a regression, not a design. Before the
                 // fence system landed (#350) this method walked `dirtyBits` and skipped `dirtyBits[chunkId] == 0`; the
                 // rewrite replaced the walk with `ActiveClusterCount` and left the parameter as `_ = dirtyBits;`. The two
                 // sets coincide on a fully-moving world — 2 007 dirty of 2 020 active at 100 % moving — so every campaign
@@ -4143,7 +4143,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                 // ClusterAabbs to exactly what the recompute produces, and then the fence has nothing to store while the index is still a tick behind. The
                 // process bit separates the two: WriteSpatial sets it, and the OpenMut / GetSpan writers that leave ClusterAabbs for the fence to recompute
                 // do not — which is precisely the case where equality really does mean nothing happened.
-                // 🔴 This gate carries TWO meanings, and they cannot currently be separated. Read it before changing it.
+                // This gate carries TWO meanings, and they cannot currently be separated. Read it before changing it.
                 //
                 // Meaning one, which is correct: a cluster nobody touched needs neither an index write nor a scan, and
                 // skipping it is what makes a settled world cost nothing (AC-10.8). This loop walks EVERY active cluster —
@@ -4176,7 +4176,7 @@ internal sealed unsafe partial class ArchetypeClusterState
                 // RecomputeClusterAabb over every occupied slot of every active cluster, unconditionally, so `fresh` is in
                 // registers and the nomination is three float compares against a walk that has already been paid for.
                 //
-                // 🔴 KNOWN GAP, barrier-only mode. The other branch iterates ClusterProcessBitmap, which by construction
+                // KNOWN GAP, barrier-only mode. The other branch iterates ClusterProcessBitmap, which by construction
                 // holds only clusters written this tick, so there is no equivalent place to put this and a still cell in
                 // that mode is never nominated. Closing it needs a signal that ranks CELLS rather than reacting to cluster
                 // writes — which is exactly step 11's priority queue ("candidate cells ... re-ranked lazily", §5.6).
@@ -4350,7 +4350,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <para><b>Every "no information" answer is <c>true</c>.</b> A null or short <see cref="FenceDirtyBits"/> means Prep has not published a snapshot this
     /// tick, or a cluster was allocated past the pre-sized bound during Migrate; either way the honest answer is "recompute". Being wrong in the other
     /// direction is a bound that silently stops tracking its entities, which is the failure mode this whole path exists to prevent.</para>
-    /// <para>🔴 <b>The three signals are not interchangeable and none is redundant.</b> A write sets the dirty bit but not the process bit; a
+    /// <para><b>The three signals are not interchangeable and none is redundant.</b> A write sets the dirty bit but not the process bit; a
     /// <c>WriteSpatial</c> sets the process bit and deliberately not the dirty bit (<c>ClusterRef.cs:300</c>); a destroy or a migration-out sets NEITHER,
     /// because Prep step 2 masks the dirty word with occupancy and a vacated slot is no longer occupied — which is why the vacating sites flag a shrink.
     /// Dropping any one of the three leaves a class of change invisible to the refresh.</para>
@@ -4395,7 +4395,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             }
         }
 
-        // 🔴 A NULL array is "Prep published nothing", NOT "Prep has not run". FenceDirtyBits is cleared at the top of every
+        // A NULL array is "Prep published nothing", NOT "Prep has not run". FenceDirtyBits is cleared at the top of every
         // Prep and re-published at its end only when the archetype had work (FenceBranchPath 2); the refresh runs strictly
         // after Prep on both the serial and the parallel path, so by the time control reaches here the only way to see null
         // is that this archetype's Prep found nothing dirty. Treating it as "unknown, recompute everything" is what a first
@@ -5095,7 +5095,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
     /// <summary>Remove a cluster chunk ID from the active list (swap-with-last, O(1)).</summary>
     /// <remarks>
-    /// 🔴 <b>Re-sorting the list in Prep was built, measured and REFUTED (#886 lead B) — do not re-add it without a new measurement.</b> The reasoning was
+    /// <b>Re-sorting the list in Prep was built, measured and REFUTED (#886 lead B) — do not re-add it without a new measurement.</b> The reasoning was
     /// sound on its face: every swap-with-last displaces one id to a random earlier index, nothing ever puts it back, the AabbRefresh walk slices this list by
     /// index range through a 32-page accessor window, and a fresh world (ascending by construction) is the only world a 40-tick benchmark ever sees. The
     /// partition harness gained <c>--churn</c> to age a world first, and the aging is real: 1 000 adjacent inversions on 2 025 clusters after 60 warm-up
@@ -5222,7 +5222,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         // ── A vacated slot needs an AABB shrink, and NOTHING else records that ──────────────────────────────────────
         //
-        // 🔴 A destroy sets no dirty bit: ReleaseSlot never calls SetDirty, and even if the slot had been written earlier
+        // A destroy sets no dirty bit: ReleaseSlot never calls SetDirty, and even if the slot had been written earlier
         // in the tick, Prep step 2 ANDs the dirty word with occupancy, so a freed slot's bit is masked away before the
         // refresh ever sees it. It sets no process bit either — that is WriteSpatial's. So a destroyed entity's position
         // stayed inside its cluster's bound until something unrelated happened to write that cluster, which on a settled

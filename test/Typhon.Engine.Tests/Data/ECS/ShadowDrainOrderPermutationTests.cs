@@ -142,7 +142,7 @@ class ShadowDrainOrderPermutationTests
     [Test]
     public void TheScratchBuffersAreReusableAcrossCallsWithDifferentShapes()
     {
-        // 🔴 The scratch is per-archetype and lives for the process. A histogram left dirty by one call, or an order array read past the current count,
+        // The scratch is per-archetype and lives for the process. A histogram left dirty by one call, or an order array read past the current count,
         // corrupts a LATER tick — so the contract is that consecutive calls with unrelated spans each return a correct permutation.
         int[] order = [];
         int[] counts = [];

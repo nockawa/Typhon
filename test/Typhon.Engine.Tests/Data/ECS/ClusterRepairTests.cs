@@ -279,7 +279,7 @@ class ClusterRepairTests : TestBase<ClusterRepairTests>
 
         var (after, clustersAfter) = MeanClusterExtent(dbe);
 
-        // 🔴 Without this the test passes on a repair that stored NO bounds at all. MeanClusterExtent skips a cluster with
+        // Without this the test passes on a repair that stored NO bounds at all. MeanClusterExtent skips a cluster with
         // no recorded box, so `after` would be 0 over 0 clusters, `optimum` would be 100/sqrt(0) = +Infinity, and both
         // assertions below would read a flawless repair off an empty measurement. The surviving mutation is "stop storing
         // AABBs for repair-allocated destinations", which is precisely the kind of defect this AC exists to catch.
@@ -504,7 +504,7 @@ class ClusterRepairTests : TestBase<ClusterRepairTests>
         var after = TotalZoneMapWidth(dbe, out var clustersAfter);
         Assert.That(after, Is.GreaterThan(0L), "every zone map is now unrecorded — the repair invalidated them and nothing widened them back");
 
-        // 🔴 The count, not just the total. A sum shrinks just as convincingly when maps go MISSING as when they narrow,
+        // The count, not just the total. A sum shrinks just as convincingly when maps go MISSING as when they narrow,
         // and the mutation that exploits it is one line: widen InvalidateClusterZoneMaps to every cluster of the cell
         // rather than only the destinations. Most maps would then read "unrecorded", `after` would collapse, and the test
         // would get greener the more it broke.

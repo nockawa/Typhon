@@ -2445,7 +2445,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 }
                 if (_spatialQueryType == SpatialQueryType.AABB)
                 {
-                    // 🔴 The max corner is ALWAYS at [3]/[4], for both dimensions. Only Z varies.
+                    // The max corner is ALWAYS at [3]/[4], for both dimensions. Only Z varies.
                     //
                     // This block used to read qMaxX from [2] and qMaxY from [3] for a 2D component — i.e. it took the caller's minZ as maxX and their maxX as
                     // maxY. WhereInAABB documents and packs six doubles as (minX, minY, minZ, maxX, maxY, maxZ) whatever the dimension, so a 2D query got a

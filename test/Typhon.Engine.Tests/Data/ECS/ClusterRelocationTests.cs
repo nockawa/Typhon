@@ -286,7 +286,7 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
     /// So the construction puts the containing cluster at the LOWER id and the emptied one at a higher id: the spec says the
     /// containing cluster, the unfixed arithmetic says the empty one. That is also the behaviour you want on the merits —
     /// dropping an entity into a box that already covers it beats opening a fresh cluster for it.</para>
-    /// <para><b>🔴 As of the candidate-hoist refactor this test no longer reddens when the special case is deleted, and that
+    /// <para><b>As of the candidate-hoist refactor this test no longer reddens when the special case is deleted, and that
     /// is a property of the code rather than a weakness here.</b> <c>ChooseRelocationTarget</c> now clamps negative growth to
     /// zero — a defence against a box snapshotted mid-store, whose min can exceed its max — and that clamp catches the
     /// <c>-∞</c> the sentinel produces just as the explicit case catches it. Two mechanisms, identical answer, so no input
@@ -359,7 +359,7 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
     /// make placement — and therefore the resulting bounds, and therefore query cost — a function of scheduling. The
     /// candidates are made IDENTICAL rather than merely similar, because a tiebreak only has to be stable and equality is
     /// the only input that tests stability rather than arithmetic.</para>
-    /// <para><b>🔴 Deleting the tiebreak clause does NOT redden this test, and that is recorded rather than papered over.</b>
+    /// <para><b>Deleting the tiebreak clause does NOT redden this test, and that is recorded rather than papered over.</b>
     /// <c>CellClusterPool.GetClusters</c> returns a cell's clusters in ascending chunk-id order today, so "first candidate
     /// with strictly smaller growth" already resolves to the lowest id and the explicit tiebreak is redundant with the
     /// enumeration order. Nothing documents that order as a guarantee, and the pool is a structure step 11 may well re-pack,

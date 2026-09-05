@@ -115,7 +115,7 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
     /// Assert directly against the per-archetype B+Tree that <paramref name="present"/> are keys and <paramref name="absent"/> are not.
     /// </summary>
     /// <remarks>
-    /// 🔴 <b>Querying is not enough, and an ablation proved it.</b> The first version of this fixture asserted only through
+    /// <b>Querying is not enough, and an ablation proved it.</b> The first version of this fixture asserted only through
     /// <c>Query(...).WhereField(...)</c>, and it stayed green under a deliberately broken drain permutation — one whose scatter dropped 31 of every 32
     /// entries. The planner had chosen a scan for this shape, so the assertions were reading the component column and the index could have said anything.
     /// A test of the drain has to read what the drain writes.
@@ -268,7 +268,7 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
         AssertIndexKeys(dbe, [SharedTag, retained], [order[0]]);
     }
 
-    // 🔴 The all-on-one-key arm is NOT carried here. Collapsing every entity onto one multi-value key leaves the tree with a single distinct key and
+    // The all-on-one-key arm is NOT carried here. Collapsing every entity onto one multi-value key leaves the tree with a single distinct key and
     // KILLS THE PROCESS when any other key is queried — #884, which has the full repro and the 1 499-versus-1 500 bisect. A crashing test takes its whole
     // nightly shard's results with it rather than reporting one failure, so quarantining it would cost more than it reports.
 
@@ -475,7 +475,7 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
 
         Assert.That(CountWithTag(dbe, SharedTag), Is.EqualTo(shareCount), "every entity collapsed onto the shared key is findable under it");
 
-        // 🔴 NOT asserted here: querying a key every entity has LEFT. That is #884's exact trigger and it still KILLS THE PROCESS — no exception, no
+        // NOT asserted here: querying a key every entity has LEFT. That is #884's exact trigger and it still KILLS THE PROCESS — no exception, no
         // assertion, the host simply dies — so it cannot be carried even under Quarantine, because a crash takes its whole nightly shard's results rather
         // than reporting one failure. #885's fix did not touch it; verified by adding the call back and watching it crash on every run.
 

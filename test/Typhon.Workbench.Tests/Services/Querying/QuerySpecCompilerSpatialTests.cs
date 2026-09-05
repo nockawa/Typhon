@@ -144,7 +144,7 @@ public sealed class QuerySpecCompilerSpatialTests
     [Test]
     public void Aabb_CoveringWorld_ReturnsAllEntities()
     {
-        // 🔴 This test used to guard a REPACK: the compiler turned the DSL's [minX,minY,minZ,maxX,maxY,maxZ] into
+        // This test used to guard a REPACK: the compiler turned the DSL's [minX,minY,minZ,maxX,maxY,maxZ] into
         // WhereInAABB(minX, minY, maxX, maxY, _, _) for a 2D component, because EcsQuery read the max corner from slots
         // 2 and 3. That was a defect in EcsQuery, fixed in #872 step 13, and the repack went with it — so what this now
         // guards is that the DSL's own order reaches the engine unchanged.
@@ -184,7 +184,7 @@ public sealed class QuerySpecCompilerSpatialTests
     /// A RAY over a cluster-backed archetype now RETURNS RESULTS. It used to throw.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>The polarity of this test is reversed from what it asserted before #872 step 13</b>, and the reversal is the point. The cluster tier
+    /// <para><b>The polarity of this test is reversed from what it asserted before #872 step 13</b>, and the reversal is the point. The cluster tier
     /// served only AABB and Radius under #230 Option B, so <c>EcsQuery</c> raised <see cref="NotSupportedException"/> for every other shape — and since #666
     /// made every archetype cluster-backed, that was every archetype. Step 13 wired the step-9 cluster ray and frustum implementations into <c>EcsQuery</c>,
     /// which is what made retiring the entity-level R-Tree a removal rather than the loss of a working <c>RAY</c>.</para>

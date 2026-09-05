@@ -42,7 +42,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return 0;
         }
 
-        // 🔴 The plane count drives a stackalloc below, and again per promoted cell. This method is reachable from
+        // The plane count drives a stackalloc below, and again per promoted cell. This method is reachable from
         // public API (EcsQuery.WhereFrustum), so the bound has to hold HERE and not only at the entry point: a stack
         // overflow kills the process rather than raising something the caller can catch. EcsQuery enforces the same
         // number so the message names the API the user called; this is the backstop for every other caller.
@@ -75,7 +75,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         Span<double> box = stackalloc double[6];
         int count = 0;
 
-        // 🔴 ONE read of ClusterAabbs for the whole query — the rent below, every bounds check, and every index.
+        // ONE read of ClusterAabbs for the whole query — the rent below, every bounds check, and every index.
         // ArchetypeClusterState grows it with Array.Resize (a plain reference store), so re-reading the field per
         // cluster can see a LONGER array than the visit set was sized for: ids in [oldLen, newLen) would then pass the
         // bounds check while TryVisit reports them unvisited every time, silently turning dedup off for that range.

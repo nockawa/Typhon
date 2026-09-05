@@ -2309,7 +2309,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 🔴 <c>FindLeaf</c> descends internal nodes with no version validation and right-walks on the upper bound alone, so under concurrent merges and borrows
+    /// <c>FindLeaf</c> descends internal nodes with no version validation and right-walks on the upper bound alone, so under concurrent merges and borrows
     /// — which shift keys LEFT — it lands one leaf too far right about once in a thousand moves on a three-level tree, and <c>Find</c> on that leaf honestly
     /// says the key is not there. Reading that as "not in the tree" is #739's shape — IXS-07's second parent validation closed it for the optimistic descent,
     /// and nothing had closed it for this one — and it is what #887's second face was: <c>MoveValue</c> returning -1 for a present key, the tick fence
@@ -2680,7 +2680,7 @@ internal abstract partial class BTree<TKey, TStore> : BTreeBase<TStore> where TK
     /// insertion point). Version-validated at every hop; restarts on any contention and throws when restarts run out.
     /// </summary>
     /// <remarks>
-    /// 🔴 This used to be its own loop — <c>while (!node.IsLeaf) node = node.GetNearestChild(key)</c> — under a comment saying "internal nodes are stable",
+    /// This used to be its own loop — <c>while (!node.IsLeaf) node = node.GetNearestChild(key)</c> — under a comment saying "internal nodes are stable",
     /// which was true when the tree had one lock and false ever since it had OLC. A peer shifting an internal node's items (<c>PopFirstInternal</c> during a
     /// promotion spill, a merge) can be mid-write when this reads the node: the descent then reads a slot that has just been CLEARED, takes chunk #0 as its
     /// child, reads "not a leaf" from the segment header there, and walks whatever chunk #0's bytes route to — a cycle it never leaves, because the loop had

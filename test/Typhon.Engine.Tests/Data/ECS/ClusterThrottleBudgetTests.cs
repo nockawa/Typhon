@@ -164,7 +164,7 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
 
             var t = dbe.GetSpatialTelemetry(ArchetypeId);
 
-            // 🔴 Guarded, because the division below fails OPEN. A zero estimate makes the quotient +Infinity, and a float-to-int conversion saturates
+            // Guarded, because the division below fails OPEN. A zero estimate makes the quotient +Infinity, and a float-to-int conversion saturates
             // rather than throwing — so `affordable` becomes int.MaxValue and the bound becomes "at most 2 147 483 647 migrations". One line zeroing
             // MeasuredNsPerEntity would leave every budget assertion in this file and in ClusterThrottleParallelTests green while AC-11.1 went unchecked.
             Assert.That(t.MeasuredNsPerEntity, Is.GreaterThan(0d),
@@ -176,7 +176,7 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
                 $"tick {tick} executed {t.MigrationCount} migrations against a budget that pays for {affordable} at the "
                 + $"{t.MeasuredNsPerEntity:F0} ns/entity it measured");
 
-            // 🔴 The added timers' whole reason for existing, and nothing else asserts it. MigrationExecuteMs brackets the migrant loop, which merely
+            // The added timers' whole reason for existing, and nothing else asserts it. MigrationExecuteMs brackets the migrant loop, which merely
             // STAGES the index update and the EntityMap patch; MigrationTotalMs adds the two apply phases that actually perform them. Substituting the
             // former for the latter in the cost model leaves every other assertion here green — both sides of those bounds divide by the same published
             // estimate — while the budget silently admits about twice what it can pay for.
@@ -243,7 +243,7 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
 
             var t = dbe.GetSpatialTelemetry(ArchetypeId);
 
-            // 🔴 The identity spans TWO ticks, and that is a property of the pipeline rather than an allowance made for it. Drift detection runs in
+            // The identity spans TWO ticks, and that is a property of the pipeline rather than an allowance made for it. Drift detection runs in
             // AabbRefresh, which follows Migrate, so its requests land beyond this tick's drain prefix and are decided by the NEXT tick's Prep — where the
             // throttle admits or drops them. Comparing within one tick compares detections against the previous tick's admissions and fails by exactly the
             // lag. `unplaced` is the exception: it is decided AT detection, so it belongs to the earlier tick's side.
@@ -275,7 +275,7 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
     /// A tick carrying BOTH cell crossings and intra-cell drifters keeps every relocation the budget can pay for.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>This is the arm that catches an in-place partition, and nothing else in the suite can.</b> The throttle separates mandatory crossings
+    /// <para><b>This is the arm that catches an in-place partition, and nothing else in the suite can.</b> The throttle separates mandatory crossings
     /// from throttleable relocations. The obvious implementation compacts the crossings to the front of the pending queue and then re-scans it for
     /// relocations — but the low indices have already been overwritten, so exactly <c>min(relocations, crossings)</c> relocations are destroyed, with
     /// <c>RelocationsThrottled</c> reading zero. It was written that way and shipped through a full green suite, because every other fixture here confines
@@ -285,7 +285,7 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
     /// drifters, EVERY relocation is silently dropped and step 10's placement reverts to the first fit this issue exists to repair.</para>
     /// <para><b>The budget is deliberately generous</b>, so a missing relocation cannot be excused as a throttled one: at 5 ms nothing should be refused.
     /// </para>
-    /// <para>🔴 <b>What this arm proves, precisely.</b> The assertion is an INEQUALITY, not an identity, and it cannot be tightened here:
+    /// <para><b>What this arm proves, precisely.</b> The assertion is an INEQUALITY, not an identity, and it cannot be tightened here:
     /// <c>MigrationCount</c> sums all three migration kinds while <c>DriftersDetected</c> counts drifters alone, so the slack is this tick's crossing
     /// count — a quantity the fixture drives but does not pin. It therefore catches a partition that loses MORE relocations than there are crossings, and
     /// misses one that loses fewer. The exact net is
@@ -386,7 +386,7 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
     /// The same pending queue, budget and estimate produce the same admitted set — every time, on any thread.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>AC-11.6 says "deterministic under a fixed seed and fixed W", and the ADMITTED COUNT cannot satisfy that literally — which is a
+    /// <para><b>AC-11.6 says "deterministic under a fixed seed and fixed W", and the ADMITTED COUNT cannot satisfy that literally — which is a
     /// consequence of the adaptive cost model, not a defect in the throttle.</b> The budget buys
     /// <c>ReclusterBudgetMs / MeasuredNsPerEntity</c> entities, and that estimate is a wall-clock MEASUREMENT of the previous tick. Two runs of an
     /// identical workload therefore admit slightly different numbers, and a different set of entities moved means different bounds, which means a different

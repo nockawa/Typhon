@@ -125,7 +125,7 @@ internal sealed class CellRepairQueue
                 Score = 0f,
             };
 
-            // 🔴 Scored BEFORE the eviction test, and the ordering is the whole difference between eviction and thrashing.
+            // Scored BEFORE the eviction test, and the ordering is the whole difference between eviction and thrashing.
             //
             // An unscored newcomer enters at 0, which is below every ranked candidate — so the next newcomer of the same batch evicts IT, and the one
             // after that evicts the second. Only the last nomination of a batch would survive, TotalEvicted would be inflated by the churn, and the
@@ -269,7 +269,7 @@ internal sealed class CellRepairQueue
     /// its live tail is the worst candidate the last rank knew about — one probe in the common case, against a full enumeration of up to
     /// <c>RepairQueueMaxCells</c> entries per new cell key. That enumeration is what the previous version did, and at the 4 096 default it made a burst of
     /// nominations against a full queue quadratic.</para>
-    /// <para>🔴 <b>The candidate it finds is then RE-SCORED before being compared.</b> A cached score is as old as the last <see cref="Rerank"/> and its
+    /// <para><b>The candidate it finds is then RE-SCORED before being compared.</b> A cached score is as old as the last <see cref="Rerank"/> and its
     /// age factor with it, so an incumbent that has waited fifty ticks would be judged at the score it had on arrival while every newcomer is scored fresh
     /// — biasing eviction against precisely the long-waiting candidates the age term exists to protect, which is <c>TH-03</c>'s starvation reintroduced
     /// through the back door.</para>

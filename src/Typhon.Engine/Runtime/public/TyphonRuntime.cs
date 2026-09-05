@@ -2080,7 +2080,7 @@ public sealed partial class TyphonRuntime : IDisposable
         // through one accounting bucket. UoW.Flush below handles the writeback per the configured DurabilityMode (and skips it entirely in WAL mode where
         // WAL records carry durability). Without this, each tick-fence callee would create+commit its own private ChangeSet, doing redundant disk I/O on
         // every tick (measured at ~22 ms / 88% of ExecuteMigrations time on a 1071-migration AntHill storm).
-        // 🔴 Caught, on BOTH arms, and that is #890's other half. The serial arm runs the whole fence inline on this thread, so a throw from it used to
+        // Caught, on BOTH arms, and that is #890's other half. The serial arm runs the whole fence inline on this thread, so a throw from it used to
         // escape OnTickEndInternal entirely: the UoW flush and dispose below never ran (`_currentUow` leaked and was overwritten by the next tick's), the
         // outcome stayed the PREVIOUS tick's `Success`, and the runtime went on ticking — the same silence the parallel arm had, reached a different way.
         // The parallel arm's own phases are caught by the scheduler and reported through RecordSystemFailure; what can still reach here from it is a throw

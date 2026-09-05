@@ -156,7 +156,7 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
 
         // ── Handing out a mutable span over the SPATIAL column is a promise that positions may move ─────────────────
         //
-        // 🔴 This is the one write path that signals nothing. WriteSpatial sets the process bit when the bound grew or a
+        // This is the one write path that signals nothing. WriteSpatial sets the process bit when the bound grew or a
         // crossing fired; OpenMut sets the dirty bit; a destroy now flags a shrink. GetSpan sets NONE of them — its own
         // contract is that the caller opts in via MarkDirty, and ClusterSpatialTests'
         // TickFence_DirectSpanWrite_NoMarkSlotDirty_AABB_StillRefreshed exists precisely because real callers do not
@@ -168,7 +168,7 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         // real. One Interlocked.Or per GetSpan call — per CLUSTER, not per entity, on a call that is already resolving
         // a slot and computing a base pointer — buys back exactly the coverage the full rescan was providing.
         //
-        // 🔴 A PER-ARCHETYPE flag, not a per-cluster process bit, and the difference is the whole design.
+        // A PER-ARCHETYPE flag, not a per-cluster process bit, and the difference is the whole design.
         //
         // GetSpan returns a MUTABLE span; it does not observe whether the caller writes through it, and plenty of callers
         // do not — ClusterRepairTests.ReadAll enumerates every cluster and reads positions through exactly this method.

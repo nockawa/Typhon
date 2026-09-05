@@ -38,7 +38,7 @@ internal interface IRadixKey<T> where T : struct
 /// result is always left in <c>items</c>; an odd number of passes ends in the scratch and is copied back.</para>
 /// <para><b>Which digits get a pass.</b> One pass over the keys ORs them and ANDs them; <c>or ^ and</c> is exactly the set of bits that vary across the
 /// run — a bit is set in it iff some key has it set and some key has it clear. A digit with no varying bit is skipped before its histogram, wherever it
-/// sits. 🔴 The first version derived this from <c>min ^ max</c>, which is NOT exact: the two extremes can agree on their low bits while a key between
+/// sits. The first version derived this from <c>min ^ max</c>, which is NOT exact: the two extremes can agree on their low bits while a key between
 /// them differs there (<c>{0, 0x100, 0x101, 0x200}</c> — review caught it, <c>RadixSortTests</c> pins it). Only the extremes' shared HIGH bits are
 /// shared by every key between them; their shared low bits prove nothing.</para>
 /// <para><b>Adaptive digit width.</b> Every pass pays a fixed cost proportional to the bucket count — the histogram clear and, above all, the prefix sum

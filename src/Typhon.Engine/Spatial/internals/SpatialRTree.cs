@@ -443,7 +443,7 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
             return;
         }
 
-        // 🔴 Being a leaf is NOT proof of being OUR leaf. Since #872 step 9 many trees share one ChunkBasedSegment, so a chunk this tree freed can have been
+        // Being a leaf is NOT proof of being OUR leaf. Since #872 step 9 many trees share one ChunkBasedSegment, so a chunk this tree freed can have been
         // reallocated as another cell tree's leaf — and it passes the IsLeaf test above wearing that tree's data. Refitting it would overwrite a stranger's
         // MBR, and RefitAncestorsBottomUp would then climb ITS parent chain, rewriting internal MBRs and union masks all the way to that tree's root. Nothing
         // would throw and both trees would stay structurally valid, so TreeValidator would pass over the damage; the only symptom is SQ-01 false negatives in

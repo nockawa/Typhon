@@ -429,7 +429,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // critical cell can sit anywhere in the order and be reached only after the budget has been spent on cells that
         // merely scored well. Hoisting it is what makes the valve a queue-jump rather than a late consolation.
         //
-        // 🔴 The scan then BREAKS rather than continuing, and over a persistent queue that is a different cost class from
+        // The scan then BREAKS rather than continuing, and over a persistent queue that is a different cost class from
         // the per-tick list step 12 had. `continue` meant every remaining candidate — up to RepairQueueMaxCells, 4 096 by
         // default — still paid GetClusters, the ranking loop, an Array.Sort and a geometry hash before failing the budget
         // test, single-threaded on Prep and charged to no budget at all. One unit exhausting a 1 ms budget left 4 095
@@ -439,7 +439,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // the cheapest possible unit is two clusters, so once the remaining budget cannot cover that, nothing later in the
         // order can be admitted either — and the one admission that IS allowed to exceed the budget has already been tried.
         //
-        // 🔴 "At most one overshoot per archetype per tick" is enforced STRUCTURALLY here, by the fact that exactly one call
+        // "At most one overshoot per archetype per tick" is enforced STRUCTURALLY here, by the fact that exactly one call
         // site below passes `valveAvailable: true`. It used to be a `_valveFiredThisTick` flag, which this hoist orphaned —
         // the flag stayed assigned and reset for a while with no reader left, which is worse than no flag at all: it reads
         // as the thing enforcing the bound while enforcing nothing. One call site is provable by inspection.
@@ -571,7 +571,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         // The memo is the hash of the unit's stored bounds, which the ranking loop above has just read into registers.
         // Same bounds as the last no-op ⇒ the same entity positions produce the same key order ⇒ the same partition.
         //
-        // 🔴 A heuristic, in one direction. Entities that shuffle STRICTLY INSIDE their clusters' existing bounds change
+        // A heuristic, in one direction. Entities that shuffle STRICTLY INSIDE their clusters' existing bounds change
         // the Morton order without changing any bound, and this will skip a re-sort that would have helped. That is the
         // same exposure CR-03 already records as a scoped exception, and it is the delta path's population, not repair's.
         var geometry = HashUnitGeometry(candidates, clusters.Length);
@@ -586,7 +586,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         // The unit is sized from the CONFIGURED value, unconditionally. The valve's cap is applied further down, and only if the valve is actually needed.
         //
-        // 🔴 Capping here on `valveAvailable` — which means "this cell is critical and the valve is unspent", NOT "the valve is being used" — inverts the
+        // Capping here on `valveAvailable` — which means "this cell is critical and the valve is unspent", NOT "the valve is being used" — inverts the
         // whole policy. Under the whole-cell configuration every critical cell reached while the valve was unspent had its unit forced down to eight
         // clusters even when the budget covered the entire cell, and because the smaller unit then FIT, the valve was never marked as fired and the shrink
         // repeated for every critical candidate in the tick. The most degraded cells got the smallest repairs, silently and without limit.
@@ -797,7 +797,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             return 0;
         }
 
-        // 🔴 A radix sort was tried here and REFUTED — do not re-add it without a new measurement. RadixSortBenchmarks, the Repair_* rows, quiet box, with
+        // A radix sort was tried here and REFUTED — do not re-add it without a new measurement. RadixSortBenchmarks, the Repair_* rows, quiet box, with
         // the adaptive 8-bit digits these sizes take (the fixed-11-bit first cut was worse still, 7.5x slower at 128): at the sizes a repair unit has
         // (65–2 000 entities) the two-key stable RadixSort (source location, then Morton) runs at 0.31x of this Array.Sort at 128
         // entries, 0.39x at 512 and 0.67x at 2 048 — a 63-bit key is six to eight passes and the tie-break adds up to four more, each with its fixed cost,

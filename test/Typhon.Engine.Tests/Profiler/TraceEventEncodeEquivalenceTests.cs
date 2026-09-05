@@ -1773,7 +1773,7 @@ public class TraceEventEncodeEquivalenceTests
         AssertSpanEqualsGolden(bufStruct, lenStruct, golden);
     }
 
-    // 🔴 SpatialMaintainInsertEvent and SpatialMaintainUpdateSlowPathEvent had golden-encoding tests here until #872
+    // SpatialMaintainInsertEvent and SpatialMaintainUpdateSlowPathEvent had golden-encoding tests here until #872
     // step 13. Both producer structs were emitted only from SpatialMaintainer's entity-tree writers, which went with
     // the tree; a golden test over a producer nothing can call proves the codec agrees with a struct that will never
     // encode anything. Their TraceEventKind values (138, 139) are reserved rather than reused — see the enum.

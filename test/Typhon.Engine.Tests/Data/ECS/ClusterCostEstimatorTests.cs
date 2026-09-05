@@ -48,7 +48,7 @@ class ClusterCostEstimatorTests : TestBase<ClusterCostEstimatorTests>
             new Vector2(0, 0),
             new Vector2(WorldMax, WorldMax),
             CellSize,
-            // 🔴 The drift gate is OFF (a ratio no cluster confined to its own cell can reach), and it has to be for the quiet-tick test to terminate.
+            // The drift gate is OFF (a ratio no cluster confined to its own cell can reach), and it has to be for the quiet-tick test to terminate.
             // With it on, a repair tightens a cell, the next tick's motion smears it again, and the relocation churn regenerates drifters indefinitely —
             // so "two consecutive ticks that migrated nothing" never arrives and the drain loop times out. Measured before the change: 3 of 4 Debug runs
             // red. Repair alone still supplies every migration the cost model needs, which is what these tests actually measure.
@@ -147,11 +147,11 @@ class ClusterCostEstimatorTests : TestBase<ClusterCostEstimatorTests>
     /// <para><b>The seed is the step change.</b> Genuinely changing the machine's per-entity cost mid-run is not something a unit test can do; seeding the
     /// model at a value the hardware contradicts is the same experiment from the other end, and it exercises the identical code path — the first
     /// measurement is as much a step away from the current estimate as any later one would be.</para>
-    /// <para>🔴 <b>Neither the direction nor the magnitude of the truth is assumed, and that is not laziness.</b> A Debug build migrates an entity in
+    /// <para><b>Neither the direction nor the magnitude of the truth is assumed, and that is not laziness.</b> A Debug build migrates an entity in
     /// ~24 us and a Release build in ~1.5 us, so a seed that is "8x too high" in one configuration is 6x too LOW in the other. The first version of this
     /// test hard-coded the direction and failed for exactly that reason. What is asserted instead holds in both: the estimate leaves its seed, and the
     /// amplitude of its movement shrinks.</para>
-    /// <para>🔴 <b>Monotone per step is the WRONG property, and asserting it was the second error here.</b> The samples an EWMA averages are themselves
+    /// <para><b>Monotone per step is the WRONG property, and asserting it was the second error here.</b> The samples an EWMA averages are themselves
     /// noisy — a tick's measured cost varies with cache state and with how many entities happened to move — so a converging filter still wobbles from step
     /// to step. What separates convergence from ringing is not that every step moves the same way but that the AMPLITUDE decays. Comparing the spread of
     /// the last window against the first says precisely that, and a filter that rang would fail it.</para>
@@ -160,13 +160,13 @@ class ClusterCostEstimatorTests : TestBase<ClusterCostEstimatorTests>
     [VerifiesRule("RP-01")]
     public void TheEstimateSettlesUnderSustainedLoad()
     {
-        // 🔴 The SHIPPED seed, not one chosen to be far from the truth, and the clamp band is why. Blend bounds the estimate to [seed/10, seed*20]; at a
+        // The SHIPPED seed, not one chosen to be far from the truth, and the clamp band is why. Blend bounds the estimate to [seed/10, seed*20]; at a
         // seed of 190 the ceiling is 3 800 ns, well under the ~24 000 ns/entity a Debug build actually costs — so the estimate would pin at the clamp on
         // every tick and the settling assertion below would be measuring the clamp rather than the filter, letting alpha = 1.0 (no filtering at all)
         // through in Debug. At 1 500 the band is [150, 30 000], which contains both Debug's cost and Release's, so what settles is the EWMA itself.
         var samples = SampleEstimate(seedNsPerEntity: 1500f, ticks: 16, seed: 5150);
 
-        // 🔴 BOTH windows are after the seeded transient, and that is the whole point of the choice.
+        // BOTH windows are after the seeded transient, and that is the whole point of the choice.
         //
         // The first version compared samples [0,5) against [11,16). The early window spans the 8x step away from the seed, so its spread is dominated by
         // the step rather than by the filter — and ANY filter whose steady-state noise is smaller than that step passes, including alpha = 1.0, which is
@@ -179,12 +179,12 @@ class ClusterCostEstimatorTests : TestBase<ClusterCostEstimatorTests>
         {
             Assert.That(samples[0], Is.GreaterThan(0d), "the estimator never produced a reading, so nothing below is about convergence");
 
-            // 🔴 No "the estimate moved away from its seed" assertion, deliberately. How far it moves is the distance between the shipped seed and THIS
+            // No "the estimate moved away from its seed" assertion, deliberately. How far it moves is the distance between the shipped seed and THIS
             // machine's cost — about 16x in Debug, near zero in Release, where that seed was measured — so any threshold holding in one configuration is
             // either vacuous or red in the other. Both were tried. The property asserted instead is the one that separates a converged filter from a
             // ringing one and holds on any hardware: by the end of the run the estimate is stable in absolute terms.
 
-            // 🔴 An ABSOLUTE ceiling, and no relative comparison between the two windows. Ordering `late` against `early` looks stricter and is in fact
+            // An ABSOLUTE ceiling, and no relative comparison between the two windows. Ordering `late` against `early` looks stricter and is in fact
             // unusable: once both windows are past the seeded transient, each is measuring the same steady-state noise, and noise is not monotone — the
             // arrangement failed 2 runs in 3. (Leaving the early window ON the transient makes it pass for the wrong reason, which is the version this
             // replaced: an 8x step dominates the comparison, so any filter passes, including alpha = 1.0, which is no filtering at all.)
@@ -213,7 +213,7 @@ class ClusterCostEstimatorTests : TestBase<ClusterCostEstimatorTests>
     {
         const float Seed = 1500f;
 
-        // 🔴 The bound is the sum of TWO independently clamped terms, not one. RepairCostEstimateNs adds the migration EWMA — clamped to
+        // The bound is the sum of TWO independently clamped terms, not one. RepairCostEstimateNs adds the migration EWMA — clamped to
         // [Seed/10, Seed*20] — to the planner EWMA, which since the planner-cost fix is clamped against its own 60 ns scale rather than the migration
         // seed's. Asserting Seed*20 alone is a latent machine-speed flake: on a slow enough machine both terms sit near their ceilings and the sum
         // legitimately exceeds it. The floor is the migration floor alone, because the planner term is zero until the planner has run.
@@ -237,7 +237,7 @@ class ClusterCostEstimatorTests : TestBase<ClusterCostEstimatorTests>
     /// down every idle tick; the tick after a lull would then divide the budget by a near-zero cost and admit an unbounded amount of work — an overrun
     /// arriving precisely when the frame had been quiet, which is the worst possible time and the hardest to attribute. Guarded by updating only when the
     /// tick's migration count is non-zero, which is one condition and easy to drop in a refactor.</para>
-    /// <para>🔴 <b>"Settled" is detected, not assumed after N ticks.</b> Motion stops producing WRITES immediately but not migrations: a drifter detected in
+    /// <para><b>"Settled" is detected, not assumed after N ticks.</b> Motion stops producing WRITES immediately but not migrations: a drifter detected in
     /// tick T's AabbRefresh is executed by tick T+1's Migrate, and a repair planned in Prep lands a tick later still. So the first few ticks after the last
     /// write carry real samples and legitimately move the model. An earlier version of this test compared the estimate before and after a fixed number of
     /// quiet ticks and read that legitimate movement as decay.</para>

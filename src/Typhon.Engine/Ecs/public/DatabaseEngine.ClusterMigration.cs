@@ -1119,12 +1119,12 @@ public partial class DatabaseEngine
             // shape of a component, not a contrivance. At 100 % moving the drain walked 64 000 entries per tick to prove Tag had not changed — 22 % of the
             // entire fence.
             //
-            // 🔴 Gated on SlotReleasesThisTick as well, and that second term is what makes this exact rather than merely plausible. The loop below is not only
+            // Gated on SlotReleasesThisTick as well, and that second term is what makes this exact rather than merely plausible. The loop below is not only
             // a compare: its `occupancy == 0` branch is the destroy-side index REMOVAL for fence-maintained slots. An entity written for component T and then
             // destroyed needs its indexed component S taken out of the tree, and S is precisely what the written-slot test would skip. With no releases at all
             // this tick that case cannot exist. With releases, the drain runs in full, exactly as before.
             //
-            // 🔴 `writtenSlots != 0` is the third term and it is a FAIL-SAFE, not an optimisation. Zero is ambiguous: it means "nothing was written" on the
+            // `writtenSlots != 0` is the third term and it is a FAIL-SAFE, not an optimisation. Zero is ambiguous: it means "nothing was written" on the
             // paths that maintain WrittenSlotUnion, and "this path does not maintain it" everywhere else — and a pure-Transient archetype is the second kind.
             // Its writes never reach the SetDirty overload that records a component slot, so the union stays zero while the shadow buffers fill, and a gate
             // that trusted the zero skipped every drain and left the tree on the pre-mutation key
@@ -1165,7 +1165,7 @@ public partial class DatabaseEngine
                     // GetChunkAddress calls below are the drain's whole cost on the common path — the one where the indexed field did not actually change —
                     // and in append order they miss the accessor's 32-page window on nearly every entry. See BuildShadowDrainOrder for the measurement.
                     //
-                    // 🔴 One behaviour this reorders, deliberately: with two entities colliding on a UNIQUE key inside one drain,
+                    // One behaviour this reorders, deliberately: with two entities colliding on a UNIQUE key inside one drain,
                     // Transaction.RejectUniqueIndexCollision below rejects whichever it reaches SECOND, so which of the two is rejected now follows cluster
                     // order instead of write order. Both are legal and neither is promised by any rule — but NOTHING PINS IT: no fixture in this repo
                     // declares a unique cluster index and drives two colliding writes through one drain, so this paragraph is the only record that the

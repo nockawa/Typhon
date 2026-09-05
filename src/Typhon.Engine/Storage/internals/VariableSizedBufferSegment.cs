@@ -506,7 +506,7 @@ public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentB
                     curChunkId = firstFreeChunkId;
                     --totalFreeChunk;
 
-                    // 🔴 #884. The free list is a CHAIN through NextChunkId — BufferRelease pushes onto it with
+                    // #884. The free list is a CHAIN through NextChunkId — BufferRelease pushes onto it with
                     // `curChunk->NextChunkId = rootChunk.FirstFreeChunkId; rootChunk.FirstFreeChunkId = curChunkId;` — so popping its head means
                     // taking that head's successor. This used to read the field back AFTER re-initialising the chunk to zero, which always yielded 0
                     // and therefore truncated the list: every free chunk behind the head was orphaned, still owned by the buffer and never reused,
@@ -519,7 +519,7 @@ public class VariableSizedBufferSegment<T, TStore> : VariableSizedBufferSegmentB
                     nextFreeChunkId = 0;
                 }
 
-                // 🔴 #884. Link the PREVIOUS chunk through a FRESHLY RESOLVED address, never through curChunkAddr.
+                // #884. Link the PREVIOUS chunk through a FRESHLY RESOLVED address, never through curChunkAddr.
                 //
                 // Both branches above can evict the previous chunk's slot from this accessor's page window — AllocateChunk demonstrably, and the free-list
                 // read above just as much — and curChunkAddr is a raw pointer into that window. Writing the chain link through it after an eviction lands

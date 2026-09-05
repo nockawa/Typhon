@@ -660,7 +660,7 @@ internal abstract partial class BTree<TKey, TStore>
     /// </summary>
     /// <remarks>
     /// <para>
-    /// 🔴 <b>#887 lived here.</b> This used to read <c>oldBufferId</c> and <c>newBufferId</c> through an unlatched <c>FindLeaf</c> + <c>GetItem</c> and then
+    /// <b>#887 lived here.</b> This used to read <c>oldBufferId</c> and <c>newBufferId</c> through an unlatched <c>FindLeaf</c> + <c>GetItem</c> and then
     /// call <c>RemoveFromBuffer</c> / <c>Append</c> on them. The optimistic paths above only ever touch a buffer under the write latch of the leaf whose entry
     /// names it, and that is not decoration: a peer that empties a key removes the entry and FREES the buffer under its latch, and the allocator re-issues the
     /// chunk to whoever creates a buffer next. An id read before that and used after it addressed a dead buffer, or another key's — the element vanished, or

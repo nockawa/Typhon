@@ -215,7 +215,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         var half = targetExtent * 0.5f;
         var margin = cfg.CellSize * cfg.ClusterDriftMarginRatio;
 
-        // 🔴 The target region is centred on the cluster's CENTROID, not on the centre of its AABB, and the difference is the whole behaviour of this rule
+        // The target region is centred on the cluster's CENTROID, not on the centre of its AABB, and the difference is the whole behaviour of this rule
         // rather than a refinement.
         //
         // An AABB centre sits halfway between the two extremes, so ONE far outlier drags it half the distance to itself. Thirty entities at x≈12 and one
@@ -310,7 +310,7 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// visits repacked the cell and the fixture's two half-full clusters became one.</para>
     /// <para>The shrink mask alone is what a vacated slot needs, and it is enough: <c>ClusterNeedsAabbRecompute</c> tests these axes directly, so the refresh
     /// re-derives the bound and the ordinary <c>boundsMoved</c> comparison then decides whether the index wants the new box.</para>
-    /// <para>🔴 <b>Barrier-only mode is deliberately NOT covered by this.</b> That arm iterates <see cref="ArchetypeClusterState.ClusterProcessBitmap"/>, so
+    /// <para><b>Barrier-only mode is deliberately NOT covered by this.</b> That arm iterates <see cref="ArchetypeClusterState.ClusterProcessBitmap"/>, so
     /// without the bit it never visits the cluster at all — a destroy there stays invisible exactly as it is today. Closing that needs the bit, and the bit
     /// costs what the paragraph above describes; it is a separate decision, not a side effect of this one.</para>
     /// </remarks>

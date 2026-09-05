@@ -347,7 +347,7 @@ internal sealed partial class ArchetypeClusterState
         _lastTickPlannerTicks = 0;
         _lastTickPlannedEntities = 0;
 
-        // 🔴 Published HERE, not as a side effect of the admission decision, and the difference is observable.
+        // Published HERE, not as a side effect of the admission decision, and the difference is observable.
         //
         // It used to be written inside RepairCostEstimateNs, which the throttle calls only after establishing that it has requests to weigh — so on any
         // tick with an empty pending queue the telemetry reported ZERO rather than the model's current value. A consumer dividing the budget by it to
@@ -375,7 +375,7 @@ internal sealed partial class ArchetypeClusterState
     /// The measured cost of MOVING one entity, without the repair planner's own overhead — what a relocation is charged.
     /// </summary>
     /// <remarks>
-    /// 🔴 <b>A relocation must not be charged the planner's gather-and-sort, and charging it was under-admitting relocations on every tick.</b> The planner
+    /// <b>A relocation must not be charged the planner's gather-and-sort, and charging it was under-admitting relocations on every tick.</b> The planner
     /// term exists because a repair pays for a Morton sort and a destination allocation that no cell crossing and no drift relocation ever touches. Adding
     /// it to the throttle's per-entity price inflated the cost of exactly the mechanism that does not incur it — and the inflation had a floor rather than
     /// tapering away, because <see cref="Blend"/> clamps the planner EWMA into the MIGRATION seed's band and so never lets it fall below a tenth of that
@@ -487,7 +487,7 @@ internal sealed partial class ArchetypeClusterState
         var budgetNs = cfg.ReclusterBudgetMs * 1_000_000d;
         if (budgetNs <= 0d)
         {
-            // 🔴 Zero means NO BUDGET ENFORCEMENT, not "do no re-clustering", and the distinction is not a nicety.
+            // Zero means NO BUDGET ENFORCEMENT, not "do no re-clustering", and the distinction is not a nicety.
             //
             // `ReclusterBudgetMs = 0` already had a documented meaning before step 11 — it disables REPAIR, because a whole-unit admission needs a positive
             // budget to project against — and step-10 fixtures set it precisely to isolate relocation from repair. Extending it to also drop every
@@ -518,7 +518,7 @@ internal sealed partial class ArchetypeClusterState
 
         // -- The classes are SEPARATED before anything is compacted, and the ORDER of the five steps is the invariant --
         //
-        // 🔴 The obvious in-place two-pass partition is WRONG, silently, and loses data with an infinite budget. Pass one// compacts the mandatory entries to
+        // The obvious in-place two-pass partition is WRONG, silently, and loses data with an infinite budget. Pass one// compacts the mandatory entries to
         // the front; pass two then re-scans the SAME array for relocations — but every index below the compaction cursor has already been overwritten by a
         // crossing. Traced on [R0, C1]: pass one writes C1 over index 0, pass two sees two crossings, and R0 is gone with nothing counted as throttled.
         //
@@ -528,7 +528,7 @@ internal sealed partial class ArchetypeClusterState
         // revert to first fit on precisely the busy ticks it matters most on. TH-01 names this as an on_violation, and
         // RelocationsSurviveATickThatAlsoCarriesCellCrossings is the arm that catches it end to end.
         //
-        // 🔴 THE ORDERING BELOW IS WHAT KEEPS THAT SAFE, and it is not visible from any single step. Every read of a relocation's request happens BEFORE the
+        // THE ORDERING BELOW IS WHAT KEEPS THAT SAFE, and it is not visible from any single step. Every read of a relocation's request happens BEFORE the
         // compaction writes over the queue: steps 1-3 decide entirely from INDICES, step 4 lifts the survivors out, and only step 5 compacts. Moving step 5
         // earlier reintroduces the measured bug exactly.
         //
@@ -636,7 +636,7 @@ internal sealed partial class ArchetypeClusterState
                 survivors[r] = queue[relocIndices[r]];
             }
 
-            // 🔴 `relocIndices` and `relocationCount` DIE HERE, and the brace is the point. Past it the queue is rewritten, so an index into it means something
+            // `relocIndices` and `relocationCount` DIE HERE, and the brace is the point. Past it the queue is rewritten, so an index into it means something
             // else entirely — reading one would reproduce TH-01's measured failure, min(relocations, crossings) entries destroyed with RelocationsThrottled
             // reading zero. A comment asking a future editor not to is weaker than the compiler refusing.
         }

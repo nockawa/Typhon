@@ -112,7 +112,7 @@ public readonly struct SpatialGridConfig
     /// Projected cost of moving one entity on the repair path, in nanoseconds — the exchange rate <see cref="ReclusterBudgetMs"/> is spent at. Default 1500.
     /// </summary>
     /// <remarks>
-    /// <para><b>🔴 Not §5.2's 60 ns. That figure does not survive measurement.</b> §5.2 budgets a batched relocation at ~60 ns/entity and derives the ~6 ms
+    /// <para><b>Not §5.2's 60 ns. That figure does not survive measurement.</b> §5.2 budgets a batched relocation at ~60 ns/entity and derives the ~6 ms
     /// per 100 K-entity cell that makes repair the rare path rather than the per-tick one. <c>AC-12.7</c>'s measurement
     /// (<c>ClusterRepairTests.MeasureRepairCostPerEntity</c>, Release, 2 000 entities in 41 clusters, six consecutive repairs on a warm engine) reports
     /// <b>1 331 to 6 992 ns/entity</b> — 22x to 117x the estimate — which projects to <b>~133 ms</b> for a 100 K-entity cell rather than ~6 ms. The first
@@ -147,7 +147,7 @@ public readonly struct SpatialGridConfig
     /// state reachable without the outlier guard firing, since a cluster holding only its own cell's entities tops out near
     /// <c>1 + MigrationHysteresisRatio</c>. Strictly above <see cref="ClusterRepairExtentRatio"/>'s 0.75, so a critical cell has always been an ordinary
     /// candidate first.</para>
-    /// <para><b>🔴 The overshoot this permits is CAPPED, and the cap is not optional.</b> <c>AC-11.1</c> allows exceeding the budget "by more than one
+    /// <para><b>The overshoot this permits is CAPPED, and the cap is not optional.</b> <c>AC-11.1</c> allows exceeding the budget "by more than one
     /// indivisible unit", which reads as licence until one notices that a whole cell is one indivisible unit and a 100 K-entity cell was measured at
     /// ~133 ms — a 133x overrun that would still claim compliance. So a valve admission forces the unit down to
     /// <see cref="RepairWorstClustersPerUnit"/> clusters and fires at most once per tick per archetype. Nothing else in the planner may exceed the

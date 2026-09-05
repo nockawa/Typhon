@@ -257,7 +257,7 @@ class ClusterDriftDetectionTests : TestBase<ClusterDriftDetectionTests>
         Assert.Multiple(() =>
         {
             Assert.That(expected.Drifters, Is.Not.Empty, "the population must actually produce drifters, or this compares two zeroes");
-            // 🔴 These two counts mean different things and are equal only because this test writes EVERY entity: the oracle
+            // These two counts mean different things and are equal only because this test writes EVERY entity: the oracle
             // counts every mapped non-empty cluster, production counts the clusters WRITTEN this tick. The equality is a
             // property of the population, not of the rule, and a future population that moves a subset would break it
             // without anything being wrong. Kept because it does catch a scan that visits the wrong set on this input.

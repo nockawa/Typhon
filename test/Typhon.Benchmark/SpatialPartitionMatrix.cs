@@ -122,7 +122,7 @@ internal sealed class RunResult
     /// <c>RuntimeOptions.WorkerCount</c> the run was driven at — the variable this whole harness exists to sweep.
     /// </summary>
     /// <remarks>
-    /// 🔴 <b>The first version of this harness called <c>dbe.WriteTickFence()</c> directly and had no such field.</b> That entry point runs
+    /// <b>The first version of this harness called <c>dbe.WriteTickFence()</c> directly and had no such field.</b> That entry point runs
     /// <c>WriteTickFenceCore</c>, a serial <c>foreach</c> over component tables; the parallel fence is a DAG dispatched by <c>TyphonRuntime</c> through
     /// <c>FenceWorkPlan</c>, and nothing but the runtime reaches it. Every migration and fence number that harness produced was therefore a
     /// single-threaded measurement of a subsystem whose design is explicitly "parallel across cells, divided by W" — compared, in the write-up, against
@@ -290,7 +290,7 @@ public static class SpatialPartitionMatrix
     /// Fraction of the population that moves on any given tick. <c>1.0</c> (the default) means every entity moves every tick.
     /// </summary>
     /// <remarks>
-    /// 🔴 <b>1.0 is a stress case, not a workload.</b> Five of the six motion models moved every entity by construction, and the writer wrote
+    /// <b>1.0 is a stress case, not a workload.</b> Five of the six motion models moved every entity by construction, and the writer wrote
     /// every entity whenever any had moved — so every cluster was dirty on every tick and the campaign reported "97-99 % of clusters dirty" as though
     /// it were a property of moving worlds. A simulation in which a quarter of the entities move in a tick is already busy; most are far below that.
     /// Since Prep's cost is what this harness exists to characterise, and Prep's per-cluster work is gated on dirtiness, the moving fraction is a
@@ -310,7 +310,7 @@ public static class SpatialPartitionMatrix
     // the positions they had". Population, cells and density are preserved; the cluster ids' order in the active list and the slot packing inside the
     // cells are what change. Warm-up ticks are excluded from every reported number.
     //
-    // 🔴 What it showed (#886 lead B): the scrambled list is NOT slower. Restoring ascending order was measured against leaving it alone, ten
+    // What it showed (#886 lead B): the scrambled list is NOT slower. Restoring ascending order was measured against leaving it alone, ten
     // interleaved pairs across two variants, and lost every pair. The engine-side sort was reverted; the aging stays because the fresh world it replaces
     // is the wrong world to measure a server against, and because an aged run at 25 % moving is 30-35 % FASTER than a fresh one — same migrations, same
     // tightness — which nobody has explained yet.
@@ -321,7 +321,7 @@ public static class SpatialPartitionMatrix
     /// Cell size that puts <paramref name="entitiesPerCell"/> entities in the average cell for this population.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>Density is the variable that matters, and it is not the one anybody sets.</b> A first cut of this
+    /// <para><b>Density is the variable that matters, and it is not the one anybody sets.</b> A first cut of this
     /// harness fixed the world at 10 000 units and the cell at 250, which at 16 000 entities gives 64 000 cells and
     /// <b>1.13 entities per cluster</b> — every cluster a singleton, whose AABB is the entity. Nothing can be
     /// re-clustered, so the budget sweep measured seven identical partitions and reported that the budget buys nothing.
@@ -727,7 +727,7 @@ public static class SpatialPartitionMatrix
             reclusterBudgetMs: budgetMs));
         dbe.InitializeArchetypes();
 
-        // 🔴 The write path is a MEASUREMENT VARIABLE, not a detail — it selects which branch of Prep runs.
+        // The write path is a MEASUREMENT VARIABLE, not a detail — it selects which branch of Prep runs.
         //
         // Writing through Transaction.OpenMut sets ClusterDirtyBitmap and routes Prep down the dirty-bitmap branch,
         // which runs the shadow drain, the zone-map recompute and the dormancy sweep. Writing through
@@ -781,7 +781,7 @@ public static class SpatialPartitionMatrix
 
         // ── steady state, under the REAL runtime ───────────────────────────────────────────
         //
-        // 🔴 Driven through TyphonRuntime and not dbe.WriteTickFence(), and the difference is the whole point of this
+        // Driven through TyphonRuntime and not dbe.WriteTickFence(), and the difference is the whole point of this
         // harness. WriteTickFenceCore is a serial `foreach` over component tables; the parallel fence is a DAG the
         // scheduler dispatches through FenceWorkPlan, and only the runtime reaches it. The design specifies this work as
         // "parallel across cells... divided by W in the window", so a serial measurement of it is not a conservative
@@ -808,7 +808,7 @@ public static class SpatialPartitionMatrix
 
         // -- The Move system is inside a scheduler callback, and a callback that throws is not a callback that reported an error ------------------------
         //
-        // 🔴 The 3D barrier arm threw NotSupportedException on its first WriteSpatial (ClusterRef.WriteSpatial supports AABB2F only), the scheduler absorbed
+        // The 3D barrier arm threw NotSupportedException on its first WriteSpatial (ClusterRef.WriteSpatial supports AABB2F only), the scheduler absorbed
         // it, and the run completed and reported fence = 0.33 ms, mig/t = 0, tightness = 96.7 % -- identical at all six moving fractions, because nothing had
         // moved at any of them. The harness printed a motionless world as a RESULT. A comment two hundred lines below already said "A measurement harness must
         // never be able to report that outcome as a result"; the guard it describes did not cover the exception route.
@@ -964,7 +964,7 @@ public static class SpatialPartitionMatrix
                     var tx = ctx.Transaction;
                     if (barrier)
                     {
-                        // 🔴 Fails LOUDLY. ClusterRef.WriteSpatial supports AABB2F only (ClusterRef.cs:335-342), so a 3D archetype throws
+                        // Fails LOUDLY. ClusterRef.WriteSpatial supports AABB2F only (ClusterRef.cs:335-342), so a 3D archetype throws
                         // NotSupportedException on the first slot of every tick. The scheduler did not surface that: the run completed, reported
                         // drift = 0 / migrations = 0 / fence = 0.077 ms, and looked like a 100x speedup rather than a workload that never moved.
                         // A measurement harness must never be able to report that outcome as a result.
@@ -1043,7 +1043,7 @@ public static class SpatialPartitionMatrix
             BaseTickRate = 200,
             EnableParallelFence = true,
 
-            // 🔴 OFF by default, and that is a measurement decision worth stating. With the live cost model on, FenceWorkPlan
+            // OFF by default, and that is a measurement decision worth stating. With the live cost model on, FenceWorkPlan
             // picks its chunk count from the PREVIOUS ticks' observed cost, so a W-sweep would partly measure the model
             // adapting rather than the work parallelising, and two runs of one point would not be comparable. Production
             // leaves it on; a scaling study cannot. `--adaptive-cost` turns it on for the runs that ask what production
@@ -1053,7 +1053,7 @@ public static class SpatialPartitionMatrix
             EntityMapBulkMinEntriesPerBucket = ForceBulkMap ? 0f : EntityMapUpdateStaging.DefaultMinEntriesPerBucket,
         });
 
-        // 🔴 Exceptions raised once teardown has begun are DISCARDED, and this is a workaround for an engine defect
+        // Exceptions raised once teardown has begun are DISCARDED, and this is a workaround for an engine defect
         // rather than a convenience.
         //
         // DagScheduler.Dispose() disposes `_tickStartSignal` and only then calls base.Dispose(), which is what stops the
@@ -1188,7 +1188,7 @@ public static class SpatialPartitionMatrix
     /// Advances the motion model and records WHICH entities moved in <paramref name="movedFlags"/>.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>The flags exist because the previous version of this harness ignored the count it returned.</b> The caller ran
+    /// <para><b>The flags exist because the previous version of this harness ignored the count it returned.</b> The caller ran
     /// <c>if (moved > 0) { for every entity: write }</c>, so a model that moved a tenth of the population still wrote all of it and dirtied every
     /// cluster. That is what produced the "97-99 % of clusters are dirty every tick" figure the design was written against — a property of this loop,
     /// not of any workload.</para>
@@ -1614,7 +1614,7 @@ public static class SpatialPartitionMatrix
         var rng = new Random(777);
         var sw = new Stopwatch();
 
-        // 🔴 Warm-up, discarded. Every query shape below is generic over the archetype, so the FIRST call of each one
+        // Warm-up, discarded. Every query shape below is generic over the archetype, so the FIRST call of each one
         // pays JIT for a fresh instantiation — measured at 300-450 us against a 5 us steady-state cost, which landed
         // entirely on whichever shape happened to be timed first and read as a partitioning result. One pass of every
         // shape, thrown away, before any of them is timed.
@@ -1622,7 +1622,7 @@ public static class SpatialPartitionMatrix
 
         // Three AABB sizes as fractions of the WORLD, not of the cell.
         //
-        // 🔴 Scaling them by cell size made the numbers meaningless the moment Matrix C swept it: at 4 cells across, a
+        // Scaling them by cell size made the numbers meaningless the moment Matrix C swept it: at 4 cells across, a
         // "medium" query covered the whole world at large cell sizes and returned all 16 000 entities, so the column
         // read as a query-cost regression when it was really a query-SIZE change. As world fractions the selectivity is
         // the same experiment at every point in every matrix, which is what makes the times comparable.

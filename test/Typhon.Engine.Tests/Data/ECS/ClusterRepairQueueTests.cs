@@ -123,7 +123,7 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
         var serviced = new HashSet<int>();
         for (var c = 0; c < CellCount; c++)
         {
-            // 🔴 `after > 0` is not belt-and-braces. MeanExtentPerCell skips a cluster with no recorded bound and returns 0 when it skipped them all, so a
+            // `after > 0` is not belt-and-braces. MeanExtentPerCell skips a cluster with no recorded bound and returns 0 when it skipped them all, so a
             // repair that LOST a cell's clusters rather than tightening them would read as the largest improvement of the run. That is the same shape as
             // the vacuity found in step 12's own fixtures — a measurement over an empty set scoring better than any real one.
             if (before[c] > 0d && after[c] > 0d && after[c] < before[c])
@@ -139,7 +139,7 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
     /// Re-write one entity's position, unchanged, so the archetype has work this tick.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>Not padding: without it the queue is never consulted after the world settles, and that is a real limit of step 11 rather than an
+    /// <para><b>Not padding: without it the queue is never consulted after the world settles, and that is a real limit of step 11 rather than an
     /// artefact of the fixture.</b> <c>PrepareArchetypeFenceCore</c> returns <c>false</c> for an archetype nothing wrote to, and the wrapper then skips
     /// planning entirely — because a repair plan allocates clusters that THIS tick's Migrate and Finalize must consume, and neither runs for an idle
     /// archetype. So a queue full of candidates in a world that has gone completely still is never drained. Closing that needs the fence re-armed by queue
@@ -225,7 +225,7 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
     /// With far more candidates than a one-unit-per-tick budget can service, ageing carries every one of them to the head.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>Driven against <c>CellRepairQueue</c> directly, and that is the only way this can be tested honestly.</b> The engine-level version of
+    /// <para><b>Driven against <c>CellRepairQueue</c> directly, and that is the only way this can be tested honestly.</b> The engine-level version of
     /// this test cannot be made machine-independent: the budget is spent against a MEASURED per-entity cost, a Debug build migrates an entity in ~24 us and
     /// a Release build in ~1.5 us, so a budget that admits exactly one unit per tick in one configuration admits eighteen in the other. Sizing it for Debug
     /// makes the test vacuous on the gate, which runs Release; sizing it for Release makes it fail outright in Debug. Both were tried, and the second was
@@ -261,7 +261,7 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
         {
             // Re-nominated every tick, exactly as a cell that stays degraded would be. Cell 0 is worst by a wide margin, so ranking alone would pick it
             // every single time.
-            // 🔴 A WIDE gap — 0.95 against 0.20, not 0.80. At the narrower spacing the score ratio was 1.19, which an age factor capped at 2x still
+            // A WIDE gap — 0.95 against 0.20, not 0.80. At the narrower spacing the score ratio was 1.19, which an age factor capped at 2x still
             // overcomes within four ticks: `Math.Min(2f, 1 + rate * age)` would have left this test green while contradicting TH-03's claim that the age
             // term is UNBOUNDED in the tick count. The point of the invariant is that no ceiling on ageing exists, so the fixture has to need one high
             // enough that any ceiling would fail.
@@ -471,7 +471,7 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
         {
             Assert.That(scheduledMs, Is.GreaterThan(0d), "nothing was ever scheduled, so the ratio below has no denominator and asserts nothing");
 
-            // 🔴 The ratio alone passes HARDER the less is reported, so zero — an accrual that stopped accruing — would be the best possible score. AC-11.5
+            // The ratio alone passes HARDER the less is reported, so zero — an accrual that stopped accruing — would be the best possible score. AC-11.5
             // asks for a cost that is "small AND reported"; without this line the second half is unestablished and the counter could be deleted.
             Assert.That(maintenanceMs, Is.GreaterThan(0d),
                 "queue maintenance reported exactly zero over nineteen ticks that scheduled real work — the accrual is not running, so the ratio below is "
@@ -589,7 +589,7 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
     /// the tier index is <c>TrailingZeroCount</c> of the byte — and <c>TrailingZeroCount(0)</c> is <b>32</b>, not 0. A weight of <c>1 / (1 + index)</c>
     /// without a <c>None</c> guard therefore scores an untiered cell at 1/33, below every real tier. Absent information must discount NOTHING, so
     /// <c>None</c> weighs 1.0.</para>
-    /// <para>🔴 <b>A uniformly untiered world cannot show this, and the first version of this test used one.</b> If every cell is
+    /// <para><b>A uniformly untiered world cannot show this, and the first version of this test used one.</b> If every cell is
     /// <see cref="SimTier.None"/> then the wrong weight is a uniform scale factor: the ranking is bit-identical, the sort produces the same order, and
     /// deleting the fallback leaves the test green. The bug only becomes visible when tiered and untiered cells compete — so one cell here is promoted to
     /// <see cref="SimTier.Tier2"/> (weight ⅓) and the rest are left untiered, with identical degradation. With the fallback the untiered cells outrank it;
@@ -647,7 +647,7 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
     [VerifiesRule("TH-03")]
     public void ThePlannerServicesTheHeadOfTheRanking()
     {
-        // 🔴 0.2 ms, not 1.0. A two-cluster unit is ~98 entities and the first tick has no measurement yet, so it is projected at the 1 500 ns seed —
+        // 0.2 ms, not 1.0. A two-cluster unit is ~98 entities and the first tick has no measurement yet, so it is projected at the 1 500 ns seed —
         // 147 us each. At 1 ms the budget affords all six cells (882 us), every one is serviced, and head-versus-tail becomes indistinguishable: the
         // reversed-iteration mutation this test exists to catch passes. 0.2 ms affords exactly one.
         using var dbe = SetupEngine(budgetMs: 0.2f, agingRate: 0f, worstClustersPerUnit: 2);

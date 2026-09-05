@@ -17,7 +17,7 @@ namespace Typhon.Engine.Tests;
 /// against it and <c>ClusterDriftParallelTests</c> compares the PARALLEL fence against it, which makes the two arms
 /// comparable through a third party. Diffing serial against parallel directly would go green whenever both are wrong the
 /// same way — and they share every line of detection, so that is the likely failure, not a remote one.</para>
-/// <para><b>🔴 One clause of <c>CR-03</c> is deliberately NOT modelled: the exclusion of slots the outlier guard has already
+/// <para><b>One clause of <c>CR-03</c> is deliberately NOT modelled: the exclusion of slots the outlier guard has already
 /// claimed.</b> Production computes its drifter set as <c>centres.ValidMask &amp; ~guardClaimedSlots</c>; this oracle has no
 /// equivalent, so it is faithful only while the outlier guard fires nothing. Every population that drives it today is
 /// entirely intra-cell, which is exactly the condition under which the guard cannot fire — so the two agree, and the

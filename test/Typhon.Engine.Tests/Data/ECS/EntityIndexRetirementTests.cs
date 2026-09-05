@@ -63,7 +63,7 @@ class EntityIndexRetirementTests : TestBase<EntityIndexRetirementTests>
         var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<RetirePos3>();
 
-        // 🔴 The three-argument constructor, NOT SpatialGridConfig.Flat. Flat() sets worldMin.Z = 0 and worldMax.Z = cellSize — a grid ONE cell layer thick
+        // The three-argument constructor, NOT SpatialGridConfig.Flat. Flat() sets worldMin.Z = 0 and worldMax.Z = cellSize — a grid ONE cell layer thick
         // — which is right for a 2D archetype and silently wrong for a 3D one: entities above z = cellSize land outside the grid, and the resulting misses
         // read as query bugs. That mistake cost this fixture its first frustum run.
         dbe.ConfigureSpatialGrid(new SpatialGridConfig(
@@ -151,7 +151,7 @@ class EntityIndexRetirementTests : TestBase<EntityIndexRetirementTests>
         using var dbe = Setup3D(scope, promoteThreshold);
         var boxes = Populate3D(dbe, 400, seed: 9001);
 
-        // 🔴 Rays are AIMED, not random. A line has zero volume: 400 boxes of ~7 units across in a 1 000³ world give an expected hit count near 0.01 for a
+        // Rays are AIMED, not random. A line has zero volume: 400 boxes of ~7 units across in a 1 000³ world give an expected hit count near 0.01 for a
         // uniformly random ray, so a sweep of a dozen of them hits nothing and the oracle comparison passes on two empty sets. Each ray here is fired at a
         // randomly chosen entity's centre from a random origin, which guarantees at least one true hit per query while leaving everything else it crosses
         // for the oracle to find.
@@ -719,7 +719,7 @@ class EntityIndexRetirementTests : TestBase<EntityIndexRetirementTests>
     /// A 2D component's AABB query takes its max corner from the same arguments a 3D one does.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>It did not, and nothing caught it.</b> <c>ExecuteSpatial</c> read <c>_spatialParams[2]</c> as
+    /// <para><b>It did not, and nothing caught it.</b> <c>ExecuteSpatial</c> read <c>_spatialParams[2]</c> as
     /// <c>maxX</c> and <c>[3]</c> as <c>maxY</c> for a component with <c>CoordCount == 4</c> — the caller's <c>minZ</c>
     /// and <c>maxX</c>. <see cref="EcsQuery{TArchetype}.WhereInAABB{T}"/> documents and packs six doubles as
     /// <c>(minX, minY, minZ, maxX, maxY, maxZ)</c> whatever the dimension, so a 2D query got a degenerate box and a
@@ -921,7 +921,7 @@ class EntityIndexRetirementTests : TestBase<EntityIndexRetirementTests>
     /// A handle to a destroyed region never validates against the slot's next tenant.
     /// </summary>
     /// <remarks>
-    /// <para>🔴 <b>It did, on a reachable three-region sequence.</b> The free list was threaded through
+    /// <para><b>It did, on a reachable three-region sequence.</b> The free list was threaded through
     /// <c>SpatialRegionConfig.Generation</c>: destroy wrote the next-free index over the generation, and create did
     /// <c>Generation++</c> on that link — so the counter walked backwards instead of monotonically. Create 0/1/2 (all
     /// generation 1), destroy 0 then 1, create once more: the reused slot lands on generation <c>0 + 1 = 1</c>, which is

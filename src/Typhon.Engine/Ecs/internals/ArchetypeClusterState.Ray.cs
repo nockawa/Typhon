@@ -76,7 +76,7 @@ internal sealed unsafe partial class ArchetypeClusterState
         var accessor = ClusterSegment.CreateChunkAccessor();
         try
         {
-            // 🔴 `count < results.Length` at every level, as the frustum walk already did. Without it a filled buffer
+            // `count < results.Length` at every level, as the frustum walk already did. Without it a filled buffer
             // still visited every remaining cell, cluster and entity, ran the full slab test on each and threw the hit
             // away. Invisible while the only callers passed a k-sized span and expected truncation; the EcsQuery growth
             // loop made it the NORMAL case, because every attempt but the last ends with the buffer full.
@@ -114,7 +114,7 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         // Front-to-back is part of the contract, and cells are walked in grid order rather than along the ray, so the merge happens here.
         //
-        // 🔴 Comparison sort, not insertion sort, and skippable. The input is grouped by cell in GRID order, which is not
+        // Comparison sort, not insertion sort, and skippable. The input is grouped by cell in GRID order, which is not
         // near-sorted by distance in the general case — so the old insertion sort was quadratic, not the "almost sorted"
         // linear it looks like. Harmless at the handful of hits a picking ray returns; the EcsQuery growth loop can now
         // reach millions from user code, and that caller discards the ordering entirely.

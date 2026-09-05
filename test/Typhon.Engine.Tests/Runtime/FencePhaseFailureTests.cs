@@ -24,7 +24,7 @@ namespace Typhon.Engine.Tests;
 /// production seam exists for this and none should: the probe is already there, and throwing from it reproduces #889's shape without simulating it.
 /// </para>
 /// <para>
-/// 🔴 <b>Which GATE it lands on depends on whether Prep sliced, and both are covered because they are different catch sites.</b> An archetype below
+/// <b>Which GATE it lands on depends on whether Prep sliced, and both are covered because they are different catch sites.</b> An archetype below
 /// <see cref="DatabaseEngine.PrepSliceMinClusters"/> runs the atomic <c>ArchetypePrep</c> work item, so the probe throws from <c>DispatchItem</c> — an
 /// <b>Execute</b> chunk. A sliced one reaches the same call from Prep's serial tail inside <c>FenceMigrateExecSystem.Prepare</c> — a <b>Prepare</b> gate,
 /// which is the one #889 actually hit and the one that reached the host through nothing at all. A fixture that only covered the Execute path would be

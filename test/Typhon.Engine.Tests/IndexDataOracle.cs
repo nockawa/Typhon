@@ -197,7 +197,7 @@ internal static unsafe class IndexDataOracle
             var e = intTree.EnumerateRangeMultiple(int.MinValue, int.MaxValue);
             while (e.MoveNextKey())
             {
-                // 🔴 The enumerator is TWO-LEVEL and this loop must be too. `CurrentValues` is one CHUNK of the key's VSBS buffer, not the whole of it —
+                // The enumerator is TWO-LEVEL and this loop must be too. `CurrentValues` is one CHUNK of the key's VSBS buffer, not the whole of it —
                 // `NextChunk()` walks the rest, which is what EcsQuery's own `do { ... } while (enumerator.NextChunk())` does.
                 //
                 // Without the inner loop this oracle silently stopped at the root chunk, which holds 56 elements. Every key with more than 56 entities under

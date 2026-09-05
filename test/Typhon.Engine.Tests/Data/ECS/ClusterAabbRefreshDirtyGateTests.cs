@@ -171,7 +171,7 @@ class ClusterAabbRefreshDirtyGateTests : TestBase<ClusterAabbRefreshDirtyGateTes
     [Test]
     public void ADestroyedEntitysPositionDoesNotStayInsideTheClusterBound()
     {
-        // 🔴 THE test for the gate's second signal. A destroy sets neither a dirty bit nor a process bit, so with the gate in
+        // THE test for the gate's second signal. A destroy sets neither a dirty bit nor a process bit, so with the gate in
         // place and no shrink flag from ReleaseSlot this cluster is never revisited and keeps a bound sized to an entity
         // that no longer exists. Remove the FlagClusterShrinkAxesOnly call in ReleaseSlot and this reddens; nothing else in
         // the suite does.

@@ -835,7 +835,7 @@ public partial class DatabaseEngine
         // to ExecuteMigrationsSlice. Requests filed LATER — by FlagOutliersForMigration and by step 10's drift detection,
         // both of which run inside AabbRefresh, after Migrate — land beyond the prefix and must survive to the next tick.
         //
-        // 🔴 This lives in a wrapper rather than at the bottom of the body because the body has THREE exits, and taking the
+        // This lives in a wrapper rather than at the bottom of the body because the body has THREE exits, and taking the
         // one that skips this is not an edge case. An archetype written through the spatial barrier sets ClusterProcessBitmap
         // and leaves ClusterDirtyBitmap clean, so it leaves through the clean-bitmap `return true` on every ordinary tick.
         // With the snapshot inside the body, that archetype recorded a drain prefix of zero while Migrate executed the whole
@@ -976,7 +976,7 @@ public partial class DatabaseEngine
         // filed here would sit unexecuted and the clusters allocated for them would have no sweep to free them. Dropping
         // the nomination costs one deferred repair — the cluster re-nominates the next time it is written.
         //
-        // 🔴 KNOWN GAP, still open after step 11, and narrowed rather than closed. In barrier-only mode the AABB pass visits
+        // KNOWN GAP, still open after step 11, and narrowed rather than closed. In barrier-only mode the AABB pass visits
         // only clusters WRITTEN this tick, so a cell that degrades and then goes completely still is never re-NOMINATED.
         // Step 11's queue fixes the half that was in reach — a nomination the budget refuses, or one that arrives on a tick
         // that cannot plan, is now REMEMBERED rather than discarded, so a cell nominated once while it was moving is still
@@ -1244,7 +1244,7 @@ public partial class DatabaseEngine
     /// </remarks>
     private void PlanArchetypeRepairs(ArchetypeClusterState clusterState, ChangeSet changeSet, long tickNumber, double remainingBudgetNs)
     {
-        // 🔴 A pure-Transient archetype absorbs and DISCARDS rather than returning with the list intact. Returning here left RepairNominations untouched on
+        // A pure-Transient archetype absorbs and DISCARDS rather than returning with the list intact. Returning here left RepairNominations untouched on
         // the hasWork path while the !hasWork path both absorbed and cleared, so the list would grow across ticks. It is unreachable today only because a
         // null cluster segment implies FenceBranchPath == 0 and therefore no AabbRefresh producer — an accidental guarantee, not a designed one.
         if (clusterState.ClusterSegment == null)
@@ -1380,7 +1380,7 @@ public partial class DatabaseEngine
                         var wordCount = clusterState.PrimarySegmentCapacity;
                         var spatialBits = new long[Math.Max(wordCount, 1)];
 
-                        // 🔴 Only the clusters that CARRY A SIGNAL, not every active cluster.
+                        // Only the clusters that CARRY A SIGNAL, not every active cluster.
                         //
                         // This loop used to read the occupancy word of every active cluster and copy it in wholesale, which manufactured a dirty set the size
                         // of the population on a tick where, by construction, the dirty bitmap was EMPTY. Everything downstream then treated a settled world

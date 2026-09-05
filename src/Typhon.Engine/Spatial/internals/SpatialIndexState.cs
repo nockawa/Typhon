@@ -37,7 +37,7 @@ internal class SpatialIndexState
 
     /// <summary>Get or create the interest management system for this spatial index.</summary>
     /// <remarks>
-    /// 🔴 <b>Locked, not <c>??=</c>.</b> Two racing callers each ran the null check, each built a system, and each stored theirs — after which one caller's
+    /// <b>Locked, not <c>??=</c>.</b> Two racing callers each ran the null check, each built a system, and each stored theirs — after which one caller's
     /// observers were registered on an instance nothing else could reach, and its deltas silently stopped arriving. Harmless while the only callers were
     /// tests calling this once; #872 step 13 made it public API, where "get the observer set" is exactly the kind of call two systems make on startup.
     /// </remarks>

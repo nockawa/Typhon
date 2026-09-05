@@ -1501,7 +1501,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             BitConverter.SingleToInt32Bits(config.MigrationHysteresisRatio),
         ];
 
-        // 🔴 #872's tuning knobs — step 10's ClusterTargetExtentRatio and ClusterDriftMarginRatio, and step 12's ClusterRepairExtentRatio,
+        // #872's tuning knobs — step 10's ClusterTargetExtentRatio and ClusterDriftMarginRatio, and step 12's ClusterRepairExtentRatio,
         // ReclusterBudgetMs, RepairNsPerEntity and RepairWorstClustersPerUnit — are deliberately NOT in this record, and the reason is worth stating
         // because their absence looks like an oversight next to MigrationHysteresisRatio.
         //

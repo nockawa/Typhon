@@ -26,7 +26,7 @@ internal struct SpatialRegionConfig
     /// Free-list link while <see cref="Active"/> is 0; meaningless while the slot is live.
     /// </summary>
     /// <remarks>
-    /// 🔴 <b>This used to be stored in <see cref="Generation"/>, and that let a destroyed handle validate.</b> Destroy wrote the next-free index over the
+    /// <b>This used to be stored in <see cref="Generation"/>, and that let a destroyed handle validate.</b> Destroy wrote the next-free index over the
     /// generation and create did <c>Generation++</c> on that link, so the counter walked backwards: create 0/1/2, destroy 0 then 1, create again — the reused
     /// slot lands on generation 1, which is exactly the handle the caller was told was dead. The same arithmetic makes <c>default(SpatialRegionHandle)</c>
     /// (index 0, generation 0) reachable as a live handle. Pre-existing; #872 step 13 promoted it to public API, which is what made it worth its own field.

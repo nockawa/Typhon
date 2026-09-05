@@ -237,7 +237,7 @@ class ClusterRelocationCostTests : TestBase<ClusterRelocationCostTests>
         var sb = new StringBuilder();
         sb.AppendLine($"AC-10.7 — intra-cell drift cost, {CellCount * EntitiesPerCell:N0} entities over {CellCount} cells, "
             + $"{cs.ActiveClusterCount:N0} clusters, {MeasuredTicks} ticks");
-        sb.AppendLine("  🔴 WORST CASE, NOT STEADY STATE. The population is scattered uniformly across each cell, so every cluster starts maximally spread and");
+        sb.AppendLine("  WORST CASE, NOT STEADY STATE. The population is scattered uniformly across each cell, so every cluster starts maximally spread and");
         sb.AppendLine("the drifter fraction stays near 100% per tick — §5.2's model assumes ~1%. Relocation cannot converge against a random layout, so");
         sb.AppendLine("these");
         sb.AppendLine("  ns/entity figures are an upper bound on the repair cost and the drifter counts are NOT a prediction of a real workload. A converging");

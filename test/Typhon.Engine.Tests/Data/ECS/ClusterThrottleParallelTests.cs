@@ -18,7 +18,7 @@ namespace Typhon.Engine.Tests;
 /// <para><b>What makes determinism true here, rather than merely observed.</b> The throttle is a single-threaded, order-preserving partition at the tail of
 /// Prep, and the repair queue is ranked on the same thread. Nothing about either decision is reached by more than one worker, so worker count cannot enter
 /// it.</para>
-/// <para>🔴 <b>What is asserted is the RULE at every W, not an identical packing — and the difference is not a weakening.</b> Cross-arm packing equality
+/// <para><b>What is asserted is the RULE at every W, not an identical packing — and the difference is not a weakening.</b> Cross-arm packing equality
 /// is what <c>ClusterRepairParallelTests</c> checks, and it can only check it because a repair PINS its destination slot. A step-10 relocation deliberately
 /// does not: it names a destination cluster and lets <c>ClaimSlotInCell</c> pick the slot. The parallel path then runs
 /// <c>SortPendingMigrationsByDestCellKey</c> — an <b>unstable</b> sort on a comparer that reads only the cell key — and the worker-local drifter buffers are
@@ -79,7 +79,7 @@ class ClusterThrottleParallelTests : TestBase<ClusterThrottleParallelTests>
     /// Spawn a cell in two tight lobes, so relocation has somewhere BETTER to send a drifter.
     /// </summary>
     /// <remarks>
-    /// 🔴 <b>A uniformly scattered cell produces drifters and no relocations, and a fixture built on one asserts nothing.</b>
+    /// <b>A uniformly scattered cell produces drifters and no relocations, and a fixture built on one asserts nothing.</b>
     /// <c>ChooseRelocationTarget</c> returns "nowhere" when no candidate cluster would grow less than the source, and in a cell whose clusters are ALL
     /// equally smeared that is every candidate — every drifter is detected and left in place, counted as unplaced. That is the documented reason the repair
     /// path exists at all (§5.2: "a cell whose clusters are all wrong has no good destination to offer"), and the first version of this fixture ran into it:
@@ -193,7 +193,7 @@ class ClusterThrottleParallelTests : TestBase<ClusterThrottleParallelTests>
     /// </remarks>
     private static void AssertTickHonoursTheBudget(string arm, int tick, in SpatialMigrationTelemetry t, int previousDetected, int previousUnplaced)
     {
-        // 🔴 Guarded, because the division fails OPEN: a zero estimate makes the quotient +Infinity and a float-to-int conversion SATURATES rather than
+        // Guarded, because the division fails OPEN: a zero estimate makes the quotient +Infinity and a float-to-int conversion SATURATES rather than
         // throwing, so `affordable` becomes int.MaxValue and the bound becomes no bound at all. One line zeroing MeasuredNsPerEntity would leave every
         // budget assertion in this fixture and in ClusterThrottleBudgetTests green while AC-11.1 went unchecked in both.
         Assert.That(t.MeasuredNsPerEntity, Is.GreaterThan(0d),
@@ -256,7 +256,7 @@ class ClusterThrottleParallelTests : TestBase<ClusterThrottleParallelTests>
         var ticks = 0;
         Exception assertionFailure = null;
 
-        // 🔴 Under a lock rather than as plain captured locals. The callback runs on the runtime's worker threads, and although the scheduler's inter-tick
+        // Under a lock rather than as plain captured locals. The callback runs on the runtime's worker threads, and although the scheduler's inter-tick
         // barrier plus Shutdown()'s join make plain fields correct in practice on x64, this repository's memory-ordering discipline is explicitly written
         // for arm64, where a plain store carries no release. `ticks` was already Interlocked; these deserve the same honesty, and a lock taken once per
         // tick on a 100 Hz loop costs nothing measurable.
@@ -336,7 +336,7 @@ class ClusterThrottleParallelTests : TestBase<ClusterThrottleParallelTests>
     // AC-11.6 — where the determinism half lives, and why it is not here
     // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
     //
-    // 🔴 There is deliberately no repeat-run test in this fixture, and the reason is a measurement rather than a
+    // There is deliberately no repeat-run test in this fixture, and the reason is a measurement rather than a
     // preference. AC-11.6 asks for determinism "under a fixed seed and fixed W", and the ADMITTED COUNT cannot deliver
     // it: the budget buys ReclusterBudgetMs / MeasuredNsPerEntity entities and that estimate is a wall-clock
     // measurement of the previous tick, so two runs of one workload admit slightly different numbers — and a different

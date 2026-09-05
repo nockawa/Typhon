@@ -151,7 +151,7 @@ class ClusterSpatialTests : TestBase<ClusterSpatialTests>
 
         // Make the third entity degenerate in place with an INVERTED box (min above max) rather than a NaN one.
         //
-        // 🔴 NaN cannot reach this scan through a write at all: DetectClusterMigrations validates the centre first and throws
+        // NaN cannot reach this scan through a write at all: DetectClusterMigrations validates the centre first and throws
         // "Non-finite position on spatial entity" before AabbRefresh ever runs. An inverted box is finite, passes that guard, and is the degeneracy form the
         // scan actually has to handle — which makes it the only form worth asserting on here. Discovering that cost one red test, and it is the reason this
         // comment exists rather than a NaN literal.

@@ -85,7 +85,7 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
     //    Opened by this build, a v7 file's Spatial pages are allocated and owned by nothing: the page classifier cannot
     //    name them, the integrity checker cannot reach them, and they are never reclaimed. That is what the bump refuses.
     //
-    //    🔴 CORRECTED. The first version of this note claimed the LEAF LAYOUT was the dangerous half — the R-Tree leaf
+    //    CORRECTED. The first version of this note claimed the LEAF LAYOUT was the dangerous half — the R-Tree leaf
     //    entry did lose its 4-byte ComponentChunkId column (R2Df32 15 -> 17, R3Df32 11 -> 13), and the note asserted that
     //    the per-cell CLUSTER trees share that layout and "ARE written", so a v7 leaf read with v8 offsets would serve
     //    wrong clusters. They are NOT written: CellClusterTree is SpatialRTree<TransientStore> over a segment built by

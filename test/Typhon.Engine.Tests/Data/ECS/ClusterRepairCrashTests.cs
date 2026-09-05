@@ -22,7 +22,7 @@ namespace Typhon.Engine.Tests;
 /// simply not known to the rebuilt layer and its chunk stays free: no data lost, no phantom cell membership. That is why
 /// the repair path allocates empty rather than pre-setting occupancy bits, and it is what the cluster-count and
 /// cluster→cell assertions below pin.</para>
-/// <para><b>🔴 The HARD-CRASH arm is deliberately absent, and it is not an oversight.</b> It was written, run, and
+/// <para><b>The HARD-CRASH arm is deliberately absent, and it is not an oversight.</b> It was written, run, and
 /// removed after it failed with the repair path <i>disabled</i>: after <c>SimulateHardCrash</c> every entity comes back
 /// at its own position — the storage assertions all pass — but the spatial cell layer is never rebuilt, and
 /// <c>SpatialGrid.GetCell(0)</c> throws a <see cref="NullReferenceException"/> because no cell chunk was ever allocated.
