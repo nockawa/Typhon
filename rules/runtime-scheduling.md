@@ -334,7 +334,11 @@ Compile-time stripped in RELEASE; active in DEBUG to catch declaration drift.
   never skip WriteTickFence to "avoid establishing a durability boundary" — that reasoning is inverted, see below
   may the output/subscription phase be suppressed for a tick — it is the ONLY one of the three that may be skipped,
       because publication is the only tick-end act carrying tick-wide "this was a good tick" semantics
-  scope: TyphonRuntime.OnTickEndInternal; RuntimeOptions.SystemExceptionPolicy = AbortTickAndStop
+  may a tick that does NOT RUN skip both — the terminal gates in DagScheduler.ExecuteCallbacks (tick abort, and fence failure since #890)
+      return before TickStartCallback, so no UoW is created and no SV/Transient write happens. This rule's failure mode is mutate-then-skip;
+      with no mutation there is nothing for a fence to cover. The damage a fence failure DOES leave is on its own tick, and stopping bounds
+      it rather than undoing it.
+  scope: TyphonRuntime.OnTickEndInternal; RuntimeOptions.SystemExceptionPolicy = AbortTickAndStop; DagScheduler.ExecuteCallbacks
   on_violation: SingleVersion / Transient writes are made IN PLACE into cluster pages and receive their WAL record at
     the fence. Skipping the fence leaves the page mutated, dirty and un-logged; the checkpoint thread then persists it
     on its own schedule, producing a durable mutation with no WAL record behind it. CK-02's WAL-before-data ordering

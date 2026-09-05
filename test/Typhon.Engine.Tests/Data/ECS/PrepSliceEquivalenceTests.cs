@@ -368,27 +368,29 @@ class PrepSliceEquivalenceTests : TestBase<PrepSliceEquivalenceTests>
     [Property("CacheSize", 64 * 1024 * 1024)]
     public void SlicedPrep_BuildsTheSameQueueAsTheUnslicedPath_AtTwoWorkers() => AssertArmMatchesSerial(2);
 
-    /// <summary>
-    /// 🔴 Quarantined with the W = 8 arm below, on thinner evidence: one unexplained failure in 31 runs after the slice width in this fixture went from
-    /// 128 to 16 words (~20 slices), against 0 in 16 at W = 2 and 0 in 8 at W = 4 before. The message was not captured; the W = 8 arm's three faces (#887)
-    /// are the likely class. In the gate the concurrent arm is W = 2, which has never failed.
-    /// </summary>
-    // #887 — the parallel fence at W = 8 disagrees with the serial fence on the same world in one run of three
+    /// <summary>Four workers, ~20 slices. Quarantined against #887 from 2026-09-04 to 2026-09-05, when the drain that caused it left the slices; see the
+    /// W = 8 arm for the evidence.</summary>
     [Test]
-    [Category("Quarantine")]
     [CancelAfter(120_000)]
     [Property("CacheSize", 64 * 1024 * 1024)]
     public void SlicedPrep_BuildsTheSameQueueAsTheUnslicedPath_AtFourWorkers() => AssertArmMatchesSerial(4);
 
     /// <summary>
-    /// 🔴 W = 8 is quarantined, and NOT because of slicing: with the sliced path switched off (<c>PrepSliceMinClusters = int.MaxValue</c>) the parallel fence
-    /// at W = 8 still disagrees with the serial one in roughly one run in three — once with ~10 of 4 076 crossings missing from one cluster and index entries
-    /// naming the wrong slot, once with two thirds of the destination cells off by exactly one. W = 1, 2 and 4 never do. Tracked as #887; this
-    /// fixture is the repro.
+    /// 🔴 This arm is why the shadow drain no longer runs inside a Prep slice. It failed about one run in three at W = 8 — entities the index no longer
+    /// listed, leaves naming unoccupied slots — and the ablations located it exactly: 21 runs clean with Prep slicing off, 14 clean with only the drain
+    /// serialised, ~45 % failure otherwise. The defect is under the fence, in <c>BTree.MoveValue</c>
+    /// (<c>BTreeMoveValueConcurrencyTests</c> reproduces it with no fence at all, #887); the fence's part was calling it from W workers, which #886's
+    /// slicing introduced and <c>DatabaseEngine.DrainShadowEntriesAfterSlices</c> now undoes. Keep this arm un-quarantined: it is the regression guard for
+    /// putting the drain back.
+    /// <para>
+    /// 🔴 <b>This CONTRADICTS what the doc here said before, and the contradiction is the point.</b> The 2026-09-04 note claimed the disagreement
+    /// reproduced with slicing switched off, which is why #887 was filed as "not caused by #886". It does not: 21 clean runs say so. The earlier reading was
+    /// taken while #890's defect was live — <c>FenceMigrateExecSystem.Prepare</c> was throwing on every dirty tick, so Index, EntityMap, AabbRefresh and
+    /// Finalize were all being skipped as <c>DependencyFailed</c> and every arm was comparing against a fence that stopped half way. Measurements from that
+    /// window are not evidence about anything else, which is the general lesson and the reason #890 was worth fixing first.
+    /// </para>
     /// </summary>
-    // #887 — the parallel fence at W = 8 disagrees with the serial fence on the same world in one run of three
     [Test]
-    [Category("Quarantine")]
     [CancelAfter(120_000)]
     [Property("CacheSize", 64 * 1024 * 1024)]
     public void SlicedPrep_BuildsTheSameQueueAsTheUnslicedPath_AtEightWorkers()
@@ -469,14 +471,12 @@ class PrepSliceEquivalenceTests : TestBase<PrepSliceEquivalenceTests>
     }
 
     /// <summary>
-    /// 🔴 Found while writing this fixture, and NOT a #886 regression: after a PARALLEL fence that executed cell crossings, migration destinations hold keys
-    /// outside their zone map — a false negative for indexed range queries. Reproduced at W = 1 with the sliced Prep switched off; the serial
-    /// <c>WriteTickFence</c> arm over the same world and writes passes. Quarantined against #888; the oracle it runs is the one every
-    /// arm above would otherwise run too.
+    /// Widen-only zone maps may be wider than the data and never narrower, checked over every active cluster after a parallel fence that executed cell
+    /// crossings. Quarantined against #888 from 2026-09-04 to 2026-09-05 and un-quarantined when that failure proved not to reproduce — 27 clean runs at
+    /// <c>53771f51</c> and 5 at <c>a0cb5980</c>, the commit it was filed from, with this file byte-identical between the two. It stays in the suite as the
+    /// guard that would reopen #888.
     /// </summary>
-    // #888 — migration destinations hold keys outside their zone map after a parallel fence
     [Test]
-    [Category("Quarantine")]
     [CancelAfter(120_000)]
     [Property("CacheSize", 64 * 1024 * 1024)]
     public void ZoneMaps_ContainTheirData_AfterAParallelFenceWithMigrations() => RunArmOn(1, checkZoneMaps: true);

@@ -256,9 +256,10 @@ internal sealed class FinalizeEmitSliceEquivalenceTests
         {
             Exception unhandled = null;
             runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) => Interlocked.CompareExchange(ref unhandled, ex, null);
-            // A fence phase whose Prepare throws is recorded in the scheduler's per-system telemetry and every later phase is skipped as
-            // DependencyFailed — nothing reaches UnhandledExceptionCallback. The write tick's outcome is read back here, at the end of the tick the
-            // scheduler numbers WriteTick - 1 (CurrentTickNumber counts completed ticks), so the assertions below can name the phase that failed.
+            // A fence phase whose Prepare throws is recorded in the scheduler's per-system telemetry and every later phase is skipped as DependencyFailed.
+            // Since #890 it also reaches UnhandledExceptionCallback and shows up as TickOutcomeReason.FenceFailure, but the telemetry read below is what
+            // NAMES the phase, which is what this fixture asserts on. The write tick's outcome is read here at the end of the tick the scheduler numbers
+            // WriteTick - 1 (CurrentTickNumber counts completed ticks).
             var inner = runtime.Scheduler.TickEndCallback;
             runtime.Scheduler.TickEndCallback = s =>
             {

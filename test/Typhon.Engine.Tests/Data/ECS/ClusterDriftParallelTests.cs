@@ -259,16 +259,20 @@ class ClusterDriftParallelTests : TestBase<ClusterDriftParallelTests>
             runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) => Interlocked.CompareExchange(ref unhandled, ex, null);
 
             runtime.Start();
-            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 5, TimeSpan.FromSeconds(15));
+            // Both observables, because the assertions below read both and the system callback runs INSIDE the tick: `ticks` reaching 5 says the fifth
+            // tick started, while CurrentTickNumber counts ticks that FINISHED (it advances in ComputeAndRecordTelemetry). Waiting only on the counter and
+            // then asserting on the clock is a race the test loses whenever the fence is slow — measured once in ~25 runs, always as "But was: 4".
+            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 5 && runtime.CurrentTickNumber >= 5, TimeSpan.FromSeconds(15));
             runtime.Shutdown();
 
-            // `unhandled` alone is not enough: the scheduler's PREPARE catch calls RecordSystemFailure instead of this
-            // callback, so anything a fence phase throws while partitioning or merging never reaches it. The clock is the
-            // observable that does move, because a failed system aborts its tick.
+            // `unhandled` alone WAS not enough before #890: the scheduler's Prepare catch called RecordSystemFailure and
+            // nothing else, so anything a fence phase threw while partitioning or merging never reached this callback. It does
+            // now — an engine-track failure is surfaced from the failure funnel — and the clock assertion below is kept as the
+            // independent observable it always was.
             Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while detecting drifters. Got: {unhandled}");
             Assert.That(ticks, Is.GreaterThanOrEqualTo(5), "the runtime must actually have ticked, or nothing was measured");
             Assert.That(runtime.CurrentTickNumber, Is.GreaterThanOrEqualTo(5),
-                "the runtime clock must have advanced — a phase that throws in Prepare is invisible to UnhandledExceptionCallback but aborts its tick");
+                "the runtime clock must have advanced — since #890 a phase that throws in Prepare also stops it, so a stalled clock is a failed fence");
         }
 
         // The FIRST snapshot that saw a detection is the first fence's. Taken by position rather than by tick number so the

@@ -2080,15 +2080,30 @@ public sealed partial class TyphonRuntime : IDisposable
         // through one accounting bucket. UoW.Flush below handles the writeback per the configured DurabilityMode (and skips it entirely in WAL mode where
         // WAL records carry durability). Without this, each tick-fence callee would create+commit its own private ChangeSet, doing redundant disk I/O on
         // every tick (measured at ~22 ms / 88% of ExecuteMigrations time on a 1071-migration AntHill storm).
-        if (_parallelFenceEnabled)
+        // 🔴 Caught, on BOTH arms, and that is #890's other half. The serial arm runs the whole fence inline on this thread, so a throw from it used to
+        // escape OnTickEndInternal entirely: the UoW flush and dispose below never ran (`_currentUow` leaked and was overwritten by the next tick's), the
+        // outcome stayed the PREVIOUS tick's `Success`, and the runtime went on ticking — the same silence the parallel arm had, reached a different way.
+        // The parallel arm's own phases are caught by the scheduler and reported through RecordSystemFailure; what can still reach here from it is a throw
+        // in RunParallelFence's serial prep, which is engine code on the tick driver and belongs in the same verdict.
+        try
         {
-            // RunParallelFence brackets its own serial-prep portion with the WriteTickFence phase marker and dispatches the Fence DAG *outside* it — the four
-            // Fence systems carry their own Engine-Post telemetry, so wrapping the dispatch would double-count them into `writeTickFenceUs`.
-            RunParallelFence(scheduler);
+            if (_parallelFenceEnabled)
+            {
+                // RunParallelFence brackets its own serial-prep portion with the WriteTickFence phase marker and dispatches the Fence DAG *outside* it — the
+                // four Fence systems carry their own Engine-Post telemetry, so wrapping the dispatch would double-count them into `writeTickFenceUs`.
+                RunParallelFence(scheduler);
+            }
+            else
+            {
+                InspectorPhase(TickPhase.WriteTickFence, () => Engine.WriteTickFence(scheduler.CurrentTickNumber, _currentUow?.ChangeSet));
+            }
         }
-        else
+        catch (Exception ex)
         {
-            InspectorPhase(TickPhase.WriteTickFence, () => Engine.WriteTickFence(scheduler.CurrentTickNumber, _currentUow?.ChangeSet));
+            // Latched through the scheduler so there is ONE fence-failure verdict however the fence failed, and so the terminal gate in ExecuteCallbacks and
+            // the host callback both fire exactly as they do for a phase that threw. Execution then continues to the flush below: TP-01a's other half is
+            // that the flush is mandatory, and a partly-run fence's pages are exactly the ones that must not be left un-flushed AND un-logged.
+            scheduler.RecordFenceDriverFailure(ex);
         }
 
         // Flush the UoW to make all Deferred writes (including the tick fence publishes above) durable, then dispose. UoW.Flush in WAL mode calls
@@ -2114,8 +2129,13 @@ public sealed partial class TyphonRuntime : IDisposable
         // Publish this tick's outcome BEFORE the output phase, so a host reading LastTickOutcome from a subscription callback already sees the verdict.
         // Written on EVERY tick under EVERY policy (#567 AC8b) — a stale outcome must never be mistaken for a fresh one. Under Isolate this is always Success:
         // a tick in which a system threw and its branch was skipped completed exactly as that policy promises. Per-system detail stays in SkipReason.
+        // A fence phase that threw is its own verdict (#890, design/Runtime/08-strict-tick-abort.md D3): the fence is the work that ends the tick, so there is
+        // no "rest of the tick" to cancel and it is never reported as an abort — but it is emphatically not a Success either, and before #890 it WAS, because
+        // nothing but per-system telemetry recorded it. Checked after the abort so a tick carrying both keeps naming the user system that started it.
         var tickAborted = scheduler.IsTickAborted;
-        LastTickOutcome = tickAborted ? scheduler.AbortedOutcome : TickOutcome.ForSuccess(scheduler.CurrentTickNumber);
+        var fenceFailed = !tickAborted && scheduler.IsFenceFailed;
+        LastTickOutcome = tickAborted ? scheduler.AbortedOutcome : fenceFailed 
+            ? scheduler.FenceFailureOutcome : TickOutcome.ForSuccess(scheduler.CurrentTickNumber);
 
         // #199: Output phase — subscription deltas.
         // Runs AFTER WriteTickFence so that:
@@ -2125,7 +2145,10 @@ public sealed partial class TyphonRuntime : IDisposable
         //
         // Suppressed on an aborted tick (#567): publication is the ONE tick-end act carrying tick-wide "this was a good tick" semantics, so it is the only one
         // of the three that may be skipped. The fence and the flush above ran unconditionally and must keep doing so — rule TP-01a.
-        if (!tickAborted)
+        // Suppressed on a fence failure for the same reason as on an abort, and with a sharper one: the output phase reads this tick's dirty bitmap and the
+        // ring buffer, and a fence that did not reach Finalize left neither of them complete. Publishing deltas from it would tell subscribers a story the
+        // WAL does not carry.
+        if (!tickAborted && !fenceFailed)
         {
             InspectorPhase(TickPhase.OutputPhase, () =>
             {
@@ -2138,6 +2161,8 @@ public sealed partial class TyphonRuntime : IDisposable
         }
         else if (!_tickAbortedNotified)
         {
+            // One event for both verdicts: a host that reacts to OnTickAborted by stopping the runtime wants to do exactly that here too, and
+            // TickOutcome.Reason tells the two apart.
             // Fires once, on the TickDriver, after the tick has fully drained — so every worker's stores are ordered ahead of the handler reading the outcome.
             // Subsequent ticks never reach here: DagScheduler.ExecuteCallbacks returns early once the abort latch is set.
             _tickAbortedNotified = true;

@@ -254,6 +254,10 @@ internal abstract partial class BTree<TKey, TStore>
     /// Pessimistic fallback for Move: traverses, removes oldKey, inserts newKey.
     /// No global lock — concurrency is handled by per-node OLC latches in Remove/Insert.
     /// </summary>
+    /// <remarks>
+    /// That last sentence is about the UNIQUE path and does not carry to <c>MoveValue</c>'s fallback, which reaches the same shape for a multi-value
+    /// index and is one of the places #887's element loss can come from. See rule IXW-06.
+    /// </remarks>
     private bool MovePessimistic(TKey oldKey, TKey newKey, int value, ref ChunkAccessor<TStore> accessor)
     {
         ref var sibAccessor = ref _segment.RentWarmSiblingAccessor(accessor.ChangeSet);
@@ -302,6 +306,12 @@ internal abstract partial class BTree<TKey, TStore>
     /// appends <paramref name="value"/> under <paramref name="newKey"/>.
     /// Returns the new element ID and both HEAD buffer IDs for inline TAIL tracking.
     /// </summary>
+    /// <remarks>
+    /// 🔴 <b>ONE writer per tree — see rule IXW-06 (#887).</b> Unlike the unique <c>Move</c>, this is NOT safe to call concurrently: the compound
+    /// spans up to two leaves plus two VSBS buffers, and a peer doing the same to either leaf can leave an element removed from its old buffer and never
+    /// appended to the new one. `BTreeMoveValueConcurrencyTests` reproduces the loss in ~100 ms with no fence involved; the tick fence's shadow drain runs
+    /// on one thread BECAUSE of this. The per-node latches below make the tree's STRUCTURE safe, which is what made the defect look impossible.
+    /// </remarks>
     public int MoveValue(TKey oldKey, TKey newKey, int elementId, int value,
         ref ChunkAccessor<TStore> accessor, out int oldHeadBufferId, out int newHeadBufferId)
     {

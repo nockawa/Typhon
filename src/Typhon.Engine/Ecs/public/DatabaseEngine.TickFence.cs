@@ -1087,7 +1087,8 @@ public partial class DatabaseEngine
 
             BeginZoneMapTick(clusterState);
             clusterState.EnsureZoneMapCapacity(Math.Max(clusterState.PrimarySegmentCapacity, dirtyBits.Length));
-            clusterState.BuildShadowDrainPlans();
+            // The per-slice drain plan is NOT built: since #887 the drain runs serially in the tail, which orders the buffer itself through
+            // BuildShadowDrainOrder. Building both would walk every shadow entry twice. Restore this the day ③ goes back into the slices.
             clusterState.PrepSliceable = true;
         }
     }
@@ -1139,23 +1140,17 @@ public partial class DatabaseEngine
             clusterScope.DirtyClusterCount = dirtyClusterCount;
             clusterScope.EntryCount = entryCount;
 
-            // ③ ④ — same gate as the atomic path (#655): either home may carry the index.
+            // ④ — same gate as the atomic path (#655): either home may carry the index.
+            //
+            // 🔴 ③, the shadow drain, USED TO RUN HERE and no longer does — it is the tail's, serially (#887). The drain replays index key changes through
+            // BTree.Move / BTree.MoveValue, and the AllowMultiple twin is NOT safe for concurrent writers: BTreeMoveValueConcurrencyTests moves a population
+            // in which every (key, value) pair belongs to exactly one thread, and finds elements simply gone from the tree with no fence involved. At the
+            // fence that surfaced as PrepSliceEquivalenceTests at W = 8 failing about one run in three, with entities the index no longer lists and leaves
+            // naming unoccupied slots: 21 runs clean with slicing off and 14 clean with only this step serialised, against ~45 % failure with it here.
+            // Design 12 §4 assumed "the B+Tree is multi-writer (IXW-01..05)"; that holds for the unique path and not for the multi-value one. Put ③ back in
+            // the slice when #887 has fixed the tree, not before, and re-measure — it was 40-46 % of Prep.
             if (clusterState.IndexSlots != null || clusterState.TransientIndexSlots != null)
             {
-                clusterScope.HasShadow = 1;
-                var shadowScope = TyphonEvent.BeginWriteTickFenceClusterShadow(meta.ArchetypeId, dirtyClusterCount);
-                subSpan = Stopwatch.GetTimestamp();
-                try
-                {
-                    shadowScope.TotalShadowEntries = ProcessClusterShadowEntriesRange(clusterState, engineState, changeSet, ref accessor, firstWord, wordCount, false);
-                }
-                finally
-                {
-                    shadowScope.Dispose();
-                }
-
-                Interlocked.Add(ref clusterState.PrepShadowTicks, Stopwatch.GetTimestamp() - subSpan);
-
                 subSpan = Stopwatch.GetTimestamp();
                 RecomputeClusterZoneMapsRange(clusterState, dirtyBits, ref accessor, firstWord, wordCount);
                 Interlocked.Add(ref clusterState.PrepZoneMapTicks, Stopwatch.GetTimestamp() - subSpan);
@@ -1191,6 +1186,54 @@ public partial class DatabaseEngine
     }
 
     /// <summary>
+    /// Step ③ for a sliced Prep: the whole archetype's shadow drain, on one thread, from the tail (#887).
+    /// </summary>
+    /// <remarks>
+    /// The drain is the one step of Prep that mutates the B+Tree, and <c>BTree.MoveValue</c> — the <c>AllowMultiple</c> key change — loses elements when two
+    /// threads run it at once (<c>BTreeMoveValueConcurrencyTests</c>, no fence involved). It therefore runs here rather than in the slices, still ahead of
+    /// every Migrate work item, so the staged index updates the Migrate phase writes still see a tree that already carries this tick's key changes.
+    /// <para>
+    /// <c>resetBuffers: true</c>, as the unsliced path passes, so the drained fields' buffers and the shadow bitmap are cleared by the one thread that
+    /// drained them and the sliced drain plan the head used to build is not needed. The tail still calls <c>ResetShadowBuffersAfterSlices</c> afterwards:
+    /// both resets are idempotent, and that one also covers the fields this drain never reached and the archetype that has no index home at all — the null
+    /// bitmap #889 tripped over.
+    /// </para>
+    /// <para>
+    /// The <c>ChangeSet</c> is threaded into the accessor, where the unsliced path opens a bare one: the drain writes the cluster page (the elementId tail),
+    /// and this call runs on the tail's rented ChangeSet, which is capped and returned by <c>FenceMigrateExecSystem.Prepare</c>. The spans are opened as a
+    /// cluster scope wrapping a shadow scope, because the shadow span parents to the cluster one and a bare child would float in the trace.
+    /// </para>
+    /// </remarks>
+    private void DrainShadowEntriesAfterSlices(ArchetypeClusterState clusterState, ArchetypeEngineState engineState, ChangeSet changeSet)
+    {
+        if (clusterState.IndexSlots == null && clusterState.TransientIndexSlots == null)
+        {
+            return;
+        }
+
+        var start = Stopwatch.GetTimestamp();
+        // Never `default` in practice — the head refuses an archetype whose ClusterSegment is null, so a sliced Prep implies one — but the ternary costs a
+        // branch on a once-per-archetype path and the null accessor's Dispose is a no-op, which is cheaper than a coupling to a decision 150 lines away.
+        var accessor = clusterState.ClusterSegment != null ? clusterState.ClusterSegment.CreateChunkAccessor(changeSet) : default;
+        var clusterScope = TyphonEvent.BeginWriteTickFenceCluster((ushort)clusterState.ArchetypeId);
+        clusterScope.DirtyClusterCount = clusterState.FenceDirtyClusterCount;
+        clusterScope.HasShadow = 1;
+        var shadowScope = TyphonEvent.BeginWriteTickFenceClusterShadow((ushort)clusterState.ArchetypeId, clusterState.FenceDirtyClusterCount);
+        try
+        {
+            shadowScope.TotalShadowEntries = ProcessClusterShadowEntries(clusterState, engineState, changeSet, ref accessor);
+        }
+        finally
+        {
+            shadowScope.Dispose();
+            clusterScope.Dispose();
+            accessor.Dispose();
+            // The same counter the slices folded into when they owned the step, so the phase tables keep comparing like with like.
+            Interlocked.Add(ref clusterState.PrepShadowTicks, Stopwatch.GetTimestamp() - start);
+        }
+    }
+
+    /// <summary>
     /// Phase 1, serial tail (#886 lead D): for every archetype whose Prep ran as slices, the crossings in slice order, the buffer resets, ⑧, then ⑥ ⑦ and
     /// the drain prefix exactly as the atomic path runs them. Called from <c>FenceMigrateExecSystem.Prepare</c>, which is single-threaded by construction
     /// and precedes the destination-cell sort that needs the queue complete. It is timed inside the Migrate span: ⑥ ⑦ ⑧ are relocated there, not removed,
@@ -1216,6 +1259,7 @@ public partial class DatabaseEngine
             clusterState.DrainPrepSliceCrossings();
             clusterState.LastTickHysteresisAbsorbedCount += clusterState.PrepSliceHysteresisAbsorbed;
             clusterState.TotalHysteresisAbsorbedCount += clusterState.PrepSliceHysteresisAbsorbed;
+            DrainShadowEntriesAfterSlices(clusterState, states[aid], changeSet);
             clusterState.ResetShadowBuffersAfterSlices();
             PreSizeArchetypeFence(clusterState);
             FinishArchetypeFencePrep(clusterState, true, tickNumber, changeSet);

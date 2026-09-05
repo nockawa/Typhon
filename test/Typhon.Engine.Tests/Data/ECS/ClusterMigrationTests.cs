@@ -1782,7 +1782,9 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) => Interlocked.CompareExchange(ref unhandled, ex, null);
 
             runtime.Start();
-            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6, TimeSpan.FromSeconds(5));
+            // Both observables: `ticks` is incremented by a system INSIDE the tick, CurrentTickNumber counts ticks that FINISHED, and the assertions below
+            // read both. Waiting only on the counter races the clock whenever a fence runs long (ClusterDriftParallelTests hit exactly that, "But was: 4").
+            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6 && runtime.CurrentTickNumber >= 6, TimeSpan.FromSeconds(5));
 
             // Snapshotted BEFORE Shutdown, and that is not tidiness. Disposing the engine drives a final SERIAL WriteTickFence, which picks its path from
             // EntityMapUpdateStaging.DefaultMinEntriesPerBucket rather than from RuntimeOptions — a runtime-less fence has no options object — so the flag
@@ -1791,7 +1793,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             observedPaths = bulkObservations.ToArray();
             runtime.Shutdown();
 
-            // `unhandled` alone is NOT enough, and believing it was is the defect this replaces. UnhandledExceptionCallback fires from the tick driver and
+            // `unhandled` alone was NOT enough before #890, and believing it was is the defect this replaces. The callback fired from the tick driver and
             // the system-execute path only (DagScheduler.cs:433, :1310); the scheduler's PREPARE catch calls RecordSystemFailure instead, so anything a fence
             // phase throws while merging, partitioning or leaf-snapping — the subtlest code in the phase — never reaches this callback. Proven by injecting a
             // throw into a phase's Prepare: `unhandled` stayed null. CurrentTickNumber is the observable that does move, because a failed system aborts its
@@ -1799,7 +1801,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while applying the staged EntityMap batch. Got: {unhandled}");
             Assert.That(ticks, Is.GreaterThanOrEqualTo(6), "the runtime must actually have ticked, or nothing was measured");
             Assert.That(runtime.CurrentTickNumber, Is.GreaterThanOrEqualTo(6),
-                "the runtime clock must have advanced — a phase that throws in Prepare is invisible to UnhandledExceptionCallback but aborts its tick");
+                "the runtime clock must have advanced — since #890 a phase that throws in Prepare also stops it, so a stalled clock is a failed fence");
         }
 
         var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
@@ -1895,10 +1897,12 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
 
             runtime.Start();
             // Migration executes on the fence of one tick and the emptied source clusters are drained on later ones, so give it several.
-            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6, TimeSpan.FromSeconds(5));
+            // Both observables: `ticks` is incremented by a system INSIDE the tick, CurrentTickNumber counts ticks that FINISHED, and the assertions below
+            // read both. Waiting only on the counter races the clock whenever a fence runs long (ClusterDriftParallelTests hit exactly that, "But was: 4").
+            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6 && runtime.CurrentTickNumber >= 6, TimeSpan.FromSeconds(5));
             runtime.Shutdown();
 
-            // `unhandled` alone is NOT enough, and believing it was is the defect this replaces. UnhandledExceptionCallback fires from the tick driver and
+            // `unhandled` alone was NOT enough before #890, and believing it was is the defect this replaces. The callback fired from the tick driver and
             // the system-execute path only (DagScheduler.cs:433, :1310); the scheduler's PREPARE catch calls RecordSystemFailure instead, so anything a fence
             // phase throws while merging, partitioning or leaf-snapping — the subtlest code in the phase — never reaches this callback. Proven by injecting a
             // throw into a phase's Prepare: `unhandled` stayed null. CurrentTickNumber is the observable that does move, because a failed system aborts its
@@ -1906,7 +1910,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while applying the staged index batch. Got: {unhandled}");
             Assert.That(ticks, Is.GreaterThanOrEqualTo(6), "the runtime must actually have ticked, or nothing was measured");
             Assert.That(runtime.CurrentTickNumber, Is.GreaterThanOrEqualTo(6),
-                "the runtime clock must have advanced — a phase that throws in Prepare is invisible to UnhandledExceptionCallback but aborts its tick");
+                "the runtime clock must have advanced — since #890 a phase that throws in Prepare also stops it, so a stalled clock is a failed fence");
         }
 
         var expected = ActualClusterLocationsForTag(dbe, meta.ArchetypeId, Tag);

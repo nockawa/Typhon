@@ -457,3 +457,38 @@ written for the read path; these are the write-path obligations that went unwrit
   note: the nightly `OlcBTreeRaceStressTests` tier remains the probabilistic net for the same defect arriving by a real race - ~40% of runs red before the
         guard, 0 in 70,833 root splits after.
   requires IXS-05 (the orphaned leaf is how this violation becomes visible)
+
+### IXW-06: The AllowMultiple compound move has ONE writer per tree `[fatal]` `[silent]` `[UNBUILT]`
+
+  invariant at most one thread at a time calls `BTree.MoveValue` on a given tree — the caller owes this, the tree does NOT provide it
+  never two fence workers replaying index key changes into the same archetype's tree at once
+  may many threads call the UNIQUE `BTree.Move` concurrently — IXW-01..05 are about that path and hold for it; this rule is about the
+      multi-value twin, whose compound (remove-from-buffer, append-to-buffer, maybe insert key, maybe delete key) is NOT atomic against
+      a peer doing the same to either of the two leaves it spans
+  enforce the fence's shadow drain runs on ONE thread: `DatabaseEngine.DrainShadowEntriesAfterSlices` is called from Prep's serial tail,
+          and `DatabaseEngine.RunPrepSlice` deliberately does not drain. Prep's other steps stay sliced.
+  enforce the other two callers are single-writer by construction and neither is a licence to add a third: `Transaction.MoveClusterIndexValue`
+          is reached from a committing transaction, whose same-component writers the DAG's AC-01 edges already order — note that
+          `TickContext.CreateSideTransaction` is EXEMPT from that ordering (EW-01's `never` clause) and must not write an AllowMultiple
+          indexed field while another writer might; `DatabaseEngine.ProcessShadowFieldEntries` drains one component table per work item.
+  scope: BTree.Move.cs (`MoveValue`), DatabaseEngine.TickFence.cs (`DrainShadowEntriesAfterSlices`, `RunPrepSlice`),
+         DatabaseEngine.ClusterMigration.cs (`DrainClusterShadowSlots`, `ProcessShadowFieldEntries`), Transaction.cs (`MoveClusterIndexValue`)
+  on_violation: SILENT element loss. An element is removed from its old key's buffer and never lands under the new one, so the entity
+                simply stops being indexed, while a leaf entry keeps naming a cluster slot its occupant has left. Nothing throws, and
+                the tree's own consistency validators pass — the STRUCTURE is intact, it is the contents that are short.
+  measured: `BTreeMoveValueConcurrencyTests.ConcurrentMoveValue_KeepsEveryElement_UnderItsNewKey` — 64 keys x 8 values, every pair moved
+            by exactly one of 2xCPU threads, census afterwards. Fails on the first run, with whole runs of a key's values gone; the
+            single-threaded arm of the identical code passes, which is what makes it a concurrency defect rather than a wrong oracle.
+            At the fence it showed as `PrepSliceEquivalenceTests` at W = 8 failing ~45 % of runs (~135 stale index entries and ~140
+            unindexed entities per failure), 0 in 21 with Prep slicing off and 0 in 14 with only the drain serialised.
+  rationale: #886 sliced Prep across workers and moved the drain with the rest of the phase, on design/Runtime/12 §4's premise that
+             "the B+Tree is multi-writer (IXW-01..05)". That premise is true of the path those rules were written for and false of
+             `MoveValue`. Recorded as a rule rather than only as a comment because the caller-side guard is the whole of the fix today:
+             the day #887 makes the tree safe, this rule is what says what changed.
+  verified: NOT COVERED by a gate test — `[UNBUILT]` is literal here. The one test that demonstrates the invariant is the FALSIFYING one
+            (`BTreeMoveValueConcurrencyTests.ConcurrentMoveValue_...`), and it is `[Category("Quarantine")]` against #887, so the merge
+            gate never runs it. Its single-threaded twin, `SerialMoveValue_KeepsEveryElement_UnderItsNewKey`, DOES run and pins the
+            oracle, which is what stops the quarantined arm rotting into a test that could not fail. When #887 fixes the tree, the
+            quarantine lifts and this rule is retired rather than verified.
+  requires IXW-04 (the leaf-authority proof `MoveValue` does take, and which is not sufficient here)
+
