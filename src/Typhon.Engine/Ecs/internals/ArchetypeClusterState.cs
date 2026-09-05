@@ -2258,10 +2258,13 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </remarks>
     public (int clusterChunkId, int slotIndex) ClaimSlot(ref ChunkAccessor<PersistentStore> accessor, ChangeSet changeSet, long bornTsn)
     {
-        // Try existing cluster with free slots (O(1) when FreeClusterHead is valid)
-        if (FreeClusterHead >= 0)
+        // Try existing cluster with free slots (O(1) when FreeClusterHead is valid).
+        // ONE read, deliberately. Testing the field and then re-reading it is what #842 crashed on: a peer that fills this cluster stores -1 between the two,
+        // the loser passes the test and takes -1 as its cluster id, and NoteClusterBorn indexes an array at -1. The exception is the mild outcome — the
+        // address for chunk -1 has already been computed by then, and only the throw stops a CAS into the word one chunk below chunk 0.
+        var clusterId = Volatile.Read(ref FreeClusterHead);
+        if (clusterId >= 0)
         {
-            var clusterId = FreeClusterHead;
             var clusterBase = accessor.GetChunkAddress(clusterId, true);
             ref var occupancy = ref *(ulong*)clusterBase;
 
@@ -2285,8 +2288,12 @@ internal sealed unsafe partial class ArchetypeClusterState
             FreeClusterHead = -1;
         }
 
-        // No free clusters — allocate new one (O(1))
-        var newClusterId = AllocateNewCluster(changeSet);
+        // No free clusters — allocate a new one, under the finalize latch for the same three reasons ClaimSlotInCell states at its own slow path: the
+        // dual-segment AllocateChunk must return matching ids, and AddToActiveList appends at ActiveClusterIds[ActiveClusterCount] and then publishes the
+        // incremented count. That append is single-writer code, and #708 put concurrent Transient commits on this path: two allocators write the same index,
+        // one increment is lost, and a live cluster is silently absent from the active list — the fence never visits it. The IndexOutOfRange when the two
+        // race Array.Resize is the loud version of the same thing, and the only one anybody noticed (#842). The hot path above does NOT take this lock.
+        var newClusterId = AllocateNewClusterLatched(changeSet);
         var newBase = accessor.GetChunkAddress(newClusterId, true);
 
         // Claim slot 0 in the fresh cluster. NO fold here — see FreshClusterStaysUnknown. Release store, paired with the reader's acquire read of the word.
@@ -2302,9 +2309,10 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </summary>
     public (int clusterChunkId, int slotIndex) ClaimSlot(ref ChunkAccessor<TransientStore> accessor, long bornTsn)
     {
-        if (FreeClusterHead >= 0)
+        // One read — see the PersistentStore overload and #842.
+        var clusterId = Volatile.Read(ref FreeClusterHead);
+        if (clusterId >= 0)
         {
-            var clusterId = FreeClusterHead;
             var clusterBase = accessor.GetChunkAddress(clusterId, true);
             ref var occupancy = ref *(ulong*)clusterBase;
 
@@ -2323,7 +2331,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             FreeClusterHead = -1;
         }
 
-        var newClusterId = AllocateNewCluster(null);
+        var newClusterId = AllocateNewClusterLatched(null);   // see the PersistentStore overload and #842
         var newBase = accessor.GetChunkAddress(newClusterId, true);
         Volatile.Write(ref *(ulong*)newBase, 1UL);   // no fold — see FreshClusterStaysUnknown
         FreeClusterHead = Layout.ClusterSize > 1 ? newClusterId : -1;
@@ -5056,6 +5064,30 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         AddToActiveList(chunkId);
         return chunkId;
+    }
+
+    /// <summary>
+    /// <see cref="AllocateNewCluster"/> under the per-archetype finalize latch — the form every caller reached from a commit must use.
+    /// </summary>
+    /// <remarks>
+    /// The body is not safe to run twice at once: the two segments' <c>AllocateChunk</c> calls have to interleave with nobody, or the ids stop matching, and
+    /// <see cref="AddToActiveList"/> writes <c>ActiveClusterIds[ActiveClusterCount]</c> before publishing the incremented count, which loses a cluster
+    /// outright when two allocators do it together. <c>ClaimSlotInCell</c> has always taken this latch around exactly this work; the plain
+    /// <c>ClaimSlot</c> overloads did not, which is #842. Nothing inside takes the latch itself, so there is no re-entrancy here —
+    /// <see cref="NoteClusterBorn"/>, the one path that would, is not called for a freshly allocated cluster (see <c>FreshClusterStaysUnknown</c>).
+    /// </remarks>
+    private int AllocateNewClusterLatched(ChangeSet changeSet)
+    {
+        ref var nullCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref nullCtx);
+        try
+        {
+            return AllocateNewCluster(changeSet);
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
     }
 
     /// <summary>Add a cluster chunk ID to the active list.</summary>
