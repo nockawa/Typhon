@@ -79,6 +79,16 @@ internal abstract partial class BTree<TKey, TStore>
         public abstract int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor<TStore> bufferAccessor);
 
         /// <summary>
+        /// How many elements an AllowMultiple key's buffer holds right now; 0 for a unique index, which has no buffers.
+        /// </summary>
+        /// <remarks>
+        /// Exists for one decision: whether a key whose buffer a caller just emptied may still be removed. Read it under the write latch of the leaf that holds
+        /// the key — an appender only ever adds to a buffer under that same latch, so a zero read there is a zero that will hold until the latch is released,
+        /// and a non-zero one means the key was repopulated since the caller emptied it and must stay (IXW-06).
+        /// </remarks>
+        public abstract int BufferElementCount(int bufferId, ref ChunkAccessor<TStore> bufferAccessor);
+
+        /// <summary>
         /// Replace one element's value inside an AllowMultiple key's buffer, in place. Returns <c>false</c> for a unique index, which has no buffers.
         /// </summary>
         /// <remarks>

@@ -511,6 +511,14 @@ internal abstract partial class BTree<TKey, TStore>
 
             if (index >= 0)
             {
+                // The caller emptied this key's buffer under an earlier acquisition of this latch and is back to drop the key. If the buffer has been refilled
+                // since — an appender got the latch in between — the key stays and nothing below runs (#887, IXW-06). Not found and not removed look the same
+                // to the caller, which is the point: it owns a decision it can no longer make, so it gets no removal to act on.
+                if (args.OnlyIfBufferEmpty && _storage.BufferElementCount(GetItem(index, ref accessor).Value, ref sibAccessor) != 0)
+                {
+                    return false;
+                }
+
                 args.SetRemovedValue(RemoveAtInternal(index, ref accessor).Value); // remove item
 
                 if (!GetIsHalfFull(ref accessor)) // borrow or merge

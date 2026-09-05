@@ -142,24 +142,11 @@ internal abstract partial class BTree<TKey, TStore>
     /// </remarks>
     private bool TryUpdateValuePessimistic(TKey key, int newValue, ref ChunkAccessor<TStore> opAccessor)
     {
-        NodeWrapper leaf;
-        PureSpin descentSpin = default;
-        while (true)
+        // IXW-06: the leaf must OWN the key's range before a miss on it means "absent" — FindLeaf alone can land one leaf to the right under a concurrent
+        // merge, and this path used to read that as not-found (the third copy of #887's second face; the other two were MoveValue's and RemoveValue's).
+        if (!TryLatchAuthoritativeLeaf(key, ref opAccessor, out var leaf))
         {
-            leaf = FindLeaf(key, out _, ref opAccessor);
-            if (!leaf.IsValid)
-            {
-                return false;
-            }
-
-            leaf.PreDirtyForWrite(ref opAccessor);
-            if (SpinWriteLock(leaf.GetLatch(ref opAccessor)) != WriteLockOutcome.Obsolete)
-            {
-                break;
-            }
-
-            Interlocked.Increment(ref _obsoleteRestarts);
-            descentSpin.Once();
+            return false;
         }
 
         // Re-find under the lock, and re-resolve the latch through the node id on every use: GetLatch hands out a reference into the chunk's page and the
@@ -334,24 +321,11 @@ internal abstract partial class BTree<TKey, TStore>
     internal bool TryUpdateValueAtPessimistic(TKey key, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> opAccessor,
         ref ChunkAccessor<TStore> sibAccessor)
     {
-        NodeWrapper leaf;
-        PureSpin descentSpin = default;
-        while (true)
+        // IXW-06: the leaf must OWN the key's range before a miss on it means "absent" — FindLeaf alone can land one leaf to the right under a concurrent
+        // merge, and this path used to read that as not-found (the third copy of #887's second face; the other two were MoveValue's and RemoveValue's).
+        if (!TryLatchAuthoritativeLeaf(key, ref opAccessor, out var leaf))
         {
-            leaf = FindLeaf(key, out _, ref opAccessor);
-            if (!leaf.IsValid)
-            {
-                return false;
-            }
-
-            leaf.PreDirtyForWrite(ref opAccessor);
-            if (SpinWriteLock(leaf.GetLatch(ref opAccessor)) != WriteLockOutcome.Obsolete)
-            {
-                break;
-            }
-
-            Interlocked.Increment(ref _obsoleteRestarts);
-            descentSpin.Once();
+            return false;
         }
 
         // Re-find under the lock, and re-resolve the latch through the node id on every use: GetLatch hands out a reference into the chunk's page and the

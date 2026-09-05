@@ -615,6 +615,7 @@ internal abstract class L32BTree<TKey, TStore> : BTree<TKey, TStore> where TStor
         public override int RemoveFromBuffer(int bufferId, int elementId, int value, ref ChunkAccessor<TStore> bufferAccessor) => 0;
         public override bool UpdateInBuffer(int bufferId, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> bufferAccessor)
             => false;   // unique index: values live in the node, not in a buffer
+        public override int BufferElementCount(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) => 0;
         public override void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) { }
 
         public override NodeWrapper GetFirstChild(NodeWrapper node, ref ChunkAccessor<TStore> accessor)
@@ -1183,6 +1184,8 @@ internal class L32MultipleBTree<TKey, TStore> : L32BTree<TKey, TStore> where TSt
         public override bool UpdateInBuffer(int bufferId, int elementId, int oldValue, int newValue, ref ChunkAccessor<TStore> bufferAccessor)
             => _valueStore.UpdateElement(bufferId, elementId, oldValue, newValue, ref bufferAccessor);
 
+        public override int BufferElementCount(int bufferId, ref ChunkAccessor<TStore> bufferAccessor)
+            => _valueStore.GetElementCount(bufferId, ref bufferAccessor);
         public override void DeleteBuffer(int bufferId, ref ChunkAccessor<TStore> bufferAccessor) => _valueStore.DeleteBuffer(bufferId, ref bufferAccessor);
     }
 }
