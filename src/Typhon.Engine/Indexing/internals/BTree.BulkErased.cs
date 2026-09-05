@@ -56,22 +56,133 @@ internal abstract partial class BTree<TKey, TStore>
     }
 
     /// <remarks>
+    /// <para>
     /// <b>The sort need not be stable, and the reason is worth stating because the opposite is the usual assumption.</b> Two entries sharing a key name
     /// different elements of that key's buffer and carry their own <c>OldValue</c>, so they update disjoint slots and the order between them cannot change
     /// the result. On a unique index a key appears at most once per batch to begin with. That also means <c>AC-6.4</c>'s determinism survives a change in W
     /// reordering equal keys: the applied set is the same whichever order they arrive in.
+    /// </para>
+    /// <para>
+    /// <b><see cref="RadixSort"/> for every integer and floating-point key, the struct-comparer introsort for the rest.</b> The introsort was already
+    /// monomorphised — <see cref="CompareKeys"/> folds to a direct <c>CompareTo</c> — so what the radix sort removes is the <c>log n</c> factor: three
+    /// 11-bit passes at most for a 32-bit key, six for a 64-bit one, fewer when the batch's keys share their high digits, each moving the 16-byte entry
+    /// once. <see cref="RadixKeyOf"/> is the order-preserving map; <c>String64</c> has none and keeps the comparer. <c>RadixSortBenchmarks</c> carries the
+    /// numbers per key width and run size.
+    /// </para>
     /// </remarks>
-    public override void SortBulkEntries(Span<byte> entries, bool multi)
+    public override void SortBulkEntries(Span<byte> entries, Span<byte> scratch, Span<int> radixCounts, bool multi)
     {
         AssertWholeEntries(entries.Length, multi, nameof(entries));
         if (multi)
         {
-            MemoryMarshal.Cast<byte, BTreeMultiValueUpdate<TKey>>(entries).Sort(new MultiEntryComparer(Comparer));
+            var span = MemoryMarshal.Cast<byte, BTreeMultiValueUpdate<TKey>>(entries);
+            if (RadixSortableKey)
+            {
+                RadixSort.Sort<BTreeMultiValueUpdate<TKey>, MultiEntryRadixKey>(span, MemoryMarshal.Cast<byte, BTreeMultiValueUpdate<TKey>>(scratch), radixCounts);
+            }
+            else
+            {
+                span.Sort(new MultiEntryComparer(Comparer));
+            }
         }
         else
         {
-            MemoryMarshal.Cast<byte, BTreeValueUpdate<TKey>>(entries).Sort(new UniqueEntryComparer(Comparer));
+            var span = MemoryMarshal.Cast<byte, BTreeValueUpdate<TKey>>(entries);
+            if (RadixSortableKey)
+            {
+                RadixSort.Sort<BTreeValueUpdate<TKey>, UniqueEntryRadixKey>(span, MemoryMarshal.Cast<byte, BTreeValueUpdate<TKey>>(scratch), radixCounts);
+            }
+            else
+            {
+                span.Sort(new UniqueEntryComparer(Comparer));
+            }
         }
+    }
+
+    /// <summary>Whether <typeparamref name="TKey"/> has a radix order: every integer width and both floating-point types. <c>String64</c> does not.</summary>
+    /// <remarks>
+    /// <c>typeof(TKey)</c> against a concrete type is a JIT intrinsic for value types, so this folds to a constant per instantiation, exactly as
+    /// <see cref="CompareKeys"/> does.
+    /// </remarks>
+    private static bool RadixSortableKey
+        => typeof(TKey) == typeof(int) || typeof(TKey) == typeof(long) || typeof(TKey) == typeof(short) || typeof(TKey) == typeof(sbyte)
+            || typeof(TKey) == typeof(uint) || typeof(TKey) == typeof(ulong) || typeof(TKey) == typeof(ushort) || typeof(TKey) == typeof(byte)
+            || typeof(TKey) == typeof(float) || typeof(TKey) == typeof(double);
+
+    /// <summary>
+    /// The unsigned 64-bit radix key with <typeparamref name="TKey"/>'s own order — the order <see cref="CompareKeys"/> defines, since the partitioning
+    /// descent asserts the batch against THAT. Sign-flipped for the signed integers, widened for the unsigned ones, and the zone maps' ordered encodings for
+    /// float and double, with one amendment: <c>CompareTo</c> puts NaN below every other value (and all NaNs equal), where the zone-map encoding scatters
+    /// NaN bit patterns above +∞ and below -∞, so NaN is pinned to the lowest key here. -0.0 and +0.0 compare equal under both.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static ulong RadixKeyOf(TKey key)
+    {
+        if (typeof(TKey) == typeof(int))
+        {
+            return RadixSort.SignedKey(Unsafe.As<TKey, int>(ref key));
+        }
+
+        if (typeof(TKey) == typeof(long))
+        {
+            return RadixSort.SignedKey(Unsafe.As<TKey, long>(ref key));
+        }
+
+        if (typeof(TKey) == typeof(short))
+        {
+            return RadixSort.SignedKey(Unsafe.As<TKey, short>(ref key));
+        }
+
+        if (typeof(TKey) == typeof(sbyte))
+        {
+            return RadixSort.SignedKey(Unsafe.As<TKey, sbyte>(ref key));
+        }
+
+        if (typeof(TKey) == typeof(uint))
+        {
+            return Unsafe.As<TKey, uint>(ref key);
+        }
+
+        if (typeof(TKey) == typeof(ulong))
+        {
+            return Unsafe.As<TKey, ulong>(ref key);
+        }
+
+        if (typeof(TKey) == typeof(ushort))
+        {
+            return Unsafe.As<TKey, ushort>(ref key);
+        }
+
+        if (typeof(TKey) == typeof(byte))
+        {
+            return Unsafe.As<TKey, byte>(ref key);
+        }
+
+        if (typeof(TKey) == typeof(float))
+        {
+            var f = Unsafe.As<TKey, float>(ref key);
+            // No non-NaN value encodes to 0: the lowest, -∞, encodes to 0x007F_FFFF, and every pattern below that is a NaN.
+            return float.IsNaN(f) ? 0UL : (ulong)ZoneMapArray.FloatToOrderedLong(f);
+        }
+
+        if (typeof(TKey) == typeof(double))
+        {
+            var d = Unsafe.As<TKey, double>(ref key);
+            // long.MinValue is unreachable for a non-NaN double (-∞ encodes to long.MinValue + 0x0010_0000_0000_0000), so it is NaN's alone.
+            return double.IsNaN(d) ? 0UL : RadixSort.SignedKey(ZoneMapArray.DoubleToOrderedLong(d));
+        }
+
+        return 0;
+    }
+
+    private readonly struct UniqueEntryRadixKey : IRadixKey<BTreeValueUpdate<TKey>>
+    {
+        public static ulong Key(in BTreeValueUpdate<TKey> entry) => RadixKeyOf(entry.Key);
+    }
+
+    private readonly struct MultiEntryRadixKey : IRadixKey<BTreeMultiValueUpdate<TKey>>
+    {
+        public static ulong Key(in BTreeMultiValueUpdate<TKey> entry) => RadixKeyOf(entry.Key);
     }
 
     public override void MergeBulkRuns(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, Span<byte> dest, bool multi)

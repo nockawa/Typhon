@@ -187,6 +187,9 @@ internal sealed class RunResult
     /// <summary>The WAL-append part of <see cref="FinalizeEmitUs"/>, and the commit-buffer swaps the tick caused.</summary>
     public double FinalizeAppendUs, WalSwapsPerTick;
 
+    /// <summary>The Migrate workers' per-chunk sorts, µs of CPU per tick summed over the chunks: index runs, EntityMap runs, dirty-delta grouping.</summary>
+    public double IndexSortCpuUs, MapSortCpuUs, DirtySortCpuUs;
+
     /// <summary>Per-phase chunks the planner dispatched and items it packed into them, per tick — the parallel width each phase actually got.</summary>
     public double PrepChunks, PrepItems, MigrateChunks, MigrateItems, IndexChunks, IndexItems, AabbChunks, AabbItems, FinalizeChunks, FinalizeItems;
 
@@ -295,6 +298,7 @@ public static class SpatialPartitionMatrix
     /// </remarks>
     private static float MovingFraction = 1f;
     private static bool AdaptiveCost;
+    private static bool ForceBulkMap;
 
     // ── Aging (#886 lead B) ──────────────────────────────────────────────────────────────────────────────────────────
     //
@@ -355,7 +359,10 @@ public static class SpatialPartitionMatrix
         FenceWorkPlan.WorkerAwareChunking = Array.IndexOf(args, "--legacy-chunking") < 0;
         FenceWorkPlan.MinUsefulChunkUs = Math.Min(FenceWorkPlan.MinChunkCostUs, ArgFloat(args, "--chunk-floor-us", FenceWorkPlan.MinUsefulChunkUs));
         AdaptiveCost = Array.IndexOf(args, "--adaptive-cost") >= 0;
-        ArchetypeClusterState.UseRadixDestCellSort = Array.IndexOf(args, "--compare-sort") < 0;
+        // --force-bulk-map stages every EntityMap patch for the bulk phase whatever the batch size, so its per-chunk sort is exercised on a world whose
+        // migrations would otherwise take the inline path. (The --compare-sort / --compare-new-sorts A/B flags of #889 and #891 went with the comparison
+        // sorts they selected, once the numbers in design 14 §5 were accepted.)
+        ForceBulkMap = Array.IndexOf(args, "--force-bulk-map") >= 0;
         if (Array.IndexOf(args, "--no-finalize-slice") >= 0)
         {
             DatabaseEngine.FinalizeSliceMinRanges = int.MaxValue;
@@ -924,6 +931,8 @@ public static class SpatialPartitionMatrix
                 lastSwapGen = swapGen;
                 phase.AddSerial(runtime.LastFenceWallTicks * toUs, serial.MigrateTail * toUs, serial.MigrateSort * toUs, serial.IndexMerge * toUs,
                     serial.EntityMapMerge * toUs, serial.FinalizeEmit * toUs, serial.FinalizeAppend * toUs, swaps);
+                var chunkSort = runtime.LastFenceChunkSortTicks;
+                phase.AddChunkSorts(chunkSort.IndexSort * toUs, chunkSort.MapSort * toUs, chunkSort.DirtySort * toUs);
                 phase.AddWidths(runtime);
 
                 acc.Add(dbe.GetSpatialTelemetry(archetypeId));
@@ -1041,6 +1050,7 @@ public static class SpatialPartitionMatrix
             // sees: the pinned index seed (0.06 µs/entry) is 7x below what this world measures (0.43), and a planner fed
             // that number under-chunks the index phase in a way production never would (#889).
             AdaptiveFenceCost = AdaptiveCost,
+            EntityMapBulkMinEntriesPerBucket = ForceBulkMap ? 0f : EntityMapUpdateStaging.DefaultMinEntriesPerBucket,
         });
 
         // 🔴 Exceptions raised once teardown has begun are DISCARDED, and this is a workaround for an engine defect
@@ -1356,6 +1366,7 @@ public static class SpatialPartitionMatrix
         private double _prepSpan, _prepCpu, _migSpan, _migCpu, _idxSpan, _idxCpu;
         private double _mapSpan, _mapCpu, _aabbSpan, _aabbCpu, _finSpan, _finCpu;
         private double _wall, _migTail, _migSort, _idxMerge, _mapMerge, _finEmit, _finAppend, _swaps;
+        private double _idxSortCpu, _mapSortCpu, _dirtySortCpu;
         private readonly double[] _phaseChunks = new double[5];
         private readonly double[] _phaseItems = new double[5];
         private long _chunks;
@@ -1386,6 +1397,11 @@ public static class SpatialPartitionMatrix
         {
             _wall += wall; _migTail += migTail; _migSort += migSort; _idxMerge += idxMerge; _mapMerge += mapMerge; _finEmit += finEmit;
             _finAppend += finAppend; _swaps += swaps;
+        }
+
+        public void AddChunkSorts(double idxSort, double mapSort, double dirtySort)
+        {
+            _idxSortCpu += idxSort; _mapSortCpu += mapSort; _dirtySortCpu += dirtySort;
         }
 
         public void AddWidths(TyphonRuntime runtime)
@@ -1424,6 +1440,7 @@ public static class SpatialPartitionMatrix
             r.MigrateTailUs = _migTail / n; r.MigrateSortUs = _migSort / n; r.IndexMergeUs = _idxMerge / n;
             r.EntityMapMergeUs = _mapMerge / n; r.FinalizeEmitUs = _finEmit / n;
             r.FinalizeAppendUs = _finAppend / n; r.WalSwapsPerTick = _swaps / n;
+            r.IndexSortCpuUs = _idxSortCpu / n; r.MapSortCpuUs = _mapSortCpu / n; r.DirtySortCpuUs = _dirtySortCpu / n;
             r.PrepChunks = _phaseChunks[0] / n; r.PrepItems = _phaseItems[0] / n;
             r.MigrateChunks = _phaseChunks[1] / n; r.MigrateItems = _phaseItems[1] / n;
             r.IndexChunks = _phaseChunks[2] / n; r.IndexItems = _phaseItems[2] / n;
@@ -1819,7 +1836,7 @@ public static class SpatialPartitionMatrix
             "churnFraction", "churnTicks", "activeListInversions",
             "fenceWallUs", "migrateTailUs", "migrateSortUs", "indexMergeUs", "entityMapMergeUs", "finalizeEmitUs", "finalizeAppendUs", "walSwapsPerTick",
             "prepChunks", "prepItems", "migrateChunks", "migrateItems", "indexChunks", "indexItems", "aabbChunks", "aabbItems", "finalizeChunks",
-            "finalizeItems", "failure"));
+            "finalizeItems", "indexSortCpuUs", "mapSortCpuUs", "dirtySortCpuUs", "failure"));
 
         var c = CultureInfo.InvariantCulture;
         foreach (var r in results)
@@ -1843,7 +1860,7 @@ public static class SpatialPartitionMatrix
                 F(r.FenceWallUs), F(r.MigrateTailUs), F(r.MigrateSortUs), F(r.IndexMergeUs), F(r.EntityMapMergeUs), F(r.FinalizeEmitUs),
                 F(r.FinalizeAppendUs), F(r.WalSwapsPerTick),
                 F(r.PrepChunks), F(r.PrepItems), F(r.MigrateChunks), F(r.MigrateItems), F(r.IndexChunks), F(r.IndexItems), F(r.AabbChunks), F(r.AabbItems),
-                F(r.FinalizeChunks), F(r.FinalizeItems), r.Failure));
+                F(r.FinalizeChunks), F(r.FinalizeItems), F(r.IndexSortCpuUs), F(r.MapSortCpuUs), F(r.DirtySortCpuUs), r.Failure));
         }
 
         File.WriteAllText(path, sb.ToString());

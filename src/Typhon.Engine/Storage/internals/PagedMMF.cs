@@ -2783,8 +2783,9 @@ public partial class PagedMMF : ResourceNode, IMemoryResource
 
         var memPageBaseAddr = _memPagesAddr;
 
-        // We want to generate as few IO operations as possible, so we sort the pages to identify the ones that are contiguous in the file
-        Array.Sort(memPageIndices, (x, y) => x - y);
+        // We want to generate as few IO operations as possible, so we sort the pages to identify the ones that are contiguous in the file. The bare
+        // overload: a comparison lambda, even a static one, routes Array.Sort through the delegate path instead of the primitive int one.
+        Array.Sort(memPageIndices);
 
         // Sample each page's writeback generation BEFORE anything is written, and publish these exact values once the fsync
         // below has made the bytes durable. Same contract as the checkpoint's capture, same reason: a modification landing

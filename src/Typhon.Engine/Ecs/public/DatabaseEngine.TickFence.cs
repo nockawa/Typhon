@@ -122,14 +122,19 @@ public partial class DatabaseEngine
 
     /// <summary>Per-thread descriptor scratch for columnar fence emission — one entry per dirty cluster, payload-free (#559).</summary>
     [ThreadStatic]
-    private static RecordCodec.FenceBlockDescriptor[] _fenceBlocks;
+    private static RecordCodec.FenceBlockDescriptor[] FenceBlocks;
 
     /// <summary>
     /// Per-thread arena for the collection-content batch that accompanies a columnar fence (#389). Separate from <see cref="_fenceArena"/>: the two are
     /// never live at once, but a cluster fence and a flat fence are different call paths and sharing one arena between them buys nothing.
     /// </summary>
     [ThreadStatic]
-    private static CommitBatchArena _fenceCollectionArena;
+    private static CommitBatchArena FenceCollectionArena;
+
+    // Histogram scratch for the serial fence's radix sorts — the staged EntityMap and index runs of ApplyStaged*. Serial by construction, so one per engine.
+    private int[] _serialRadixCounts;
+
+    private Span<int> SerialRadixCounts => _serialRadixCounts ??= new int[RadixSort.Buckets];
 
     /// <summary>
     /// Emits the full <c>ComponentCollection</c> content of every dirty entity in a cluster fence, as its own fence batch of CollectionDelta records.
@@ -151,7 +156,7 @@ public partial class DatabaseEngine
         int firstWord,
         int wordCount)
     {
-        var arena = _fenceCollectionArena ??= new CommitBatchArena();
+        var arena = FenceCollectionArena ??= new CommitBatchArena();
         arena.Reset();
         var batch = new CommitBatchBuilder(arena, tickNumber, 0, true);
         var batchBytes = 0;
@@ -600,7 +605,7 @@ public partial class DatabaseEngine
         try
         {
             staging.ClearPrepared();
-            staging.SortChunk(0);
+            staging.SortChunk(0, SerialRadixCounts);
             var count = staging.MergeAndPartition(1);
             if (count == 0)
             {
@@ -673,7 +678,8 @@ public partial class DatabaseEngine
 
                 // The parallel path's Migrate workers sort their own chunk before leaving it; this path has no workers, so it sorts its single run here. The
                 // merge below then sees one sorted run and copies it, which is the degenerate case it already handles.
-                field.Index.SortBulkEntries(staging.ChunkSpan(0, fieldId), multi);
+                var run = staging.ChunkSpan(0, fieldId);
+                field.Index.SortBulkEntries(run, staging.SortScratch(0, run.Length), SerialRadixCounts, multi);
 
                 var merged = staging.MergeSortedRuns(fieldId, field.Index.BulkEntryStride(multi), field.Index, multi, out var byteCount);
                 if (byteCount == 0)
@@ -1937,7 +1943,7 @@ public partial class DatabaseEngine
         // roughly 256 descriptors. The array used to hold 64, so it was the array that bound, every time, and Finalize paid a Measure -> TryClaim ->
         // Write -> Publish round trip per 64 dirty clusters -- ~31 a tick at 2 000 dirty clusters instead of ~8. Durability-neutral: fence records are
         // individually committed (LOG-04) and the byte cap still bounds the claim; the only thing that changes is how many claims a tick makes.
-        var blocks = _fenceBlocks ??= new RecordCodec.FenceBlockDescriptor[MaxFenceBatchBlocks];
+        var blocks = FenceBlocks ??= new RecordCodec.FenceBlockDescriptor[MaxFenceBatchBlocks];
         var blockCount = 0;
         var batchBytes = 0;
         long appendTicks = 0;

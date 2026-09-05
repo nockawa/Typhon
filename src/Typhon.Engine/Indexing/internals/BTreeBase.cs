@@ -74,7 +74,12 @@ internal abstract class BTreeBase<TStore> : IBTreeIndex where TStore : struct, I
     public abstract unsafe void WriteBulkMultiEntry(Span<byte> dest, void* keyAddr, int elementId, int oldValue, int newValue);
 
     /// <summary>Sorts a staged buffer ascending by key, in place. The partitioning descent requires it and asserts it in Debug.</summary>
-    public abstract void SortBulkEntries(Span<byte> entries, bool multi);
+    /// <param name="entries">The staged run, a whole number of entries at this tree's stride.</param>
+    /// <param name="scratch">Ping-pong scratch for the radix sort, at least as long as <paramref name="entries"/>; unused by a tree whose key has no radix
+    /// order (<c>String64</c>). Caller-owned — <c>IndexUpdateStaging.SortScratch</c> on the fence — so nothing here allocates per run.</param>
+    /// <param name="radixCounts">Histogram scratch of <see cref="RadixSort.Buckets"/> ints, the caller's too.</param>
+    /// <param name="multi"><c>true</c> for the <c>AllowMultiple</c> entry shape.</param>
+    public abstract void SortBulkEntries(Span<byte> entries, Span<byte> scratch, Span<int> radixCounts, bool multi);
 
     /// <summary>
     /// Merges two key-sorted staged runs into <paramref name="dest"/>, which must hold exactly their combined length.

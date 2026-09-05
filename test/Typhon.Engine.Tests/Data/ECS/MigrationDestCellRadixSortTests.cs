@@ -8,12 +8,11 @@ using Typhon.Engine.Internals;
 namespace Typhon.Engine.Tests;
 
 /// <summary>
-/// #889 lead F. The Migrate phase's Prepare orders the pending queue by destination cell with <see cref="ArchetypeClusterState.RadixSortByDestCellKey"/>,
-/// an LSD radix sort, where it used to run <c>Array.Sort</c> with a comparer. The sort's contract is what the slice planner carves on — ascending
-/// <see cref="MigrationRequest.DestCellKey"/>, and now stable — and these pin it against a reference that has both properties.
+/// The Migrate phase's destination-cell sort as a SITE of <see cref="RadixSort"/> (#889 lead F, made generic in #891): the queue's scratch that
+/// <see cref="ArchetypeClusterState.RadixSortByDestCellKey"/> owns and grows, the key struct's order, and the public entry point. The algorithm itself —
+/// stability, digit widths, skipped digits, signed keys — is pinned by <c>RadixSortTests</c> and is not repeated here.
 /// </summary>
 [TestFixture]
-[NonParallelizable]   // one test flips the static sort switch
 class MigrationDestCellRadixSortTests : TestBase<MigrationDestCellRadixSortTests>
 {
     private ArchetypeClusterState NewState()
@@ -51,95 +50,31 @@ class MigrationDestCellRadixSortTests : TestBase<MigrationDestCellRadixSortTests
         }
     }
 
-    /// <summary>Keys spanning one, two and three 11-bit digits, so the pass loop runs one, two and three times and the ping-pong lands on either
-    /// side.</summary>
-    [TestCase(2_000, 1 << 11, TestName = "Keys_Within_One_Digit")]
-    [TestCase(2_000, 1 << 20, TestName = "Keys_Within_Two_Digits")]
-    [TestCase(2_000, int.MaxValue, TestName = "Keys_Over_The_Whole_Positive_Range")]
-    [TestCase(50, 1 << 12, TestName = "A_Small_Queue")]
-    public void Sorts_By_DestCellKey_Stably(int count, int keyRange)
-    {
-        var state = NewState();
-        var rng = new Random(889 + keyRange);
-        var items = Build(rng, count, r => r.Next(keyRange));
-        var expected = Reference(items, count);
-        var tail = items[count..];
-
-        state.RadixSortByDestCellKey(items, count);
-
-        AssertSameSequence(items, expected, count, $"range {keyRange}");
-        for (var i = 0; i < tail.Length; i++)
-        {
-            Assert.That(items[count + i].SourceClusterChunkId, Is.EqualTo(tail[i].SourceClusterChunkId),
-                $"entry {count + i}, past `count`, is not the sort's to touch");
-            Assert.That(items[count + i].DestCellKey, Is.EqualTo(tail[i].DestCellKey), $"entry {count + i}, past `count`, is not the sort's to touch");
-        }
-    }
-
     /// <summary>
-    /// Stability, witnessed where it matters: eight values per digit over three digits give 512 distinct keys for 4 000 requests, so nearly every key is
-    /// shared and every pass has ties to keep in order. The range cases above prove ORDER; this one proves the enqueue order survives inside each cell.
+    /// The site's key is the destination cell, signed, and the site sorts only the first <c>count</c> entries: colliding cells over signed keys, with a tail
+    /// past the count that must come back untouched.
     /// </summary>
     [Test]
-    public void Colliding_Keys_Keep_Their_Enqueue_Order_Through_Every_Pass()
+    public void RadixSortByDestCellKey_OrdersByDestinationCell_Stably_LeavingTheTailAlone()
     {
         var state = NewState();
-        var rng = new Random(512);
-        var items = Build(rng, 4_000, r => (r.Next(8) << 22) | (r.Next(8) << 11) | r.Next(8));
-        var expected = Reference(items, 4_000);
-
-        state.RadixSortByDestCellKey(items, 4_000);
-
-        AssertSameSequence(items, expected, 4_000, "colliding keys");
-    }
-
-    /// <summary>Negative keys order before positive ones, exactly as <see cref="int.CompareTo(int)"/> does — the sign flip is what makes a radix sort
-    /// signed.</summary>
-    [Test]
-    public void Negative_Keys_Order_Before_Positive_Ones()
-    {
-        var state = NewState();
-        var rng = new Random(7);
-        var items = Build(rng, 3_000, r => r.Next(int.MinValue, int.MaxValue));
+        var rng = new Random(889);
+        var items = Build(rng, 3_000, r => r.Next(-64, 64) << 7);   // 128 cells, signed, ~23 requests each
         var expected = Reference(items, 3_000);
+        var tail = items[3_000..];
 
         state.RadixSortByDestCellKey(items, 3_000);
 
-        AssertSameSequence(items, expected, 3_000, "signed");
-        Assert.That(items[0].DestCellKey, Is.LessThan(0), "sanity: the seed produced negative keys and they came first");
-    }
-
-    /// <summary>A queue whose requests all target one cell is already in order, and stability means it is left exactly as it was.</summary>
-    [Test]
-    public void One_Cell_Is_A_NoOp()
-    {
-        var state = NewState();
-        var items = Build(new Random(1), 500, _ => 4242);
-        var snapshot = (MigrationRequest[])items.Clone();
-
-        state.RadixSortByDestCellKey(items, 500);
-
-        for (var i = 0; i < 500; i++)
+        AssertSameSequence(items, expected, 3_000, "signed colliding cells");
+        Assert.That(items[0].DestCellKey, Is.LessThan(0), "sanity: negative cells came first");
+        for (var i = 0; i < tail.Length; i++)
         {
-            Assert.That(items[i].SourceClusterChunkId, Is.EqualTo(snapshot[i].SourceClusterChunkId), $"position {i}");
+            Assert.That((items[3_000 + i].SourceClusterChunkId, items[3_000 + i].DestCellKey), Is.EqualTo((tail[i].SourceClusterChunkId, tail[i].DestCellKey)),
+                $"entry {3_000 + i}, past `count`, is not the sort's to touch");
         }
     }
 
-    /// <summary>Keys that share every low digit and differ only high up: the low passes are skipped, the high one still sorts.</summary>
-    [Test]
-    public void Passes_Whose_Digit_Is_Constant_Are_Skipped_Without_Losing_The_Order()
-    {
-        var state = NewState();
-        var rng = new Random(3);
-        var items = Build(rng, 1_000, r => (r.Next(64) << 22) | 0x1555);   // low 22 bits identical, only the top digit varies
-        var expected = Reference(items, 1_000);
-
-        state.RadixSortByDestCellKey(items, 1_000);
-
-        AssertSameSequence(items, expected, 1_000, "high-digit-only");
-    }
-
-    /// <summary>The queue grows across ticks; the sort's scratch must follow it rather than sort against a stale, shorter partner.</summary>
+    /// <summary>The queue grows across ticks; the site's scratch must follow it rather than sort against a stale, shorter partner.</summary>
     [Test]
     public void Scratch_Grows_With_The_Queue()
     {
@@ -152,39 +87,33 @@ class MigrationDestCellRadixSortTests : TestBase<MigrationDestCellRadixSortTests
         var large = Build(rng, 20_000, r => r.Next(1 << 16));
         var expected = Reference(large, 20_000);
         state.RadixSortByDestCellKey(large, 20_000);
-        AssertSameSequence(large, expected, 20_000, "then, twenty times larger");
+        AssertSameSequence(large, expected, 20_000, "then, two hundred times larger");
     }
 
-    /// <summary>Through the public entry point: the queue itself, and the switch that keeps the comparison sort for the harness A/B.</summary>
+    /// <summary>Through the public entry point: the queue itself, sorted in place over exactly <c>PendingMigrationCount</c> entries.</summary>
     [Test]
-    public void SortPendingMigrationsByDestCellKey_OrdersTheQueue_UnderEitherSort()
+    public void SortPendingMigrationsByDestCellKey_OrdersTheQueue()
     {
         var state = NewState();
         var rng = new Random(5);
-        var was = ArchetypeClusterState.UseRadixDestCellSort;
         try
         {
-            foreach (var radix in new[] { true, false })
+            var items = Build(rng, 1_500, r => r.Next(1 << 18));
+            state.PendingMigrations = items;
+            state.PendingMigrationCount = 1_500;
+
+            state.SortPendingMigrationsByDestCellKey();
+
+            var keys = new List<int>(1_500);
+            for (var i = 0; i < 1_500; i++)
             {
-                ArchetypeClusterState.UseRadixDestCellSort = radix;
-                var items = Build(rng, 1_500, r => r.Next(1 << 18));
-                state.PendingMigrations = items;
-                state.PendingMigrationCount = 1_500;
-
-                state.SortPendingMigrationsByDestCellKey();
-
-                var keys = new List<int>(1_500);
-                for (var i = 0; i < 1_500; i++)
-                {
-                    keys.Add(state.PendingMigrations[i].DestCellKey);
-                }
-
-                Assert.That(keys, Is.Ordered.Ascending, $"radix={radix}: the queue must be ascending by destination cell");
+                keys.Add(state.PendingMigrations[i].DestCellKey);
             }
+
+            Assert.That(keys, Is.Ordered.Ascending, "the queue must be ascending by destination cell");
         }
         finally
         {
-            ArchetypeClusterState.UseRadixDestCellSort = was;
             state.PendingMigrations = null;
             state.PendingMigrationCount = 0;
         }

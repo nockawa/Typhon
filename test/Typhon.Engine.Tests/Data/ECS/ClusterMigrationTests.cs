@@ -1941,6 +1941,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         staging.BeginTick(Runs);
 
         var stride = tree.BulkEntryStride(true);
+        var radixCounts = new int[RadixSort.Buckets];
         var expected = new List<(int Key, int NewValue)>();
         for (var run = 0; run < Runs; run++)
         {
@@ -1954,7 +1955,8 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             }
 
             // What the Migrate worker does before it leaves its chunk. MergeSortedRuns' whole contract is that its inputs arrive sorted.
-            tree.SortBulkEntries(staging.ChunkSpan(run, 0), true);
+            var runBytes = staging.ChunkSpan(run, 0);
+            tree.SortBulkEntries(runBytes, staging.SortScratch(run, runBytes.Length), radixCounts, true);
         }
 
         var merged = staging.MergeSortedRuns(0, stride, tree, true, out var byteCount);

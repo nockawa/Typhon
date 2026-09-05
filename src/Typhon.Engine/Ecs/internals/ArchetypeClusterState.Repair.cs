@@ -797,6 +797,12 @@ internal sealed unsafe partial class ArchetypeClusterState
             return 0;
         }
 
+        // 🔴 A radix sort was tried here and REFUTED — do not re-add it without a new measurement. RadixSortBenchmarks, the Repair_* rows, quiet box, with
+        // the adaptive 8-bit digits these sizes take (the fixed-11-bit first cut was worse still, 7.5x slower at 128): at the sizes a repair unit has
+        // (65–2 000 entities) the two-key stable RadixSort (source location, then Morton) runs at 0.31x of this Array.Sort at 128
+        // entries, 0.39x at 512 and 0.67x at 2 048 — a 63-bit key is six to eight passes and the tie-break adds up to four more, each with its fixed cost,
+        // against an introsort whose CompareTo is devirtualised and inlined on a 16-byte struct. It wins only at 32 768 (2.5x), a unit the planner never
+        // admits.
         Array.Sort(entries, 0, count);
 
         // ── Already sorted? Then moving 2 000 entities buys exactly nothing ──────────────────────────────────────────

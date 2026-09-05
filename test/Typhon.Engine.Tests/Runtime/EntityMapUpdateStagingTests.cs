@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using Typhon.Engine.Internals;
 
@@ -17,6 +18,9 @@ namespace Typhon.Engine.Tests.Runtime;
 [TestFixture]
 class EntityMapUpdateStagingTests
 {
+    /// <summary>The histogram the exec system hands each chunk's sort; one is enough here, the fixture sorts on one thread.</summary>
+    private static readonly int[] RadixCounts = new int[RadixSort.Buckets];
+
     private static EntityLocationUpdate Entry(long key, int bucket, int dstChunkId, int dstSlot) => new()
     {
         EntityKey = key,
@@ -39,7 +43,7 @@ class EntityMapUpdateStagingTests
                 staging.Add(r, Entry(key: r * 1000 + i, bucket: i * runs + r, dstChunkId: r, dstSlot: i));
             }
 
-            staging.SortChunk(r);
+            staging.SortChunk(r, RadixCounts);
         }
 
         merged = staging.MergeAndPartition(desiredParts: 4);
@@ -98,7 +102,7 @@ class EntityMapUpdateStagingTests
         for (var r = 0; r < 4; r++)
         {
             staging.Add(r, Entry(key: r, bucket: 42, dstChunkId: r, dstSlot: 0));
-            staging.SortChunk(r);
+            staging.SortChunk(r, RadixCounts);
         }
 
         var merged = staging.MergeAndPartition(desiredParts: 2);
@@ -121,7 +125,7 @@ class EntityMapUpdateStagingTests
         staging.BeginTick(3);
         staging.Add(1, Entry(key: 7, bucket: 9, dstChunkId: 1, dstSlot: 3));
         staging.Add(1, Entry(key: 8, bucket: 2, dstChunkId: 1, dstSlot: 4));
-        staging.SortChunk(1);
+        staging.SortChunk(1, RadixCounts);
 
         var merged = staging.MergeAndPartition(desiredParts: 1);
 
@@ -184,7 +188,7 @@ class EntityMapUpdateStagingTests
                     staging.Add(r, Entry(key: r * 1000 + i, bucket: i * Runs + r, dstChunkId: r, dstSlot: i));
                 }
 
-                staging.SortChunk(r);
+                staging.SortChunk(r, RadixCounts);
             }
 
             staging.MergeAndPartition(4);
@@ -201,12 +205,88 @@ class EntityMapUpdateStagingTests
                 staging.Add(r, Entry(key: r * 1000 + i, bucket: i * Runs + r, dstChunkId: r, dstSlot: i));
             }
 
-            staging.SortChunk(r);
+            staging.SortChunk(r, RadixCounts);
         }
 
         staging.MergeAndPartition(4);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.That(allocated, Is.Zero, $"a steady-state tick must allocate nothing on the staging path — got {allocated} bytes");
+    }
+
+    /// <summary>
+    /// The per-chunk sort on unique buckets — a run large enough to take the wide digits, then one small enough for the narrow ones — must come back strictly
+    /// ascending and a permutation of what went in. A real bulk batch is not like this: the bucket is a hash bucket and the bulk path is taken only once the
+    /// batch has at least one entry per live bucket, so shared buckets are the norm, which is what the colliding case below covers.
+    /// </summary>
+    [TestCase(3_000, TestName = "UniqueBuckets_WideDigits")]
+    [TestCase(300, TestName = "UniqueBuckets_NarrowDigits")]
+    public void SortChunk_SortsByBucket_OnUniqueBuckets(int count)
+    {
+        var rng = new Random(count);
+        var buckets = new int[count];
+        for (var i = 0; i < count; i++)
+        {
+            buckets[i] = i * 3;
+        }
+
+        rng.Shuffle(buckets);
+
+        var staging = new EntityMapUpdateStaging();
+        staging.BeginTick(1);
+        for (var i = 0; i < count; i++)
+        {
+            staging.Add(0, Entry(key: 5_000_000L + i, bucket: buckets[i], dstChunkId: i, dstSlot: i & 63));
+        }
+
+        staging.SortChunk(0, RadixCounts);
+        var output = staging.ChunkSpan(0).ToArray();
+
+        Assert.That(output, Has.Length.EqualTo(count));
+        Assert.That(output.Select(e => e.EntityKey).OrderBy(k => k), Is.EqualTo(Enumerable.Range(0, count).Select(i => 5_000_000L + i)),
+            "a permutation of the input");
+        for (var i = 1; i < count; i++)
+        {
+            Assert.That(output[i].Bucket, Is.GreaterThan(output[i - 1].Bucket), $"ascending by bucket at {i}");
+            Assert.That(output[i].EntityKey, Is.EqualTo(5_000_000L + output[i].DstChunkId), $"the whole entry travels with its bucket at {i}");
+        }
+    }
+
+    /// <summary>
+    /// The shape a real bulk batch has: many entries per bucket. The run must come back a bucket-sorted permutation of the input that keeps insertion order
+    /// inside each bucket — the sort is stable — which is what makes the merged batch a pure function of the runs.
+    /// </summary>
+    [TestCase(3_000, TestName = "SharedBuckets_WideDigits")]
+    [TestCase(300, TestName = "SharedBuckets_NarrowDigits")]
+    public void SortChunk_SortsByBucket_OnSharedBuckets_Stably(int count)
+    {
+        var rng = new Random(count * 7);
+        var buckets = new int[count];
+        for (var i = 0; i < count; i++)
+        {
+            buckets[i] = rng.Next(64);   // ~50 entries per bucket at 3 000
+        }
+
+        var staging = new EntityMapUpdateStaging();
+        staging.BeginTick(1);
+        for (var i = 0; i < count; i++)
+        {
+            staging.Add(0, Entry(key: 9_000_000L + i, bucket: buckets[i], dstChunkId: i, dstSlot: i & 63));
+        }
+
+        staging.SortChunk(0, RadixCounts);
+        var output = staging.ChunkSpan(0).ToArray();
+
+        Assert.That(output, Has.Length.EqualTo(count), "nothing dropped");
+        Assert.That(output.Select(e => e.EntityKey).OrderBy(k => k), Is.EqualTo(Enumerable.Range(0, count).Select(i => 9_000_000L + i)),
+            "a permutation of the input");
+        for (var i = 1; i < count; i++)
+        {
+            Assert.That(output[i].Bucket, Is.GreaterThanOrEqualTo(output[i - 1].Bucket), $"ascending by bucket at {i}");
+            if (output[i].Bucket == output[i - 1].Bucket)
+            {
+                Assert.That(output[i].EntityKey, Is.GreaterThan(output[i - 1].EntityKey), $"insertion order kept inside bucket at {i}");
+            }
+        }
     }
 }

@@ -514,9 +514,6 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
     }
 
-    /// <summary>A/B switch (#889): the stable radix sort in <see cref="RadixSortByDestCellKey"/>, or the <c>Array.Sort</c> it replaced.</summary>
-    internal static bool UseRadixDestCellSort = true;
-
     // Ping-pong partner for the radix sort, the queue's capacity, grown with it. Only the Migrate phase's Prepare touches either.
     private MigrationRequest[] _migrationSortScratch;
     private int[] _radixCounts;
@@ -533,26 +530,21 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
-        if (!UseRadixDestCellSort)
-        {
-            Array.Sort(PendingMigrations, 0, PendingMigrationCount, MigrationByDestCellKeyComparer.Instance);
-            return;
-        }
-
         RadixSortByDestCellKey(PendingMigrations, PendingMigrationCount);
     }
 
     /// <summary>
-    /// Orders the first <paramref name="count"/> requests by ascending <see cref="MigrationRequest.DestCellKey"/> — LSD radix over 11-bit digits, STABLE, so
+    /// Orders the first <paramref name="count"/> requests by ascending <see cref="MigrationRequest.DestCellKey"/> — <see cref="RadixSort"/>, STABLE, so
     /// requests sharing a cell keep the order they were enqueued in.
     /// </summary>
     /// <remarks>
     /// <para><b>Why not <c>Array.Sort</c> (#889).</b> Measured on Matrix M at 100 % moving: 0.71–0.88 ms per tick for ~5 000 requests, 150–175 ns a
     /// request — introsort's <c>n log n</c> comparisons through an <c>IComparer</c> interface call, each moving a 20-byte struct. It ran on the driver
     /// between the Prep tails and the Migrate dispatch, so every one of those microseconds was fence span. The keys are 32-bit cell ids of which a live
-    /// world uses a few thousand, so a radix sort is <c>O(n)</c> with a small constant: three passes at most, and any pass whose digit is the same for every
-    /// key is skipped after its histogram, which for a world whose cells sit in a narrow key range means one or two.</para>
-    /// <para><b>Signed order.</b> The sign bit is flipped before the digits are taken, so negative keys order before positive ones exactly as
+    /// world uses a few thousand, so the radix sort is <c>O(n)</c> with a small constant — one or two passes for a world whose cells sit in a narrow key
+    /// range. Measured at 63 µs. The sort itself was lifted into <see cref="RadixSort"/> once other fence sorts wanted it (#891); this is the site that owns
+    /// the queue's scratch. The <c>Array.Sort</c> it replaced was kept behind a switch for the A/B and deleted once the numbers were accepted.</para>
+    /// <para><b>Signed order.</b> <see cref="DestCellKeyOf"/> flips the sign bit, so negative keys order before positive ones exactly as
     /// <see cref="int.CompareTo(int)"/> would; nothing enqueues a negative destination today, and this costs an XOR.</para>
     /// <para><b>Stable, where <c>Array.Sort</c> was not</b>, and that is a behaviour change worth stating: a cell's requests now apply in enqueue order —
     /// ascending source cluster for crossings, the planner's emission order for repairs — where introsort permuted them. See the remark on
@@ -560,87 +552,31 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </remarks>
     internal void RadixSortByDestCellKey(MigrationRequest[] items, int count)
     {
-        const int DigitBits = 11;
-        const int Buckets = 1 << DigitBits;
-        const int DigitMask = Buckets - 1;
-        const uint SignFlip = 0x8000_0000u;
-
-        var min = uint.MaxValue;
-        var max = 0u;
-        for (var i = 0; i < count; i++)
-        {
-            var k = (uint)items[i].DestCellKey ^ SignFlip;
-            min = Math.Min(min, k);
-            max = Math.Max(max, k);
-        }
-
-        var differing = min ^ max;
-        if (differing == 0)
-        {
-            return;     // one cell: already sorted, and stable means untouched
-        }
-
         if (_migrationSortScratch == null || _migrationSortScratch.Length < count)
         {
             _migrationSortScratch = new MigrationRequest[Math.Max(count, items.Length)];
         }
 
-        var counts = _radixCounts ??= new int[Buckets];
-        var highestDifferingBit = 32 - BitOperations.LeadingZeroCount(differing);
-        var src = items;
-        var dst = _migrationSortScratch;
-        for (var shift = 0; shift < highestDifferingBit; shift += DigitBits)
-        {
-            Array.Clear(counts);
-            for (var i = 0; i < count; i++)
-            {
-                counts[(int)((((uint)src[i].DestCellKey ^ SignFlip) >> shift) & DigitMask)]++;
-            }
-
-            if (counts[(int)((min >> shift) & DigitMask)] == count)
-            {
-                continue;   // every key shares this digit: the pass would copy the array unchanged
-            }
-
-            var running = 0;
-            for (var b = 0; b < Buckets; b++)
-            {
-                var c = counts[b];
-                counts[b] = running;
-                running += c;
-            }
-
-            for (var i = 0; i < count; i++)
-            {
-                var d = (int)((((uint)src[i].DestCellKey ^ SignFlip) >> shift) & DigitMask);
-                dst[counts[d]++] = src[i];
-            }
-
-            (src, dst) = (dst, src);
-        }
-
-        if (!ReferenceEquals(src, items))
-        {
-            Array.Copy(src, items, count);   // an odd number of passes left the result in the scratch
-        }
+        _radixCounts ??= new int[RadixSort.Buckets];
+        RadixSort.Sort<MigrationRequest, DestCellKeyOf>(items.AsSpan(0, count), _migrationSortScratch, _radixCounts);
     }
 
-    private sealed class MigrationByDestCellKeyComparer : IComparer<MigrationRequest>
+    /// <summary>The queue sort's key: the destination cell only — that is what the slice planner carves on — sign-flipped so the radix order is
+    /// <see cref="int"/> order.</summary>
+    /// <remarks>
+    /// 🔴 <b>A secondary sort on the SOURCE cluster chunk id was tried here and REFUTED — do not re-add it without a new measurement.</b> The reasoning
+    /// was sound on its face: the migrate loop's first act is <c>GetChunkAddress(srcChunkId, dirty: true)</c>, the accessor window holds three clusters per
+    /// page, and <c>ChunkAccessor.LoadAndGet</c> is called 108 473 times in this phase per traced run — the same access pattern #882's counting sort removed
+    /// from the shadow drain. An interleaved A/B over five pairs measured <b>0.95x to 1.13x on the Migrate phase, straddling 1.0</b>: no effect. (With a
+    /// stable radix sort it would be a second pass on the source key before this one; the reasoning below is why that pass would still buy nothing.)
+    /// <para>The reason it cannot help is upstream. <c>DetectClusterMigrations</c> builds this queue by walking <c>dirtyBits</c> in ascending word order, so
+    /// requests are appended in ascending SOURCE order already, and a stable sort by destination keeps that order inside every cell; the entries sharing
+    /// any one destination cell are few, so there was almost no source disorder left inside a run for a secondary key to fix even when the sort was not
+    /// stable. The drain's problem was different in kind — its buffer is in user WRITE order, which is random with respect to chunk id.</para>
+    /// </remarks>
+    private readonly struct DestCellKeyOf : IRadixKey<MigrationRequest>
     {
-        public static readonly MigrationByDestCellKeyComparer Instance = new();
-
-        /// <summary>Destination cell only — that is what the slice planner carves on.</summary>
-        /// <remarks>
-        /// 🔴 <b>A secondary sort on the SOURCE cluster chunk id was tried here and REFUTED — do not re-add it without a new measurement.</b> The reasoning
-        /// was sound on its face: the migrate loop's first act is <c>GetChunkAddress(srcChunkId, dirty: true)</c>, the accessor window holds three clusters
-        /// per page, and <c>ChunkAccessor.LoadAndGet</c> is called 108 473 times in this phase per traced run — the same access pattern #882's counting sort
-        /// removed from the shadow drain. An interleaved A/B over five pairs measured <b>0.95x to 1.13x on the Migrate phase, straddling 1.0</b>: no effect.
-        /// <para>The reason it cannot help is upstream. <c>DetectClusterMigrations</c> builds this queue by walking <c>dirtyBits</c> in ascending word order,
-        /// so requests are appended in ascending SOURCE order already; the destination sort then interleaves them, but the entries sharing any one
-        /// destination cell are few, so there is almost no source disorder left inside a run for a secondary key to fix. The drain's problem was different in
-        /// kind — its buffer is in user WRITE order, which is random with respect to chunk id.</para>
-        /// </remarks>
-        public int Compare(MigrationRequest x, MigrationRequest y) => x.DestCellKey.CompareTo(y.DestCellKey);
+        public static ulong Key(in MigrationRequest item) => RadixSort.SignedKey(item.DestCellKey);
     }
 
     /// <summary>

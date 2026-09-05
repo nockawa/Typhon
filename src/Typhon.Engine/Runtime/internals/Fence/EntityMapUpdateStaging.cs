@@ -96,9 +96,9 @@ internal sealed class EntityMapUpdateStaging
 
     private EntityLocationUpdate[][] _buffers = [];
 
-    // Per-chunk scratch for the sort keys, grown geometrically so the per-tick sort settles to zero allocation rather than reallocating whenever a run
-    // exceeds the largest one that chunk has seen.
-    private int[][] _sortKeys = [];
+    // Per-chunk ping-pong partner for the radix sort, grown geometrically so the per-tick sort settles to zero allocation rather than reallocating whenever
+    // a run exceeds the largest one that chunk has seen.
+    private EntityLocationUpdate[][] _sortScratch = [];
     private int[] _counts = [];
     private int _chunkCapacity;
 
@@ -138,9 +138,9 @@ internal sealed class EntityMapUpdateStaging
             Array.Copy(_buffers, grownBuffers, _buffers.Length);
             _buffers = grownBuffers;
 
-            var grownKeys = new int[grownBuffers.Length][];
-            Array.Copy(_sortKeys, grownKeys, _sortKeys.Length);
-            _sortKeys = grownKeys;
+            var grownScratch = new EntityLocationUpdate[grownBuffers.Length][];
+            Array.Copy(_sortScratch, grownScratch, _sortScratch.Length);
+            _sortScratch = grownScratch;
 
             var grownCounts = new int[grownBuffers.Length * CountersPerLine];
             Array.Copy(_counts, grownCounts, _counts.Length);
@@ -197,18 +197,26 @@ internal sealed class EntityMapUpdateStaging
     /// that is already open and leaves the phase an <c>O(n log W)</c> merge.
     /// </para>
     /// <para>
-    /// <b><see cref="Array.Sort{TKey,TValue}(TKey[],TValue[],int,int)"/>, not the insertion sort this started as.</b> "The run is short" is true only when the
-    /// chunk count is high: at one Migrate chunk the run is the WHOLE batch, and an <c>O(n²)</c> sort of 95 000 entries cost <b>455 ms</b> of Migrate CPU
-    /// against 63 ms for the inline path it was meant to beat. The quadratic term is invisible at W = 16 and ruinous at W = 1, which is exactly the shape a
-    /// microbenchmark on a small run would have missed.
+    /// <b>Not the insertion sort this started as.</b> "The run is short" is true only when the chunk count is high: at one Migrate chunk the run is the WHOLE
+    /// batch, and an <c>O(n²)</c> sort of 95 000 entries cost <b>455 ms</b> of Migrate CPU against 63 ms for the inline path it was meant to beat. The
+    /// quadratic term is invisible at W = 16 and ruinous at W = 1, which is exactly the shape a microbenchmark on a small run would have missed. A key-array
+    /// <c>Array.Sort</c> brought that to 29.8 ms.
     /// </para>
     /// <para>
     /// <b>Stability is not required here, unlike in the merge.</b> An entity migrates at most once per tick, so no two entries in the batch share a key and
     /// there is nothing for a tie-break to reorder. <see cref="MergeTwo"/> stays stable anyway, because it is what makes the merged batch a pure function of
     /// the runs rather than of the chunk count.
     /// </para>
+    /// <para>
+    /// <b><see cref="RadixSort"/> since #891.</b> The bucket index is below <c>LiveBucketCount</c>, so two or three digit passes cover it, each moving the
+    /// 48-byte entry once, where introsort moved it ~<c>log n</c> times. In isolation 1.5x at chunk-run sizes and 4x on a whole batch
+    /// (<c>RadixSortBenchmarks</c>); in situ at W = 8 the runs are ~50–150 entries and the two were within ±10 µs of CPU a tick of each other, so this
+    /// conversion rests on the whole-batch case — the serial fence and W = 1, where the run IS the batch.
+    /// </para>
     /// </remarks>
-    internal void SortChunk(int chunkIndex)
+    /// <param name="chunkIndex">The chunk whose run to sort.</param>
+    /// <param name="radixCounts">The calling worker's histogram scratch, <see cref="RadixSort.Buckets"/> ints. Owned by the exec system per chunk.</param>
+    internal void SortChunk(int chunkIndex, Span<int> radixCounts)
     {
         if (chunkIndex >= _chunkCapacity)
         {
@@ -222,20 +230,20 @@ internal sealed class EntityMapUpdateStaging
         }
 
         // Geometric for the same reason as EnsureCapacity: a run that grows by one entry a tick must not reallocate this chunk's scratch every tick.
-        var keys = _sortKeys[chunkIndex];
-        if (keys == null || keys.Length < count)
+        var scratch = _sortScratch[chunkIndex];
+        if (scratch == null || scratch.Length < count)
         {
-            keys = new int[Math.Max(Math.Max(count, (keys?.Length ?? 0) * 2), InitialCapacity)];
-            _sortKeys[chunkIndex] = keys;
+            scratch = new EntityLocationUpdate[Math.Max(Math.Max(count, (scratch?.Length ?? 0) * 2), InitialCapacity)];
+            _sortScratch[chunkIndex] = scratch;
         }
 
-        var buffer = _buffers[chunkIndex];
-        for (var i = 0; i < count; i++)
-        {
-            keys[i] = buffer[i].Bucket;
-        }
+        RadixSort.Sort<EntityLocationUpdate, BucketKeyOf>(_buffers[chunkIndex].AsSpan(0, count), scratch, radixCounts);
+    }
 
-        Array.Sort(keys, buffer, 0, count);
+    /// <summary>The bucket sort's key: the bucket index, sign-flipped so the radix order is <see cref="int"/> order.</summary>
+    private readonly struct BucketKeyOf : IRadixKey<EntityLocationUpdate>
+    {
+        public static ulong Key(in EntityLocationUpdate item) => RadixSort.SignedKey(item.Bucket);
     }
 
     /// <summary>Total entries staged this tick.</summary>

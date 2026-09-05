@@ -48,6 +48,10 @@ internal sealed class IndexUpdateStaging
     private readonly int _slotStride;
     private int _chunkCapacity;
 
+    // Per-chunk ping-pong partner for the radix sort, shared by the chunk's fields — the same worker sorts them one after another — and grown
+    // geometrically to the largest run the chunk has seen.
+    private byte[][] _sortScratch = [];
+
     // The merged, sorted buffer per field, reused tick over tick, plus the ping-pong partner the pairwise merge alternates with.
     private readonly byte[][] _merged;
     private readonly byte[][] _scratch;
@@ -137,7 +141,15 @@ internal sealed class IndexUpdateStaging
             return;
         }
 
-        var needed = Math.Max(chunkCount, 1) * _slotStride;
+        var chunks = Math.Max(chunkCount, 1);
+        if (_sortScratch.Length < chunks)
+        {
+            var grownScratch = new byte[Math.Max(chunks, _sortScratch.Length * 2)][];
+            Array.Copy(_sortScratch, grownScratch, _sortScratch.Length);
+            _sortScratch = grownScratch;
+        }
+
+        var needed = chunks * _slotStride;
         if (_buffers.Length < needed)
         {
             var grown = new byte[Math.Max(needed, _buffers.Length * 2)][];
@@ -197,6 +209,20 @@ internal sealed class IndexUpdateStaging
     {
         var slot = chunkIndex * _slotStride + fieldId;
         return _buffers[slot].AsSpan(0, _byteCounts[slot]);
+    }
+
+    /// <summary>One chunk's sort scratch, at least <paramref name="byteCount"/> bytes: the radix sort's ping-pong partner for that chunk's runs.</summary>
+    /// <remarks>Owned by the chunk like its buffers, so the worker sorting the chunk allocates nothing once the scratch has caught up with the run.</remarks>
+    internal Span<byte> SortScratch(int chunkIndex, int byteCount)
+    {
+        var scratch = _sortScratch[chunkIndex];
+        if (scratch == null || scratch.Length < byteCount)
+        {
+            scratch = new byte[Math.Max(Math.Max(byteCount, (scratch?.Length ?? 0) * 2), InitialBufferBytes)];
+            _sortScratch[chunkIndex] = scratch;
+        }
+
+        return scratch.AsSpan(0, byteCount);
     }
 
     /// <summary>Total bytes staged for one field across every chunk this tick.</summary>

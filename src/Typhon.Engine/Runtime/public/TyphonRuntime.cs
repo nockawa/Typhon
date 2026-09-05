@@ -2347,6 +2347,12 @@ public sealed partial class TyphonRuntime : IDisposable
     }
 
     /// <summary>
+    /// Last tick's per-chunk sort CPU in the Migrate phase's <c>OnAfterChunk</c>, in <see cref="Stopwatch"/> ticks summed over the chunks: the index runs,
+    /// the EntityMap runs, the dirty-delta grouping. Worker time, not span — the chunks run in parallel — reported so the sorts can be A/B'd.
+    /// </summary>
+    internal (long IndexSort, long MapSort, long DirtySort) LastFenceChunkSortTicks => _fenceMigrateExec?.ChunkSortTicks ?? default;
+
+    /// <summary>
     /// Wraps a tick phase with paired profiler boundary events. When <see cref="TelemetryConfig.ProfilerActive"/> is false the JIT folds both Emit calls to
     /// no-ops — this method compiles to just <c>action()</c>.
     /// </summary>

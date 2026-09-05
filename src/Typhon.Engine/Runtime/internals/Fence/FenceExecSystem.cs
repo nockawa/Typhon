@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine.Internals;
@@ -369,6 +370,33 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
     internal long LastSortTicks { get; private set; }
 
+    // The three per-chunk sorts OnAfterChunk runs, in Stopwatch ticks, one padded slot of SortTicksStride longs per chunk: each worker writes its own
+    // chunk's slot and no two slots share a cache line, so the timing costs no RMW on a line every worker contends (MD-03). Cleared and sized in
+    // Prepare; summed by the driver after the barrier through ChunkSortTicks — worker CPU, not span, since the chunks run in parallel.
+    private const int SortTicksStride = 8;
+    private long[] _chunkSortTicks = new long[16 * SortTicksStride];
+    private int _lastChunkCount;
+
+    /// <summary>Last tick's per-chunk sort CPU summed over its chunks: the index runs, the EntityMap runs, the dirty-delta grouping.</summary>
+    internal (long IndexSort, long MapSort, long DirtySort) ChunkSortTicks
+    {
+        get
+        {
+            long index = 0;
+            long map = 0;
+            long dirty = 0;
+            for (var c = 0; c < _lastChunkCount; c++)
+            {
+                var slot = c * SortTicksStride;
+                index += _chunkSortTicks[slot];
+                map += _chunkSortTicks[slot + 1];
+                dirty += _chunkSortTicks[slot + 2];
+            }
+
+            return (index, map, dirty);
+        }
+    }
+
     protected override int Prepare(FenceContext ctx)
     {
         PendingPhaseStart = Stopwatch.GetTimestamp();
@@ -490,7 +518,7 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
                 var fieldRef = staging.Field(fieldId);
                 ref var field = ref clusterState.IndexSlots[fieldRef.SlotIndex].Fields[fieldRef.FieldIndex];
-                field.Index.SortBulkEntries(run, field.AllowMultiple);
+                field.Index.SortBulkEntries(run, staging.SortScratch(chunkIndex, run.Length), RadixCounts(chunkIndex), field.AllowMultiple);
             }
         }
     }
@@ -534,7 +562,7 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
         for (var aid = 0; aid < states.Length; aid++)
         {
-            states[aid]?.ClusterState?.EntityMapUpdates?.SortChunk(chunkIndex);
+            states[aid]?.ClusterState?.EntityMapUpdates?.SortChunk(chunkIndex, RadixCounts(chunkIndex));
         }
     }
 
@@ -542,6 +570,15 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
     // capacity, so steady-state allocates zero. Indexed by chunkIndex so workers running concurrent chunks never share a buffer.
     private List<DirtyBitDelta>[] _chunkDirtyBuffers
         = new List<DirtyBitDelta>[16];
+
+    // Per-chunk scratch for the radix sorts a worker runs in OnAfterChunk: the histogram every one of them shares, and the dirty-delta grouping's
+    // ping-pong partner. The histograms are sized with the dirty buffers, from Prepare, for the same reason they are; the delta scratch grows on the
+    // worker, like the List beside it, and only when a bucket outgrows what its chunk has seen.
+    private int[][] _chunkRadixCounts = new int[16][];
+    private DirtyBitDelta[][] _chunkDirtyScratch = new DirtyBitDelta[16][];
+
+    /// <summary>This chunk's radix histogram. Sized by <see cref="Prepare"/>; a worker only ever reads the slot.</summary>
+    private Span<int> RadixCounts(int chunkIndex) => _chunkRadixCounts[chunkIndex];
 
     /// <summary>
     /// Size and populate the per-chunk buffer array for this tick's chunk count. Called ONLY from <see cref="Prepare"/>, which the scheduler runs
@@ -559,15 +596,34 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
     {
         if (chunkCount > _chunkDirtyBuffers.Length)
         {
-            var grown = new List<DirtyBitDelta>[Math.Max(chunkCount, _chunkDirtyBuffers.Length * 2)];
+            var size = Math.Max(chunkCount, _chunkDirtyBuffers.Length * 2);
+            var grown = new List<DirtyBitDelta>[size];
             Array.Copy(_chunkDirtyBuffers, grown, _chunkDirtyBuffers.Length);
             _chunkDirtyBuffers = grown;
+
+            var grownCounts = new int[size][];
+            Array.Copy(_chunkRadixCounts, grownCounts, _chunkRadixCounts.Length);
+            _chunkRadixCounts = grownCounts;
+
+            var grownScratch = new DirtyBitDelta[size][];
+            Array.Copy(_chunkDirtyScratch, grownScratch, _chunkDirtyScratch.Length);
+            _chunkDirtyScratch = grownScratch;
+
+            _chunkSortTicks = new long[size * SortTicksStride];   // cleared below; last tick's values were read at its end
         }
+
+        // The four per-chunk arrays grow in lockstep above; a future edit to one of them would leave a worker indexing an empty span.
+        Debug.Assert(_chunkRadixCounts.Length == _chunkDirtyBuffers.Length && _chunkDirtyScratch.Length == _chunkDirtyBuffers.Length
+            && _chunkSortTicks.Length == _chunkDirtyBuffers.Length * SortTicksStride, "per-chunk arrays out of step");
 
         for (int k = 0; k < chunkCount; k++)
         {
             _chunkDirtyBuffers[k] ??= new List<DirtyBitDelta>(256);
+            _chunkRadixCounts[k] ??= new int[RadixSort.Buckets];
         }
+
+        _chunkSortTicks.AsSpan(0, chunkCount * SortTicksStride).Clear();
+        _lastChunkCount = chunkCount;
     }
 
     /// <summary>
@@ -585,8 +641,14 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
 
     protected override void OnAfterChunk(int chunkIndex)
     {
+        var t0 = Stopwatch.GetTimestamp();
         SortStagedIndexRuns(chunkIndex);
+        var t1 = Stopwatch.GetTimestamp();
         SortStagedEntityMapRuns(chunkIndex);
+        var t2 = Stopwatch.GetTimestamp();
+        var ticksSlot = chunkIndex * SortTicksStride;
+        _chunkSortTicks[ticksSlot] = t1 - t0;
+        _chunkSortTicks[ticksSlot + 1] = t2 - t1;
 
         var bucket = _chunkDirtyBuffers.Length > chunkIndex ? _chunkDirtyBuffers[chunkIndex] : null;
         if (bucket == null || bucket.Count == 0)
@@ -595,8 +657,18 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
         }
 
         // Group by archetypeId so we take each archetype's _finalizeLock exactly once. Typical AntHill tick has one spatial archetype → one sort pass + one
-        // lock acquisition. Sort is in-place on the chunk's buffer.
-        bucket.Sort(static (a, b) => a.ArchetypeId.CompareTo(b.ArchetypeId));
+        // lock acquisition. Sort is in-place on the chunk's buffer. The radix sort's bound pass sees the one-archetype tick as all-equal keys and returns
+        // after one read per entry, where the delegate List.Sort it replaced (#891) still ran its n log n; a ushort key needs at most two passes otherwise.
+        var scratch = _chunkDirtyScratch[chunkIndex];
+        if (scratch == null || scratch.Length < bucket.Count)
+        {
+            scratch = new DirtyBitDelta[Math.Max(bucket.Count, Math.Max(256, (scratch?.Length ?? 0) * 2))];
+            _chunkDirtyScratch[chunkIndex] = scratch;
+        }
+
+        RadixSort.Sort<DirtyBitDelta, DirtyDeltaArchetypeKey>(CollectionsMarshal.AsSpan(bucket), scratch, RadixCounts(chunkIndex));
+
+        _chunkSortTicks[ticksSlot + 2] = Stopwatch.GetTimestamp() - t2;
 
         int i = 0;
         int n = bucket.Count;
@@ -613,6 +685,12 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
             Engine.FlushDirtyBitDeltas(aid, bucket, i, j - i);
             i = j;
         }
+    }
+
+    /// <summary>The dirty-delta grouping's key: the archetype id, unsigned already.</summary>
+    private readonly struct DirtyDeltaArchetypeKey : IRadixKey<DirtyBitDelta>
+    {
+        public static ulong Key(in DirtyBitDelta item) => item.ArchetypeId;
     }
 }
 

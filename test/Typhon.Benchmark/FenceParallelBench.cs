@@ -121,6 +121,8 @@ internal static class FenceParallelBench
 
         var pristine = BuildUnsortedBatch(treeSize, n, clustered);
         var working = new BTreeValueUpdate<int>[n];
+        var sortScratch = new BTreeValueUpdate<int>[n];
+        var radixCounts = new int[RadixSort.Buckets];
 
         var services = new ServiceCollection();
         services
@@ -167,7 +169,7 @@ internal static class FenceParallelBench
                 for (var warm = 0; warm < 3; warm++)
                 {
                     Array.Copy(pristine, working, n);
-                    tree.SortBulkEntries(MemoryMarshal.AsBytes(working.AsSpan()), multi: false);
+                    tree.SortBulkEntries(MemoryMarshal.AsBytes(working.AsSpan()), MemoryMarshal.AsBytes(sortScratch.AsSpan()), radixCounts, multi: false);
                     parts = tree.PartitionByLeafBoundaries(working, workers, boundaries, ref accessor);
                     pool.Run(tree, working, boundaries, parts, out leaves);
                 }
@@ -176,7 +178,8 @@ internal static class FenceParallelBench
                 {
                     var sw = Stopwatch.StartNew();
                     Array.Copy(pristine, working, n);           // the Merge the phase does across per-worker staging buffers
-                    tree.SortBulkEntries(MemoryMarshal.AsBytes(working.AsSpan()), multi: false);   // the sort §5.5 assumed away
+                    tree.SortBulkEntries(MemoryMarshal.AsBytes(working.AsSpan()), MemoryMarshal.AsBytes(sortScratch.AsSpan()), radixCounts,
+                        multi: false);   // the sort §5.5 assumed away
                     parts = tree.PartitionByLeafBoundaries(working, workers, boundaries, ref accessor);
                     sw.Stop();
                     var prepUs = sw.Elapsed.TotalMilliseconds * 1000.0;
