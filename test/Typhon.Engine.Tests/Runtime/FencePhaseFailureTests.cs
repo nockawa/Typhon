@@ -86,6 +86,19 @@ class FencePhaseFailureTests : TestBase<FencePhaseFailureTests>
     }
 
     /// <summary>
+    /// Whether <see cref="ArchetypeClusterState.PrepSlicesRun"/> counts in this build — its bump is <c>[Conditional("DEBUG")]</c>, so Release leaves it at
+    /// 0 however many slices run. Probed by bumping it rather than by <c>#if DEBUG</c>, so it cannot drift from the engine's attribute.
+    /// </summary>
+    private static readonly bool SliceCounterCounts = ProbeSliceCounter();
+
+    private static bool ProbeSliceCounter()
+    {
+        var before = Volatile.Read(ref ArchetypeClusterState.PrepSlicesRun);
+        ArchetypeClusterState.NotePrepSliceRun();
+        return Volatile.Read(ref ArchetypeClusterState.PrepSlicesRun) != before;
+    }
+
+    /// <summary>
     /// Runs the world for a few ticks, optionally making the fence's Prep throw on the first tick that reaches the throttle.
     /// </summary>
     /// <param name="injectFailure">Whether to throw from the probe.</param>
@@ -221,9 +234,14 @@ class FencePhaseFailureTests : TestBase<FencePhaseFailureTests>
             Assert.That(run.ProbeCalls, Is.GreaterThan(0), "sanity: the injection point must actually be reached, or this fixture asserts nothing");
 
             // The arm is only worth what its GATE is: without this the sliced case can silently degrade into the atomic one and the fixture goes on
-            // passing while the Prepare path — #890's own case — is never entered again.
-            Assert.That(run.SlicesRun, sliced ? Is.GreaterThan(0) : Is.EqualTo(0),
-                sliced ? "the sliced arm must actually slice, or the throw lands in Execute like the other arm" : "the atomic arm must not slice");
+            // passing while the Prepare path — #890's own case — is never entered again. The counter that gate reads is bumped by a
+            // [Conditional("DEBUG")] method, so in Release it stays 0 however many slices ran: asking it whether it counts is the difference between a
+            // gate and a test that is red in Release for no defect. The negative half still holds either way — 0 is 0 in both builds.
+            if (SliceCounterCounts || !sliced)
+            {
+                Assert.That(run.SlicesRun, sliced ? Is.GreaterThan(0) : Is.EqualTo(0),
+                    sliced ? "the sliced arm must actually slice, or the throw lands in Execute like the other arm" : "the atomic arm must not slice");
+            }
             Assert.That(run.Unhandled, Is.Not.Null, "the host must be told: this is the whole of #890");
             Assert.That(run.Unhandled?.Message, Does.Contain(Marker), "and told about the exception that actually failed, not a wrapper");
 

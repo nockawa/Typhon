@@ -412,6 +412,26 @@ class PrepSliceEquivalenceTests : TestBase<PrepSliceEquivalenceTests>
         }
     }
 
+
+    /// <summary>
+    /// Whether <see cref="ArchetypeClusterState.PrepSlicesRun"/> actually counts in this build. It is bumped by a <c>[Conditional("DEBUG")]</c> method —
+    /// deliberately, so Release does not share one cache line across every engine and worker for a test counter — so in Release it stays at 0 however many
+    /// slices run, and an assertion that reads it as proof of execution fails in Release and only in Release.
+    /// </summary>
+    /// <remarks>
+    /// Asked by bumping it and looking, rather than by <c>#if DEBUG</c>, so this cannot drift from the engine's own attribute. Costs one increment at class
+    /// init; every reader of the counter takes a delta, so the offset is invisible. What replaces the assertion in Release is the emitted work PLAN, which
+    /// is real in both configurations: <c>PrepItems</c> comes from <c>FencePrepExec.PlanForTest</c> and is asserted non-empty on every sliced arm.
+    /// </remarks>
+    private static readonly bool SliceCounterCounts = ProbeSliceCounter();
+
+    private static bool ProbeSliceCounter()
+    {
+        var before = Volatile.Read(ref ArchetypeClusterState.PrepSlicesRun);
+        ArchetypeClusterState.NotePrepSliceRun();
+        return Volatile.Read(ref ArchetypeClusterState.PrepSlicesRun) != before;
+    }
+
     private void AssertArmMatchesSerialCore(int w, bool expectSlices)
     {
         var serial = RunArmOn(SerialArm);
@@ -424,7 +444,12 @@ class PrepSliceEquivalenceTests : TestBase<PrepSliceEquivalenceTests>
         {
             if (expectSlices)
             {
-                Assert.That(arm.SlicesRun, Is.GreaterThan(1), $"W={w}: the sliced path must actually have run — a world this size qualifies");
+                // Release cannot count slices (see SliceCounterCounts); the PrepItems assertion below is the proof that survives, and it reads the plan the
+                // fence actually executed rather than a counter.
+                if (SliceCounterCounts)
+                {
+                    Assert.That(arm.SlicesRun, Is.GreaterThan(1), $"W={w}: the sliced path must actually have run — a world this size qualifies");
+                }
             }
             else
             {
