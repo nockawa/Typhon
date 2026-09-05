@@ -268,9 +268,42 @@ class ClusterShadowDrainOrderTests : TestBase<ClusterShadowDrainOrderTests>
         AssertIndexKeys(dbe, [SharedTag, retained], [order[0]]);
     }
 
-    // The all-on-one-key arm is NOT carried here. Collapsing every entity onto one multi-value key leaves the tree with a single distinct key and
-    // KILLS THE PROCESS when any other key is queried — #884, which has the full repro and the 1 499-versus-1 500 bisect. A crashing test takes its whole
-    // nightly shard's results with it rather than reporting one failure, so quarantining it would cost more than it reports.
+    /// <summary>
+    /// The arm the fixture could not carry: EVERY entity on one multi-value key, then a query for a key nobody holds. #884 — the process died, no
+    /// exception, and the bisect said 1 499 was fine and 1 500 was not, so the trigger was a tree left holding exactly one distinct key.
+    /// </summary>
+    /// <remarks>
+    /// Fixed by #887, whose defect (2) is the same shape: the pessimistic path believed a not-found answer from a descent that can land one leaf past the
+    /// key. With one separator left, every vacated key routes to that single leaf, which is why the last entity to move is the one that turns a correct
+    /// empty answer into a walk off the end of the buffer chain. Kept here, un-quarantined, because a test that once killed the shard is exactly the one
+    /// worth running every time.
+    /// </remarks>
+    [Test]
+    public void TheWholePopulationOnOneMultiValueKeyStillAnswersAVacatedKey()
+    {
+        using var dbe = SetupEngine();
+        var ids = SpawnAcrossManyClusters(dbe, 1);
+        var order = ScrambledOrder(EntityCount, seed: 7);
+
+        const int SharedTag = 424_242;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var k = 0; k < EntityCount; k++)
+            {
+                tx.OpenMut(ids[order[k]]).Write(ShDrainUnit.Comp) = new ShDrainComp { Tag = SharedTag, Payload = order[k] };
+            }
+
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(2);
+
+        Assert.That(CountWithTag(dbe, SharedTag), Is.EqualTo(EntityCount), "every entity is on the shared key, so all of them must be findable under it");
+
+        // The query that used to kill the process: a key every entity has left, against a tree holding one separator.
+        Assert.That(CountWithTag(dbe, order[0]), Is.EqualTo(0), "a vacated key must answer empty, not crash");
+        Assert.That(CountWithTag(dbe, order[EntityCount - 1]), Is.EqualTo(0), "the last key vacated is the one the bisect blamed");
+    }
 
     [Test]
     public void AnEntityDestroyedAfterMutationLosesItsOldKey()
