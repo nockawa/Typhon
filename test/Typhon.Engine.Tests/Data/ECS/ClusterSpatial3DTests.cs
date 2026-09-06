@@ -1,4 +1,5 @@
-﻿using System.Numerics;
+﻿using System.Collections.Generic;
+using System.Numerics;
 using Microsoft.Extensions.DependencyInjection;
 using NUnit.Framework;
 using Typhon.Schema.Definition;
@@ -32,6 +33,84 @@ class ClusterSpatial3DTests : TestBase<ClusterSpatial3DTests>
             cellSize: 100f));
         dbe.InitializeArchetypes();
         return dbe;
+    }
+
+    /// <summary>
+    /// A promoted cell answers a 3D archetype's query identically to the linear scan it replaces — including when the
+    /// query leaves an axis OPEN with an infinite bound, which is the documented way to ask a 2D question of a 3D index.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>#905.</b> <c>CellClusterTree.QueryToCoords</c> used to map an infinite Z range onto the unit "flat slab"
+    /// that <c>ToCoords</c> writes for a 2D cluster. That is right only while every STORED box is on that slab. A 3D
+    /// archetype stores its real Z, so a cell holding entities at z ≈ 125 was asked for clusters overlapping z ∈ [0, 1]
+    /// and answered NOTHING — a silent <c>SQ-01</c> false negative on every open-axis query against a promoted cell,
+    /// with promotion on by default at 1 024 clusters per cell.</para>
+    /// <para><b>Why nothing caught it.</b> Every existing promoted-cell differential uses a 2D archetype, whose stored Z
+    /// is already the ±∞ sentinel and therefore genuinely lives on the slab. The combination that fails is a 3D field
+    /// plus an open axis, and it had no test. Found by the game-workload harness, not by this suite.</para>
+    /// <para>Ablation: restoring the flat-slab mapping in <c>QueryToCoords</c> makes the open-axis arm return zero.</para>
+    /// </remarks>
+    [Test]
+    [VerifiesRule("SQ-01")]
+    public void PromotedCell_AnswersA3DArchetypeIdenticallyToTheScan([Values(true, false)] bool openAxis)
+    {
+        var scan = QueryOneCell(promote: false, openAxis);
+        var tree = QueryOneCell(promote: true, openAxis);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scan, Is.Not.Empty, "precondition: the query has to find something on the scan for the comparison to mean anything");
+            Assert.That(tree, Is.EquivalentTo(scan), "the promoted cell answers a different set from the linear scan it replaced");
+        });
+    }
+
+    /// <summary>Fill one cell with 3D entities, optionally promote it, and return what a box query finds.</summary>
+    private HashSet<long> QueryOneCell(bool promote, bool openAxis)
+    {
+        ServiceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        using var scope = ServiceProvider.CreateScope();
+        var dbe = scope.ServiceProvider.GetRequiredService<DatabaseEngine>();
+        dbe.RegisterComponentFromAccessor<ClSpatialPos>();
+        dbe.RegisterComponentFromAccessor<ClSpatialMeta>();
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
+            worldMin: new Vector2(-10_000, -10_000), worldMax: new Vector2(10_000, 10_000), cellSize: 1_000f));
+
+        // Promote on the first cluster, and on count alone: this is about what a promoted cell ANSWERS, not about when a
+        // cell deserves a tree.
+        dbe.ClusterCellTreePromoteThreshold = promote ? 1 : int.MaxValue;
+        dbe.ClusterCellTreePromoteTightness = 1f;
+        dbe.InitializeArchetypes();
+
+        // Z well away from the unit slab [0, 1] the defect collapsed the query onto — 125 is where a flat world's entities
+        // sit when a scenario parks them at half a cell.
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var met = default(ClSpatialMeta);
+            for (var i = 0; i < 200; i++)
+            {
+                var pos = MakePos(10f + ((i * 37) % 900), 10f + ((i * 61) % 900), 125f, 2f);
+                tx.Spawn<ClSpatialUnit>(ClSpatialUnit.Pos.Set(in pos), ClSpatialUnit.Meta.Set(in met));
+            }
+
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+
+        var cs = dbe._archetypeStates[Archetype<ClSpatialUnit>.Metadata.ArchetypeId].ClusterState;
+        Assert.That(cs.PromotedCellCount, promote ? Is.GreaterThan(0) : Is.Zero, "the arm did not get the structure it was asked for");
+
+        var found = new HashSet<long>();
+        using (var epoch = EpochGuard.Enter(dbe.EpochManager))
+        {
+            foreach (var r in cs.QueryAabb(dbe.SpatialGrid, 0f, 0f, openAxis ? float.NegativeInfinity : 0f,
+                         1_000f, 1_000f, openAxis ? float.PositiveInfinity : 1_000f))
+            {
+                found.Add(r.EntityId);
+            }
+        }
+
+        return found;
     }
 
     private static ClSpatialPos MakePos(float x, float y, float z, float size = 1.0f) =>

@@ -66,7 +66,10 @@ class ClusterSpatialCoherenceTests : TestBase<ClusterSpatialCoherenceTests>
         dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(worldMax, worldMax),
-            cellSize: cellSize));
+            cellSize: cellSize,
+            // Step 15: batches of >= 128 identical points would be permuted by the ordering's unstable sort, and Destroy_ResetsScanCursor needs entity 0
+            // in cluster 0 — so the ordering is off. Placement is the shipped first fit.
+            batchSpawnSortThreshold: 0));
         dbe.InitializeArchetypes();
         return dbe;
     }

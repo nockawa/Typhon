@@ -60,7 +60,7 @@ class ClusterRepairConvergenceTests : TestBase<ClusterRepairConvergenceTests>
             CellSize,
             clusterTargetExtentRatio: driftRatio,
             clusterRepairExtentRatio: 0.75f,
-            reclusterBudgetMs: 100f,
+            reclusterBudgetMs: 100f, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
             repairWorstClustersPerUnit: 0));
         dbe.InitializeArchetypes();
         return dbe;

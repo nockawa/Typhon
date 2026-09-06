@@ -63,11 +63,14 @@ class ClusterRepairQueueTests : TestBase<ClusterRepairQueueTests>
             // picks, and a step-10 relocation quietly tightening a cell would remove candidates for a reason nothing here is asserting about.
             clusterTargetExtentRatio: 100f,
             clusterRepairExtentRatio: 0.75f,
-            reclusterBudgetMs: budgetMs,
+            reclusterBudgetMs: budgetMs, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
             repairWorstClustersPerUnit: worstClustersPerUnit,
             clusterRepairCriticalExtentRatio: criticalRatio,
             repairAgingRatePerTick: agingRate,
-            repairQueueMaxCells: queueMaxCells));
+            repairQueueMaxCells: queueMaxCells,
+            // Constant-mode target (step 14): at 250 entities per cell the density-derived target is 0.76, which sits above the 0.75 repair
+            // gate this fixture drives and would change which cells nominate.
+            clusterTargetPackingSlack: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }

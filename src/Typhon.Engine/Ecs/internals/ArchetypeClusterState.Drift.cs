@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Typhon.Engine.Internals;
@@ -185,10 +186,13 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </remarks>
     internal void DetectDriftersInCluster(int clusterChunkId, int cellKey, in ClusterSpatialAabb clusterAabb, SpatialGrid grid,
         ref ChunkAccessor<PersistentStore> accessor, in ClusterCentres centres, ulong guardClaimedSlots, List<MigrationRequest> driftBuffer,
-        List<RelocationCandidate> candidateScratch, ref int driftersDetected, ref int driftAbsorbed, ref int driftersUnplaced)
+        List<RelocationCandidate> candidateScratch, float targetExtent, ref int driftersDetected, ref int driftAbsorbed, ref int driftersUnplaced,
+        ref int driftersUnplacedNoCandidate, ref int driftersSpilled)
     {
+        // The target extent is the CALLER's — the cell's density-derived one since step 14, or the configured constant in constant mode. It used to be
+        // recomputed here from ClusterTargetExtentRatio, so a cluster admitted by a 0.75 density gate had its entities tested against a 0.25 box and
+        // most of them filed as drifters: the storm §5.8.2 describes, narrowed to the density band and hidden behind the boost.
         ref readonly var cfg = ref grid.Config;
-        var targetExtent = cfg.CellSize * cfg.ClusterTargetExtentRatio;
         if (!(targetExtent > 0f))
         {
             return;
@@ -284,15 +288,26 @@ internal sealed unsafe partial class ArchetypeClusterState
 
             var destCluster = ChooseRelocationTarget(candidateScratch, posX - originX, posY - originY, flat ? 0f : posZ - originZ, flat);
 
-            // A drifter with nowhere better to go is left in place rather than queued: relocating it into an equally bad cluster costs a full migration
-            // and buys no selectivity, and the fallback claim would likely hand it back to the cluster it came from anyway.
             if (destCluster < 0)
             {
-                // Counted since #872 step 11, not merely skipped. A drifter with nowhere better to go and one the budget refused are the same absence from
-                // MigrationCount, and telling them apart is the difference between "the world is drifting faster than the budget" and "this cell has run
-                // out of room" — two problems with opposite remedies.
-                driftersUnplaced++;
-                continue;
+                if (candidateScratch.Count == 0)
+                {
+                    // A drifter with nowhere better to go is left in place rather than queued: relocating it into an equally bad cluster costs a full
+                    // migration and buys no selectivity. Counted since #872 step 11, not merely skipped — a drifter with nowhere to go and one the budget
+                    // refused are the same absence from MigrationCount, and telling them apart is the difference between "the world is drifting faster
+                    // than the budget" and "this cell has run out of room", two problems with opposite remedies.
+                    driftersUnplaced++;
+                    driftersUnplacedNoCandidate++;
+                    continue;
+                }
+
+                // The cell had candidates and this pass has filled every free slot they offered (step 14's capacity ledger). Filed for a cluster the
+                // drain allocates for this cell and reuses through the slice — NOT first fit, which once earlier drifters of this cluster have drained
+                // finds the freed slots in the SOURCE and moves the entity back where it came from at full cost. The design's "allocate a new cluster
+                // if none qualifies"; step 17's split turns it into a median cut. A cell with NO candidate at all took the branch above instead: its
+                // drifters stay where they are, which keeps CR-03's "drifters and no migrations" signal for a cell that has genuinely run out of room.
+                driftersSpilled++;
+                destCluster = MigrationRequest.FreshCluster;
             }
 
             driftBuffer.Add(new MigrationRequest(clusterChunkId, slotIndex, cellKey, destCluster, MigrationRequest.AnySlot, MigrationKind.Relocation));
@@ -404,18 +419,26 @@ internal sealed unsafe partial class ArchetypeClusterState
 
 
     /// <summary>One admissible relocation destination: a cluster of the cell with room, and the box it would grow.</summary>
-    internal readonly struct RelocationCandidate
+    internal struct RelocationCandidate
     {
-        internal RelocationCandidate(int chunkId, in ClusterSpatialAabb box)
+        internal RelocationCandidate(int chunkId, in ClusterSpatialAabb box, int freeSlots)
         {
             ChunkId = chunkId;
             Box = box;
+            FreeSlots = freeSlots;
         }
 
-        internal int ChunkId { get; }
+        internal readonly int ChunkId;
 
         /// <summary>Snapshotted BY VALUE — see <see cref="BuildRelocationCandidates"/> for why a reference will not do.</summary>
-        internal ClusterSpatialAabb Box { get; }
+        internal readonly ClusterSpatialAabb Box;
+
+        /// <summary>
+        /// Slots this candidate can still take THIS pass. Decremented by <see cref="ChooseRelocationTarget"/> as drifters are assigned, so the second
+        /// drifter of a cluster is not sent to a destination the first one just filled (step 14 — measured: 91–99 % of admitted relocations rejected
+        /// their pin and fell through to first fit, because every drifter in a cell named the same empty cluster).
+        /// </summary>
+        internal int FreeSlots;
     }
 
     /// <summary>
@@ -446,6 +469,8 @@ internal sealed unsafe partial class ArchetypeClusterState
             return;
         }
 
+        var excludeDraining = _repairSourceExclusions.Count > 0;
+
         var clusters = CellClusterPool.GetClusters(cellKey);
         for (var i = 0; i < clusters.Length; i++)
         {
@@ -455,11 +480,24 @@ internal sealed unsafe partial class ArchetypeClusterState
                 continue;
             }
 
+            // Not a cluster this tick's migrations drained (step 15): by AabbRefresh its box reads empty or tight because it was just vacated, and a
+            // repair source in particular is about to be freed at Finalize — a pin to it is rejected at the next drain and lands first fit (CR-02).
+            if (excludeDraining && _repairSourceExclusions.ContainsCluster(candidate))
+            {
+                continue;
+            }
+
+            if (IsRepairDestination(candidate))
+            {
+                continue;   // reserved for a repair plan's output — see _repairDestinationReservations
+            }
+
             // Read without dirtying: raising ActiveChunkWriters on a cluster that is merely being inspected inflates ChangeSet and writeback pressure for
             // nothing, which is the reasoning TryClaimSlotInCluster already documents.
             var candidateBase = accessor.GetChunkAddress(candidate);
             var occupancy = *(ulong*)candidateBase;
-            if ((~occupancy & Layout.FullMask) == 0)
+            var freeSlots = BitOperations.PopCount(~occupancy & Layout.FullMask);
+            if (freeSlots == 0)
             {
                 continue; // full — a destination with no room is not a candidate
             }
@@ -467,7 +505,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             // Copied into a local first: ClusterAabbs[candidate] is a ref to a live array element and cannot be passed by here, and taking a snapshot is
             // what this method is for anyway.
             var box = ClusterAabbs[candidate];
-            candidates.Add(new RelocationCandidate(candidate, in box));
+            candidates.Add(new RelocationCandidate(candidate, in box, freeSlots));
         }
     }
 
@@ -494,13 +532,22 @@ internal sealed unsafe partial class ArchetypeClusterState
     internal int ChooseRelocationTarget(List<RelocationCandidate> candidates, float px, float py, float pz, bool flat)
     {
         var best = -1;
+        var bestIndex = -1;
         var bestGrowth = float.PositiveInfinity;
+        var bestSize = float.PositiveInfinity;
 
-        for (var i = 0; i < candidates.Count; i++)
+        // A span over the list's buffer, because the winner's FreeSlots is decremented in place — the list is this pass's running ledger of capacity.
+        var span = CollectionsMarshal.AsSpan(candidates);
+        for (var i = 0; i < span.Length; i++)
         {
-            var candidate = candidates[i];
-            var box = candidate.Box;
-            var growth = float.IsPositiveInfinity(box.MinX) ? 0f : GrowthToAdmit(in box, px, py, pz, flat);
+            ref var candidate = ref span[i];
+            if (candidate.FreeSlots <= 0)
+            {
+                continue; // filled by an earlier drifter of this pass
+            }
+
+            var size = 0f;
+            var growth = float.IsPositiveInfinity(candidate.Box.MinX) ? 0f : GrowthToAdmit(in candidate.Box, px, py, pz, flat, out size);
 
             // Clamped because a box snapshotted mid-store can still be internally inconsistent: min above max yields a grown area SMALLER than the
             // original, hence negative growth, which would beat every honest candidate. The snapshot in BuildRelocationCandidates makes that far less
@@ -510,11 +557,18 @@ internal sealed unsafe partial class ArchetypeClusterState
                 growth = 0f;
             }
 
-            if (growth < bestGrowth || (growth == bestGrowth && candidate.ChunkId < best))
+            if (growth < bestGrowth || (growth == bestGrowth && (size < bestSize || (size == bestSize && candidate.ChunkId < best))))
             {
                 bestGrowth = growth;
+                bestSize = size;
                 best = candidate.ChunkId;
+                bestIndex = i;
             }
+        }
+
+        if (bestIndex >= 0)
+        {
+            span[bestIndex].FreeSlots--;
         }
 
         return best;
@@ -526,7 +580,16 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// feeds would fight it. A degenerate box — one entity, zero extent — has zero area, so growth from it is the area of the box spanning the two points,
     /// which is exactly the right answer and needs no case.
     /// </remarks>
-    private static float GrowthToAdmit(in ClusterSpatialAabb box, float px, float py, float pz, bool flat)
+    private static float GrowthToAdmit(in ClusterSpatialAabb box, float px, float py, float pz, bool flat) =>
+        GrowthToAdmit(in box, px, py, pz, flat, out _);
+
+    /// <summary>
+    /// The enlargement admitting a point costs a box, and the box's size once it has: the second is the tie-break (step 15). Every box that already
+    /// contains the point grows by exactly zero, so plain least enlargement ranks a cluster spanning the whole cell level with a tight one beside the
+    /// point and lets the chunk id decide — which is how arrivals were measured flowing into the widest boxes under motion. Among equal growth the
+    /// SMALLER resulting box wins (R*-tree's "least area" after "least enlargement"); an empty box has area zero and keeps winning outright.
+    /// </summary>
+    private static float GrowthToAdmit(in ClusterSpatialAabb box, float px, float py, float pz, bool flat, out float resultingSize)
     {
         var minX = MathF.Min(box.MinX, px);
         var maxX = MathF.Max(box.MaxX, px);
@@ -535,12 +598,13 @@ internal sealed unsafe partial class ArchetypeClusterState
 
         if (flat)
         {
-            return ((maxX - minX) * (maxY - minY)) - ((box.MaxX - box.MinX) * (box.MaxY - box.MinY));
+            resultingSize = (maxX - minX) * (maxY - minY);
+            return resultingSize - ((box.MaxX - box.MinX) * (box.MaxY - box.MinY));
         }
 
         var minZ = MathF.Min(box.MinZ, pz);
         var maxZ = MathF.Max(box.MaxZ, pz);
-        return ((maxX - minX) * (maxY - minY) * (maxZ - minZ))
-             - ((box.MaxX - box.MinX) * (box.MaxY - box.MinY) * (box.MaxZ - box.MinZ));
+        resultingSize = (maxX - minX) * (maxY - minY) * (maxZ - minZ);
+        return resultingSize - ((box.MaxX - box.MinX) * (box.MaxY - box.MinY) * (box.MaxZ - box.MinZ));
     }
 }

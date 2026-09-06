@@ -61,7 +61,9 @@ class ClusterMigrationSourceExclusivityTests : TestBase<ClusterMigrationSourceEx
         dbe.RegisterComponentFromAccessor<ClMigPos>();
         dbe.RegisterComponentFromAccessor<ClMigScratch>();
         dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
-            new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize, reclusterBudgetMs: budgetMs));
+            new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize, reclusterBudgetMs: budgetMs,
+            // Constant-mode target (step 14): at ~56 entities per cell the density-derived target is off, and this fixture needs relocations.
+            clusterTargetPackingSlack: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }

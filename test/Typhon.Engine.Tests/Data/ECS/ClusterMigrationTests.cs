@@ -1399,6 +1399,108 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         Assert.That(cs.ClusterMigrationPendingSlots[preChunkId], Is.Zero, "migration pending bits cleared at fence");
     }
 
+    /// <summary>
+    /// An entity that crosses into another cell and comes back within the same tick is still home at the fence. The outbound <c>WriteSpatial</c> flags the
+    /// slot with the far cell as its destination; the return write finds the entity home and clears nothing; the drain must therefore re-derive the
+    /// destination from the position the slot holds NOW and drop the request, not execute the one recorded at write time (CC-02).
+    /// </summary>
+    /// <remarks>
+    /// Found by <c>ClusterPlacementTests.ConcurrentSpawnsAndBoundGrowthKeepClustersInTheirCell</c> in its two-cell form: a concurrent writer reached a
+    /// spawn's slot between its claim and its data (the documented in-flight window), flagged a crossing from the writer's position, the spawn's own
+    /// position then landed, and the fence migrated the entity to a cell it had never been in. That took a race to reach; this takes two writes.
+    /// </remarks>
+    [Test]
+    [VerifiesRule("CC-02")]
+    public void WriteSpatial_CrossAndReturnInOneTick_StaysInItsCell()
+    {
+        using var dbe = SetupEngineWithGrid();
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            id = tx.Spawn<ClMigUnit>(ClMigUnit.Pos.Set(PointAt(50f, 50f)), ClMigUnit.Scratch.Set(ScratchOf(0, 0f)));
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+        var homeCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
+        var cs = dbe._archetypeStates[Archetype<ClMigUnit>.Metadata.ArchetypeId].ClusterState;
+        var (chunkId, slot) = ReadLocation(dbe, id);
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var accessor = tx.For<ClMigUnit>();
+            foreach (var cluster in accessor.GetClusterEnumerator())
+            {
+                if (cluster.ChunkId != chunkId)
+                {
+                    continue;
+                }
+
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(250f, 250f));   // out: flagged, destination = the far cell
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(60f, 60f));     // back home in the same tick — nothing clears the flag
+            }
+
+            accessor.Dispose();
+            tx.Commit();
+        }
+
+        Assert.That(cs.ClusterMigrationPendingSlots[chunkId] & (1UL << slot), Is.Not.Zero, "precondition: the outbound write left its flag behind");
+        dbe.WriteTickFence(2);
+
+        var (chunkAfter, _) = ReadLocation(dbe, id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cs.ClusterCellMap[chunkAfter], Is.EqualTo(homeCell), "migrated on a destination the entity no longer has");
+            Assert.That(dbe.SpatialGrid.GetCell(homeCell).EntityCount, Is.EqualTo(1));
+            Assert.That(cs.LastTickMigrationCount, Is.Zero, "a stale flag is dropped at the drain, not executed");
+        });
+    }
+
+    /// <summary>Two crossings in one tick: the flag's per-cluster destination is the LAST write's, and the drain must land the entity where it is.</summary>
+    [Test]
+    [VerifiesRule("CC-02")]
+    public void WriteSpatial_TwoCrossingsInOneTick_LandsWhereItIs()
+    {
+        using var dbe = SetupEngineWithGrid();
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            id = tx.Spawn<ClMigUnit>(ClMigUnit.Pos.Set(PointAt(50f, 50f)), ClMigUnit.Scratch.Set(ScratchOf(0, 0f)));
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+        var (chunkId, slot) = ReadLocation(dbe, id);
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var accessor = tx.For<ClMigUnit>();
+            foreach (var cluster in accessor.GetClusterEnumerator())
+            {
+                if (cluster.ChunkId != chunkId)
+                {
+                    continue;
+                }
+
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(250f, 250f));
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(150f, 50f));
+            }
+
+            accessor.Dispose();
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(2);
+        var cs = dbe._archetypeStates[Archetype<ClMigUnit>.Metadata.ArchetypeId].ClusterState;
+        var (chunkAfter, _) = ReadLocation(dbe, id);
+        var whereItIs = dbe.SpatialGrid.WorldToCellKey(150f, 50f, 0f);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cs.ClusterCellMap[chunkAfter], Is.EqualTo(whereItIs));
+            Assert.That(dbe.SpatialGrid.GetCell(whereItIs).EntityCount, Is.EqualTo(1));
+            Assert.That(cs.LastTickMigrationCount, Is.EqualTo(1));
+        });
+    }
+
     [Test]
     public void WriteSpatial_AABBGrow_InlineUpdate()
     {

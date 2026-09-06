@@ -55,7 +55,9 @@ class ClusterDriftDetectionTests : TestBase<ClusterDriftDetectionTests>
         // made. Three placement tests and one shrink test went red that way, all of them correctly. Pinning the budget to
         // zero scopes each fixture to the mechanism it is written to measure; it is not a workaround for a defect.
         dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize,
-            reclusterBudgetMs: 0f));
+            reclusterBudgetMs: 0f, batchSpawnSortThreshold: 0 /* step 15: single-point batches >= 128 would be permuted by the ordering's unstable sort; slot order is what these read */,
+            // Constant-mode target (step 14): the oracle defines drifters against the configured ratio on cells too sparse for the density target.
+            clusterTargetPackingSlack: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }

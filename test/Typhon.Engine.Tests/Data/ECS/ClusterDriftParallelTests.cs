@@ -90,7 +90,9 @@ class ClusterDriftParallelTests : TestBase<ClusterDriftParallelTests>
         // made. Three placement tests and one shrink test went red that way, all of them correctly. Pinning the budget to
         // zero scopes each fixture to the mechanism it is written to measure; it is not a workaround for a defect.
         dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize,
-            reclusterBudgetMs: 0f));
+            reclusterBudgetMs: 0f,
+            // Constant-mode target (step 14): the oracle defines the drifter set against the configured ratio.
+            clusterTargetPackingSlack: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }

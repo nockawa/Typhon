@@ -54,7 +54,7 @@ class ClusterCostEstimatorTests : TestBase<ClusterCostEstimatorTests>
             // red. Repair alone still supplies every migration the cost model needs, which is what these tests actually measure.
             clusterTargetExtentRatio: 100f,
             clusterRepairExtentRatio: 0.75f,
-            reclusterBudgetMs: 5.0f,
+            reclusterBudgetMs: 5.0f, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
             repairNsPerEntity: seedNsPerEntity));
         dbe.InitializeArchetypes();
         return dbe;

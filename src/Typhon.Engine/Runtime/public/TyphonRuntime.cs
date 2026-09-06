@@ -2236,6 +2236,15 @@ public sealed partial class TyphonRuntime : IDisposable
             Engine.UpdateLastTickFenceLSNAtomic(overall);
         }
 
+        // Step 14 (D2): the migration cost model charges a frame budget, so it needs the migration phases' CPU-to-span ratio — how many workers' worth of
+        // CPU one unit of span bought. Summed across the three phases a migration passes through; a tick that moved nothing leaves the previous value.
+        var migrationCpuTicks = _fenceMigrateExec.TotalWallTicks + _fenceIndexMassUpdateExec.TotalWallTicks + _fenceEntityMapUpdateExec.TotalWallTicks;
+        var migrationSpanTicks = _fenceMigrateExec.PhaseSpanTicks + _fenceIndexMassUpdateExec.PhaseSpanTicks + _fenceEntityMapUpdateExec.PhaseSpanTicks;
+        if (migrationSpanTicks > 0 && migrationCpuTicks > 0)
+        {
+            Engine.SetLastFenceMigrationParallelism(migrationCpuTicks / (double)migrationSpanTicks);
+        }
+
         if (Options.AdaptiveFenceCost)
         {
             _liveFenceCost.UpdatePhase(FencePhase.Prep, _fencePrepExec.TotalWallTicks, _fencePrepExec.TotalUnitCount);

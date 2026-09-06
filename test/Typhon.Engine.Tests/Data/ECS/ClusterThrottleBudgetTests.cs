@@ -67,13 +67,16 @@ class ClusterThrottleBudgetTests : TestBase<ClusterThrottleBudgetTests>
             new Vector2(WorldMax, WorldMax),
             CellSize,
             clusterRepairExtentRatio: repairExtentRatio,
-            reclusterBudgetMs: budgetMs,
+            reclusterBudgetMs: budgetMs, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
             repairNsPerEntity: nsPerEntity,
             // The valve is switched OFF, and saying so is required rather than tidy. With repair held off at 1.19 no cell can ever be nominated, so the
             // default critical ratio of 1.0 would sit BELOW the repair threshold — the configuration in which every nominated cell is critical and the
             // valve overshoots the budget on every tick. The constructor rejects that pairing, correctly; a fixture that means "no repair" means "no
             // valve" too.
-            clusterRepairCriticalExtentRatio: 0f));
+            clusterRepairCriticalExtentRatio: 0f,
+            // Constant-mode target (step 14): at 1 200 entities per cell the density-derived target is 0.35 and the throttle's boost would
+            // raise it tick by tick, so the drifter flood these tests budget against would not be steady.
+            clusterTargetPackingSlack: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }

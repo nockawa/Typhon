@@ -755,6 +755,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     private SpatialGridConfig? _pendingGridConfig;
 
     /// <summary>
+    /// CPU-to-span ratio of the previous fence's migration phases (Migrate + IndexMassUpdate + EntityMapUpdate), ≥ 1. The per-entity migration cost the
+    /// repair budget is spent against is measured in summed CPU and the budget is a frame budget, so the sample is divided by this (step 14, D2).
+    /// <c>1</c> until the parallel runtime publishes a value, which is also the truth for the serial fence.
+    /// </summary>
+    private double _lastFenceMigrationParallelism = 1d;
+
+    /// <summary>Published by <c>TyphonRuntime</c> after each parallel fence. See <see cref="_lastFenceMigrationParallelism"/>.</summary>
+    internal void SetLastFenceMigrationParallelism(double parallelism) => _lastFenceMigrationParallelism = parallelism >= 1d ? parallelism : 1d;
+
+    /// <summary>See <see cref="_lastFenceMigrationParallelism"/>. Exposed for tests and telemetry.</summary>
+    internal double LastFenceMigrationParallelism => _lastFenceMigrationParallelism;
+
+    /// <summary>
     /// Sets the spatial grid configuration for this engine. Must be called before <see cref="InitializeArchetypes"/>. Only required when at least one
     /// cluster-eligible archetype has a spatial component — non-spatial engines never need this call.
     /// </summary>
@@ -1106,6 +1119,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // Seeded here rather than read at the point of use: AttachCellTreeFactory copies it onto every ArchetypeClusterState during InitializeArchetypes,
         // and a per-archetype copy of a value that could still change would make two archetypes of one database disagree about where their cells promote.
         ClusterCellTreePromoteThreshold = _options.Spatial?.CellTreePromoteThreshold ?? SpatialOptions.DefaultCellTreePromoteThreshold;
+        ClusterCellTreePromoteTightness = _options.Spatial?.CellTreePromoteTightness ?? SpatialOptions.DefaultCellTreePromoteTightness;
 
         // Resolve the WAL directory to {bundle}/wal when the caller left it null (the bundle-format default). This MUST run HERE — before
         // InitializeUowRegistry() below — because the reopen path reads _options.Wal.WalDirectory to decide whether WAL segments are present and recovery must

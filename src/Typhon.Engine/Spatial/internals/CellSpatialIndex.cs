@@ -1,4 +1,8 @@
 using System;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
+using System.Threading;
 
 namespace Typhon.Engine.Internals;
 
@@ -81,6 +85,97 @@ internal sealed class CellSpatialIndex
     }
 
     /// <summary>
+    /// Below this many clusters in a cell, the scalar loop wins and <see cref="MatchBatch"/> should not be used.
+    /// </summary>
+    /// <remarks>
+    /// Not a hedge — measured. A batch costs a call, a count clamp, six array loads and a set-bit loop before any comparison
+    /// happens, and under 8 clusters not one vector iteration runs, so the whole apparatus wraps a scalar tail: at 4 clusters
+    /// the batched form measured 9.2 ns against the scalar loop's 6.3 ns, a 46% REGRESSION, and that is the density measured
+    /// game worlds actually sit at. Two full vector iterations is where it turns over.
+    /// </remarks>
+    public const int SimdScanMinClusters = 16;
+
+    /// <summary>
+    /// Test up to 64 clusters starting at <paramref name="start"/> against a query box, returning a bit per overlapping slot.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>This is the broadphase the engine almost always runs.</b> A cell promotes to a per-cell R-Tree only above
+    /// <c>CellTreePromoteThreshold</c> clusters, which measured game worlds essentially never reach, so this linear scan —
+    /// not the tree — is what a spatial query spends its time in. It was a scalar loop over six <see cref="float"/> arrays
+    /// while the R-Tree's leaf scan had already been vectorised, which had the optimisation effort pointed at the path that
+    /// does not run.</para>
+    /// <para><b>Batched rather than whole-index, because the caller is an enumerator.</b> The broadphase yields one cluster
+    /// at a time and the narrowphase runs between yields, so a whole-index match would need somewhere to put an unbounded
+    /// result set. Sixty-four slots at a time fits a <see cref="ulong"/> the caller can carry as one field, refilled when it
+    /// empties — bounded, allocation-free, and it keeps the vector work on contiguous runs.</para>
+    /// <para>The Z test is skipped for a 2D archetype, whose <see cref="MinZ"/>/<see cref="MaxZ"/> hold the +∞/−∞ sentinel:
+    /// comparing those against a finite query bound is false on both sides, so including the axis would reject everything.
+    /// The caller passes ±∞ for a 2D query, and ±∞ compared against the sentinel is likewise false — hence the explicit
+    /// skip rather than relying on the comparison.</para>
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining | MethodImplOptions.AggressiveOptimization)]
+    public ulong MatchBatch(int start, float minX, float minY, float minZ, float maxX, float maxY, float maxZ, bool testZ)
+    {
+        int count = Math.Min(64, ClusterCount - start);
+        if (count <= 0)
+        {
+            return 0UL;
+        }
+
+        var aMinX = MinX;
+        var aMinY = MinY;
+        var aMaxX = MaxX;
+        var aMaxY = MaxY;
+        var aMinZ = MinZ;
+        var aMaxZ = MaxZ;
+
+        ulong mask = 0UL;
+        int i = 0;
+        if (Vector256.IsHardwareAccelerated)
+        {
+            var qMinX = Vector256.Create(minX);
+            var qMinY = Vector256.Create(minY);
+            var qMaxX = Vector256.Create(maxX);
+            var qMaxY = Vector256.Create(maxY);
+            var qMinZ = Vector256.Create(minZ);
+            var qMaxZ = Vector256.Create(maxZ);
+            for (; i + 8 <= count; i += 8)
+            {
+                int b = start + i;
+                var m = Vector256.GreaterThanOrEqual(Vector256.Create(aMaxX, b), qMinX)
+                    & Vector256.LessThanOrEqual(Vector256.Create(aMinX, b), qMaxX)
+                    & Vector256.GreaterThanOrEqual(Vector256.Create(aMaxY, b), qMinY)
+                    & Vector256.LessThanOrEqual(Vector256.Create(aMinY, b), qMaxY);
+                if (testZ)
+                {
+                    m &= Vector256.GreaterThanOrEqual(Vector256.Create(aMaxZ, b), qMinZ)
+                        & Vector256.LessThanOrEqual(Vector256.Create(aMinZ, b), qMaxZ);
+                }
+
+                mask |= (ulong)m.ExtractMostSignificantBits() << i;
+            }
+        }
+
+        for (; i < count; i++)
+        {
+            int b = start + i;
+            if (aMaxX[b] < minX || aMinX[b] > maxX || aMaxY[b] < minY || aMinY[b] > maxY)
+            {
+                continue;
+            }
+
+            if (testZ && (aMaxZ[b] < minZ || aMinZ[b] > maxZ))
+            {
+                continue;
+            }
+
+            mask |= 1UL << i;
+        }
+
+        return mask;
+    }
+
+    /// <summary>
     /// Append a cluster to the index and return its slot (position in the SoA arrays). Grows the backing
     /// arrays by doubling when capacity is exhausted. The returned slot should be stored as the cluster's
     /// back-pointer so subsequent <see cref="UpdateAt"/> / <see cref="RemoveAt"/> calls can locate it in O(1).
@@ -117,6 +212,33 @@ internal sealed class CellSpatialIndex
         MaxY[slot] = aabb.MaxY;
         MaxZ[slot] = aabb.MaxZ;
         CategoryMasks[slot] = aabb.CategoryMask;
+    }
+
+    /// <summary>
+    /// Widen the AABB at the given slot — every axis a CAS that only moves a min down or a max up — from a thread that holds no latch. The spawn path's
+    /// funnel (<c>ArchetypeClusterState.WidenClusterInPerCellIndex</c>): two spawns into one cluster widen the same slot at once, and a spawn opening a
+    /// cluster in the same cell may be inside a latched <see cref="Add"/> → <see cref="Grow"/> that replaces every array. A plain store there lands in
+    /// the abandoned array — a bound the index never sees (CA-02 → CA-01 false negative, step 15 review). <see cref="Grow"/> therefore copies and
+    /// publishes, <see cref="ClusterIds"/> last, and this method re-checks that witness after its writes: if it moved, the writes may have landed in
+    /// an orphaned array and are redone in the live one. Idempotent by construction, so a redo costs nothing but the CAS loops.
+    /// </summary>
+    public void WidenAt(int slot, in ClusterSpatialAabb aabb)
+    {
+        while (true)
+        {
+            var witness = Volatile.Read(ref ClusterIds);
+            ClusterSpatialAabb.CasMin(ref Volatile.Read(ref MinX)[slot], aabb.MinX);
+            ClusterSpatialAabb.CasMin(ref Volatile.Read(ref MinY)[slot], aabb.MinY);
+            ClusterSpatialAabb.CasMin(ref Volatile.Read(ref MinZ)[slot], aabb.MinZ);
+            ClusterSpatialAabb.CasMax(ref Volatile.Read(ref MaxX)[slot], aabb.MaxX);
+            ClusterSpatialAabb.CasMax(ref Volatile.Read(ref MaxY)[slot], aabb.MaxY);
+            ClusterSpatialAabb.CasMax(ref Volatile.Read(ref MaxZ)[slot], aabb.MaxZ);
+            Interlocked.Or(ref Volatile.Read(ref CategoryMasks)[slot], aabb.CategoryMask);
+            if (ReferenceEquals(Volatile.Read(ref ClusterIds), witness))
+            {
+                return;
+            }
+        }
     }
 
     /// <summary>
@@ -159,13 +281,22 @@ internal sealed class CellSpatialIndex
         {
             newCapacity = ClusterIds.Length + 1;
         }
-        Array.Resize(ref ClusterIds, newCapacity);
-        Array.Resize(ref MinX, newCapacity);
-        Array.Resize(ref MinY, newCapacity);
-        Array.Resize(ref MinZ, newCapacity);
-        Array.Resize(ref MaxX, newCapacity);
-        Array.Resize(ref MaxY, newCapacity);
-        Array.Resize(ref MaxZ, newCapacity);
-        Array.Resize(ref CategoryMasks, newCapacity);
+        // Copy, then publish with release stores — the bound arrays first and ClusterIds LAST, because ClusterIds is the witness WidenAt re-checks: a
+        // widener that observes the new ClusterIds after its writes knows every bound array it wrote was already the new one.
+        Volatile.Write(ref MinX, Grown(MinX, newCapacity));
+        Volatile.Write(ref MinY, Grown(MinY, newCapacity));
+        Volatile.Write(ref MinZ, Grown(MinZ, newCapacity));
+        Volatile.Write(ref MaxX, Grown(MaxX, newCapacity));
+        Volatile.Write(ref MaxY, Grown(MaxY, newCapacity));
+        Volatile.Write(ref MaxZ, Grown(MaxZ, newCapacity));
+        Volatile.Write(ref CategoryMasks, Grown(CategoryMasks, newCapacity));
+        Volatile.Write(ref ClusterIds, Grown(ClusterIds, newCapacity));
+    }
+
+    private static T[] Grown<T>(T[] source, int newCapacity)
+    {
+        var grown = new T[newCapacity];
+        Array.Copy(source, grown, source.Length);
+        return grown;
     }
 }

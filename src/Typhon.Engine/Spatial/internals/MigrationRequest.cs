@@ -54,6 +54,13 @@ internal readonly struct MigrationRequest
     /// <summary>"Any cluster in the destination cell will do" — the cell-crossing case, and the value every pre-step-10 caller means.</summary>
     public const int AnyCluster = -1;
 
+    /// <summary>
+    /// A relocation whose cell had candidates but no free slot left this pass (step 14's capacity ledger): the drain claims it in a cluster allocated
+    /// for this cell during this Migrate slice, reused until full, rather than in whatever first-fit finds — which, once earlier drifters of the same
+    /// cluster have drained, is the SOURCE cluster itself. The design's "allocate a new cluster if none qualifies", and step 17's split in embryo.
+    /// </summary>
+    public const int FreshCluster = -2;
+
     /// <summary>"Any free slot in the destination cluster will do" — what a step-10 relocation means, and the value every caller but repair passes.</summary>
     public const int AnySlot = -1;
 

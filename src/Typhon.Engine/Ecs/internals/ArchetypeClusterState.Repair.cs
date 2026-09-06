@@ -222,6 +222,26 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// container is.</remarks>
     private readonly ClusterSlotClaimSet _repairSourceExclusions = new();
 
+    /// <summary>
+    /// The clusters this tick's repair plans allocated for their own re-pack output, closed to every other claimant for the width of the tick.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Measured, and it is the whole of the pin-rejection population.</b> A repair pins each moved entity to an exact <c>(cluster, slot)</c> of a
+    /// FRESHLY ALLOCATED empty cluster, which is what makes the re-pack a permutation that cannot collide with itself. But an empty cluster attached to a
+    /// cell is also the most attractive thing the cursor first-fit scan can find, so the cell-crossing drain — thousands of requests a tick against a
+    /// repair's hundreds — filled those clusters before the repair's own pinned claims arrived. Every one of the 26 434 rejected repair pins in a 40-tick
+    /// <c>Cruise</c> run (14.6 % of 178 145) was "the pinned cluster is full", never a stale cell, and the entity then landed in the right cell but the
+    /// wrong cluster: the Morton grouping the plan had just computed, undone for one entity in seven.</para>
+    /// <para>Excluding them costs one flat-array probe per scanned cluster on the claim path, the same probe
+    /// <see cref="_repairSourceExclusions"/> already makes for relocation candidates. A claimant that finds every cluster of its cell reserved opens a fresh
+    /// one, which is correct: those slots are spoken for.</para>
+    /// </remarks>
+    private readonly ClusterSlotClaimSet _repairDestinationReservations = new();
+
+    /// <summary>Is this cluster reserved for a repair plan's output this tick? Read from the claim path, including user threads at spawn.</summary>
+    internal bool IsRepairDestination(int clusterChunkId) =>
+        _repairDestinationReservations.Count > 0 && _repairDestinationReservations.ContainsCluster(clusterChunkId);
+
     // ══════════════════════════════════════════════════════════════════════════════
     // Intra-cell Morton encoding
     // ══════════════════════════════════════════════════════════════════════════════
@@ -371,6 +391,13 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
 
         nominations.Clear();
+
+        // ABOVE every early return below, and that placement is the whole of its correctness. The reservation is per-TICK, and the ticks on which the
+        // planner returns early are the normal steady state: a converged cell stops nominating (RP-03's no-op memo), the budget can be zero, the archetype
+        // can be Static. Cleared further down, last tick's reservations would outlive their plan for as long as the planner kept returning early — and a
+        // destination that received nothing is freed by the same Finalize, so its chunk id is reallocated, possibly into another cell, and that live
+        // cluster would then be excluded from every claim path and every relocation candidate for good.
+        _repairDestinationReservations.Clear();
 
         if (queue == null || queue.Count == 0)
         {
@@ -838,6 +865,20 @@ internal sealed unsafe partial class ArchetypeClusterState
         // the rest have not, and the resulting bounds are neither the old ones nor the new ones. Allocating up front makes
         // the failure atomic — nothing is emitted, the clusters already taken are on the drain list and Finalize frees
         // them because they are still empty.
+        // ── PER-GROUP SKIPPING WAS TRIED HERE AND REFUTED (#872 step 17, D6) ────────────────────────────────────────
+        //
+        // D6 proposed moving "only the minority of each sorted group" — 40-60 % of a random unit's moves, 85-95 % of a
+        // drifted one's. The version that is SAFE at this grain is to skip a group whose entities already draw from one
+        // source cluster, which is the per-group form of the whole-unit memo above. Measured over three motion points,
+        // three rounds, one process: 4 % fewer migrations at Drift 8 ms, a WASH on fence span everywhere, and at Drift
+        // 1 ms it did five times MORE migrations than the baseline — because skipping groups returns budget to the
+        // planner, which then admits units it would otherwise have refused. It changes which cells get repaired, not
+        // only what each repair costs, and neither direction paid.
+        //
+        // The 40-60 % figure needs PER-ENTITY granularity: keep the entities already in the plurality cluster and move
+        // only the rest into it. That needs the drain to free a slot before it fills it, and the dependency graph
+        // between clusters has cycles in general, so it needs a rotation buffer or a cycle-following executor — which
+        // is why the destinations here are fresh clusters in the first place (see the comment above). Not built.
         var destinationCount = (count + capacity - 1) / capacity;
         if (_repairDestinationScratch.Length < destinationCount)
         {
@@ -852,6 +893,10 @@ internal sealed unsafe partial class ArchetypeClusterState
             {
                 return 0;
             }
+
+            // Closed to the cursor scan for the rest of the tick — see _repairDestinationReservations. Slot 0 is enough to mark the cluster present, and
+            // presence is the whole question the scan asks; the plan owns every slot of a cluster it allocated empty.
+            _repairDestinationReservations.Claim(destinations[d], 0);
         }
 
         // Reserved AFTER the destinations exist, so a failed allocation does not leave the queue grown for requests that

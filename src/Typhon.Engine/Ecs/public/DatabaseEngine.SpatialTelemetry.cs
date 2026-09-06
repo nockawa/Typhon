@@ -136,6 +136,15 @@ public partial class DatabaseEngine
             RepairQueueEvicted = clusterState.RepairQueue?.TotalEvicted ?? 0L,
             RepairQueueMaintenanceMs = QueueMaintenanceMs(clusterState),
             MeasuredNsPerEntity = clusterState.LastTickMeasuredNsPerEntity,
+            DriftGatedClusters = clusterState.LastTickDriftGatedClusters,
+            DriftSuppressedByDensity = clusterState.LastTickDriftSuppressedByDensity,
+            DriftersUnplacedNoCandidate = clusterState.LastTickDriftersUnplacedNoCandidate,
+            DriftersSpilled = clusterState.LastTickDriftersSpilled,
+            PinsRejected = clusterState.LastTickPinsRejected,
+            RelocationsAdmitted = clusterState.LastTickRelocationsAdmitted,
+            CrossingsQueued = clusterState.LastTickCrossingsQueued,
+            RelocationSpendNs = clusterState.LastTickRelocationSpendNs,
+            RepairBudgetStarvedNs = clusterState.LastTickRepairBudgetStarvedNs,
         };
     }
 
@@ -184,6 +193,15 @@ public partial class DatabaseEngine
         var queueMaintenanceMs = 0d;
         var measuredNsPerEntity = 0d;
         var measuredSamples = 0;
+        var driftGated = 0;
+        var driftSuppressedByDensity = 0;
+        var unplacedNoCandidate = 0;
+        var spilled = 0;
+        var pinsRejected = 0;
+        var relocationsAdmitted = 0;
+        var crossingsQueued = 0;
+        var relocationSpendNs = 0d;
+        var repairStarvedNs = 0d;
 
         for (var i = 0; i < states.Length; i++)
         {
@@ -215,6 +233,15 @@ public partial class DatabaseEngine
             queueDepth += clusterState.RepairQueue?.Count ?? 0;
             queueEvicted += clusterState.RepairQueue?.TotalEvicted ?? 0L;
             queueMaintenanceMs += QueueMaintenanceMs(clusterState);
+            driftGated += clusterState.LastTickDriftGatedClusters;
+            driftSuppressedByDensity += clusterState.LastTickDriftSuppressedByDensity;
+            unplacedNoCandidate += clusterState.LastTickDriftersUnplacedNoCandidate;
+            spilled += clusterState.LastTickDriftersSpilled;
+            pinsRejected += clusterState.LastTickPinsRejected;
+            relocationsAdmitted += clusterState.LastTickRelocationsAdmitted;
+            crossingsQueued += clusterState.LastTickCrossingsQueued;
+            relocationSpendNs += clusterState.LastTickRelocationSpendNs;
+            repairStarvedNs += clusterState.LastTickRepairBudgetStarvedNs;
 
             // AVERAGED, not summed, and it is the one member here that is. Every other value is an extensive quantity — more archetypes, more of it — but
             // a cost per entity is intensive, and summing it would report an engine with four archetypes as four times as expensive per entity as each of
@@ -239,6 +266,15 @@ public partial class DatabaseEngine
             RepairQueueEvicted = queueEvicted,
             RepairQueueMaintenanceMs = queueMaintenanceMs,
             MeasuredNsPerEntity = measuredSamples > 0 ? measuredNsPerEntity / measuredSamples : 0d,
+            DriftGatedClusters = driftGated,
+            DriftSuppressedByDensity = driftSuppressedByDensity,
+            DriftersUnplacedNoCandidate = unplacedNoCandidate,
+            DriftersSpilled = spilled,
+            PinsRejected = pinsRejected,
+            RelocationsAdmitted = relocationsAdmitted,
+            CrossingsQueued = crossingsQueued,
+            RelocationSpendNs = relocationSpendNs,
+            RepairBudgetStarvedNs = repairStarvedNs,
         };
     }
 }

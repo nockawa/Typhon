@@ -43,7 +43,10 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
         // made. Three placement tests and one shrink test went red that way, all of them correctly. Pinning the budget to
         // zero scopes each fixture to the mechanism it is written to measure; it is not a workaround for a defect.
         dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldMax, WorldMax), CellSize,
-            reclusterBudgetMs: 0f));
+            reclusterBudgetMs: 0f, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
+            // Constant-mode target (step 14): the assertions here are written against the configured ratio; at 128-600 entities per cell the
+            // density-derived target would sit between 0.49 and off, and the drifter sets they pin would change.
+            clusterTargetPackingSlack: 0f));
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -281,11 +284,13 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
     /// <c>GrowthToAdmit</c> on the <c>+∞</c>-min / <c>-∞</c>-max sentinel computes an area of <c>+∞</c> and a grown area of
     /// <c>0</c>, so growth is <b>-∞</b>, and -∞ beats every finite growth just as 0 does. The assertion was true under both
     /// the rule and its absence, which makes it worth nothing.</para>
-    /// <para><b>Where the two answers actually differ is a TIE.</b> Against a cluster whose box already contains the point —
-    /// genuine growth <c>0</c> — the spec's <c>0</c> ties and resolves to the lower chunk id, while <c>-∞</c> wins outright.
-    /// So the construction puts the containing cluster at the LOWER id and the emptied one at a higher id: the spec says the
-    /// containing cluster, the unfixed arithmetic says the empty one. That is also the behaviour you want on the merits —
-    /// dropping an entity into a box that already covers it beats opening a fresh cluster for it.</para>
+    /// <para><b>Where the two answers actually differ is a TIE.</b> Against a cluster whose box IS the point — genuine growth
+    /// <c>0</c> and, since step 15 ranks equal growth by the smaller resulting box, resulting size <c>0</c> as well — the spec's
+    /// <c>0</c> ties on both terms and resolves to the lower chunk id, while <c>-∞</c> wins outright. So the construction puts
+    /// the containing cluster at the LOWER id and the emptied one at a higher id: the spec says the containing cluster, the
+    /// unfixed arithmetic says the empty one. That is also the behaviour you want on the merits — dropping an entity into a
+    /// box that already covers it beats opening a fresh cluster for it. (A wider containing box would tie on growth but lose
+    /// on size, which is the size term doing its job, not the defect this test is after.)</para>
     /// <para><b>As of the candidate-hoist refactor this test no longer reddens when the special case is deleted, and that
     /// is a property of the code rather than a weakness here.</b> <c>ChooseRelocationTarget</c> now clamps negative growth to
     /// zero — a defence against a box snapshotted mid-store, whose min can exceed its max — and that clamp catches the
@@ -318,18 +323,18 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
             int container = candidates[0];                       // lower id — its box will already contain the point
             int emptied = candidates[candidates.Count - 1];      // higher id — this one gets the sentinel
 
-            // A box that already covers the query point: real growth 0, so it TIES with a correctly-scored empty cluster and
-            // wins the tiebreak on id, while it loses outright to an empty cluster scored as -∞.
+            // A box that is exactly the query point: growth 0 AND resulting size 0 (step 15 ranks equal growth by the smaller resulting box), so it
+            // TIES with a correctly-scored empty cluster on both terms and wins the tiebreak on id, while it loses outright to an empty cluster
+            // scored as -∞. A wider containing box would tie on growth but lose on size, which is the new rule doing its job, not the defect.
             cs.ClusterAabbs[container] = new ClusterSpatialAabb
             {
-                MinX = 40f, MaxX = 60f, MinY = 40f, MaxY = 60f, MinZ = float.PositiveInfinity, MaxZ = float.NegativeInfinity,
+                MinX = 50f, MaxX = 50f, MinY = 50f, MaxY = 50f, MinZ = float.PositiveInfinity, MaxZ = float.NegativeInfinity,
             };
             cs.ClusterAabbs[emptied] = ClusterSpatialAabb.Empty;
 
-            // Every other candidate is given the whole cell as its box. That does NOT push it out of contention — a 0..99 box
-            // already contains (50,50), so its growth is 0 and it TIES with the container; the id tiebreak is what excludes
-            // it, since `container` is the lowest id. The test still discriminates (an empty cluster scored at -∞ would beat
-            // all of them), but calling this a two-horse race would be wrong.
+            // Every other candidate is given the whole cell as its box: growth 0 for (50,50) too, but a resulting size of 99 × 99 against the
+            // container's 0, so the size term excludes it before the id ever has to. The test still discriminates — an empty cluster scored at -∞
+            // would beat all of them.
             foreach (int c in candidates)
             {
                 if (c != container && c != emptied)
@@ -582,7 +587,10 @@ class ClusterRelocationTests : TestBase<ClusterRelocationTests>
             migrationHysteresisRatio: 0.05f, clusterTargetExtentRatio: targetRatio, clusterDriftMarginRatio: 0.05f,
             // Zero, for the reason SetupEngine records: this is an A/B of the DELTA path against itself, and a repair
             // would tighten both arms and mask the difference the measurement is about.
-            reclusterBudgetMs: 0f));
+            reclusterBudgetMs: 0f, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
+            // Constant-mode target (step 14): the assertions here are written against the configured ratio; at 128-600 entities per cell the
+            // density-derived target would sit between 0.49 and off, and the drifter sets they pin would change.
+            clusterTargetPackingSlack: 0f));
         dbe.InitializeArchetypes();
 
         using var _ = dbe;

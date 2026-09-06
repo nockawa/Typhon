@@ -212,58 +212,100 @@ public partial class DatabaseEngine
     /// (<see cref="ArchetypeClusterState.ClusterMigrationPendingSlots"/>), appended to the shared queue in ascending cluster order. Serial — the
     /// unsliced detector calls it first, the sliced Prep's head calls it once before the slices; a slice never does.
     /// </summary>
-    private static void DrainPreFlaggedMigrations(ArchetypeClusterState clusterState, ushort archetypeId, ref int migrationsQueuedCount,
-        ref int clustersTouched)
+    /// <remarks>
+    /// <para><b>The flag says WHICH slot moved; the position says WHERE it is.</b> The barrier records a per-cluster destination computed from the value
+    /// it was handed, and nothing un-flags a slot: an entity written out of its cell and back within one tick, or a slot two writes carried to two
+    /// different cells, still carries the first destination at the fence. Executing it moves an entity into a cell it is not in — silently, every
+    /// counter balancing (CC-02). The same goes for a write that reaches a spawn's slot inside the claim-to-data window the spawn commit still has
+    /// (see <c>NoteClusterBorn</c>'s "known residual"): the writer flags a crossing from ITS value, the spawn's own position then lands, and the flag
+    /// describes an entity that never existed. <c>ClusterPlacementTests.ConcurrentSpawnsAndBoundGrowthKeepClustersInTheirCell</c> reached that one in
+    /// about one cold run in ten; <c>ClusterMigrationTests.WriteSpatial_CrossAndReturnInOneTick_StaysInItsCell</c> reaches the first with two writes.</para>
+    /// <para>So the drain re-reads the slot's field and decides exactly as the legacy scan does — exited with the hysteresis margin, then the cell the
+    /// centre resolves to — and the recorded key is at most a hint. One field read per flagged slot, against the migration it would otherwise
+    /// mis-execute. A flag whose entity is home is dropped and counted in <see cref="ArchetypeClusterState.LastTickStaleFlagsDropped"/>.</para>
+    /// </remarks>
+    private static unsafe void DrainPreFlaggedMigrations(ArchetypeClusterState clusterState, ushort archetypeId, ref ChunkAccessor<PersistentStore> clusterAccessor,
+        ref int migrationsQueuedCount, ref int clustersTouched)
     {
         var processBitmap = clusterState.ClusterProcessBitmap;
         var migrationPending = clusterState.ClusterMigrationPendingSlots;
-        var migrationDestKeys = clusterState.ClusterMigrationDestCellKeys;
-        if (processBitmap != null && migrationPending != null)
+        if (processBitmap == null || migrationPending == null)
         {
-            for (var wordIdx = 0; wordIdx < processBitmap.Length; wordIdx++)
+            return;
+        }
+
+        ref var ss = ref clusterState.SpatialSlot;
+        var layout = clusterState.Layout;
+        var compSize = layout.ComponentSize(ss.Slot);
+        var compOffset = layout.ComponentOffset(ss.Slot);
+        var fieldType = ss.FieldInfo.FieldType;
+        var grid = clusterState.Grid;
+        ref readonly var cfg = ref grid.Config;
+        var cellSize = cfg.CellSize;
+        var hysteresisMargin = cellSize * cfg.MigrationHysteresisRatio;
+        var staleDropped = 0;
+
+        for (var wordIdx = 0; wordIdx < processBitmap.Length; wordIdx++)
+        {
+            var word = processBitmap[wordIdx];
+            if (word == 0)
             {
-                var word = processBitmap[wordIdx];
-                if (word == 0)
+                continue;
+            }
+
+            while (word != 0)
+            {
+                var chunkId = (wordIdx << 6) + BitOperations.TrailingZeroCount((ulong)word);
+                word &= word - 1;
+                if (chunkId >= migrationPending.Length)
                 {
                     continue;
                 }
 
-                while (word != 0)
+                var slotMask = migrationPending[chunkId];
+                if (slotMask == 0)
                 {
-                    var chunkId = (wordIdx << 6) + BitOperations.TrailingZeroCount((ulong)word);
-                    word &= word - 1;
-                    if (chunkId >= migrationPending.Length)
+                    continue;
+                }
+
+                var currentCellKey = clusterState.ClusterCellMap[chunkId];
+                if (currentCellKey < 0)
+                {
+                    continue;
+                }
+
+                clustersTouched++;
+                var clusterBase = clusterAccessor.GetChunkAddress(chunkId);
+                var (cx, cy, cz) = grid.CellKeyToCoords(currentCellKey);
+                var curCellMinX = cfg.WorldMin.X + cx * cellSize;
+                var curCellMinY = cfg.WorldMin.Y + cy * cellSize;
+                var curCellMinZ = cfg.WorldMin.Z + cz * cellSize;
+                while (slotMask != 0)
+                {
+                    var slotIndex = BitOperations.TrailingZeroCount(slotMask);
+                    slotMask &= slotMask - 1;
+                    var fieldPtr = clusterBase + compOffset + slotIndex * compSize + ss.FieldOffset;
+                    SpatialGrid.ReadSpatialCenter3D(fieldPtr, fieldType, out var posX, out var posY, out var posZ);
+                    var exited = posX < curCellMinX - hysteresisMargin || posX > curCellMinX + cellSize + hysteresisMargin
+                                 || posY < curCellMinY - hysteresisMargin || posY > curCellMinY + cellSize + hysteresisMargin
+                                 || posZ < curCellMinZ - hysteresisMargin || posZ > curCellMinZ + cellSize + hysteresisMargin;
+                    var destCellKey = exited ? grid.WorldToCellKey(posX, posY, posZ) : currentCellKey;
+                    if (destCellKey == currentCellKey)
                     {
+                        staleDropped++;
                         continue;
                     }
 
-                    var slotMask = migrationPending[chunkId];
-                    if (slotMask == 0)
-                    {
-                        continue;
-                    }
-
-                    var destCellKey = migrationDestKeys[chunkId];
-                    if (destCellKey < 0)
-                    {
-                        continue;
-                    }
-
-                    clustersTouched++;
-                    var currentCellKey = clusterState.ClusterCellMap[chunkId];
-                    while (slotMask != 0)
-                    {
-                        var slotIndex = BitOperations.TrailingZeroCount(slotMask);
-                        slotMask &= slotMask - 1;
-                        migrationsQueuedCount++;
-                        TyphonEvent.EmitSpatialClusterMigrationDetect(archetypeId, chunkId, currentCellKey, destCellKey);
-                        clusterState.EnqueueMigration(chunkId, slotIndex, destCellKey);
-                        TyphonEvent.EmitSpatialClusterMigrationQueue(archetypeId, chunkId,
-                            (ushort)Math.Min(clusterState.PendingMigrationCount, ushort.MaxValue));
-                    }
+                    migrationsQueuedCount++;
+                    TyphonEvent.EmitSpatialClusterMigrationDetect(archetypeId, chunkId, currentCellKey, destCellKey);
+                    clusterState.EnqueueMigration(chunkId, slotIndex, destCellKey);
+                    TyphonEvent.EmitSpatialClusterMigrationQueue(archetypeId, chunkId,
+                        (ushort)Math.Min(clusterState.PendingMigrationCount, ushort.MaxValue));
                 }
             }
         }
+
+        clusterState.LastTickStaleFlagsDropped = staleDropped;
     }
 
     /// <inheritdoc cref="DetectClusterMigrations"/>
@@ -308,7 +350,7 @@ public partial class DatabaseEngine
             // EnqueueMigration, and CR-05's guard is Debug-only.
             if (sink == null)
             {
-                DrainPreFlaggedMigrations(clusterState, archetypeId, ref migrationsQueuedCount, ref clustersTouched);
+                DrainPreFlaggedMigrations(clusterState, archetypeId, ref clusterAccessor, ref migrationsQueuedCount, ref clustersTouched);
             }
 
             // ─── Step (b): legacy scan over dirtyBits for slots not covered by step (a) ───
@@ -563,6 +605,11 @@ public partial class DatabaseEngine
 
         // Single-assignment accessor construction (TYPHON004 forbids the default→reassign pattern).
         var hasClusterAccessor = clusterState.ClusterSegment != null;
+
+        // Step 14: the cluster this slice allocated for FreshCluster relocations, per destination cell. Slices are carved on DestCellKey and a
+        // relocation's destination is its source cell, so the pair never has to survive the slice. See ClaimSlotInFreshCluster.
+        var freshCell = -1;
+        var freshCluster = -1;
         var clusterAccessor = hasClusterAccessor ? clusterState.ClusterSegment.CreateChunkAccessor(changeSet) : default;
 
         var hasTransientClusterAccessor = clusterState.TransientSegment != null;
@@ -633,15 +680,45 @@ public partial class DatabaseEngine
                 // claim. AnySlot keeps step 10's behaviour byte for byte — the pinned overload tests the sign before touching the exact-slot path.
                 var preferredCluster = req.DestClusterChunkId;
                 var preferredSlot = req.DestSlotIndex;
-                if (hasClusterAccessor)
+                if (preferredCluster == MigrationRequest.FreshCluster)
                 {
-                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, preferredSlot, ref clusterAccessor, changeSet, grid,
-                        migrationBornBound);
+                    (dstChunkId, dstSlot) = hasClusterAccessor
+                        ? clusterState.ClaimSlotInFreshCluster(destCellKey, ref clusterAccessor, changeSet, grid, migrationBornBound, ref freshCell,
+                            ref freshCluster)
+                        : clusterState.ClaimSlotInFreshCluster(destCellKey, ref transientClusterAccessor, null, grid, migrationBornBound, ref freshCell,
+                            ref freshCluster);
                 }
                 else
                 {
-                    (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, preferredSlot, ref transientClusterAccessor, grid,
-                        migrationBornBound);
+                    // Step 15 (D4). A cell-crossing request names no cluster, and the drain is where the choice is best made: the destination cell is
+                    // this slice's alone (slices are carved on DestCellKey), so the occupancy it reads is live and the bounds it reads already include
+                    // the arrivals this slice has unioned in. The position comes from the source slot — the line the copy below is about to read anyway
+                    // — rather than travelling in the request, rebased into the DESTINATION cell's frame, which is the frame ClusterAabbs stores (C15).
+                    // A pinned request (relocation, repair) passes straight through: the pinned overload tests the pin before it looks at the point.
+                    var destPx = 0f;
+                    var destPy = 0f;
+                    var destPz = 0f;
+                    if (grid.Config.LeastEnlargementPlacement || grid.Config.GrowthCapPlacement)
+                    {
+                        // Both switches off: the pinned overload never looks at the point, so the field is not read for it (step 15 review).
+                        var srcFieldPtr = srcPrimaryPre + spatialCompOffset + srcSlot * spatialCompSize + ss.FieldOffset;
+                        SpatialGrid.ReadSpatialCenter3D(srcFieldPtr, ss.FieldInfo.FieldType, out var migrantX, out var migrantY, out var migrantZ);
+                        grid.CellOrigin(destCellKey, out var destOriginX, out var destOriginY, out var destOriginZ);
+                        destPx = migrantX - destOriginX;
+                        destPy = migrantY - destOriginY;
+                        destPz = migrantZ - destOriginZ;
+                    }
+
+                    if (hasClusterAccessor)
+                    {
+                        (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, preferredSlot, destPx, destPy, destPz,
+                            ref clusterAccessor, changeSet, grid, migrationBornBound);
+                    }
+                    else
+                    {
+                        (dstChunkId, dstSlot) = clusterState.ClaimSlotInCell(destCellKey, preferredCluster, preferredSlot, destPx, destPy, destPz,
+                            ref transientClusterAccessor, grid, migrationBornBound);
+                    }
                 }
 
                 // 3. Re-fetch source / destination bases after potential segment growth inside ClaimSlotInCell.

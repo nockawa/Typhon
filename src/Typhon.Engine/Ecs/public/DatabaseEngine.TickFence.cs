@@ -390,10 +390,14 @@ public partial class DatabaseEngine
         state.CellTreeSegmentFactory = stride =>
         {
             CreateTransientClusterSegment(stride, out var treeStore, out var treeSegment);
-            return (treeSegment, treeStore.Value);
+            return (treeSegment, treeStore!.Value);
         };
         state.CellTreePromoteThreshold = ClusterCellTreePromoteThreshold;
         state.CellTreeDemoteThreshold = ClusterCellTreePromoteThreshold == int.MaxValue ? int.MaxValue : ClusterCellTreePromoteThreshold / 2;
+        state.CellTreePromoteTightness = ClusterCellTreePromoteTightness;
+        // Twice the promote gate, and never past the cell itself: a mean of 1.0 is a cell whose clusters each span it, which is the loosest a bound
+        // inside its own cell can read.
+        state.CellTreeDemoteTightness = MathF.Min(1f, ClusterCellTreePromoteTightness * 2f);
         return state;
     }
 
@@ -407,6 +411,12 @@ public partial class DatabaseEngine
     /// numbers behind the default.
     /// </remarks>
     internal int ClusterCellTreePromoteThreshold { get; set; }
+
+    /// <summary>
+    /// Mean cluster extent, as a fraction of the cell edge, at or below which a cell half may promote (<see cref="SpatialOptions.CellTreePromoteTightness"/>).
+    /// Read once per archetype by <see cref="AttachCellTreeFactory"/>, like the count threshold beside it.
+    /// </summary>
+    internal float ClusterCellTreePromoteTightness { get; set; } = SpatialOptions.DefaultCellTreePromoteTightness;
 
     private void CreateTransientClusterSegment(int stride, out TransientStore? store, out ChunkBasedSegment<TransientStore> segment)
     {
@@ -721,7 +731,8 @@ public partial class DatabaseEngine
         {
             clusterState.RecomputeDirtyClusterAabbsSlice(sliceStart, sliceCount, ref accessor, _spatialGrid, promotedBuffer, outlierBuffer, repairBuffer,
                 out var aabbsChanged, out var slotsScanned, out var outlierGuardFires, out var clustersScanned, out var driftersDetected,
-                out var driftAbsorbed, out var driftersUnplaced);
+                out var driftAbsorbed, out var driftersUnplaced, out var driftGatedClusters, out var driftSuppressedByDensity,
+                out var driftersUnplacedNoCandidate, out var driftersSpilled);
             // Interlocked, not plain adds: every AabbRefresh slice of this archetype reaches here, and the three counters are archetype-wide. They are reset
             // once per tick in PrepareArchetypeFence, so a lost add would under-report for that tick only — which is exactly the kind of quiet inaccuracy that
             // makes a measurement useless for tuning P4.
@@ -730,6 +741,10 @@ public partial class DatabaseEngine
             Interlocked.Add(ref clusterState.LastTickDriftersDetected, driftersDetected);
             Interlocked.Add(ref clusterState.LastTickDriftAbsorbedCount, driftAbsorbed);
             Interlocked.Add(ref clusterState.LastTickDriftersUnplaced, driftersUnplaced);
+            Interlocked.Add(ref clusterState.LastTickDriftGatedClusters, driftGatedClusters);
+            Interlocked.Add(ref clusterState.LastTickDriftSuppressedByDensity, driftSuppressedByDensity);
+            Interlocked.Add(ref clusterState.LastTickDriftersUnplacedNoCandidate, driftersUnplacedNoCandidate);
+            Interlocked.Add(ref clusterState.LastTickDriftersSpilled, driftersSpilled);
             clusterState.EnqueueMigrationsBulk(outlierBuffer);
             clusterState.EnqueuePromotedAppliesBulk(promotedBuffer);
             clusterState.EnqueueRepairNominationsBulk(repairBuffer);
@@ -823,9 +838,14 @@ public partial class DatabaseEngine
         // budget is spent against — which is what makes RepairNsPerEntity a seed rather than the operative constant.
         if (_spatialGrid != null)
         {
-            clusterState.ObserveMigrationCost(in _spatialGrid.Config);
+            clusterState.ObserveMigrationCost(in _spatialGrid.Config, _lastFenceMigrationParallelism);
         }
 
+        // Step 14 (D2): last tick's throttle verdict raises or decays the intra-cell target before the counters it reads are zeroed.
+        if (_spatialGrid != null)
+        {
+            clusterState.UpdateDriftTargetBoost(in _spatialGrid.Config);
+        }
         clusterState.ResetThrottleTickState();
         clusterState.ResetPrepSubSpans();
         clusterState.PreviousTickMigrationCount = clusterState.LastTickMigrationCount;
@@ -840,6 +860,10 @@ public partial class DatabaseEngine
         clusterState.LastTickSlotsScanned = 0;
         clusterState.LastTickDriftersDetected = 0;
         clusterState.LastTickDriftAbsorbedCount = 0;
+        clusterState.LastTickDriftGatedClusters = 0;
+        clusterState.LastTickDriftSuppressedByDensity = 0;
+        clusterState.LastTickCellTreePromotions = 0;
+        clusterState.LastTickCellTreeDemotions = 0;
 
         // LastTickHysteresisAbsorbedCount was NOT reset here until #872, and DetectClusterMigrations only ever ASSIGNED it (=, not +=). A tick in which
         // detection did not run therefore reported the PREVIOUS tick's absorbed count as if it were this tick's — a stale reading indistinguishable from a live
@@ -925,21 +949,42 @@ public partial class DatabaseEngine
         // an otherwise idle archetype and collides head-on with AC-10.8 ("a tick with no movement does no relocation work
         // and allocates nothing"). That trade is bigger than this step and is deliberately not taken here.
         //
-        // ── The throttle runs BEFORE the planner, and the ordering is the policy (§5.6) ──────────────────────────────
+        // ── The planner runs BEFORE the throttle, and the ordering is the policy (§5.6, revised by §5.8.3) ──────────
         //
-        // One budget, spent in priority order: cell crossings are correctness and take what they need, intra-cell
-        // relocations take what is left, and repair gets the remainder. So the relocation throttle both consumes and
-        // reports the budget the planner may then spend. Reversing the two would let a rare repair outbid the steady-state
-        // path that keeps cells from needing repair in the first place.
+        // One budget, spent in priority order: cell crossings are correctness and take what they need; REPAIR takes the
+        // next claim; intra-cell relocations get the remainder. The reverse order shipped first, on the argument that a
+        // rare repair must not outbid the steady-state path — and measured the opposite: relocations consumed the whole
+        // budget on every tick at every budget (relocationSpendMs == budget up to 16 ms), the planner entered with a
+        // median 630 ns of 8 ms, and the one unit per tick that ran was the safety valve. Greedy relocation has no
+        // gradient in a cell whose boxes all span it, so what it bought with that budget was net widening. Repair is the
+        // mechanism that converges unconditionally, so it is charged first; what it commits is pre-charged to the
+        // throttle, which still charges crossings and refuses relocations against what is left (step 14, D2).
         if (hasWork)
         {
             var tailStart = Stopwatch.GetTimestamp();
-            var remainingBudgetNs = pending.ApplyMigrationThrottle(_spatialGrid);
-            var throttleEnd = Stopwatch.GetTimestamp();
-            pending.PrepThrottleTicks += throttleEnd - tailStart;
+            var budgetNs = _spatialGrid != null ? _spatialGrid.Config.ReclusterBudgetMs * 1_000_000d : 0d;
+            var crossingsNs = _spatialGrid != null ? pending.PendingMandatoryCostNs(in _spatialGrid.Config) : 0d;
+            var repairCommittedNs = 0d;
+            // Zeroed here, not inside the planner: PlanArchetypeRepairs returns early on an empty queue without touching it, and a stale value from the
+            // last tick that DID plan would be pre-charged to a throttle that owes nothing.
+            pending.LastTickReclusterBudgetUsedMs = 0d;
+            if (budgetNs > 0d)
+            {
+                PlanArchetypeRepairs(pending, changeSet, tickNumber, Math.Max(0d, budgetNs - crossingsNs));
+                repairCommittedNs = pending.LastTickReclusterBudgetUsedMs * 1_000_000d;
+            }
+            else
+            {
+                // Zero budget disables repair (AC-11.8) but not the absorb: the queue must keep receiving nominations so a budget raised at runtime
+                // finds candidates rather than an empty queue.
+                PlanArchetypeRepairs(pending, changeSet, tickNumber, 0d);
+            }
 
-            PlanArchetypeRepairs(pending, changeSet, tickNumber, remainingBudgetNs);
-            pending.PrepPlanTicks += Stopwatch.GetTimestamp() - throttleEnd;
+            var planEnd = Stopwatch.GetTimestamp();
+            pending.PrepPlanTicks += planEnd - tailStart;
+
+            pending.ApplyMigrationThrottle(_spatialGrid, repairCommittedNs);
+            pending.PrepThrottleTicks += Stopwatch.GetTimestamp() - planEnd;
         }
         else
         {
@@ -1036,7 +1081,17 @@ public partial class DatabaseEngine
             {
                 var preFlagged = 0;
                 var preFlaggedClusters = 0;
-                DrainPreFlaggedMigrations(clusterState, meta.ArchetypeId, ref preFlagged, ref preFlaggedClusters);
+                // The head runs before the slices' Execute enters its epoch, and the accessor's Debug gate requires one.
+                using var headEpoch = EpochGuard.Enter(EpochManager);
+                var headAccessor = clusterState.ClusterSegment.CreateChunkAccessor();
+                try
+                {
+                    DrainPreFlaggedMigrations(clusterState, meta.ArchetypeId, ref headAccessor, ref preFlagged, ref preFlaggedClusters);
+                }
+                finally
+                {
+                    headAccessor.Dispose();
+                }
             }
 
             BeginZoneMapTick(clusterState);
@@ -1707,6 +1762,10 @@ public partial class DatabaseEngine
         // before any query can run. The in-place update path deliberately leaves leaf MBRs wider than the union of their entries, which is safe for
         // queries and false for ST-01 read literally — so the looseness must not survive the fence.
         clusterState.RefitPromotedCellTrees();
+
+        // After the refit, because a promotion built here would otherwise hand the refit a tree it has already walked past, and because the demote half
+        // reads bounds the refit has just made honest (#872 step 16, D3).
+        clusterState.EvaluateCellTreeTightnessTransitions();
 
         // Clean-spatial-refresh branch (path 1) stops here — no dormancy sweep change (already swept clean), no WAL emit.
         if (clusterState.FenceBranchPath == 1)

@@ -68,7 +68,7 @@ class ClusterThrottleParallelTests : TestBase<ClusterThrottleParallelTests>
             // Repair is held off (1.19 is under the constructor's 1.2 ceiling and unreachable for a cluster confined to its own cell) so the whole budget
             // is spent by the RELOCATION throttle. Mixing the two would make a disagreement ambiguous between the partition and the planner.
             clusterRepairExtentRatio: 1.19f,
-            reclusterBudgetMs: BudgetMs,
+            reclusterBudgetMs: BudgetMs, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
             // No repair means no valve — see ClusterThrottleBudgetTests.SetupEngine for why the constructor insists the two agree.
             clusterRepairCriticalExtentRatio: 0f));
         dbe.InitializeArchetypes();

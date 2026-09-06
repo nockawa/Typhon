@@ -19,7 +19,7 @@ namespace Typhon.Engine.Internals;
 /// </remarks>
 internal sealed partial class ArchetypeClusterState
 {
-    /// <summary>Weight of the newest sample in the per-entity cost estimators. See <see cref="ObserveMigrationCost"/>.</summary>
+    /// <summary>Weight of the newest sample in the per-entity cost estimators. See <see cref="ObserveMigrationCost(in SpatialGridConfig, double)"/>.</summary>
     /// <remarks>
     /// A constant rather than a knob. It sets how fast the model tracks a change in cost, and 0.25 settles a step change inside ten ticks while ignoring
     /// a single anomalous tick — a range where nothing a user could reasonably choose behaves differently enough to be worth a configuration surface.
@@ -70,7 +70,7 @@ internal sealed partial class ArchetypeClusterState
     /// The relocations the budget ADMITTED, lifted out of the pending queue before the mandatory requests are compacted over them.
     /// </summary>
     /// <remarks>
-    /// Per-archetype and reused across ticks, so its steady state is one allocation. See <see cref="ApplyMigrationThrottle"/> for why the copy is not
+    /// Per-archetype and reused across ticks, so its steady state is one allocation. See <see cref="ApplyMigrationThrottle(SpatialGrid, double)"/> for why the copy is not
     /// optional: an in-place partition overwrites the entries a later pass has yet to read. It holds only the SURVIVORS — about 1 300 requests where it
     /// used to hold every candidate, 54 800 of them, at the 25 % reference point of the #872 matrix (#882).
     /// </remarks>
@@ -97,6 +97,44 @@ internal sealed partial class ArchetypeClusterState
     /// indistinguishable, from the outside, from one the throttle silently swallowed.
     /// </remarks>
     internal int LastTickDriftersUnplaced;
+
+    /// <summary>
+    /// Wave-2 K2: the subset of <see cref="LastTickDriftersUnplaced"/> whose cell offered NO candidate at all — a single-cluster cell, or one whose
+    /// every other cluster is full. Detection walked the cluster for nothing.
+    /// </summary>
+    internal int LastTickDriftersUnplacedNoCandidate;
+
+    /// <summary>
+    /// Drifters whose cell had candidates but no capacity left this pass, filed with <see cref="MigrationRequest.AnyCluster"/> so the drain's first-fit
+    /// claim allocates a fresh cluster for them — the design's "allocate a new cluster if none qualifies", made explicit (step 14). Step 17's split
+    /// replaces this with a median cut; until then the count says how often a cell overflows.
+    /// </summary>
+    internal int LastTickDriftersSpilled;
+
+    /// <summary>
+    /// Wave-2 K5: pinned claims (relocation or repair) rejected at drain time — a stale cluster identity or a full cluster — and therefore executed as
+    /// first fit, which is <c>CR-02</c>'s fallback and the placement this subsystem exists to repair.
+    /// </summary>
+    internal int LastTickPinsRejected;
+
+    /// <summary>Wave-2 K6: intra-cell relocations the throttle admitted into the drain prefix in the most recently completed tick.</summary>
+    internal int LastTickRelocationsAdmitted;
+
+    /// <summary>
+    /// Mandatory cell-crossing requests the throttle found queued and charged. Repair requests are filed BEFORE the throttle runs (step 14) and are
+    /// pre-charged by the planner, so they are neither counted here nor charged again — see <see cref="LastTickRepairedEntityCount"/>.
+    /// </summary>
+    internal int LastTickCrossingsQueued;
+
+    /// <summary>Wave-2 K9: the budget the admitted relocations were charged, in nanoseconds — <c>admitted × estimate</c>.</summary>
+    internal double LastTickRelocationSpendNs;
+
+    /// <summary>
+    /// Budget the relocation throttle had spent BEFORE the repair planner ran on a tick where the planner refused a unit for budget. Since step 14 the
+    /// planner runs first, so this is zero by construction — a tripwire: any non-zero reading means the Prep order has regressed to relocations-first,
+    /// which is the priority inversion §5.8.3 measured. Asserted by <c>ClusterDensityTargetTests</c>.
+    /// </summary>
+    internal double LastTickRepairBudgetStarvedNs;
 
     /// <summary>
     /// Safety-valve admissions in the most recently completed tick — repair units begun with insufficient budget because the cell was critical.
@@ -185,7 +223,7 @@ internal sealed partial class ArchetypeClusterState
     /// <summary>The per-entity cost the budget is being spent against, in nanoseconds. Published every tick, whether or not anything was admitted.</summary>
     /// <remarks>
     /// Published so a reader can tell a budget that bought little because work was dear from one that bought little because none was queued — which needs
-    /// the estimate to exist on the quiet ticks too, so it is written by <see cref="ObserveMigrationCost"/> rather than by the admission path.
+    /// the estimate to exist on the quiet ticks too, so it is written by <see cref="ObserveMigrationCost(in SpatialGridConfig, double)"/> rather than by the admission path.
     /// </remarks>
     internal double LastTickMeasuredNsPerEntity;
 
@@ -295,6 +333,13 @@ internal sealed partial class ArchetypeClusterState
         LastTickRelocationsSuperseded = 0;
         LastTickDriftersUnplaced = 0;
         LastTickRepairValveFires = 0;
+        LastTickDriftersUnplacedNoCandidate = 0;
+        LastTickDriftersSpilled = 0;
+        LastTickPinsRejected = 0;
+        LastTickRelocationsAdmitted = 0;
+        LastTickCrossingsQueued = 0;
+        LastTickRelocationSpendNs = 0d;
+        LastTickRepairBudgetStarvedNs = 0d;
 
         // Not LastTickMeasuredNsPerEntity: ObserveMigrationCost republishes it on the very next line of the caller, and zeroing it here would leave it at
         // zero for any archetype that has no grid to observe against — which reads as "the model has no estimate" rather than "there is no model".
@@ -324,14 +369,24 @@ internal sealed partial class ArchetypeClusterState
     /// monotonically. A debt or credit term would create exactly the loop the AC forbids, on an actuator that at the default budget admits one unit or
     /// zero.</para>
     /// </remarks>
-    internal void ObserveMigrationCost(in SpatialGridConfig config)
+    internal void ObserveMigrationCost(in SpatialGridConfig config) => ObserveMigrationCost(in config, 1d);
+
+    /// <param name="config">The grid configuration carrying the seed.</param>
+    /// <param name="parallelism">
+    /// How many workers' worth of CPU the fence's migration phases ran per unit of span last tick — CPU ticks ÷ span ticks, ≥ 1, published by the
+    /// runtime; <c>1</c> on the serial fence (step 14, D2). <see cref="LastTickMigrationTotalMs"/> is CPU summed across workers, and the budget it is
+    /// spent against is a FRAME budget, which is spent in span: charging a migration at its summed CPU over-billed it by the fence's parallel speed-up
+    /// (measured 5–15×), which is why an 8 ms budget bought one valve unit.
+    /// </param>
+    internal void ObserveMigrationCost(in SpatialGridConfig config, double parallelism)
     {
         var seed = config.RepairNsPerEntity > 0f ? config.RepairNsPerEntity : 1500f;
 
         var migrated = LastTickMigrationCount;
         if (migrated > 0)
         {
-            var sample = LastTickMigrationTotalMs * 1_000_000d / migrated;
+            var divisor = parallelism > 1d ? parallelism : 1d;
+            var sample = LastTickMigrationTotalMs * 1_000_000d / migrated / divisor;
             _migrationNsPerEntityEwma = Blend(_migrationNsPerEntityEwma, sample, seed);
         }
 
@@ -397,7 +452,7 @@ internal sealed partial class ArchetypeClusterState
     /// </summary>
     /// <remarks>
     /// <para><b>The measurement this exists for.</b> At the 25 % reference point the scan nominated <b>55 415</b> relocations per tick and
-    /// <see cref="ApplyMigrationThrottle"/> admitted <b>1 288</b> — a ratio of 43 : 1. Every one of the 54 127 rejects had already paid
+    /// <see cref="ApplyMigrationThrottle(SpatialGrid, double)"/> admitted <b>1 288</b> — a ratio of 43 : 1. Every one of the 54 127 rejects had already paid
     /// <c>BuildRelocationCandidates</c>, three <c>AxisOvershoot</c> calls, a <c>ChooseRelocationTarget</c> descent over the cell's candidates (367 473 calls
     /// per traced run) and a 20-byte append, and then went through four more full passes inside the throttle. The work was not merely wasted; it was the
     /// largest single term in two different phases.</para>
@@ -405,7 +460,7 @@ internal sealed partial class ArchetypeClusterState
     /// queue order within each class, so it admits a PREFIX of them. A cap of <c>C</c> nominations therefore yields the identical admitted set as long as
     /// <c>C</c> is at least what the budget can pay for, and the cap below is deliberately <b>double</b> that plus a floor. Ordering across parallel slices
     /// was already nondeterministic (each worker appends its own buffer and bulk-enqueues), so nothing that was previously guaranteed is lost.</para>
-    /// <para><b>Zero budget still means no enforcement</b>, matching <see cref="ApplyMigrationThrottle"/>'s own reading of
+    /// <para><b>Zero budget still means no enforcement</b>, matching <see cref="ApplyMigrationThrottle(SpatialGrid, double)"/>'s own reading of
     /// <c>ReclusterBudgetMs = 0</c>: the fixtures that pin drift behaviour set exactly that, and they must keep seeing every drifter the oracle sees.</para>
     /// </remarks>
     internal int ComputeDriftNominationCap(in SpatialGridConfig cfg)
@@ -429,7 +484,7 @@ internal sealed partial class ArchetypeClusterState
         return cap > 0 ? cap : 0;
     }
 
-    /// <summary>Record one repair-planning pass so the next tick's <see cref="ObserveMigrationCost"/> has a sample.</summary>
+    /// <summary>Record one repair-planning pass so the next tick's <see cref="ObserveMigrationCost(in SpatialGridConfig, double)"/> has a sample.</summary>
     /// <remarks>
     /// <b>Queue maintenance is subtracted, not included.</b> The caller brackets the whole of <c>PlanCellRepairs</c>, which contains the absorb and the
     /// re-rank — and those are already reported separately as <c>RepairQueueMaintenanceMs</c> for <c>AC-11.5</c>. Counting them here as well would inflate
@@ -476,7 +531,40 @@ internal sealed partial class ArchetypeClusterState
     /// invariant. <c>AC-11.6</c> needs that; a partition that reordered would make the admitted set
     /// depend on the partition's internals.</para>
     /// </remarks>
-    internal double ApplyMigrationThrottle(SpatialGrid grid)
+    internal double ApplyMigrationThrottle(SpatialGrid grid) => ApplyMigrationThrottle(grid, 0d);
+
+    /// <summary>
+    /// The cost the queue's mandatory requests will charge — every kind but <see cref="MigrationKind.Relocation"/> and <see cref="MigrationKind.Repair"/> —
+    /// at the current per-entity estimate. What the planner is handed as its budget is the configured budget minus this (step 14, D2).
+    /// </summary>
+    internal double PendingMandatoryCostNs(in SpatialGridConfig cfg)
+    {
+        var count = PendingMigrationCount;
+        if (count == 0)
+        {
+            return 0d;
+        }
+
+        var queue = PendingMigrations;
+        var mandatory = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var kind = queue[i].Kind;
+            if (kind != MigrationKind.Relocation && kind != MigrationKind.Repair)
+            {
+                mandatory++;
+            }
+        }
+
+        return mandatory * MigrationCostEstimateNs(in cfg);
+    }
+
+    /// <param name="grid">The grid whose configuration carries the budget.</param>
+    /// <param name="preChargedNs">
+    /// What the repair planner already committed this tick, in nanoseconds (step 14, D2). Subtracted from the budget before anything is charged, and
+    /// the planner's own <see cref="MigrationKind.Repair"/> requests are then admitted without being charged a second time — they remain mandatory.
+    /// </param>
+    internal double ApplyMigrationThrottle(SpatialGrid grid, double preChargedNs)
     {
         if (grid == null)
         {
@@ -514,7 +602,7 @@ internal sealed partial class ArchetypeClusterState
         }
 
         var queue = PendingMigrations;
-        var remainingNs = budgetNs;
+        var remainingNs = budgetNs - preChargedNs;
 
         // -- The classes are SEPARATED before anything is compacted, and the ORDER of the five steps is the invariant --
         //
@@ -542,6 +630,7 @@ internal sealed partial class ArchetypeClusterState
 
         // Declared out here because step 5 needs them; the INDEX list deliberately is not — see the closing brace below.
         var mandatory = 0;
+        var crossings = 0;
         var superseded = 0;
         var throttled = 0;
         var admittedRelocations = 0;
@@ -568,7 +657,12 @@ internal sealed partial class ArchetypeClusterState
 
                 _mandatorySourceSlots.Claim(request.SourceClusterChunkId, request.SourceSlotIndex);
                 mandatory++;
-                remainingNs -= estimateNs;
+                if (request.Kind != MigrationKind.Repair)
+                {
+                    // A repair request was charged by the planner that filed it (preChargedNs); charging it again here would bill the same move twice.
+                    remainingNs -= estimateNs;
+                    crossings++;
+                }
             }
 
             // -- 2. A relocation whose entity is already leaving under a mandatory request is DROPPED, not admitted (#877) --
@@ -664,6 +758,9 @@ internal sealed partial class ArchetypeClusterState
         PendingMigrationCount = admitted;
         LastTickRelocationsThrottled = throttled;
         LastTickRelocationsSuperseded = superseded;
+        LastTickRelocationsAdmitted = admittedRelocations;
+        LastTickCrossingsQueued = crossings;
+        LastTickRelocationSpendNs = admittedRelocations * estimateNs;
         return remainingNs > 0d ? remainingNs : 0d;
     }
 }

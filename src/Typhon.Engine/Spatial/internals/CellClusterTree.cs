@@ -357,6 +357,39 @@ internal sealed class CellClusterTree
         _tree.QueryAABB(queryCoords, null, categoryMask);
 
     /// <summary>
+    /// The same query, over an accessor the caller owns rather than one rented per call.
+    /// </summary>
+    /// <remarks>
+    /// A cell walk touches many cells and asks each a small question, so an accessor created per question starts with an empty
+    /// page window and takes the load-and-evict slow path every time. One accessor held across the walk pays that once.
+    /// </remarks>
+    internal SpatialRTree<TransientStore>.AABBQueryEnumerator QueryWith(
+        scoped ReadOnlySpan<double> queryCoords,
+        ref ChunkAccessor<TransientStore> accessor,
+        uint categoryMask) =>
+        _tree.QueryAABBWith(queryCoords, ref accessor, categoryMask);
+
+    /// <summary>Create an accessor over this cell tree's segment, for a caller that will run several queries against it.</summary>
+    /// <summary>
+    /// The same query, stated in this cell's f32 frame rather than marshalled through f64.
+    /// </summary>
+    /// <remarks>
+    /// Every caller already holds floats — cluster bounds are f32 and <c>C15</c> cell-relative — so the f64 array was a
+    /// round trip to a width nothing on the vector path reads. See <c>AABBQueryEnumerator</c>'s f32 constructor.
+    /// </remarks>
+    internal SpatialRTree<TransientStore>.AABBQueryEnumerator QueryF32(
+        float minX, float minY, float minZ, float maxX, float maxY, float maxZ, uint categoryMask) =>
+        _tree.QueryAABBF32(minX, minY, minZ, maxX, maxY, maxZ, categoryMask);
+
+    /// <inheritdoc cref="QueryF32"/>
+    internal SpatialRTree<TransientStore>.AABBQueryEnumerator QueryF32With(
+        float minX, float minY, float minZ, float maxX, float maxY, float maxZ, uint categoryMask,
+        ref ChunkAccessor<TransientStore> accessor) =>
+        _tree.QueryAABBF32With(minX, minY, minZ, maxX, maxY, maxZ, categoryMask, ref accessor);
+
+    internal ChunkAccessor<TransientStore> CreateAccessor() => _segment.CreateChunkAccessor();
+
+    /// <summary>
     /// Every cluster chunk id in this tree, in descent order. Used by demotion, which rebuilds a linear index from the tree's contents.
     /// </summary>
     /// <remarks>
@@ -440,15 +473,31 @@ internal sealed class CellClusterTree
         coords[5] = flat ? FlatSlabMax : aabb.MaxZ;
     }
 
-    /// <summary>Expand a query box into the tree's coordinate layout, collapsing an infinite Z range onto the flat slab <see cref="ToCoords"/> writes.</summary>
+    /// <summary>Expand a query box into the tree's coordinate layout, replacing an infinite bound with the tree's full extent.</summary>
+    /// <remarks>
+    /// <para><b>An infinite bound means UNBOUNDED, and it must not be collapsed onto the flat slab.</b> This method used to map an infinite Z range onto
+    /// <see cref="FlatSlabMin"/>..<see cref="FlatSlabMax"/> — the slab <see cref="ToCoords"/> writes for a 2D cluster — which is right only while every
+    /// STORED box is also on that slab. A 3D archetype stores its real Z, so a cell holding entities at, say, z ≈ 125 was asked for clusters overlapping
+    /// z ∈ [0, 1] and answered NOTHING: a silent <c>SQ-01</c> false negative on every query that left an axis open, which is the documented way to ask a
+    /// 2D question of a 3D-capable index. Measured across five game-shaped worlds, 13 of 15 population points returned zero from the tree where the
+    /// linear scan answered correctly (#905).</para>
+    /// <para>The full extent is the right image of infinity for both cases: a 2D cluster's slab and a 3D cluster's real Z both lie inside it. It is the
+    /// same bound <see cref="EnumerateClusterIds"/> already uses to mean "everything", and it is finite for the reason recorded there — an infinite
+    /// coordinate inside the tree's own arithmetic poisons the node MBRs it unions into.</para>
+    /// <para>Each bound is mapped independently. A caller may leave one side of an axis open, and X and Y are no different from Z.</para>
+    /// </remarks>
     internal static void QueryToCoords(float minX, float minY, float minZ, float maxX, float maxY, float maxZ, Span<double> coords)
     {
-        bool infiniteZ = float.IsNegativeInfinity(minZ) || float.IsPositiveInfinity(maxZ);
-        coords[0] = minX;
-        coords[1] = minY;
-        coords[2] = infiniteZ ? FlatSlabMin : minZ;
-        coords[3] = maxX;
-        coords[4] = maxY;
-        coords[5] = infiniteZ ? FlatSlabMax : maxZ;
+        coords[0] = Lower(minX);
+        coords[1] = Lower(minY);
+        coords[2] = Lower(minZ);
+        coords[3] = Upper(maxX);
+        coords[4] = Upper(maxY);
+        coords[5] = Upper(maxZ);
+        return;
+
+        static double Lower(float v) => float.IsNegativeInfinity(v) || float.IsNaN(v) ? FullExtentMin : Math.Max(v, FullExtentMin);
+
+        static double Upper(float v) => float.IsPositiveInfinity(v) || float.IsNaN(v) ? FullExtentMax : Math.Min(v, FullExtentMax);
     }
 }

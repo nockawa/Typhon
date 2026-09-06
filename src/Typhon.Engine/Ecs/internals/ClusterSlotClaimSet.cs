@@ -19,7 +19,9 @@ namespace Typhon.Engine.Internals;
 /// reason.</para>
 /// <para><b>No rule prescribes a container.</b> <c>CR-05</c> constrains the two sets' semantics — separate lifetimes, neither subsuming the other, only
 /// mandatory requests claiming — and <c>TH-01</c> constrains the partition's order. Both are unchanged by the representation.</para>
-/// <para>Single-threaded by contract: built and read inside one archetype's Prep, which is one work item on one worker.</para>
+/// <para>Built inside one archetype's Prep — one work item, one worker — and, since step 15, also READ from user threads by placement's draining-cluster
+/// exclusion (<c>TryClaimPlaced</c>): a reader that sees last tick's set, or a torn view of this tick's, skips at most one candidate, and
+/// <see cref="ContainsCluster"/> bounds-checks the array reference it read.</para>
 /// </remarks>
 internal sealed class ClusterSlotClaimSet
 {

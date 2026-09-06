@@ -35,10 +35,17 @@ namespace Typhon.Engine.Internals;
 /// <c>_tail</c> and <c>Array.Resize</c> the pool array, none of which such a lock would cover — two genuinely racing writers would corrupt the pool with it
 /// held. Rather than a comment asserting the contract, <see cref="EnterWriter"/> DETECTS a breach; see its remarks.</para>
 /// <para><b>Readers are a different matter and are genuinely concurrent.</b> <c>ClaimSlotInCell</c>'s hot path calls <see cref="GetClusters"/>,
-/// <see cref="GetClusterCount"/> and the scan-cursor accessors from fence workers while another worker may be inside <see cref="AddCluster"/>. They are safe
-/// because a chunk, once published, is never moved and every structural load is a volatile acquire — not because of any mutual exclusion. The scan cursors
-/// stay outside the writer guard deliberately: they are per-cell single-writer hints (see <see cref="_cellScanCursor"/>) on the hot claim path, where an
-/// interlocked round trip would cost more than the staleness it prevents.</para>
+/// <see cref="GetClusterCount"/> and the scan-cursor accessors from fence workers AND from user threads committing spawns while another thread is inside
+/// <see cref="AddCluster"/>. They are safe because a segment, once published, is never moved, and because reader and writer agree on an ORDER — not
+/// because of any mutual exclusion. The writer publishes with release stores in the order <c>_pool</c> (a grown array, entries copied) → segment head →
+/// the new entry → count; the reader takes acquire loads in the reverse order count → head → <c>_pool</c>, so whatever count it observes, the head and
+/// the array it then loads are at least as new as the store that produced that count. The two dangerous pairings are a NEW count against an OLD head — the
+/// span runs past the old segment into the next cell's, and a claim lands in a cluster of another cell (CC-02; observed 2 in ~60 runs of
+/// <c>ClusterPlacementTests.ConcurrentSpawnsAndBoundGrowthKeepClustersInTheirCell</c> when these were plain loads, step 15) — and a NEW head against an
+/// OLD <c>_pool</c>, an index past the orphaned array. Plain element loads were program-ordered on x64 but nothing stopped the JIT or arm64 from
+/// reordering them; the acquire/release pairs cost nothing on x64. The scan cursors stay outside the protocol deliberately: they are per-cell
+/// single-writer hints (see <see cref="_cellScanCursor"/>) on the hot claim path, where an interlocked round trip would cost more than the staleness it
+/// prevents.</para>
 /// </remarks>
 internal sealed class CellClusterPool
 {
@@ -205,7 +212,7 @@ internal sealed class CellClusterPool
     public int PoolCapacity => _pool.Length;
 
     /// <summary>Number of cluster chunk IDs currently in the specified cell's segment. Zero for a cell nothing has been added to.</summary>
-    public int GetClusterCount(int cellKey) => HasCell(cellKey) ? Count(cellKey) : 0;
+    public int GetClusterCount(int cellKey) => HasCell(cellKey) ? Volatile.Read(ref Count(cellKey)) : 0;
 
     /// <summary>
     /// Logical index the next spatial slot claim should start its cluster scan from. See <see cref="_cellScanCursor"/>. The caller must still clamp this
@@ -267,12 +274,17 @@ internal sealed class CellClusterPool
             return ReadOnlySpan<int>.Empty;
         }
 
-        int count = Count(cellKey);
+        // Acquire loads in THIS order — count, head, pool — the reverse of AddCluster's release order; see the class remarks for the two pairings this
+        // rules out. A span built from a consistent (head, count) stays valid across a concurrent grow: the old segment is orphaned, never overwritten.
+        var count = Volatile.Read(ref Count(cellKey));
         if (count == 0)
         {
             return ReadOnlySpan<int>.Empty;
         }
-        return _pool.AsSpan(Head(cellKey), count);
+
+        var head = Volatile.Read(ref Head(cellKey));
+        var pool = Volatile.Read(ref _pool);
+        return pool.AsSpan(head, count);
     }
 
     /// <summary>
@@ -293,7 +305,7 @@ internal sealed class CellClusterPool
             }
 
             _pool[Head(cellKey) + count] = clusterChunkId;
-            Count(cellKey) = count + 1;
+            Volatile.Write(ref Count(cellKey), count + 1);   // release: the entry, the head and the pool are visible to a reader that sees this count
         }
         finally
         {
@@ -329,9 +341,10 @@ internal sealed class CellClusterPool
                     continue;
                 }
 
-                // Swap-with-last (no-op when i is already the last entry)
+                // Swap-with-last (no-op when i is already the last entry). A concurrent reader may still see the old count and the moved entry twice —
+                // a duplicate chunk id costs a redundant claim attempt, never a wrong cell.
                 span[i] = span[^1];
-                Count(cellKey) = count - 1;
+                Volatile.Write(ref Count(cellKey), count - 1);
                 return true;
             }
             return false;
@@ -360,7 +373,7 @@ internal sealed class CellClusterPool
             Array.Copy(_pool, Head(cellKey), _pool, newHead, currentCount);
         }
 
-        Head(cellKey) = newHead;
+        Volatile.Write(ref Head(cellKey), newHead);   // release: the copied entries precede the head a reader pairs with its count
         _tail += newCapacity;
         Capacity(cellKey) = newCapacity;
         capacity = newCapacity;
@@ -384,6 +397,11 @@ internal sealed class CellClusterPool
         {
             newSize = (int)Math.Min((long)newSize * 2, Array.MaxLength);
         }
-        Array.Resize(ref _pool, newSize);
+
+        // Copy-then-publish with a release store, so a reader that later observes a head inside the grown region also observes the grown array. The
+        // orphaned array keeps its content: a span a reader built over it stays valid.
+        var grown = new int[newSize];
+        Array.Copy(_pool, grown, _pool.Length);
+        Volatile.Write(ref _pool, grown);
     }
 }

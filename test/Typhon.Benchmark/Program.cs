@@ -165,6 +165,18 @@ class Program
                 return;
             }
 
+            if (args.Contains("--game"))
+            {
+                GameScenarios.Run(args);
+                return;
+            }
+
+            if (args.Contains("--profile-broadphase"))
+            {
+                BroadphaseQueryProfile.Run(args);
+                return;
+            }
+
             if (args.Contains("--profile-openmut"))
             {
                 OpenMutLossProfile.Run(args);

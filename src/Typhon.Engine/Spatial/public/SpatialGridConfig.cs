@@ -47,13 +47,76 @@ public readonly struct SpatialGridConfig
     /// <para><b>Why it is not the cluster's own AABB.</b> The write-time CAS in <c>ClusterRef.MaybeGrowAndFlagShrink</c> grows that bound to contain every
     /// entity it holds, so "outside my cluster's AABB" is never true of anything. The target region has to be an independent, tighter box or it detects
     /// nothing.</para>
-    /// <para><b>The default is provisional and the design says so.</b> P4 is marked TBD — "too tight ⇒ thrash; too loose ⇒ no selectivity gain" — and the
-    /// value that resolves it comes from step 11's budget/tightness curve, not from first principles. For orientation: C clusters partitioning a flat cell
-    /// tile it at about <c>cellSize / sqrt(C)</c>, which is ~0.11 at the ~80 clusters AntHill's densest zones hold and ~0.025 at the 1 563 of a 100
-    /// K-entity cell. 0.25 is deliberately looser than either, because a gate that fires on nearly every cluster converts a detection pass into a
-    /// relocation storm before any throttle exists to absorb it (step 11).</para>
+    /// <para><b>This is the floor of the target, not the target (step 14).</b> The extent a full cluster can reach in a cell of <c>E</c> entities is bounded
+    /// by geometry: <c>(slotsPerCluster / E)^(1/d)</c> of the cell edge, 1.0 in a cell that fits one cluster and 0.5 at 512 entities in 3D. A constant
+    /// 0.25 asked for the impossible everywhere the density guidance sends users, so the gate fired on every written cluster on every tick and every
+    /// entity beyond the target was a drifter with nowhere to go. The operative target is <c>clamp(ClusterTargetPackingSlack × bound, this, 1)</c>,
+    /// evaluated per cell from its live population — see <see cref="ClusterTargetPackingSlack"/>. This value only matters in cells dense enough for the
+    /// bound to fall below it, which at the default slack is about 3 500 entities per cell in 3D and 1 500 in 2D.</para>
     /// </remarks>
     public readonly float ClusterTargetExtentRatio;
+
+    /// <summary>
+    /// Multiplier on the per-cell packing bound that sets the intra-cell target extent: <c>target = clamp(slack × (slotsPerCluster / E)^(1/d),
+    /// <see cref="ClusterTargetExtentRatio"/>, 1)</c> of the cell edge, where <c>E</c> is the cell's live entity count. Default 1.5. <c>0</c> disables the
+    /// derivation, the throttle's boost and the repair-first exclusion, and makes <see cref="ClusterTargetExtentRatio"/> the constant it used to be.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why a slack at all.</b> The bound is what a perfect Morton tiling reaches; an online packing under motion sits above it, and a gate at
+    /// exactly the bound would fire on clusters no relocation can improve. 1.5 is the factor the R-Tree crossover sweep itself tiles at, so a cell that
+    /// holds the target is one whose tree can prune.</para>
+    /// <para><b>A target of 1 means off.</b> In a cell whose population fits one cluster the bound is the cell, so the gate never fires, the drift scan
+    /// never runs and no relocation is ever filed — which is the correct amount of intra-cell maintenance for that cell, and was measured to be where every
+    /// uniform configuration in the recommended 16–64 entities/cell basin lives. Repair nominates at <c>max(target, ClusterRepairExtentRatio)</c> for the
+    /// same reason: a re-sort cannot beat the bound either.</para>
+    /// </remarks>
+    public readonly float ClusterTargetPackingSlack;
+
+    /// <summary>
+    /// Place an arriving entity — a spawn, or a cell crossing at drain time — in the cluster of its cell whose bound grows least to admit it (ties to the
+    /// smallest resulting box), rather than in the first cluster with a free slot. Default <c>false</c>: opt-in.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Off by default because it measured as a wash where repair runs and a loss where it does not.</b> Against first fit, with the batch
+    /// ordering on in both arms (step 15, 16 000 entities at 250 per cell, W = 8, medians): Drift at 8 ms 77.4 vs 77.6 %, Drift at 1 ms 85.7 vs 84.5 %,
+    /// Cruise at 8 ms 89.3 vs 80.2 % — worse. First fit concentrates arrivals into one cursor cluster per cell that the planner then re-sorts; least
+    /// enlargement spreads them over every cluster, each a little wider, and under heavy crossings that is the mean going up. The one thing it does
+    /// unambiguously is place a lone arrival beside its neighbours (asserted), which a workload with rare arrivals into a dense, slow pocket may want.</para>
+    /// <para>What is NOT optional is the ordering of batch spawns (<see cref="BatchSpawnSortThreshold"/>) — that is where the measured gain lives.</para>
+    /// </remarks>
+    public readonly bool LeastEnlargementPlacement;
+
+    /// <summary>
+    /// Open a fresh cluster for an arrival whose best candidate would stretch past the cell's density-derived target × <see cref="GrowthCapSlack"/>,
+    /// up to <see cref="MaxOpenClustersPerCell"/> open clusters per cell. Implies least-enlargement ranking of the candidates. Default <c>false</c>.
+    /// </summary>
+    /// <remarks>
+    /// The one write-path mechanism that CREATES tightness under motion — 7 to 16 points tighter than first fit at 40 ticks, the best sustained arm
+    /// of the step-15 measurement — and it is paid for in occupancy and per-cluster fence work: +4–29 % fence, −4 to −17 points of slot occupancy at
+    /// 250 entities per cell. At birth on an unsorted fill it buys only ~4 points (ranking finds candidates that fit under the cap, so few clusters
+    /// open); birth tightness is <see cref="BatchSpawnSortThreshold"/>'s job. A workload trade, not a default — the case for it is a dense, slow pocket
+    /// queried with boxes no larger than a tenth of a cell. Never fires in a cell whose population fits one cluster.
+    /// </remarks>
+    public readonly bool GrowthCapPlacement;
+
+    /// <summary>Multiplier on the density-derived target that a growth-capped arrival may stretch its cluster to. Default 1.25.</summary>
+    public readonly float GrowthCapSlack;
+
+    /// <summary>Open (non-full) clusters the growth cap may hold per cell before it falls back to least enlargement. Default 4.</summary>
+    public readonly int MaxOpenClustersPerCell;
+
+    /// <summary>
+    /// A transaction that spawns at least this many entities places them in per-cell Morton order, so a bulk load is born at the packing bound rather
+    /// than at the full extent of every cell it touches. Default 128; <c>0</c> disables the ordering.
+    /// </summary>
+    /// <remarks>
+    /// Placement is first fit within a cell in visiting order, and a random-order batch fills each cluster with whatever arrived next: measured 99 % of
+    /// the cell at 250 entities per cell, against a bound of 63 %. Ordering the batch along the intra-cell Morton curve costs one O(n log n) sort over
+    /// the batch and reads only the staged spatial field — no accessor — and leaves the batch born at 1.24× the bound at 250 per cell (1.52× at 512:
+    /// Z-order runs that straddle a quadrant boundary are what keeps it off the ideal). Below the threshold a batch
+    /// cannot fill more than one cluster of a cell, so the sort would buy nothing.
+    /// </remarks>
+    public readonly int BatchSpawnSortThreshold;
 
     /// <summary>
     /// Dead zone around the target region, as a fraction of cell size, below which a drifting entity is left alone. Default 0.05.
@@ -191,7 +254,7 @@ public readonly struct SpatialGridConfig
 
     /// <summary>
     /// Number of cells along the Z axis. <c>1</c> for a flat world built with
-    /// <see cref="Flat(Vector2,Vector2,float,float,float,float,float,float,float,int,float,float,int)"/>.
+    /// <see cref="Flat(Vector2,Vector2,float,float,float,float,float,float,float,int,float,float,int,float,bool,bool,float,int,int)"/>.
     /// </summary>
     public readonly int GridDepth;
 
@@ -218,6 +281,14 @@ public readonly struct SpatialGridConfig
     /// <param name="clusterRepairCriticalExtentRatio">Degradation at which a cell jumps the queue regardless of budget; 0 disables it (default 1.0).</param>
     /// <param name="repairAgingRatePerTick">Rank growth per tick a candidate waits; 0 disables ageing (default 0.05).</param>
     /// <param name="repairQueueMaxCells">Hard cap on queued repair candidates (default 4096).</param>
+    /// <param name="clusterTargetPackingSlack">
+    /// Multiplier on the per-cell packing bound that sets the intra-cell target; 0 keeps the constant (default 1.5).
+    /// </param>
+    /// <param name="leastEnlargementPlacement">Place arrivals in the least-enlargement cluster of their cell (default false — opt-in).</param>
+    /// <param name="growthCapPlacement">Open a fresh cluster when an arrival would stretch past the cap (default false).</param>
+    /// <param name="growthCapSlack">Multiplier on the density target the cap allows (default 1.25).</param>
+    /// <param name="maxOpenClustersPerCell">Open clusters the cap may hold per cell (default 4).</param>
+    /// <param name="batchSpawnSortThreshold">Spawns per transaction above which the batch is placed in Morton order; 0 disables (default 128).</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="cellSize"/> is not positive, or the derived cell count does not fit a 32-bit cell key.
     /// </exception>
@@ -225,8 +296,14 @@ public readonly struct SpatialGridConfig
     public SpatialGridConfig(Vector3 worldMin, Vector3 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
         float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f, float clusterRepairExtentRatio = 0.75f,
         float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8,
-        float clusterRepairCriticalExtentRatio = 1.0f, float repairAgingRatePerTick = 0.05f, int repairQueueMaxCells = 4096)
+        float clusterRepairCriticalExtentRatio = 1.0f, float repairAgingRatePerTick = 0.05f, int repairQueueMaxCells = 4096,
+        float clusterTargetPackingSlack = 1.5f, bool leastEnlargementPlacement = false, bool growthCapPlacement = false, float growthCapSlack = 1.25f,
+        int maxOpenClustersPerCell = 4, int batchSpawnSortThreshold = 128)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(clusterTargetPackingSlack);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(growthCapSlack);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxOpenClustersPerCell, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(batchSpawnSortThreshold);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(cellSize);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(clusterTargetExtentRatio);
         ArgumentOutOfRangeException.ThrowIfNegative(clusterDriftMarginRatio);
@@ -275,6 +352,12 @@ public readonly struct SpatialGridConfig
         CellSize = cellSize;
         MigrationHysteresisRatio = migrationHysteresisRatio;
         ClusterTargetExtentRatio = clusterTargetExtentRatio;
+        ClusterTargetPackingSlack = clusterTargetPackingSlack;
+        LeastEnlargementPlacement = leastEnlargementPlacement;
+        GrowthCapPlacement = growthCapPlacement;
+        GrowthCapSlack = growthCapSlack;
+        MaxOpenClustersPerCell = maxOpenClustersPerCell;
+        BatchSpawnSortThreshold = batchSpawnSortThreshold;
         ClusterDriftMarginRatio = clusterDriftMarginRatio;
         ClusterRepairExtentRatio = clusterRepairExtentRatio;
         ReclusterBudgetMs = reclusterBudgetMs;
@@ -320,11 +403,22 @@ public readonly struct SpatialGridConfig
     /// <param name="clusterRepairCriticalExtentRatio">Degradation at which a cell jumps the queue regardless of budget; 0 disables it (default 1.0).</param>
     /// <param name="repairAgingRatePerTick">Rank growth per tick a candidate waits; 0 disables ageing (default 0.05).</param>
     /// <param name="repairQueueMaxCells">Hard cap on queued repair candidates (default 4096).</param>
+    /// <param name="clusterTargetPackingSlack">
+    /// Multiplier on the per-cell packing bound that sets the intra-cell target; 0 keeps the constant (default 1.5).
+    /// </param>
+    /// <param name="leastEnlargementPlacement">Place arrivals in the least-enlargement cluster of their cell (default false — opt-in).</param>
+    /// <param name="growthCapPlacement">Open a fresh cluster when an arrival would stretch past the cap (default false).</param>
+    /// <param name="growthCapSlack">Multiplier on the density target the cap allows (default 1.25).</param>
+    /// <param name="maxOpenClustersPerCell">Open clusters the cap may hold per cell (default 4).</param>
+    /// <param name="batchSpawnSortThreshold">Spawns per transaction above which the batch is placed in Morton order; 0 disables (default 128).</param>
     public static SpatialGridConfig Flat(Vector2 worldMin, Vector2 worldMax, float cellSize, float migrationHysteresisRatio = 0.05f,
         float clusterTargetExtentRatio = 0.25f, float clusterDriftMarginRatio = 0.05f, float clusterRepairExtentRatio = 0.75f,
         float reclusterBudgetMs = 1.0f, float repairNsPerEntity = 1500f, int repairWorstClustersPerUnit = 8,
-        float clusterRepairCriticalExtentRatio = 1.0f, float repairAgingRatePerTick = 0.05f, int repairQueueMaxCells = 4096) =>
+        float clusterRepairCriticalExtentRatio = 1.0f, float repairAgingRatePerTick = 0.05f, int repairQueueMaxCells = 4096,
+        float clusterTargetPackingSlack = 1.5f, bool leastEnlargementPlacement = false, bool growthCapPlacement = false, float growthCapSlack = 1.25f,
+        int maxOpenClustersPerCell = 4, int batchSpawnSortThreshold = 128) =>
         new(new Vector3(worldMin, 0f), new Vector3(worldMax, cellSize), cellSize, migrationHysteresisRatio, clusterTargetExtentRatio,
             clusterDriftMarginRatio, clusterRepairExtentRatio, reclusterBudgetMs, repairNsPerEntity, repairWorstClustersPerUnit,
-            clusterRepairCriticalExtentRatio, repairAgingRatePerTick, repairQueueMaxCells);
+            clusterRepairCriticalExtentRatio, repairAgingRatePerTick, repairQueueMaxCells, clusterTargetPackingSlack, leastEnlargementPlacement,
+            growthCapPlacement, growthCapSlack, maxOpenClustersPerCell, batchSpawnSortThreshold);
 }

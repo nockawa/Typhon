@@ -99,6 +99,22 @@ public unsafe ref struct AabbClusterEnumerator
     private int _currentCellZ;
     private CellSpatialIndex _currentCellIndex;    // null when we need to advance to the next cell
     private int _currentBroadphaseSlot;            // next index into _currentCellIndex.ClusterIds to scan
+
+    // ── Batched broadphase (SIMD) ──────────────────────────────────────────────────────────────────────────────────
+    //
+    // The linear scan is what a spatial query actually runs: a cell only gets an R-Tree above CellTreePromoteThreshold
+    // clusters, which measured game worlds essentially never reach. It was a scalar loop over six float SoA arrays while
+    // the tree's leaf scan had already been vectorised — the optimisation effort aimed at the path that does not run.
+    //
+    // CellSpatialIndex.MatchBatch tests 64 slots at a time and returns a bit per overlap; this carries the current batch's
+    // mask and its base slot, refilling when the mask empties. Sixty-four rather than the whole index because this is an
+    // enumerator: the narrowphase runs between yields, so an unbounded match set would need somewhere to live.
+    private ulong _scanMask;
+    private int _scanMaskBase;
+    private int _scanNextBatch;
+
+    /// <summary>Is the current cell half big enough for the batched scan to beat the scalar loop? See <see cref="CellSpatialIndex.SimdScanMinClusters"/>.</summary>
+    private bool _useSimdScan;
     private ulong _currentOccupancyBits;           // remaining occupied slots in the current cluster (bits cleared as we iterate)
     private int _currentClusterChunkId;            // chunk id of the cluster currently in narrowphase
     private byte* _currentClusterBase;             // base pointer of that cluster
@@ -175,6 +191,7 @@ public unsafe ref struct AabbClusterEnumerator
         _currentCellZ = _cellMinZ;
         _currentCellIndex = null;
         _currentBroadphaseSlot = 0;
+        _useSimdScan = false;
         _currentOccupancyBits = 0UL;
         _currentClusterChunkId = 0;
         _currentClusterBase = null;
@@ -241,6 +258,10 @@ public unsafe ref struct AabbClusterEnumerator
         {
             _currentCellIndex = linear;
             _currentBroadphaseSlot = 0;
+            _scanMask = 0;
+            _scanMaskBase = 0;
+            _scanNextBatch = 0;
+            _useSimdScan = SpatialQueryTuning.SimdLinearScan && linear.ClusterCount >= CellSpatialIndex.SimdScanMinClusters;
             return true;
         }
 
@@ -366,8 +387,24 @@ public unsafe ref struct AabbClusterEnumerator
                 // Fall through to section 3: this half is drained.
             }
 
+            // 2a. Batched broadphase: the AABB test already happened for a whole batch, so this only pops set bits.
+            if (_currentCellIndex != null && _useSimdScan && TryNextBatchedSlot(out int batchedIdx))
+            {
+                if (_categoryMask != 0 && (_currentCellIndex.CategoryMasks[batchedIdx] & _categoryMask) == 0)
+                {
+                    continue;   // category miss — same "any bit overlap" rule as the scalar branch below
+                }
+
+                int batchedChunkId = _currentCellIndex.ClusterIds[batchedIdx];
+                EnsureAccessor();
+                _currentClusterBase = _accessor.GetChunkAddress(batchedChunkId);
+                _currentClusterChunkId = batchedChunkId;
+                _currentOccupancyBits = *(ulong*)_currentClusterBase;
+                continue;
+            }
+
             // 2. Advance to the next cluster in the current cell's broadphase (linear scan).
-            if (_currentCellIndex != null && _currentBroadphaseSlot < _currentCellIndex.ClusterCount)
+            if (_currentCellIndex != null && !_useSimdScan && _currentBroadphaseSlot < _currentCellIndex.ClusterCount)
             {
                 int idx = _currentBroadphaseSlot++;
                 // Category filter. Convention matches the legacy SpatialRTree: a zero categoryMask means "no filter" (accept all). A non-zero categoryMask
@@ -423,6 +460,7 @@ public unsafe ref struct AabbClusterEnumerator
             //    skip fence updates, queries check both").
             _currentCellIndex = null;
             _currentBroadphaseSlot = 0;
+            _useSimdScan = false;
 
             // 3a. If we just finished DynamicIndex for the current cell and haven't yet tried StaticIndex, try it now.
             if (!_currentCellStaticPass && _currentPerCellSlot != null)
@@ -530,6 +568,38 @@ public unsafe ref struct AabbClusterEnumerator
 
     /// <summary>Enumerator pattern: a ref struct enumerator is its own source.</summary>
     public AabbClusterEnumerator GetEnumerator() => this;
+
+    /// <summary>
+    /// Next slot whose cluster AABB overlaps the query box, from the batched match mask, refilling it as needed.
+    /// </summary>
+    /// <remarks>
+    /// The Z axis is tested like any other. A 2D cluster leaves Z at the <c>+∞ / −∞</c> sentinel and a 2D query passes
+    /// <c>±∞</c> bounds, and both comparisons come out true on those values — so the axis costs two vector compares and
+    /// needs no special case, exactly as in the scalar loop it replaces.
+    /// </remarks>
+    private bool TryNextBatchedSlot(out int slot)
+    {
+        while (_scanMask == 0)
+        {
+            if (_scanNextBatch >= _currentCellIndex.ClusterCount)
+            {
+                slot = -1;
+                return false;
+            }
+
+            _scanMaskBase = _scanNextBatch;
+            _scanMask = _currentCellIndex.MatchBatch(
+                _scanMaskBase,
+                _cellQueryMinX, _cellQueryMinY, _cellQueryMinZ,
+                _cellQueryMaxX, _cellQueryMaxY, _cellQueryMaxZ,
+                testZ: true);
+            _scanNextBatch += 64;
+        }
+
+        slot = _scanMaskBase + System.Numerics.BitOperations.TrailingZeroCount(_scanMask);
+        _scanMask &= _scanMask - 1;
+        return true;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureAccessor()

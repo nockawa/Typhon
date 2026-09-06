@@ -316,6 +316,15 @@
   invariant the signal is ClusterProcessBitmap, which WriteSpatial sets on exactly `aabbChanged || migrationFlagged`
     and ClearAabbRefreshBookkeeping zeroes once per tick. A writer that leaves ClusterAabbs alone for the fence to
     recompute (OpenMut / GetSpan) sets no bit, which is precisely the case where equality does mean nothing changed.
+  invariant 🔴 OUTSIDE the fence, on user threads (#872 step 15 review): a cluster is in its cell's index from the moment
+    it is in the cell's pool — the allocation site adds it under _finalizeLock with an EMPTY box before AddCluster
+    publishes it (AddClusterToPerCellIndexLocked) — and every spawner thereafter only WIDENS: ClusterAabbs by per-axis
+    CAS (ClusterSpatialAabb.WidenCas2F/3F), the linear index slot by per-axis CAS that re-validates against a concurrent
+    grow (CellSpatialIndex.WidenAt), a promoted half under _finalizeLock (WidenClusterInPerCellIndex). Before this a
+    fresh cluster was published first, so two spawners both took the "first entity" branch — two index entries, one
+    orphaned, and a reset that wiped the other's widening — and a plain-store widen landed in an array a grow had
+    abandoned. Verified before any fence by
+    ClusterPlacementTests.ConcurrentSpawnsIntoOneCellLeaveTheIndexExactBeforeAnyFence
   scope: ArchetypeClusterState.RecomputeDirtyClusterAabbsSlice, ArchetypeClusterState.IsClusterProcessBitSet,
     ArchetypeClusterState.ApplyOrDeferClusterUpdate, ArchetypeClusterState.UpdateClusterInPerCellIndex,
     ClusterRef.MaybeGrowAndFlagShrink
@@ -494,10 +503,15 @@
 
 ### CR-03: A drifter is defined by the target region alone `[silent]`
   invariant the rule is two-level, and the levels are not interchangeable:
-    gate    — a cluster whose largest axis extent ≤ CellSize * ClusterTargetExtentRatio is skipped whole; no
-              entity in it can be improved by moving, so a tight world does three float compares per written
-              cluster and no per-entity work
-    entity  — inside a gated cluster, an entity whose centre lies outside the target box by more than
+    gate    — a cluster whose largest axis extent ≤ the cell's TARGET EXTENT is skipped whole; no entity in
+              it can be improved by moving, so a tight world does three float compares per written cluster
+              and no per-entity work. The target is per cell (step 14): CellSize * clamp(
+              ClusterTargetPackingSlack * (slotsPerCluster / CellState.EntityCount)^(1/d),
+              ClusterTargetExtentRatio, 1) × the throttle's boost, where a value of the cell itself means OFF;
+              a slack of 0 makes ClusterTargetExtentRatio the constant it used to be. A cluster above the
+              repair-nomination gate max(target, ClusterRepairExtentRatio) is not drift-scanned at all
+    entity  — inside a gated cluster, an entity whose centre lies outside the target box — the SAME target
+              extent the gate used, never the configured constant — by more than
               CellSize * ClusterDriftMarginRatio is a drifter
   invariant 🔴 the target box is centred on the cluster's CENTROID, never on the midpoint of its AABB. A box
     midpoint sits halfway between the two extremes, so ONE far outlier drags it half the distance to itself:
@@ -991,6 +1005,49 @@
     cellKey ≥ CellCount → IndexOutOfRangeException in SpatialGrid.GetCell
     cellKey corrupted → cluster bucketed into wrong cell → wrong tier assignment, wrong query results
     cellKey held across a rebuild → names a different position's cell → silently wrong counters and tiers
+
+### CC-02: Cluster→cell exclusivity — every entity sits in the cell its cluster is mapped to `[fatal][silent]`
+  invariant ∀ active cluster C with ClusterCellMap[C.chunkId] = k ≥ 0, ∀ occupied slot E of C, once the fence has
+    drained the tick's crossings:
+    SpatialGrid.WorldToCellKey(E.position) == k
+      ∨ E.position lies within MigrationHysteresisRatio × CellSize of cell k on every axis
+    The second disjunct is the write barrier's dead zone (ClusterRef.MaybeFlagMigration): a write that lands in the
+    band is absorbed on purpose and never becomes a crossing, so the entity legitimately sits a margin outside k.
+    A test wanting the exact form sets the ratio to 0
+  invariant this is decision C13 of the VDB cell-grid design: a cluster belongs to exactly one cell. It is what
+    makes the per-cell index (SH-01), CellState.EntityCount and the cell-relative frame of CA-01 well-defined.
+    Between a spatial write and the next fence an entity may sit outside k — that is a crossing awaiting its
+    drain (CR-05, TH-01), not a violation
+  invariant the paths that PLACE an entity in a cell — spawn (ClaimSlotInCell resolves k from the position) and
+    the drain-time claim of a crossing (its DestCellKey) — and the path that PUBLISHES a fresh cluster to a cell
+    (AddClusterToPerCellIndex) run from user threads concurrently under commit, and must be safe against each
+    other. Before #872 step 15 AddClusterToPerCellIndex ran latch-free, so two commits opening clusters in one
+    cell could overwrite each other's PerCellSpatialSlot (every cluster published into the loser invisible to the
+    index), and every allocation site published a fresh cluster into the cell's pool BEFORE writing its occupancy
+    word, so a concurrent claim's CAS could be clobbered — an entity lost with every counter still balancing
+  invariant a write-time crossing flag (ClusterRef.MaybeFlagMigration) names the SLOT that moved; the cell it
+    records is a hint. Nothing un-flags a slot, so an entity written out and back within a tick, two writes to
+    two cells, or a write that reached a spawn's slot before its data landed (the in-flight window NoteClusterBorn
+    documents as a known residual) all leave a flag whose destination is not where the entity is. The drain
+    (DatabaseEngine.DrainPreFlaggedMigrations) therefore re-reads the position and decides from it — dropping the
+    flag when the entity is home (LastTickStaleFlagsDropped) — exactly as the dirty-bits scan does
+  invariant CellClusterPool's per-cell (head, count) pair and its backing array are published and read in a fixed
+    order (release: pool → head → entry → count; acquire: count → head → pool). A reader pairing a new count with
+    an old head runs past its cell's segment into the next cell's, and a claim lands in a cluster of another cell
+  scope: ArchetypeClusterState.AddClusterToPerCellIndex, ArchetypeClusterState.AddClusterToPerCellIndexLocked,
+    ArchetypeClusterState.ClaimSlotInCell, ArchetypeClusterState.TryClaimPinnedSlot, ArchetypeClusterState.ClusterCellMap,
+    DatabaseEngine.DrainPreFlaggedMigrations, CellClusterPool.GetClusters, CellClusterPool.AddCluster
+  verified: ClusterPlacementTests.ConcurrentSpawnsAndBoundGrowthKeepClustersInTheirCell — eight writers spawning
+    into two adjacent cells race eight writers moving entities across their boundary; after the fence every
+    occupied slot resolves to its cluster's mapped cell and the two cells count what was spawned (7 of 30 runs
+    failed before the latch and the occupancy-before-publish ordering; about 1 cold launch in 10 before the drain
+    re-derived the destination). ClusterMigrationTests.WriteSpatial_CrossAndReturnInOneTick_StaysInItsCell and
+    WriteSpatial_TwoCrossingsInOneTick_LandsWhereItIs pin the drain's decision with two writes, no race
+  on_violation:
+    an entity in a cluster mapped to another cell → invisible to its own cell's index → SQ-01 false negative,
+      counters balanced
+    a PerCellSpatialSlot overwritten → every cluster published into it invisible to the index
+  requires: CC-01 (the key is valid), CR-05 and TH-01 (crossings are drained every tick, so the window closes)
 
 ---
 

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -1932,10 +1933,17 @@ public unsafe partial class Transaction
         // Sized for 3D ([minX, minY, minZ, maxX, maxY, maxZ]); 2D reads only populate the first 4 slots. Issue #230 Phase 3 unified 2D/3D per-cell index paths.
         Span<double> spawnSpatialCoords = stackalloc double[6];
 
+        // Step 15 (D4): a batch of spatial spawns is placed in per-cell Morton order, so a bulk load is born at the packing bound instead of at ~100 %
+        // of every cell it touches. The list itself is left alone — _spawnedEntityIndex maps ids into it — and only the visiting order changes.
+        var sortThreshold = _dbe.SpatialGrid != null ? _dbe.SpatialGrid.Config.BatchSpawnSortThreshold : 0;
+        var spawnOrder = sortThreshold > 0 && _spawnedEntities.Count >= sortThreshold ? BuildSpatialSpawnOrder() : null;
+
         try
         {
-            foreach (var entry in _spawnedEntities)
+            var spawnCount = _spawnedEntities.Count;
+            for (var spawnIndex = 0; spawnIndex < spawnCount; spawnIndex++)
             {
+                var entry = _spawnedEntities[spawnOrder != null ? spawnOrder[spawnIndex] : spawnIndex];
                 // Skip entities that were also destroyed in this transaction — no EntityMap insert needed
                 if (_pendingDestroys != null && _pendingDestroys.Contains(entry.Id))
                 {
@@ -1978,7 +1986,11 @@ public unsafe partial class Transaction
                     // once per archetype switch (see SetupSpawnAccessors) so this hot branch is a single field read.
                     int spatialSlotIdx = ctx.SpatialSlotIndexCached;
                     bool useCellClaim = spatialSlotIdx >= 0;
+                    var rankedSpawn = false;
                     int computedCellKey = -1;
+                    float spawnPx = 0f;
+                    float spawnPy = 0f;
+                    float spawnPz = 0f;
                     if (useCellClaim)
                     {
                         // #839: the spatial payload is in the spawn arena unless the component is Versioned, in which case it still has a content chunk.
@@ -2007,6 +2019,22 @@ public unsafe partial class Transaction
                         }
                         byte* spatialFieldPtr = spatialSrcAddr + ctx.SpatialComponentOverheadCached + ctx.SpatialFieldOffsetCached;
                         computedCellKey = ctx.SpatialGridCached.WorldToCellKeyFromSpatialField(spatialFieldPtr, ctx.SpatialFieldTypeCached);
+
+                        // The same field, read once more for its centre and rebased into the cell's frame (C15): the claim ranks the cell's clusters by
+                        // how far each stored bound grows to admit it. Cheap — the field is in the line WorldToCellKeyFromSpatialField just read.
+                        // A Morton-ordered batch is placed first fit: the order IS the placement, and ranking each arrival against every open cluster
+                        // would let it join an older open cluster whose box happens to be nearer and mix the sorted runs (measured: fill clusters
+                        // spanning the cell with the cap on). The ranked overload is for spawns that arrive one at a time or in small batches.
+                        rankedSpawn = spawnOrder == null
+                            && (ctx.SpatialGridCached.Config.LeastEnlargementPlacement || ctx.SpatialGridCached.Config.GrowthCapPlacement);
+                        if (rankedSpawn)
+                        {
+                            SpatialGrid.ReadSpatialCenter3D(spatialFieldPtr, ctx.SpatialFieldTypeCached, out var worldX, out var worldY, out var worldZ);
+                            ctx.SpatialGridCached.CellOrigin(computedCellKey, out var originX, out var originY, out var originZ);
+                            spawnPx = worldX - originX;
+                            spawnPy = worldY - originY;
+                            spawnPz = worldZ - originZ;
+                        }
                     }
 
                     if (ctx.ClusterState.ClusterSegment != null)
@@ -2014,12 +2042,10 @@ public unsafe partial class Transaction
                         // Mixed or pure-SV/V: PersistentStore is primary
                         if (useCellClaim)
                         {
-                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlotInCell(
-                                computedCellKey,
-                                ref ctx.ClusterAccessor,
-                                _changeSet,
-                                ctx.SpatialGridCached,
-                                TSN);
+                            (clusterChunkId, slotIdx) = rankedSpawn
+                                ? ctx.ClusterState.ClaimSlotInCell(computedCellKey, spawnPx, spawnPy, spawnPz, ref ctx.ClusterAccessor, _changeSet,
+                                    ctx.SpatialGridCached, TSN)
+                                : ctx.ClusterState.ClaimSlotInCell(computedCellKey, ref ctx.ClusterAccessor, _changeSet, ctx.SpatialGridCached, TSN);
                         }
                         else
                         {
@@ -2036,11 +2062,10 @@ public unsafe partial class Transaction
                         // Pure-Transient: TransientStore is primary
                         if (useCellClaim)
                         {
-                            (clusterChunkId, slotIdx) = ctx.ClusterState.ClaimSlotInCell(
-                                computedCellKey,
-                                ref ctx.ClusterTransientAccessor,
-                                ctx.SpatialGridCached,
-                                TSN);
+                            (clusterChunkId, slotIdx) = rankedSpawn
+                                ? ctx.ClusterState.ClaimSlotInCell(computedCellKey, spawnPx, spawnPy, spawnPz, ref ctx.ClusterTransientAccessor,
+                                    ctx.SpatialGridCached, TSN)
+                                : ctx.ClusterState.ClaimSlotInCell(computedCellKey, ref ctx.ClusterTransientAccessor, ctx.SpatialGridCached, TSN);
                         }
                         else
                         {
@@ -2090,12 +2115,14 @@ public unsafe partial class Transaction
                     // Write full EntityId to cluster primary segment
                     *(long*)(clusterBase + layout.EntityIdsOffset + slotIdx * 8) = (long)entry.Id.RawValue;
 
-                    // Set EnabledBits in cluster
+                    // Set EnabledBits in cluster. Interlocked, not |=: the word is one per component per CLUSTER, and two transactions committing spawns
+                    // into the same cluster (their claims are independent CASes on the occupancy word) each read-modify-write it — a plain |= lets one
+                    // drop the other's bit, and every clearing site (ReleaseSlot, the migration source release) already goes through Interlocked.And.
                     for (int slot = 0; slot < ctx.ComponentCount; slot++)
                     {
                         if ((enabledBits & (1 << slot)) != 0)
                         {
-                            *(ulong*)(clusterBase + layout.EnabledBitsOffset(slot)) |= 1UL << slotIdx;
+                            Interlocked.Or(ref *(long*)(clusterBase + layout.EnabledBitsOffset(slot)), 1L << slotIdx);
                         }
                     }
 
@@ -2136,6 +2163,10 @@ public unsafe partial class Transaction
 
                     // Insert per-archetype B+Tree entries for cluster entity, in both index homes (#655). The elementId tail always lives on the PRIMARY
                     // (cluster) base even for a Transient slot, whose component bytes live in the Transient segment — see ProcessClusterShadowEntries.
+                    // Measured in Morton order and in arrival order (step 15 review, 4 K spawns of an archetype with one AllowMultiple index, warm,
+                    // Release): 16.6–18.6 ms inline against 18.4–20.0 ms deferred and replayed in key order — the tree does not care, and the
+                    // ordering itself costs nothing measurable warm (unsorted 17–18 ms). The matrix's "+90 % spawn" is a one-shot cold number paying
+                    // the ordering path's JIT. So the inserts stay where they are.
                     {
                         int clusterLocation = clusterChunkId * 64 + slotIdx;
                         InsertClusterIndexEntries(ref ctx, ctx.ClusterState.IndexSlots, clusterBase, clusterBase, layout, clusterChunkId, slotIdx,
@@ -2172,8 +2203,8 @@ public unsafe partial class Transaction
                                 ref var clusterAabb = ref ctx.ClusterState.ClusterAabbs[clusterChunkId];
                                 if (!wasInIndex)
                                 {
-                                    // First entity of (possibly reused) cluster — reset to Empty to drop any
-                                    // stale AABB left over from a prior life of this chunk id.
+                                    // A cell-claimed cluster is indexed, with an empty box, by its allocation site under the latch (step 15 review), so
+                                    // this branch is for a cluster that reached here without one. The reset then has no concurrent widener to wipe.
                                     clusterAabb = ClusterSpatialAabb.Empty;
                                 }
                                 // Tier-dispatched union: 2D fields wrote [minX, minY, maxX, maxY] into the first 4 slots; 3D fields wrote the full
@@ -2194,7 +2225,7 @@ public unsafe partial class Transaction
                                     ctx.ClusterState.Grid.CellOrigin(cellKey, out float cellOriginX, out float cellOriginY, out float cellOriginZ);
                                     if (ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F)
                                     {
-                                        clusterAabb.Union3F(
+                                        ClusterSpatialAabb.WidenCas3F(ref clusterAabb,
                                             ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[0], cellOriginX),
                                             ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[1], cellOriginY),
                                             ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[2], cellOriginZ),
@@ -2205,7 +2236,7 @@ public unsafe partial class Transaction
                                     }
                                     else
                                     {
-                                        clusterAabb.Union2F(
+                                        ClusterSpatialAabb.WidenCas2F(ref clusterAabb,
                                             ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[0], cellOriginX),
                                             ClusterSpatialAabb.ToCellRelativeMin(spawnSpatialCoords[1], cellOriginY),
                                             ClusterSpatialAabb.ToCellRelativeMax(spawnSpatialCoords[2], cellOriginX),
@@ -2219,8 +2250,10 @@ public unsafe partial class Transaction
                                     else
                                     {
                                         // Routed rather than dereferenced: the mode split (Static vs Dynamic) is only half of it since #872 step 9 — a
-                                        // promoted cell has no linear index at all, so reaching for one is a null deref above the threshold.
-                                        ctx.ClusterState.UpdateClusterInPerCellIndex(clusterChunkId, cellKey, in clusterAabb);
+                                        // promoted cell has no linear index at all, so reaching for one is a null deref above the threshold. WIDEN, not
+                                        // update: this runs on a user thread beside other spawns into the same cluster and a latched grow of the same
+                                        // cell's index, and only the CAS form survives both (step 15 review).
+                                        ctx.ClusterState.WidenClusterInPerCellIndex(clusterChunkId, cellKey, in clusterAabb);
                                     }
                                 }
                             }
@@ -2289,6 +2322,129 @@ public unsafe partial class Transaction
         finally
         {
             DisposeSpawnAccessors(ref ctx);
+            if (spawnOrder != null)
+            {
+                ArrayPool<int>.Shared.Return(spawnOrder);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The order <see cref="FinalizeSpawns"/> visits <c>_spawnedEntities</c> in: grouped by archetype, then by destination cell, then along the
+    /// intra-cell Morton curve — so first fit fills each cluster with spatial neighbours and a random-order bulk load is born packed rather than at
+    /// the full extent of its cell. Rented from <see cref="ArrayPool{T}"/>; the caller returns it.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Accessor-free, on purpose.</b> The main loop rents chunk accessors per archetype; doing that twice per batch would double the setup
+    /// cost of every bulk spawn. The pre-pass reads only what it can reach without one: the archetype's spatial slot, the component's overhead and
+    /// field offset, and the staged bytes in the spawn arena. A <c>Versioned</c> spatial component stages through a cluster accessor instead, so
+    /// its entities keep their archetype-and-cell grouping and skip the Morton term — still better than arrival order, and never wrong.</para>
+    /// <para><b>Cells are resolved with create.</b> The main loop resolves the same key with create a moment later, so nothing is materialised that
+    /// would not have been. Grouping by archetype first is a free win in its own right: every archetype switch in the main loop re-rents accessors.</para>
+    /// </remarks>
+    private int[] BuildSpatialSpawnOrder()
+    {
+        var count = _spawnedEntities.Count;
+        var order = ArrayPool<int>.Shared.Rent(count);
+        var primary = ArrayPool<ulong>.Shared.Rent(count);
+        var morton = ArrayPool<ulong>.Shared.Rent(count);
+        var runKeys = ArrayPool<ulong>.Shared.Rent(count);
+        try
+        {
+            var grid = _dbe.SpatialGrid;
+            var lastArchId = -1;
+            ArchetypeClusterState clusterState = null;
+            var spatialSlot = -1;
+            var componentOverhead = 0;
+            var fieldOffset = 0;
+            var fieldType = SpatialFieldType.AABB2F;
+            var inverseCellSize = grid != null ? grid.Config.InverseCellSize : 0f;
+
+            for (var i = 0; i < count; i++)
+            {
+                var entry = _spawnedEntities[i];
+                int archId = entry.Id.ArchetypeId;
+                if (archId != lastArchId)
+                {
+                    lastArchId = archId;
+                    spatialSlot = -1;
+                    var meta = _dbe.GetMetaByRouting((ushort)archId);
+                    var engineState = meta != null && meta.IsClusterEligible ? _dbe._archetypeStates[meta.ArchetypeId] : null;
+                    clusterState = engineState?.ClusterState;
+                    if (grid != null && clusterState != null && clusterState.SpatialSlot.HasSpatialIndex)
+                    {
+                        ref readonly var ss = ref clusterState.SpatialSlot;
+                        var table = engineState.SlotToComponentTable[ss.Slot];
+                        if (table.StorageMode != StorageMode.Versioned)
+                        {
+                            spatialSlot = ss.Slot;
+                            componentOverhead = table.ComponentOverhead;
+                            fieldOffset = ss.FieldOffset;
+                            fieldType = ss.FieldInfo.FieldType;
+                        }
+                    }
+                }
+
+                order[i] = i;
+                var cellKey = 0;
+                var mortonKey = 0UL;
+                if (spatialSlot >= 0)
+                {
+                    var stage = entry.Stage[spatialSlot];
+                    if (stage != 0)
+                    {
+                        var fieldPtr = SpawnArena.Resolve(stage) + componentOverhead + fieldOffset;
+                        SpatialGrid.ReadSpatialCenter3D(fieldPtr, fieldType, out var x, out var y, out var z);
+                        cellKey = grid.WorldToCellKey(x, y, z);
+                        grid.CellOrigin(cellKey, out var ox, out var oy, out var oz);
+                        mortonKey = ArchetypeClusterState.EncodeIntraCellMorton(x - ox, y - oy, z - oz, inverseCellSize);
+                    }
+                }
+
+                primary[i] = ((ulong)(uint)archId << 32) | (uint)cellKey;
+                morton[i] = mortonKey;
+            }
+
+            // Two-level: archetype-and-cell first, then the Morton curve inside each run. Both sorts carry the index array along.
+            Array.Sort(primary, order, 0, count);
+            var runStart = 0;
+            while (runStart < count)
+            {
+                var runEnd = runStart + 1;
+                while (runEnd < count && primary[runEnd] == primary[runStart])
+                {
+                    runEnd++;
+                }
+
+                if (runEnd - runStart > 1)
+                {
+                    // The Morton keys are in ORIGINAL index order; gather the run's keys through the permuted indices into a scratch, then sort the
+                    // scratch with the run's slice of the order array riding along.
+                    var span = order.AsSpan(runStart, runEnd - runStart);
+                    var keys = runKeys.AsSpan(0, span.Length);
+                    for (var k = 0; k < span.Length; k++)
+                    {
+                        keys[k] = morton[span[k]];
+                    }
+
+                    keys.Sort(span);
+                }
+
+                runStart = runEnd;
+            }
+
+            return order;
+        }
+        catch
+        {
+            ArrayPool<int>.Shared.Return(order);   // the caller never sees it, so the caller cannot return it
+            throw;
+        }
+        finally
+        {
+            ArrayPool<ulong>.Shared.Return(primary);
+            ArrayPool<ulong>.Shared.Return(morton);
+            ArrayPool<ulong>.Shared.Return(runKeys);
         }
     }
 

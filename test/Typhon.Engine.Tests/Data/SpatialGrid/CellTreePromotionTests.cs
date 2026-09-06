@@ -70,6 +70,9 @@ class CellTreePromotionTests : TestBase<CellTreePromotionTests>
 
         // Must precede InitializeArchetypes: the threshold is copied onto each ArchetypeClusterState as it is constructed.
         dbe.ClusterCellTreePromoteThreshold = promoteThreshold;
+        // Step 16: these fixtures exercise the TREE, not the gate that decides when a cell gets one — their clusters are scattered over the cell
+        // on purpose, which is exactly the shape the tightness gate refuses. Count-only promotion keeps them testing what they were written for.
+        dbe.ClusterCellTreePromoteTightness = 1f;
         dbe.InitializeArchetypes();
         return dbe;
     }
@@ -275,6 +278,9 @@ class CellTreePromotionTests : TestBase<CellTreePromotionTests>
         dbe.RegisterComponentFromAccessor<CtStaticPos>();
         dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(4_000f, 4_000f), CellSize));
         dbe.ClusterCellTreePromoteThreshold = promoteThreshold;
+        // Step 16: these fixtures exercise the TREE, not the gate that decides when a cell gets one — their clusters are scattered over the cell
+        // on purpose, which is exactly the shape the tightness gate refuses. Count-only promotion keeps them testing what they were written for.
+        dbe.ClusterCellTreePromoteTightness = 1f;
         dbe.InitializeArchetypes();
         return dbe;
     }

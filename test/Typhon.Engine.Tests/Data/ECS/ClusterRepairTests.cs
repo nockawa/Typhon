@@ -71,7 +71,7 @@ class ClusterRepairTests : TestBase<ClusterRepairTests>
             new Vector2(WorldMax, WorldMax),
             CellSize,
             clusterRepairExtentRatio: repairExtentRatio,
-            reclusterBudgetMs: budgetMs,
+            reclusterBudgetMs: budgetMs, batchSpawnSortThreshold: 0 /* step 15: this fixture builds its layout by spawn ORDER; the Morton sort would tighten it at birth */,
             repairWorstClustersPerUnit: worstClustersPerUnit));
         dbe.InitializeArchetypes();
         return dbe;
@@ -305,6 +305,146 @@ class ClusterRepairTests : TestBase<ClusterRepairTests>
     // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
     // AC-12.3 — every invariant survives the re-pack
     // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A tick on which the planner returns early — a converged cell nominating nothing, which is the steady state — leaves no cluster reserved.
+    /// </summary>
+    /// <remarks>
+    /// <para>The reservation is per-tick, and its clear has to sit above every early return in the planner rather than beside the plans it guards. Below them,
+    /// the last plan's reservations outlive it for as long as the planner keeps returning early, and a destination that received nothing is freed by the
+    /// same Finalize — so its chunk id is reallocated, possibly into another cell, and that live cluster is excluded from every claim path for good.</para>
+    /// <para><b>A guard, not a proof.</b> Moving the clear back below the early returns does NOT redden this test: in this fixture the queue keeps the
+    /// planner past its first exit, so the misplaced clear still runs. The defect it documents was found by reading the early returns, and the shape that
+    /// would prove it needs a cell whose queue empties while another cell's plan still holds live destinations — worth building when this file next grows
+    /// a multi-cell repair scenario.</para>
+    /// </remarks>
+    [Test]
+    public void AConvergedTickLeavesNoClusterReserved()
+    {
+        var dbe = SetupEngine();
+        SpawnDegradedCell(dbe);
+
+        var cs = dbe._archetypeStates[ArchetypeId].ClusterState;
+        var tick = 1;
+        // Until the QUEUE is empty, not merely until no unit is admitted: the early return this guards is the one at the top of the planner, and a cell
+        // that is still queued reaches every line below it. Without that distinction the test passes whether the clear runs early or late.
+        for (; tick <= 40 && (cs.RepairQueue == null || cs.RepairQueue.Count > 0 || tick < 3); tick++)
+        {
+            dbe.WriteTickFence(tick);
+        }
+
+        Assert.That(cs.RepairQueue?.Count ?? 0, Is.Zero, "precondition: the queue has drained, so the planner returns at its first early exit");
+        dbe.WriteTickFence(tick);
+        Assert.That(dbe.GetSpatialTelemetry(ArchetypeId).RepairUnitCount, Is.Zero, "precondition: the cell has converged, so nothing is being planned");
+
+        var reserved = new List<int>();
+        for (var i = 0; i < cs.ActiveClusterCount; i++)
+        {
+            var id = cs.ActiveClusterIds[i];
+            if (cs.IsRepairDestination(id))
+            {
+                reserved.Add(id);
+            }
+        }
+
+        Assert.That(reserved, Is.Empty, "a converged tick left clusters reserved for a repair plan that is not running");
+    }
+
+    /// <summary>
+    /// A repair's destination clusters are its own: entities crossing into the same cell on the same tick must not take their slots, so every entity the
+    /// plan pinned lands in the cluster the Morton sort chose for it (<c>AC-15.4</c>'s pin-rejection budget, decision D5).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The whole pin-rejection population turned out to be this.</b> A repair pins each moved entity to an exact <c>(cluster, slot)</c> of a
+    /// freshly allocated EMPTY cluster — the plan is a permutation, and an empty destination is what makes it collide-free. But an empty cluster attached
+    /// to a cell is also the first thing the cursor first-fit scan finds, and the crossing drain runs thousands of requests a tick against a repair's
+    /// hundreds. Measured over 40 ticks of the <c>Cruise</c> matrix point before the reservation: 26 434 of 178 145 repair pins rejected (14.6 %), every
+    /// one of them "the pinned cluster is full" and never a stale cell — the re-pack's grouping undone for one entity in seven, silently, with every
+    /// counter still balancing. After: 0.97 rejections per tick across the whole archetype.</para>
+    /// <para>The ablation is <c>IsRepairDestination</c> returning <see langword="false"/>.</para>
+    /// </remarks>
+    [Test]
+    public void ARepairKeepsItsDestinationsFromTheCrossingDrain()
+    {
+        var dbe = SetupEngine();
+        SpawnDegradedCell(dbe);
+
+        // A second cell's population, poised on the boundary. Every one of these crosses into cell (0,0) on the tick the repair runs, so the crossing
+        // drain and the repair's pinned claims compete for the same cell's free slots.
+        var crossers = new List<EntityId>();
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < 400; i++)
+            {
+                crossers.Add(tx.Spawn<ClMigUnit>(ClMigUnit.Pos.Set(PointAt(CellSize + 4f + ((i * 37) % 92), 4f + ((i * 61) % 92), 90_000 + i))));
+            }
+
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+
+        var cs = dbe._archetypeStates[ArchetypeId].ClusterState;
+        var rejected = 0;
+        var repaired = 0;
+        for (var t = 0; t < 6; t++)
+        {
+            // Walk the crossers over the boundary into cell (0,0) every tick, so whichever tick the planner admits a unit on has crossings in flight.
+            using (var tx = dbe.CreateQuickTransaction())
+            {
+                var accessor = tx.For<ClMigUnit>();
+                try
+                {
+                    foreach (var cluster in accessor.GetClusterEnumerator())
+                    {
+                        var bits = cluster.OccupancyBits;
+                        while (bits != 0)
+                        {
+                            var slot = System.Numerics.BitOperations.TrailingZeroCount(bits);
+                            bits &= bits - 1;
+                            ref readonly var pos = ref cluster.GetReadOnly(ClMigUnit.Pos, slot);
+                            if (pos.Tag < 90_000)
+                            {
+                                continue;
+                            }
+
+                            // Half in, half out, phases opposite. Even-tag entities enter cell (0,0) on even ticks; odd-tag ones oscillate between
+                            // cells (1,0) and (2,0) and never reach it, so three of the six ticks carry crossings into the repaired cell — enough to
+                            // overlap a repair, which is what this needs, and measured: the ablation reddens on two of them.
+                            var goIn = ((pos.Tag & 1) == 0) == ((t & 1) == 0);
+                            var x = goIn ? pos.Bounds.MinX - CellSize : pos.Bounds.MinX + CellSize;
+                            if (x > 0f && x < WorldMax)
+                            {
+                                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(x, pos.Bounds.MinY, pos.Tag));
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    accessor.Dispose();
+                }
+
+                tx.Commit();
+            }
+
+            dbe.WriteTickFence(2 + t);
+            var telemetry = dbe.GetSpatialTelemetry(ArchetypeId);
+            repaired += telemetry.RepairUnitCount;
+            rejected += cs.LastTickPinsRejected;
+            // Ablated (IsRepairDestination => false) this reads 1 858 and 2 005 on alternating ticks — the crossing drain filling the plan's output.
+            // The counter is broader than this test's subject: TryClaimPinnedSlot also bumps it for a step-10 relocation whose pinned cluster changed
+            // cell, which CR-02 calls a legal fallback. Stable at zero here across runs; if it ever flakes, split the counter by request kind rather
+            // than loosening the assertion.
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(repaired, Is.GreaterThan(0), "no repair unit was admitted, so nothing here was exercised");
+            Assert.That(rejected, Is.Zero, "a claimant took a slot in a cluster this tick's repair plan had allocated for its own output");
+            Assert.That(TotalOccupancy(dbe), Is.EqualTo(Population + crossers.Count), "an entity was lost or duplicated");
+        });
+    }
 
     /// <summary>
     /// After a repair: the same entities exist at the same positions, every cluster's stored AABB contains its entities

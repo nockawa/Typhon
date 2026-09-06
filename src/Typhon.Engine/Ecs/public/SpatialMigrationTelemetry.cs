@@ -280,6 +280,42 @@ public readonly struct SpatialMigrationTelemetry
     /// </remarks>
     public double MeasuredNsPerEntity { get; init; }
 
+    /// <summary>Clusters that passed the intra-cell drift gate last tick — the population detection walked. Wave-2 K1.</summary>
+    public int DriftGatedClusters { get; init; }
+
+    /// <summary>
+    /// Clusters that exceeded the configured floor (<c>ClusterTargetExtentRatio</c>) but not their cell's density-derived target, so the drift scan never
+    /// ran on them — the work step 14's target function removed. A world in the 16–64 entities/cell basin reports every written cluster here and zero in
+    /// <see cref="DriftGatedClusters"/>.
+    /// </summary>
+    public int DriftSuppressedByDensity { get; init; }
+
+    /// <summary>Of <see cref="DriftersUnplaced"/>, those whose cell offered no candidate cluster at all. Wave-2 K2.</summary>
+    public int DriftersUnplacedNoCandidate { get; init; }
+
+    /// <summary>
+    /// Drifters whose cell had candidates but no free slot left this pass, filed for a fresh cluster at drain time rather than left in place (step 14).
+    /// </summary>
+    public int DriftersSpilled { get; init; }
+
+    /// <summary>Pinned claims rejected at drain time and executed as first fit instead. Wave-2 K5.</summary>
+    public int PinsRejected { get; init; }
+
+    /// <summary>Intra-cell relocations the throttle admitted last tick. Wave-2 K6.</summary>
+    public int RelocationsAdmitted { get; init; }
+
+    /// <summary>Cell-crossing requests the throttle found queued and charged last tick. Wave-2 K6.</summary>
+    public int CrossingsQueued { get; init; }
+
+    /// <summary>Budget charged to admitted relocations last tick, in nanoseconds. Wave-2 K9.</summary>
+    public double RelocationSpendNs { get; init; }
+
+    /// <summary>
+    /// <see cref="RelocationSpendNs"/> on a tick where the repair planner refused at least one unit; zero otherwise. Budget spent on relocations while a
+    /// repair was turned away. Wave-2 K9.
+    /// </summary>
+    public double RepairBudgetStarvedNs { get; init; }
+
     /// <summary>
     /// Clusters currently live. The denominator for every ratio above — a migration count means nothing without the population it came from.
     /// </summary>

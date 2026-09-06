@@ -48,6 +48,9 @@ class ClusterKnnTests : TestBase<ClusterKnnTests>
         dbe.RegisterComponentFromAccessor<ClCohPos>();
         dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(new Vector2(0, 0), new Vector2(WorldExtent, WorldExtent), cellSize));
         dbe.ClusterCellTreePromoteThreshold = promoteThreshold;
+        // Step 16: these fixtures exercise the TREE, not the gate that decides when a cell gets one — their clusters are scattered over the cell
+        // on purpose, which is exactly the shape the tightness gate refuses. Count-only promotion keeps them testing what they were written for.
+        dbe.ClusterCellTreePromoteTightness = 1f;
         dbe.InitializeArchetypes();
         return dbe;
     }

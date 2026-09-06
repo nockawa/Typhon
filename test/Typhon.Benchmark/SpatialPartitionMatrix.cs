@@ -227,6 +227,33 @@ internal sealed class RunResult
     public double RepairEntitiesPerTick;
     public double RepairUnitsPerTick;
     public double RepairRefusedPerTick;
+
+    // Step-14 detection counters — see claude/research/Spatial/intra-cell-maintenance-2026-09/03-detection-economics.md §5
+    public double DriftGatedPerTick;
+    public double DriftSuppressedByDensityPerTick;
+    public double DriftersSpilledPerTick;
+
+    /// <summary>Tightness right after the spawn and its first fence, before any motion: what placement alone produced (step 15).</summary>
+    public double TightnessAtSpawnPct;
+    public double TightnessAtSpawnP90Pct;
+
+    /// <summary>The occupancy price of tightness, in the same row: clusters per live cell, and live entities as a percentage of the slots those clusters hold.</summary>
+    public double ClustersPerCell;
+    public double SlotOccupancyPct;
+    public double ClustersPerCellAtSpawn;
+    public double SlotOccupancyAtSpawnPct;
+    public double UnplacedNoCandidatePerTick;
+    public double PinsRejectedPerTick;
+
+    public string Arm = "";
+
+    public string Point = "";
+
+    public int Round;
+    public double RelocationsAdmittedPerTick;
+    public double CrossingsQueuedPerTick;
+    public double RelocationSpendMs;
+    public double RepairStarvedMs;
     public double BudgetUsedMs;
     public double MeasuredNsPerEntity;
     public double QueueDepth;
@@ -285,6 +312,12 @@ public static class SpatialPartitionMatrix
     /// <c>--barrier</c> is the configuration that corresponds to shipped code and the default is the one that does not.
     /// </remarks>
     private static bool Barrier;
+    internal static bool FirstFit;
+
+    internal static bool LeastEnlargement;
+    internal static bool GrowthCap;
+    internal static int OpenCap = 4;
+    internal static bool NoSpawnSort;
 
     /// <summary>
     /// Fraction of the population that moves on any given tick. <c>1.0</c> (the default) means every entity moves every tick.
@@ -359,6 +392,16 @@ public static class SpatialPartitionMatrix
         FenceWorkPlan.WorkerAwareChunking = Array.IndexOf(args, "--legacy-chunking") < 0;
         FenceWorkPlan.MinUsefulChunkUs = Math.Min(FenceWorkPlan.MinChunkCostUs, ArgFloat(args, "--chunk-floor-us", FenceWorkPlan.MinUsefulChunkUs));
         AdaptiveCost = Array.IndexOf(args, "--adaptive-cost") >= 0;
+        // Step 15 placement switches (A/B against the cursor first fit they replace): --first-fit turns least enlargement off, --growth-cap opens a
+        // fresh cluster when an arrival would stretch its cluster past the population-aware cap, --open-cap N bounds the open clusters per cell,
+        // --no-spawn-sort disables the per-cell Morton ordering of batch spawns.
+        // Mirrors the SHIPPED defaults since step 15: least enlargement is OFF (measured a wash where repair runs), so the harness has to opt IN to
+        // it rather than out. Before this the matrix measured a configuration the engine does not ship, and --first-fit was a no-op against the default.
+        LeastEnlargement = Array.IndexOf(args, "--least-enlargement") >= 0;
+        FirstFit = !LeastEnlargement;
+        GrowthCap = Array.IndexOf(args, "--growth-cap") >= 0;
+        OpenCap = ArgInt(args, "--open-cap", 4);
+        NoSpawnSort = Array.IndexOf(args, "--no-spawn-sort") >= 0;
         // --force-bulk-map stages every EntityMap patch for the bulk phase whatever the batch size, so its per-chunk sort is exercised on a world whose
         // migrations would otherwise take the inline path. (The --compare-sort / --compare-new-sorts A/B flags of #889 and #891 went with the comparison
         // sorts they selected, once the numbers in design 14 §5 were accepted.)
@@ -421,6 +464,10 @@ public static class SpatialPartitionMatrix
         if (which is "P")
         {
             RunMatrixP(results, ticks, args);
+        }
+        if (which is "S")
+        {
+            RunSweep(results, ticks, args);
         }
 
         sw.Stop();
@@ -585,6 +632,131 @@ public static class SpatialPartitionMatrix
         Console.WriteLine();
     }
 
+    // ── Matrix S: the sweep — every arm and every point in ONE process ─────────────────────────────────────────
+    //
+    // The measurement harness was costing more than the work it measured. A four-point, three-round A/B was twelve
+    // `dotnet run` invocations at ~35 s each, and the population and the tick loop account for well under a second of
+    // that: the rest is process start, assembly load and tier-0 JIT of the whole fence, paid twelve times over. This
+    // runs the cross product inside one process, so JIT is paid once and every arm after the first is measured warm.
+    //
+    // Arms are INTERLEAVED within a round rather than batched, because a batch-versus-batch comparison on a shared box
+    // drifts with whatever else is running on it — the A/B discipline the repo already writes down.
+    private static void RunSweep(List<RunResult> results, int ticks, string[] args)
+    {
+        var dim = ArgInt(args, "--dim", 3);
+        var entities = ArgInt(args, "--entities", 16_000);
+        var perCell = ArgInt(args, "--percell", 512);
+        var workers = ArgInt(args, "--workers", DefaultWorkers);
+        var rounds = ArgInt(args, "--rounds", 3);
+        var dist = Enum.Parse<Distribution>(ArgString(args, "--dist", "Uniform"), ignoreCase: true);
+        var cell = DeriveCellSize(dim, entities, perCell);
+        var points = ArgString(args, "--points", "drift8,drift1,cruise8,swarm8").Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var arms = ArgString(args, "--arms", "base").Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+        Console.WriteLine("── Matrix S — sweep, one process ───────────────────────────────────────");
+        Console.WriteLine($"  dim={dim} n={entities} perCell={perCell} cell={cell:F2} W={workers} ticks={ticks} rounds={rounds}");
+        Console.WriteLine($"  points=[{string.Join(" ", points)}] arms=[{string.Join(" ", arms)}]");
+
+        var sw = Stopwatch.StartNew();
+        for (var round = 0; round < rounds; round++)
+        {
+            foreach (var point in points)
+            {
+                var (motion, budget) = ParsePoint(point);
+                foreach (var arm in arms)
+                {
+                    ApplyArm(arm);
+                    var r = RunOne("S", dim, motion, dist, entities, cell, budget, ticks, workers);
+                    r.Arm = arm;
+                    r.Round = round;
+                    r.Point = point;
+                    results.Add(r);
+                    Console.WriteLine($"  r{round} {point,-8} {arm,-10} fence {r.FenceSpanUs / 1000d,6:F2} ms  aabb {r.AabbSpanUs,7:F1} us  "
+                        + $"tight {r.TightnessPct,5:F1}%  pinsRej {r.PinsRejectedPerTick,7:F1}/t  mig {r.MigrationsPerTick,7:F0}/t  "
+                        + $"repairEnt {r.RepairEntitiesPerTick,7:F0}/t  clusters {r.ActiveClusters}");
+                }
+            }
+        }
+
+        ApplyArm("base");
+        sw.Stop();
+        Console.WriteLine($"  sweep of {results.Count} runs in {sw.Elapsed.TotalSeconds:F1}s");
+        Console.WriteLine();
+        SweepSummary(results, points, arms);
+    }
+
+    private static (MotionModel motion, float budget) ParsePoint(string point)
+    {
+        var name = point.Trim().ToLowerInvariant();
+        var digits = name.Length > 0 && char.IsDigit(name[^1]) ? name[^1] - '0' : 1;
+        var motion = name.StartsWith("drift", StringComparison.Ordinal) ? MotionModel.Drift
+            : name.StartsWith("cruise", StringComparison.Ordinal) ? MotionModel.Cruise
+            : name.StartsWith("swarm", StringComparison.Ordinal) ? MotionModel.Swarm
+            : MotionModel.Static;
+        return (motion, digits);
+    }
+
+    /// <summary>Set the engine switches an arm names. Every arm must set EVERY switch it cares about — arms run in sequence in one process.</summary>
+    private static void ApplyArm(string arm)
+    {
+        switch (arm.Trim().ToLowerInvariant())
+        {
+            case "base":
+                LeastEnlargement = false;
+                FirstFit = true;
+                break;
+            case "le":
+                LeastEnlargement = true;
+                FirstFit = false;
+                break;
+            default:
+                throw new ArgumentException($"unknown sweep arm '{arm}'");
+        }
+    }
+
+    private static void SweepSummary(List<RunResult> results, string[] points, string[] arms)
+    {
+        Console.WriteLine("  medians ─────────────────────────────────────────────────────────────");
+        Console.WriteLine($"  {"point",-9}{"arm",-9}{"fence ms",10}{"aabb us",10}{"tight %",9}{"pinsRej/t",11}{"mig/t",9}{"repEnt/t",10}{"clusters",9}");
+        foreach (var point in points)
+        {
+            foreach (var arm in arms)
+            {
+                var rows = results.FindAll(r => r.Point == point && r.Arm == arm);
+                if (rows.Count == 0)
+                {
+                    continue;
+                }
+
+                Console.WriteLine($"  {point,-9}{arm,-9}{Median(rows, r => r.FenceSpanUs / 1000d),10:F2}{Median(rows, r => r.AabbSpanUs),10:F1}"
+                    + $"{Median(rows, r => r.TightnessPct),9:F1}{Median(rows, r => r.PinsRejectedPerTick),11:F1}"
+                    + $"{Median(rows, r => r.MigrationsPerTick),9:F0}{Median(rows, r => r.RepairEntitiesPerTick),10:F0}"
+                    + $"{Median(rows, r => r.ActiveClusters),9:F0}");
+            }
+        }
+    }
+
+    private static double Median(List<RunResult> rows, Func<RunResult, double> pick)
+    {
+        var v = new List<double>(rows.Count);
+        foreach (var r in rows)
+        {
+            var d = pick(r);
+            if (double.IsFinite(d))
+            {
+                v.Add(d);
+            }
+        }
+
+        if (v.Count == 0)
+        {
+            return 0d;
+        }
+
+        v.Sort();
+        return v.Count % 2 == 1 ? v[v.Count / 2] : 0.5 * (v[(v.Count / 2) - 1] + v[v.Count / 2]);
+    }
+
     // ── Matrix W: worker scaling — the one the first campaign could not ask ─────────────────────────────────────
     //
     // The design budgets the fence as "parallel across cells... divided by W". The first version of this harness drove
@@ -724,7 +896,11 @@ public static class SpatialPartitionMatrix
             new Vector3(0, 0, 0),
             new Vector3(WorldExtent, WorldExtent, dim == 3 ? WorldExtent : cellSize),
             cellSize,
-            reclusterBudgetMs: budgetMs));
+            reclusterBudgetMs: budgetMs,
+            leastEnlargementPlacement: LeastEnlargement,
+            growthCapPlacement: GrowthCap,
+            maxOpenClustersPerCell: OpenCap,
+            batchSpawnSortThreshold: NoSpawnSort ? 0 : 128));
         dbe.InitializeArchetypes();
 
         // The write path is a MEASUREMENT VARIABLE, not a detail — it selects which branch of Prep runs.
@@ -778,6 +954,13 @@ public static class SpatialPartitionMatrix
         dbe.WriteTickFence(1);
         sw.Stop();
         r.FirstFenceMs = sw.Elapsed.TotalMilliseconds;
+
+        // Placement alone (step 15): the partition as the spawn and its first fence left it, before a single entity has moved.
+        MeasurePartition(dbe, archetypeId, r);
+        r.TightnessAtSpawnPct = r.TightnessPct;
+        r.TightnessAtSpawnP90Pct = r.TightnessP90Pct;
+        r.ClustersPerCellAtSpawn = r.ClustersPerCell;
+        r.SlotOccupancyAtSpawnPct = r.SlotOccupancyPct;
 
         // ── steady state, under the REAL runtime ───────────────────────────────────────────
         //
@@ -1474,6 +1657,8 @@ public static class SpatialPartitionMatrix
         private double _prepSnapshot, _prepMask, _prepShadow, _prepZoneMap, _prepDetect, _prepThrottle, _prepPlan, _prepPreSize;
         private double _prepDirtyClusters;
         private int _measuredSamples;
+        private double _driftGated, _driftSuppressedByDensity, _driftersSpilled, _unplacedNoCandidate, _pinsRejected, _relocAdmitted, _crossingsQueued;
+        private double _relocSpendNs, _repairStarvedNs;
 
         public void Add(in SpatialMigrationTelemetry t)
         {
@@ -1495,6 +1680,15 @@ public static class SpatialPartitionMatrix
             _prepPreSize += t.PrepPreSizeMs;
             _prepDirtyClusters += t.PrepDirtyClusters;
             _unplaced += t.DriftersUnplaced;
+            _driftGated += t.DriftGatedClusters;
+            _driftSuppressedByDensity += t.DriftSuppressedByDensity;
+            _driftersSpilled += t.DriftersSpilled;
+            _unplacedNoCandidate += t.DriftersUnplacedNoCandidate;
+            _pinsRejected += t.PinsRejected;
+            _relocAdmitted += t.RelocationsAdmitted;
+            _crossingsQueued += t.CrossingsQueued;
+            _relocSpendNs += t.RelocationSpendNs;
+            _repairStarvedNs += t.RepairBudgetStarvedNs;
             _scanned += t.ClustersScanned;
             _slotsScanned += t.SlotsScanned;
             _repairEntities += t.RepairedEntityCount;
@@ -1535,6 +1729,15 @@ public static class SpatialPartitionMatrix
             r.HysteresisAbsorbedPerTick = _hyst / ticks;
             r.ThrottledPerTick = _throttled / ticks;
             r.UnplacedPerTick = _unplaced / ticks;
+            r.DriftGatedPerTick = _driftGated / ticks;
+            r.DriftSuppressedByDensityPerTick = _driftSuppressedByDensity / ticks;
+            r.DriftersSpilledPerTick = _driftersSpilled / ticks;
+            r.UnplacedNoCandidatePerTick = _unplacedNoCandidate / ticks;
+            r.PinsRejectedPerTick = _pinsRejected / ticks;
+            r.RelocationsAdmittedPerTick = _relocAdmitted / ticks;
+            r.CrossingsQueuedPerTick = _crossingsQueued / ticks;
+            r.RelocationSpendMs = _relocSpendNs / ticks / 1_000_000d;
+            r.RepairStarvedMs = _repairStarvedNs / ticks / 1_000_000d;
             r.ClustersScannedPerTick = _scanned / ticks;
             r.SlotsScannedPerTick = _slotsScanned / ticks;
             r.RepairEntitiesPerTick = _repairEntities / ticks;
@@ -1586,7 +1789,18 @@ public static class SpatialPartitionMatrix
         }
 
         r.ActiveClusters = cs.ActiveClusterCount;
-        r.LiveCells = dbe.SpatialGrid.CellCount;
+        // Cells that HOLD something, not cells that exist: under a clustered distribution the grid materialises cells the population never reaches,
+        // and clusters per cell read low against them.
+        var liveCells = 0;
+        for (var key = 0; key < dbe.SpatialGrid.CellCount; key++)
+        {
+            if (dbe.SpatialGrid.GetCell(key).EntityCount > 0)
+            {
+                liveCells++;
+            }
+        }
+
+        r.LiveCells = liveCells;
         r.EntitiesPerCluster = r.ActiveClusters > 0 ? (double)r.Entities / r.ActiveClusters : 0d;
         r.EntitiesPerCell = r.LiveCells > 0 ? (double)r.Entities / r.LiveCells : 0d;
 
@@ -1603,6 +1817,9 @@ public static class SpatialPartitionMatrix
         }
         r.TightnessPct = s / extents.Count;
         r.TightnessP90Pct = extents[Math.Min(extents.Count - 1, (int)(extents.Count * 0.9))];
+        r.ClustersPerCell = r.LiveCells > 0 ? (double)r.ActiveClusters / r.LiveCells : 0d;
+        // Over the archetype's REAL slot count (49 for these components), not the 64-slot ceiling — the ceiling read every figure 23 % low.
+        r.SlotOccupancyPct = r.ActiveClusters > 0 ? 100d * r.Entities / (r.ActiveClusters * (double)cs.Layout.ClusterSize) : 0d;
     }
 
     private static void MeasureQueries<TArch, TPos>(DatabaseEngine dbe, int dim, float cellSize, RunResult r,
@@ -1811,9 +2028,28 @@ public static class SpatialPartitionMatrix
             + $"(append {r.FinalizeAppendUs / 1000d:F2}, swaps {r.WalSwapsPerTick:F2}) | "
             + $"chunks/items p {r.PrepChunks:F0}/{r.PrepItems:F0} m {r.MigrateChunks:F0}/{r.MigrateItems:F0} i {r.IndexChunks:F0}/{r.IndexItems:F0} "
             + $"a {r.AabbChunks:F0}/{r.AabbItems:F0} f {r.FinalizeChunks:F0}/{r.FinalizeItems:F0} | "
-            + $"mig/t {r.MigrationsPerTick,8:F1} | tight {r.TightnessPct,6:F1}% | clusters {r.ActiveClusters,6} | "
+            + $"mig/t {r.MigrationsPerTick,8:F1} | tight0 {r.TightnessAtSpawnPct,6:F1}% tight {r.TightnessPct,6:F1}% | clusters {r.ActiveClusters,6} "
+            + $"cl/cell {r.ClustersPerCell,5:F2} occ {r.SlotOccupancyPct,5:F1}% | "
             + $"aabbM {r.AabbMediumNs / 1000d,7:F1} us | bf {r.BruteForceNs / 1000d,8:F1} us"
             + (r.ChurnTicks > 0 ? $" | aged {r.ChurnFraction:P0}x{r.ChurnTicks} inv {r.ActiveListInversions}" : string.Empty));
+        ReportDetectionCounters(r);
+    }
+
+    /// <summary>
+    /// Wave-2 detection counters (K1, K2, K5, K6, K9) as a second line under the main row, so the main row's columns stay where they are.
+    /// </summary>
+    private static void ReportDetectionCounters(RunResult r)
+    {
+        if (r.Failure.Length > 0)
+        {
+            return;
+        }
+
+        Console.WriteLine(
+            $"      detect: gated {r.DriftGatedPerTick,8:F1}/t suppressed {r.DriftSuppressedByDensityPerTick,8:F1}/t spilled {r.DriftersSpilledPerTick,7:F1}/t | "
+            + $"unplaced-no-cand {r.UnplacedNoCandidatePerTick,8:F1}/t | pins-rejected {r.PinsRejectedPerTick,7:F1}/t | "
+            + $"admitted reloc {r.RelocationsAdmittedPerTick,8:F1}/t crossings {r.CrossingsQueuedPerTick,8:F1}/t | "
+            + $"reloc spend {r.RelocationSpendMs,6:F3} ms repair-starved {r.RepairStarvedMs,6:F3} ms");
     }
 
     private static void WriteCsv(List<RunResult> results, string path)
@@ -1829,8 +2065,11 @@ public static class SpatialPartitionMatrix
             "hysteresisAbsorbedPerTick", "throttledPerTick", "prepSnapshotMs", "prepMaskMs", "prepShadowMs", "prepZoneMapMs", "prepDetectMs", "prepThrottleMs", "prepPlanMs", "prepPreSizeMs",
             "prepDirtyClusters", "supersededPerTick", "unplacedPerTick", "clustersScannedPerTick", "slotsScannedPerTick",
             "repairEntitiesPerTick", "repairUnitsPerTick", "repairRefusedPerTick", "budgetUsedMs", "measuredNsPerEntity",
+            "driftGatedPerTick", "driftSuppressedByDensityPerTick", "driftersSpilledPerTick", "unplacedNoCandidatePerTick", "pinsRejectedPerTick", "relocationsAdmittedPerTick",
+            "crossingsQueuedPerTick", "relocationSpendMs", "repairStarvedMs",
             "queueDepth", "queueEvicted", "queueMaintenanceMs", "valveFires",
             "activeClusters", "liveCells", "entitiesPerCluster", "entitiesPerCell", "tightnessPct", "tightnessP90Pct",
+            "tightnessAtSpawnPct", "tightnessAtSpawnP90Pct", "clustersPerCell", "slotOccupancyPct", "clustersPerCellAtSpawn", "slotOccupancyAtSpawnPct",
             "aabbSmallNs", "aabbSmallHits", "aabbMediumNs", "aabbMediumHits", "aabbLargeNs", "aabbLargeHits",
             "radiusNs", "radiusHits", "rayNs", "rayHits", "frustumNs", "frustumHits", "bruteForceNs",
             "churnFraction", "churnTicks", "activeListInversions",
@@ -1852,8 +2091,12 @@ public static class SpatialPartitionMatrix
                 F(r.HysteresisAbsorbedPerTick), F(r.ThrottledPerTick), F(r.PrepSnapshotMs), F(r.PrepMaskMs), F(r.PrepShadowMs), F(r.PrepZoneMapMs), F(r.PrepDetectMs), F(r.PrepThrottleMs),
                 F(r.PrepPlanMs), F(r.PrepPreSizeMs), F(r.PrepDirtyClustersPerTick), F(r.SupersededPerTick), F(r.UnplacedPerTick), F(r.ClustersScannedPerTick), F(r.SlotsScannedPerTick),
                 F(r.RepairEntitiesPerTick), F(r.RepairUnitsPerTick), F(r.RepairRefusedPerTick), F(r.BudgetUsedMs), F(r.MeasuredNsPerEntity),
+                F(r.DriftGatedPerTick), F(r.DriftSuppressedByDensityPerTick), F(r.DriftersSpilledPerTick), F(r.UnplacedNoCandidatePerTick), F(r.PinsRejectedPerTick), F(r.RelocationsAdmittedPerTick),
+                F(r.CrossingsQueuedPerTick), F(r.RelocationSpendMs), F(r.RepairStarvedMs),
                 F(r.QueueDepth), r.QueueEvicted, F(r.QueueMaintenanceMs), r.ValveFires,
                 r.ActiveClusters, r.LiveCells, F(r.EntitiesPerCluster), F(r.EntitiesPerCell), F(r.TightnessPct), F(r.TightnessP90Pct),
+                F(r.TightnessAtSpawnPct), F(r.TightnessAtSpawnP90Pct), F(r.ClustersPerCell), F(r.SlotOccupancyPct), F(r.ClustersPerCellAtSpawn),
+                F(r.SlotOccupancyAtSpawnPct),
                 F(r.AabbSmallNs), F(r.AabbSmallHits), F(r.AabbMediumNs), F(r.AabbMediumHits), F(r.AabbLargeNs), F(r.AabbLargeHits),
                 F(r.RadiusNs), F(r.RadiusHits), F(r.RayNs), F(r.RayHits), F(r.FrustumNs), F(r.FrustumHits), F(r.BruteForceNs),
                 F(r.ChurnFraction), r.ChurnTicks, r.ActiveListInversions,

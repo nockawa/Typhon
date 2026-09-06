@@ -48,4 +48,31 @@ public sealed class SpatialOptions
     /// the gap is what stops a cell hovering on the boundary from rebuilding itself twice per tick.</para>
     /// </remarks>
     public int CellTreePromoteThreshold { get; set; } = DefaultCellTreePromoteThreshold;
+
+    /// <summary>
+    /// The default <see cref="CellTreePromoteTightness"/>: the mean cluster extent, as a fraction of the cell edge, at or below which a cell's clusters
+    /// are tight enough for a tree to prune between them.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The count threshold was calibrated on a layout the engine does not produce.</b> The sweep that chose 1 024 lays its clusters at 1.5x
+    /// perfect tiling — 3.8 % of the cell at 1 563 clusters — while a real cell runs at 63-103 %. Re-run with the cluster edge as a controlled fraction of
+    /// the cell, the tree wins 1.47x at 0.038 and 1.00x at 0.10, and LOSES at every count and every selectivity from 0.25 upward: 0.24-0.46x at the
+    /// packing target, 0.08x at the 0.90 the engine reaches under motion. Hits go as (query + cluster)^2 of the population, so a loose cell has every
+    /// cluster hit by every query and the tree returns all of them after paying traversal — and pays the 20-50x update tax per moved cluster for it.</para>
+    /// <para>Hence <b>0.10</b>, and hence a gate on tightness AND count rather than count alone: promote a cell only where the tree can prune, which is a
+    /// cell the repair has packed. <c>1</c> disables the tightness half and restores count-only promotion. The fall-back sits at twice this value for the
+    /// same reason the count fall-back sits at half the count: a cell hovering on the boundary must not rebuild itself in both directions every tick.</para>
+    /// </remarks>
+    public const float DefaultCellTreePromoteTightness = 0.10f;
+
+    /// <summary>
+    /// Mean cluster extent, as a fraction of the cell edge, at or below which a cell half may promote to a per-cell R-Tree. <c>1</c> promotes on
+    /// <see cref="CellTreePromoteThreshold"/> alone.
+    /// </summary>
+    /// <remarks>
+    /// Measured on the largest axis of each cluster's bound, averaged over the cell half, and evaluated both when a cluster joins the cell and at the
+    /// fence once the tick's bounds are final — so a cell the repair has just packed promotes on that tick rather than waiting for its next arrival. A
+    /// promoted half falls back when the mean reaches twice this value.
+    /// </remarks>
+    public float CellTreePromoteTightness { get; set; } = DefaultCellTreePromoteTightness;
 }

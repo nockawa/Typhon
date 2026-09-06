@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Typhon.Engine;
@@ -113,6 +115,77 @@ public struct ClusterSpatialAabb
         if (entityMaxY > MaxY) MaxY = entityMaxY;
         if (entityMaxZ > MaxZ) MaxZ = entityMaxZ;
         CategoryMask |= entityCategoryMask;
+    }
+
+    /// <summary>
+    /// <see cref="Union2F"/> for a box other threads are widening at the same time: every axis is a CAS loop that only ever moves a min down or a
+    /// max up, so two spawns into one cluster cannot lose each other's widening the way the plain read-modify-write could (step 15 review, CA-01).
+    /// </summary>
+    public static void WidenCas2F(ref ClusterSpatialAabb box, float entityMinX, float entityMinY, float entityMaxX, float entityMaxY, uint entityCategoryMask)
+    {
+        CasMin(ref box.MinX, entityMinX);
+        CasMin(ref box.MinY, entityMinY);
+        CasMax(ref box.MaxX, entityMaxX);
+        CasMax(ref box.MaxY, entityMaxY);
+        Interlocked.Or(ref box.CategoryMask, entityCategoryMask);
+    }
+
+    /// <summary><see cref="Union3F"/> as a per-axis CAS — see <see cref="WidenCas2F"/>.</summary>
+    public static void WidenCas3F(ref ClusterSpatialAabb box, float entityMinX, float entityMinY, float entityMinZ, float entityMaxX, float entityMaxY,
+        float entityMaxZ, uint entityCategoryMask)
+    {
+        CasMin(ref box.MinX, entityMinX);
+        CasMin(ref box.MinY, entityMinY);
+        CasMin(ref box.MinZ, entityMinZ);
+        CasMax(ref box.MaxX, entityMaxX);
+        CasMax(ref box.MaxY, entityMaxY);
+        CasMax(ref box.MaxZ, entityMaxZ);
+        Interlocked.Or(ref box.CategoryMask, entityCategoryMask);
+    }
+
+    /// <summary>CAS-loop float min update: write <paramref name="candidate"/> if it is still less than the stored value.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void CasMin(ref float storedRef, float candidate)
+    {
+        while (true)
+        {
+            var current = storedRef;
+            if (candidate >= current)
+            {
+                return;
+            }
+
+            var currentBits = BitConverter.SingleToInt32Bits(current);
+            var candidateBits = BitConverter.SingleToInt32Bits(candidate);
+            ref var storedAsInt = ref Unsafe.As<float, int>(ref storedRef);
+            if (Interlocked.CompareExchange(ref storedAsInt, candidateBits, currentBits) == currentBits)
+            {
+                return;
+            }
+            // Another thread updated; retry the comparison against the new value.
+        }
+    }
+
+    /// <summary>CAS-loop float max update: write <paramref name="candidate"/> if it is still greater than the stored value.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void CasMax(ref float storedRef, float candidate)
+    {
+        while (true)
+        {
+            var current = storedRef;
+            if (candidate <= current)
+            {
+                return;
+            }
+
+            var currentBits = BitConverter.SingleToInt32Bits(current);
+            var candidateBits = BitConverter.SingleToInt32Bits(candidate);
+            ref var storedAsInt = ref Unsafe.As<float, int>(ref storedRef);
+            if (Interlocked.CompareExchange(ref storedAsInt, candidateBits, currentBits) == currentBits)
+            {
+                return;
+            }
+        }
     }
 
     /// <summary>

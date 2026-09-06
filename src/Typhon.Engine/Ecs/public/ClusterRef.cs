@@ -457,10 +457,10 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
 
         // GROW path (CAS loop per axis). Note: AABB2F has min/max as separate fields, so we CAS each independently.
         // The 2D AABB is stored on ClusterSpatialAabb (which has 3D fields; we touch only X/Y here).
-        if (newMinX < stored.MinX) { CasMin(ref stored.MinX, newMinX); changed = true; }
-        if (newMinY < stored.MinY) { CasMin(ref stored.MinY, newMinY); changed = true; }
-        if (newMaxX > stored.MaxX) { CasMax(ref stored.MaxX, newMaxX); changed = true; }
-        if (newMaxY > stored.MaxY) { CasMax(ref stored.MaxY, newMaxY); changed = true; }
+        if (newMinX < stored.MinX) { ClusterSpatialAabb.CasMin(ref stored.MinX, newMinX); changed = true; }
+        if (newMinY < stored.MinY) { ClusterSpatialAabb.CasMin(ref stored.MinY, newMinY); changed = true; }
+        if (newMaxX > stored.MaxX) { ClusterSpatialAabb.CasMax(ref stored.MaxX, newMaxX); changed = true; }
+        if (newMaxY > stored.MaxY) { ClusterSpatialAabb.CasMax(ref stored.MaxY, newMaxY); changed = true; }
 
         // SHRINK flag (only set when this slot WAS at an extreme AND moved inward). Bit layout:
         // 0x01=MinX, 0x02=MaxX, 0x04=MinY, 0x08=MaxY (matches ClusterShrinkPendingAxes doc).
@@ -496,53 +496,6 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
         return changed;
     }
 
-    /// <summary>CAS-loop float min update: write <paramref name="candidate"/> if it's still less than the stored value.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void CasMin(ref float storedRef, float candidate)
-    {
-        while (true)
-        {
-            var current = storedRef;
-            if (candidate >= current)
-            {
-                return;
-            }
-
-            var currentBits = BitConverter.SingleToInt32Bits(current);
-            var candidateBits = BitConverter.SingleToInt32Bits(candidate);
-            ref var storedAsInt = ref Unsafe.As<float, int>(ref storedRef);
-            if (Interlocked.CompareExchange(ref storedAsInt, candidateBits, currentBits) == currentBits)
-            {
-                return;
-            }
-            // Another thread updated; retry the comparison against the new value.
-        }
-    }
-
-    /// <summary>CAS-loop float max update: write <paramref name="candidate"/> if it's still greater than the stored value.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void CasMax(ref float storedRef, float candidate)
-    {
-        while (true)
-        {
-            var current = storedRef;
-            if (candidate <= current)
-            {
-                return;
-            }
-
-            var currentBits = BitConverter.SingleToInt32Bits(current);
-            var candidateBits = BitConverter.SingleToInt32Bits(candidate);
-            ref var storedAsInt = ref Unsafe.As<float, int>(ref storedRef);
-            if (Interlocked.CompareExchange(ref storedAsInt, candidateBits, currentBits) == currentBits)
-            {
-                return;
-            }
-        }
-    }
-
-    /// <summary>Atomic OR of a small mask into a single byte of a byte[]. Implemented via CAS on the byte's aligned int word slice; safe across writers
-    /// targeting different bytes within the same word.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void InterlockedOrByteArrayElement(byte[] array, int index, byte mask)
     {
@@ -689,9 +642,9 @@ public unsafe ref struct ClusterRef<TArch> where TArch : class
             return false;
         }
 
-        // Set bit in per-cluster migration bitmap (atomic OR), and stomp dest cell key. By cluster-coherence invariant, two simultaneous writers to the same
-        // cluster end up with the same dest key (modulo racing reads of WorldToCellKey on truly racing positions — fence re-reads positions when draining,
-        // so stale dest keys self-correct).
+        // Set bit in per-cluster migration bitmap (atomic OR), and stomp dest cell key. The key is a HINT: the drain (DrainPreFlaggedMigrations) re-reads
+        // the slot's position and decides from that, so two slots of one cluster written to two cells, an entity written out and back within the tick,
+        // and a write that reached a spawn's slot before its data landed, all resolve to where the entity actually is (CC-02).
         var slotBit = 1UL << slotIndex;
         Interlocked.Or(ref _state.ClusterMigrationPendingSlots[_chunkId], slotBit);
         _state.ClusterMigrationDestCellKeys[_chunkId] = newCellKey;

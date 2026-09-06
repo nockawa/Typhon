@@ -112,6 +112,9 @@ class CellTreeParallelFenceTests : TestBase<CellTreeParallelFenceTests>
 
         // Must precede InitializeArchetypes — the threshold is copied onto each ArchetypeClusterState as it is built.
         dbe.ClusterCellTreePromoteThreshold = PromoteAt;
+        // Step 16: these fixtures exercise the TREE, not the gate that decides when a cell gets one — their clusters are scattered over the cell
+        // on purpose, which is exactly the shape the tightness gate refuses. Count-only promotion keeps them testing what they were written for.
+        dbe.ClusterCellTreePromoteTightness = 1f;
 
         dbe.InitializeArchetypes();
 
