@@ -633,7 +633,7 @@ public struct PayloadBag
     public ComponentCollection<int> Items;
 
     [Field]
-    [SpatialIndex(0.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
 
     [Field]

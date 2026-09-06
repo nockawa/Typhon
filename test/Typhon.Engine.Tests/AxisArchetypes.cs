@@ -180,7 +180,7 @@ struct AxVerColl
 struct AxSvSpatial
 {
     [Field]
-    [SpatialIndex(0.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
 
     [Field]
@@ -192,7 +192,7 @@ struct AxSvSpatial
 struct AxVerSpatial
 {
     [Field]
-    [SpatialIndex(0.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
 
     [Field]

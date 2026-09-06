@@ -17,7 +17,7 @@ namespace Typhon.Benchmark;
 struct FpBenchPos
 {
     [Field]
-    [SpatialIndex(0.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     /// <summary>Unique per entity, so the B+Tree index is the ordinary unique kind rather than the buffer-backed one.</summary>

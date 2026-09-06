@@ -54,7 +54,7 @@ partial class AaBenchAnt : Archetype<AaBenchAnt>
 struct AaBenchSpatialPos
 {
     [Field]
-    [SpatialIndex(5.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
     [Field]
     public float Speed;

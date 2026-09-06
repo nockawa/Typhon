@@ -56,7 +56,7 @@ static class TriggerBenchHelper
 [StructLayout(LayoutKind.Sequential)]
 struct TrigShip
 {
-    [Field] [SpatialIndex(5.0f)]
+    [Field] [SpatialIndex]
     public AABB2F Bounds;
 }
 
@@ -64,7 +64,7 @@ struct TrigShip
 [StructLayout(LayoutKind.Sequential)]
 struct TrigTerrain
 {
-    [Field] [SpatialIndex(0.0f, Mode = SpatialMode.Static)]
+    [Field] [SpatialIndex(Mode = SpatialMode.Static)]
     public AABB2F Bounds;
 }
 

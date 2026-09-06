@@ -21,7 +21,7 @@ namespace Typhon.Engine.Tests;
 struct ClCcPos
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 }
 

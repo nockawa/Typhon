@@ -35,7 +35,7 @@ namespace Typhon.Benchmark;
 struct ClRepPos
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     /// <summary>Indexed, non-unique — the shape <c>ClMigPos</c> carries, and the reason index staging appears in the profile at all.</summary>
@@ -50,7 +50,7 @@ struct ClRepPos
 struct ClRepPosNoIndex
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     [Field]

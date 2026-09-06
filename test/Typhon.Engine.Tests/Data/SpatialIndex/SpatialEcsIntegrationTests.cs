@@ -16,7 +16,7 @@ namespace Typhon.Engine.Tests;
 [StructLayout(LayoutKind.Sequential)]
 public struct SpatialShip
 {
-    [Field] [SpatialIndex(5.0f)]
+    [Field] [SpatialIndex]
     public AABB3F Bounds;
 
     [Field]
@@ -35,7 +35,7 @@ public struct SpatialName
 [StructLayout(LayoutKind.Sequential)]
 public struct SpatialBuilding
 {
-    [Field] [SpatialIndex(0.0f)]
+    [Field] [SpatialIndex]
     public AABB2F Footprint;
 
     [Field]
@@ -46,7 +46,7 @@ public struct SpatialBuilding
 [StructLayout(LayoutKind.Sequential)]
 public struct TransientBadSpatial
 {
-    [Field] [SpatialIndex(1.0f)]
+    [Field] [SpatialIndex]
     public AABB2F Bounds;
 }
 
@@ -54,7 +54,7 @@ public struct TransientBadSpatial
 [StructLayout(LayoutKind.Sequential)]
 public struct SpatialTerrain
 {
-    [Field] [SpatialIndex(0.0f, Mode = SpatialMode.Static)]
+    [Field] [SpatialIndex(Mode = SpatialMode.Static)]
     public AABB3F Footprint;
 }
 

@@ -21,7 +21,7 @@ namespace Typhon.Engine.Tests;
 struct ClMigPos
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     // Non-unique cluster B+Tree index — used by the Phase 3 non-unique index tests to verify that

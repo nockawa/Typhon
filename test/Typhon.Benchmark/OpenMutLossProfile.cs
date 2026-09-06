@@ -186,7 +186,7 @@ public static class OpenMutLossProfile
 struct SpMatPos3NoIx
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
 
     [Field]

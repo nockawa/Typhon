@@ -84,7 +84,6 @@ internal static class ProfilerStaticDataBuilder
                     SpatialFieldType = (byte)field.SpatialFieldType,
                     SpatialMode = (byte)field.SpatialMode,
                     SpatialCellSize = field.SpatialCellSize,
-                    SpatialMargin = field.SpatialMargin,
                     SpatialCategory = field.SpatialCategory,
                     ForeignKeyTargetType = field.ForeignKeyTargetType?.FullName ?? string.Empty,
                 });

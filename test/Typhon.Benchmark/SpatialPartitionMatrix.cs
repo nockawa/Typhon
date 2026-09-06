@@ -35,7 +35,7 @@ namespace Typhon.Benchmark;
 struct SpMatPos2
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     /// <summary>Indexed and non-unique — a realistic archetype pays index staging on every migration, and omitting it
@@ -50,7 +50,7 @@ struct SpMatPos2
 struct SpMatPos3
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
 
     [Field]

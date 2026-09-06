@@ -17,7 +17,7 @@ namespace Typhon.Engine.Tests;
 struct ClSpatialPos
 {
     [Field]
-    [SpatialIndex(5.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
 
     [Field]
@@ -56,7 +56,7 @@ struct ClSpatialVData
 struct ClSpatialStaticPos
 {
     [Field]
-    [SpatialIndex(0.0f, Mode = SpatialMode.Static)]
+    [SpatialIndex(Mode = SpatialMode.Static)]
     public AABB3F Bounds;
 }
 

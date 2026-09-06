@@ -39,7 +39,7 @@ partial class SvCcUnit : Archetype<SvCcUnit>
 struct SvCcSpatialBag
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     [Field]

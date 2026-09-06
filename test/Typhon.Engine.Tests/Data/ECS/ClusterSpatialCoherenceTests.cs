@@ -18,7 +18,7 @@ namespace Typhon.Engine.Tests;
 struct ClCohPos
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     [Field]
@@ -37,7 +37,7 @@ partial class ClCohUnit : Archetype<ClCohUnit>
 struct ClCohPos2
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 }
 

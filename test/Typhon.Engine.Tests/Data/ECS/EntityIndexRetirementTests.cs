@@ -22,7 +22,7 @@ namespace Typhon.Engine.Tests;
 struct RetirePos3
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB3F Bounds;
 }
 

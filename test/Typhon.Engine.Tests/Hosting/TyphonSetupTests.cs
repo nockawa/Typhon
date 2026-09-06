@@ -298,7 +298,7 @@ public class TyphonSetupTests
 [Component("Typhon.Schema.SetupTest.SpatialBox", 1, StorageMode = StorageMode.SingleVersion)]
 public struct SetupSpatialBox
 {
-    [SpatialIndex(2f)] public AABB2F Box;
+    [SpatialIndex] public AABB2F Box;
 }
 
 [Archetype]

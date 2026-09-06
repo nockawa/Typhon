@@ -6149,8 +6149,7 @@ internal sealed unsafe partial class ArchetypeClusterState
             var descriptor = SpatialNodeDescriptor.ForVariant(variant);
 
             // Create a modified SpatialFieldInfo with cluster-relative offset
-            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.Margin, tableFi.CellSize, tableFi.Mode,
-                tableFi.Category);
+            var fi = new SpatialFieldInfo(clusterFieldOffset, tableFi.FieldSize, tableFi.FieldType, tableFi.CellSize, tableFi.Mode, tableFi.Category);
 
             // Dirty ring lives exclusively on ArchetypeClusterState after issue #230 Phase 3 legacy purge. Consumers (SpatialInterestSystem,
             // DatabaseEngine.WriteClusterTickFence) read ClusterDirtyRing directly.
@@ -6397,7 +6396,7 @@ internal struct ClusterSpatialSlot
     /// <summary>Byte offset of spatial field within cluster component SoA (no ComponentOverhead).</summary>
     public int FieldOffset;
 
-    /// <summary>Spatial field metadata (margin, mode, field type).</summary>
+    /// <summary>Spatial field metadata (mode, field type, category).</summary>
     public SpatialFieldInfo FieldInfo;
 
     /// <summary>Node layout descriptor.</summary>

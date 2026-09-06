@@ -19,7 +19,7 @@ namespace Typhon.Engine.Tests;
 struct CtStaticPos
 {
     [Field]
-    [SpatialIndex(1.0f, Mode = SpatialMode.Static)]
+    [SpatialIndex(Mode = SpatialMode.Static)]
     public AABB2F Bounds;
 
     [Field]

@@ -23,7 +23,7 @@ namespace Typhon.Workbench.Tests.Services.Querying;
 [StructLayout(LayoutKind.Sequential)]
 public struct SpatPos
 {
-    [Field] [SpatialIndex(1.0f)] public AABB2F Bounds;
+    [Field] [SpatialIndex] public AABB2F Bounds;
 }
 
 [Component("Workbench.Test.SpatMeta", 1, StorageMode = StorageMode.SingleVersion)]

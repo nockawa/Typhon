@@ -728,7 +728,7 @@ public unsafe class ComponentTable : ResourceNode, IMetricSource, IDebugProperti
     {
         var sf = Definition.SpatialField;
         var fieldInfo = new SpatialFieldInfo(ComponentOverhead + sf.OffsetInComponentStorage, sf.SizeInComponentStorage, sf.SpatialFieldType,
-            sf.SpatialMargin, sf.SpatialCellSize, sf.SpatialMode, sf.SpatialCategory);
+            sf.SpatialCellSize, sf.SpatialMode, sf.SpatialCategory);
 
         SpatialIndex = new SpatialIndexState(fieldInfo, SpatialNodeDescriptor.ForVariant(fieldInfo.ToVariant()));
     }

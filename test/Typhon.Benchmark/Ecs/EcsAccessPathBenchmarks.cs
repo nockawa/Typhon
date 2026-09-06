@@ -51,7 +51,7 @@ namespace Typhon.Benchmark;
 struct ApBenchPos
 {
     [Field]
-    [SpatialIndex(5.0f)]   // margin = fat-AABB movement hysteresis; nothing moves here, so it never triggers
+    [SpatialIndex]   // margin = fat-AABB movement hysteresis; nothing moves here, so it never triggers
     public AABB2F Bounds;
 }
 

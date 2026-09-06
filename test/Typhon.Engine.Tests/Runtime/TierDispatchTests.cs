@@ -20,7 +20,7 @@ namespace Typhon.Engine.Tests.Runtime;
 struct TierPos
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     [Field]
