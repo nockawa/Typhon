@@ -504,7 +504,10 @@ public partial class DatabaseEngine
     ///   <item>Copy every component slot's bytes source → destination (Persistent + Transient; Q8)</item>
     ///   <item>Copy EntityId and EnabledBits</item>
     ///   <item>Remove the old per-archetype B+Tree index entries and insert new ones at the new <c>clusterLocation</c></item>
-    ///   <item>Remove the old spatial R-Tree back-pointer and insert a new one at the new <c>clusterLocation</c></item>
+    ///   <item>Union the migrant's bounds into the destination cluster's AABB, rebased into the destination cell's frame, and add or update that
+    ///         cluster in the destination cell's index. There is no per-entity spatial back-pointer to move: since #872 step 13 the per-cell cluster
+    ///         index is the only index home (rule SH-01), and the entity-level R-Tree it used to point into no longer exists. The SOURCE cluster's
+    ///         bound is deliberately left conservative here rather than shrunk in place; the fence's refresh pass retightens it</item>
     ///   <item>Upsert the EntityMap <see cref="ClusterEntityRecordAccessor"/> with the new (chunkId, slot)</item>
     ///   <item><see cref="ArchetypeClusterState.ReleaseSlot(ref ChunkAccessor{PersistentStore}, int, int, ChangeSet, SpatialGrid, bool)"/> on the
     ///         source (clears occupancy, decrements cell.EntityCount, detaches empty clusters)</item>

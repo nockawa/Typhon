@@ -557,7 +557,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         if (_spatialQueryType != SpatialQueryType.None)
         {
             throw new InvalidOperationException(
-                "Only one spatial predicate is allowed per query (WhereNearby / WhereInAABB / WhereRay). Run separate queries for multiple regions.");
+                "Only one spatial predicate is allowed per query (WhereNearby / WhereInAABB / WhereRay / WhereFrustum). "
+                + "Run separate queries for multiple regions.");
         }
     }
 
@@ -803,7 +804,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             }
             if (_spatialQueryType != SpatialQueryType.None)
             {
-                throw new InvalidOperationException("A view cannot combine WhereField with a spatial predicate (WhereNearby / WhereInAABB / WhereRay).");
+                throw new InvalidOperationException(
+                    "A view cannot combine WhereField with a spatial predicate (WhereNearby / WhereInAABB / WhereRay / WhereFrustum).");
             }
             return ToIncrementalView(bufferCapacity, callerFile, callerLine, callerMethod);
         }
@@ -2846,7 +2848,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         }
         if (_spatialQueryType != SpatialQueryType.None)
         {
-            throw new InvalidOperationException("foreach does not apply spatial predicates (WhereNearby / WhereInAABB / WhereRay) — call .Execute().");
+            throw new InvalidOperationException(
+                "foreach does not apply spatial predicates (WhereNearby / WhereInAABB / WhereRay / WhereFrustum) — call .Execute().");
         }
         if (_orderBy.HasValue)
         {

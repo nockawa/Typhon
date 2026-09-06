@@ -31,7 +31,11 @@ namespace Typhon.Engine;
 /// <para>
 /// The <see cref="CategoryMask"/> is the OR of all entity category masks in the cluster — it lets the
 /// per-cell broadphase skip entire clusters when the query's category mask does not intersect. Maintained
-/// incrementally on spawn; tightened on the next full recompute pass at the tick fence.
+/// incrementally on spawn and on migration. The fence's full recompute does NOT tighten it: the category is an
+/// archetype constant rather than per-entity geometry, so there is nothing to re-derive, and the recompute
+/// deliberately reads the stored value back and preserves it (<c>ArchetypeClusterState.ReadStoredCategoryMask</c>,
+/// asserted by <c>ClusterSpatialAabbRecomputeTests.TickFence_CategoryMaskPreservedAcrossRecompute</c>). The bounds
+/// beside it are re-derived; this field is carried through.
 /// </para>
 /// </remarks>
 [StructLayout(LayoutKind.Sequential)]

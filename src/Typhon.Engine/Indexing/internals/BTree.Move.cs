@@ -336,8 +336,13 @@ internal abstract partial class BTree<TKey, TStore>
     /// <summary>
     /// Compound move for AllowMultiple indexes: removes <paramref name="elementId"/>/<paramref name="value"/> from <paramref name="oldKey"/>'s buffer and
     /// appends <paramref name="value"/> under <paramref name="newKey"/>.
-    /// Returns the new element ID and both HEAD buffer IDs for inline TAIL tracking.
+    /// Returns the new element ID, plus both HEAD buffer IDs as <c>out</c> values.
     /// </summary>
+    /// <remarks>
+    /// The two buffer ids have no consumer in the engine: every production caller discards them with <c>out _, out _</c> (<c>Transaction.cs</c> and both
+    /// cluster-migration sites), and only <c>OlcBTreeTests</c> asserts on them. They are returned because resolving each key's HEAD buffer is work this
+    /// method already does under the leaf latch, so handing the ids back costs nothing and saves a caller that wants them a second descent.
+    /// </remarks>
     /// <remarks>
     /// Multi-writer safe, and the rule that says what that rests on is IXW-06 (#887): a buffer is read or mutated only under the write latch of the leaf whose
     /// entry names it, and a key emptied by one thread is removed only if its buffer is still empty under that latch. The optimistic paths below always had

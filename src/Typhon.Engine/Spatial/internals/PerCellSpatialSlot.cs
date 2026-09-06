@@ -10,8 +10,9 @@ namespace Typhon.Engine.Internals;
 /// <para>
 /// Both dynamic and static halves are populated independently. An archetype's <see cref="SpatialFieldInfo.Mode"/> determines which one gets written at spawn
 /// time (Dynamic → dynamic half, Static → static half), but a single cell may contain clusters of different archetypes with different modes, so both are
-/// available. Queries check both and union results — this mirrors the pattern used by <c>SpatialIndexState.StaticTree</c> + <c>DynamicTree</c> at the
-/// non-cluster level.
+/// available. Queries check both and union results. This used to mirror a <c>StaticTree</c> / <c>DynamicTree</c> pair on <c>SpatialIndexState</c> at the
+/// non-cluster level; those fields are gone with the entity-level index (#872 step 13, rule SH-01), and the two halves here are now the only place the
+/// static/dynamic split exists.
 /// </para>
 /// <para>
 /// Issue #230 Phase 3 activated <see cref="StaticIndex"/> as part of closing the issue-body acceptance criterion 7 ("Static/dynamic split: static clusters
