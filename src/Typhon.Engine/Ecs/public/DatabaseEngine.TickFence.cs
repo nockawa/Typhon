@@ -385,57 +385,6 @@ public partial class DatabaseEngine
     /// <para>Attached here rather than inside <see cref="ArchetypeClusterState"/> because that type is built by static factory methods holding no services,
     /// and giving it a <see cref="DatabaseEngine"/> reference to reach the allocator would couple the storage state to the engine for one lazy allocation.</para>
     /// </remarks>
-    /// <summary>
-    /// Refuse to start the parallel fence while per-cell R-Tree promotion is enabled (#872 step 9).
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Why a guard and not just a default.</b> Promotion is off by default, which is what makes the combination unreachable today — but "unreachable
-    /// because of a default value" is a property of the configuration, not of the code, and the next person to raise the threshold gets a silent data race
-    /// rather than a message. This turns it into a refusal at startup, where it is cheap to read and impossible to miss.</para>
-    /// <para><b>What is actually unsafe.</b> The <c>AabbRefresh</c> phase slices on CLUSTER ID (<c>FenceWorkPlan.EmitAabbRefreshSliceItems</c>), and cluster
-    /// ids are allocated by the segment with no relation to cells — so one promoted cell's clusters land in different slices and two workers mutate one tree.
-    /// <see cref="SpatialRTree{TStore}"/> is single-writer by specification (ADR-044; <c>03-tree-operations.md</c> invariant O2, "at most one writer holds the
-    /// lock bit on any node at any time"), and its root-split path writes <c>_rootChunkId</c> and <c>_depth</c> as plain unsynchronised fields. Concurrent
-    /// splits orphan a subtree; the clusters in it stop being returned by any query, with nothing raised.</para>
-    /// <para><b>Migrate is NOT affected</b> and needs no guard: its slices are carved on <c>DestCellKey</c> boundaries so no two workers share a dest cell,
-    /// which is the same per-cell exclusivity this phase lacks.</para>
-    /// </remarks>
-    internal void AssertCellTreePromotionIsSafeForParallelFence()
-    {
-        if (AllowCellTreePromotionWithParallelFence)
-        {
-            return;
-        }
-
-        // The per-STATE copy is what governs behaviour — AttachCellTreeFactory snapshots the engine property at InitializeArchetypes, so checking only the
-        // property would miss an archetype initialised while it held a different value, and would also miss nothing at all if the property were lowered after
-        // the states were built. Check both: the property catches a threshold set before any archetype exists, the states catch everything after.
-        int offending = ClusterCellTreePromoteThreshold;
-        if (_archetypeStates != null)
-        {
-            for (int i = 0; i < _archetypeStates.Length; i++)
-            {
-                var cs = _archetypeStates[i]?.ClusterState;
-                if (cs != null && cs.CellTreePromoteThreshold != int.MaxValue)
-                {
-                    offending = cs.CellTreePromoteThreshold;
-                    break;
-                }
-            }
-        }
-
-        if (offending == int.MaxValue)
-        {
-            return;
-        }
-
-        ThrowHelper.ThrowInvalidOp(
-            $"A cell-tree promotion threshold of {offending} is active, but RuntimeOptions.EnableParallelFence is true. The AabbRefresh "
-            + "phase now defers promoted cells to the serial tail, but the MIGRATE path still resizes ClusterSpatialIndexSlot and grows the shared cluster "
-            + "segment from workers, and both are per-ARCHETYPE so cell-disjoint slicing does not protect them (MD-02). Run the serial fence, or leave "
-            + "promotion at int.MaxValue until those land (#872 step 9).");
-    }
-
     private ArchetypeClusterState AttachCellTreeFactory(ArchetypeClusterState state)
     {
         state.CellTreeSegmentFactory = stride =>
@@ -449,27 +398,15 @@ public partial class DatabaseEngine
     }
 
     /// <summary>
-    /// Clusters in one cell at which that cell's linear broadphase is replaced by an R-Tree. <see cref="int.MaxValue"/> — the default — never promotes.
+    /// Clusters in one cell at which that cell's linear broadphase is replaced by an R-Tree. Seeded from
+    /// <see cref="SpatialOptions.CellTreePromoteThreshold"/>; settable directly so a test can move the boundary without rebuilding the options graph.
     /// </summary>
     /// <remarks>
-    /// Left off by default on measured grounds: below ~512 clusters the linear scan wins a selective query (6x at 80, which is AntHill's densest zone) and the
-    /// tree's update path is 22-38x dearer per moved cluster. See <c>ArchetypeClusterState.CellTreePromoteThreshold</c> for the full argument and
-    /// <c>BroadphaseCrossoverSweepTests</c> for the numbers.
+    /// Read once per archetype, by <see cref="AttachCellTreeFactory"/> during <c>InitializeArchetypes</c> — a later change does not reach archetypes that
+    /// already exist. See <c>ArchetypeClusterState.CellTreePromoteThreshold</c> for the crossover argument and <c>BroadphaseCrossoverSweepTests</c> for the
+    /// numbers behind the default.
     /// </remarks>
-    internal int ClusterCellTreePromoteThreshold { get; set; } = int.MaxValue;
-
-    /// <summary>
-    /// Bypass <see cref="AssertCellTreePromotionIsSafeForParallelFence"/>. <b>Tests only.</b>
-    /// </summary>
-    /// <remarks>
-    /// <para>The AabbRefresh half of the hazard IS fixed — promoted cells are diverted out of the parallel pass and applied in the serial tail
-    /// (<c>DrainPromotedAabbApplies</c>). What is NOT fixed is the Migrate path's two PER-ARCHETYPE resources, which cell-disjoint slicing does not protect:
-    /// <c>EnsureClusterSpatialIndexSlotCapacity</c>'s <c>Array.Resize</c> plus <c>RebindCellTreeBackPointers</c>, and the shared
-    /// <c>ChunkBasedSegment.Grow</c> invalidating a sibling worker's chunk pointer. Those are <c>MD-02</c> and are tracked separately.</para>
-    /// <para>So this flag exists for the tests that must drive the parallel fence to prove the divert works, and for nothing else. It is not a supported
-    /// configuration, and it stays a bypass rather than becoming a default until the Migrate-path items land.</para>
-    /// </remarks>
-    internal bool AllowCellTreePromotionWithParallelFence { get; set; }
+    internal int ClusterCellTreePromoteThreshold { get; set; }
 
     private void CreateTransientClusterSegment(int stride, out TransientStore? store, out ChunkBasedSegment<TransientStore> segment)
     {
@@ -931,8 +868,8 @@ public partial class DatabaseEngine
         clusterState._drainedCount = 0; // deferred-drain list reset (review C-1 fix)
     }
 
-    /// <summary>Step ⑧: the pre-size and the process-bitmap memo, run once per archetype after the map — by the atomic item or by the tail.</summary>
-    private static void PreSizeArchetypeFence(ArchetypeClusterState clusterState)
+    /// <summary>Step ⑧: the pre-size and the process-bitmap memo, run once per archetype from the tail of <see cref="FinishArchetypeFencePrep"/>.</summary>
+    private void PreSizeArchetypeFence(ArchetypeClusterState clusterState)
     {
         // Pre-size FenceDirtyBits + per-cluster arrays to a generous upper bound so the Migrate phase (parallel or serial) doesn't hit ExecuteMigrations'
         // on-demand grow path under normal conditions. The strict bound (PrimarySegmentCapacity + PendingMigrationCount) under-estimates in practice when
@@ -941,8 +878,12 @@ public partial class DatabaseEngine
         // trivial. On-demand grow under _finalizeLock (ArchetypeClusterState.GrowFenceDirtyBitsForChunkId) remains as a safety net for pathological cases.
         var existingLen = clusterState.FenceDirtyBits?.Length ?? 0;
         var upperBound = Math.Max(clusterState.PrimarySegmentCapacity, existingLen) + 2 * clusterState.PendingMigrationCount + 64;
+        // PerCellIndex is indexed by CELL key, so its bound comes from the grid rather than the segment. A migration's destination cell was created by
+        // crossing detection back in Prep, so the current cell count already covers every key the Migrate phase can name; the doubling is the same kind of
+        // slack the cluster bound carries, and it is what keeps AddClusterToPerCellIndex off the growth path when it runs from a worker.
+        var cellUpperBound = _spatialGrid != null ? 2 * _spatialGrid.CellCount + 64 : 0;
         var preSizeStart = Stopwatch.GetTimestamp();
-        clusterState.PreSizeMigrationBuffers(upperBound);
+        clusterState.PreSizeMigrationBuffers(upperBound, cellUpperBound);
         clusterState.PrepPreSizeTicks += Stopwatch.GetTimestamp() - preSizeStart;
 
         // Memoize popcount of ClusterProcessBitmap so the AabbRefresh planner doesn't redo it on TickDriver (D-4).
@@ -1013,6 +954,19 @@ public partial class DatabaseEngine
         // Every producer has now filed: crossings and the outlier guard in the core above, relocations carried from last tick's AabbRefresh, and repair
         // units from the planner. CR-05 is checkable exactly here and nowhere earlier (#877).
         pending.AssertNoDuplicateMigrationSources(tickNumber);
+
+        // ⑧ LAST, and here rather than at the core's branch-2 exit where it used to sit. Two things were wrong with that placement and both are the same
+        // mistake — sizing against numbers that were not final yet:
+        //   * the core has THREE exits and only one of them reached the pre-size, so an archetype leaving through the clean-bitmap `return true` (which is
+        //     every ordinary tick for one written through the spatial barrier) had its arrays sized by whichever earlier tick happened to take branch 2;
+        //   * it ran BEFORE PlanArchetypeRepairs, which allocates destination clusters and files further migration requests — so both terms of the bound,
+        //     PrimarySegmentCapacity and PendingMigrationCount, were read before the producer that moves them furthest had run.
+        // Measured: a 3 000-entity archetype migrating 464 clusters reached the Migrate phase with ClusterSpatialIndexSlot 64 long and a chunk id of 64 to
+        // record. That used to be an unsynchronised Array.Resize on a worker thread; it is now a refusal, which is how the placement bug became visible.
+        PreSizeArchetypeFence(pending);
+
+        // LAST, so the probe observes the archetype exactly as the Migrate phase will find it — including the pre-size, which is the thing the phase depends
+        // on most and the thing a test most needs to be able to perturb.
         ArchetypeClusterState.PrepQueueProbe?.Invoke(pending, tickNumber);
     }
 
@@ -1224,7 +1178,7 @@ public partial class DatabaseEngine
             clusterState.LastTickHysteresisAbsorbedCount += clusterState.PrepSliceHysteresisAbsorbed;
             clusterState.TotalHysteresisAbsorbedCount += clusterState.PrepSliceHysteresisAbsorbed;
             clusterState.ResetShadowBuffersAfterSlices();
-            PreSizeArchetypeFence(clusterState);
+            // ⑧ is inside FinishArchetypeFencePrep now — see the comment at its tail.
             FinishArchetypeFencePrep(clusterState, true, tickNumber, changeSet);
         }
     }
@@ -1524,8 +1478,6 @@ public partial class DatabaseEngine
         {
             clusterScope.Dispose();
         }
-
-        PreSizeArchetypeFence(clusterState);
 
         return true;
     }

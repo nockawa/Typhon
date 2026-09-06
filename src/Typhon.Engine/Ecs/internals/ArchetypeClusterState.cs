@@ -57,11 +57,23 @@ internal sealed unsafe partial class ArchetypeClusterState
     //   TryClaimSlotInCluster (x2)     — new-cluster slow path: lockstep dual-segment AllocateChunk, AddToActiveList, CellClusterPool.AddCluster,
     //                                    ClusterCellMap back-pointer. The hot path (CAS into an existing cluster) does not take it.
     //   EnqueueMigrationsBulk          — bulk append to PendingMigrations
+    //   EnqueuePromotedAppliesBulk     — bulk append to PendingPromotedApplies (AabbRefresh's divert of promoted cells)
+    //   EnqueueRepairNominationsBulk   — bulk append to the repair nomination list (ArchetypeClusterState.Repair.cs)
+    //   RegisterPrepSliceCrossings     — a Prep slice filing its cell crossings under its own slice key
+    //   AllocateNewClusterLatched      — the repair path's cluster allocation; the twin of TryClaimSlotInCluster's slow path
     //   EnsureClusterVisibilityCapacity — GROWTH ONLY, behind a double-checked length compare; the fold itself never takes it. Serializing growers against
     //                                    each other is not the whole fix — see NoteClusterBorn for why a fold must also re-read the array reference after
     //                                    its CAS — but it is the half that stops two growers dropping each other's copy.
+    //   EnsureClusterAabbsCapacity        ┐ GROWTH ONLY, all five behind a double-checked length compare, all five with a ...Locked body a caller already
+    //   EnsureClusterSpatialIndexSlotCapacity │ holding the latch calls directly. See the PER-ARCHETYPE ARRAY GROWTH banner below for what they are
+    //   EnsureClusterCellMapCapacity      │ protecting against and why growth from inside a Migrate slice is refused rather than serialised.
+    //   EnsureClusterWriteBookkeepingCapacity │
+    //   EnsurePerCellIndexCapacity        ┘
+    //   TryEnsureCellTreeSegment       — first-use creation of the archetype's shared cell-tree segment. Two unsynchronised creators would each build a
+    //                                    segment and one would win, orphaning every tree already built on the loser.
     // This list is load-bearing: it is what the next person reasons about lock order from, so an acquisition added without a line here is worse than one
-    // added with a wrong line. EnsureClusterVisibilityCapacity was added in #722 and this entry with it.
+    // added with a wrong line. EnsureClusterVisibilityCapacity was added in #722 and this entry with it; the five capacity growers, the three bulk appends,
+    // AllocateNewClusterLatched and TryEnsureCellTreeSegment were added later and the list had drifted behind them.
     // Note the asymmetry this leaves: AddToActiveList runs under the latch, RemoveFromActiveList never does — removal happens only from serial contexts
     // (Finalize, or a single-threaded Transaction.Destroy). No reader takes it either, so the latch orders writers against writers, not readers.
     // Padded to 64 bytes so the latch field owns a full cache line and uncontended acquisitions don't ping-pong with adjacent hot fields like
@@ -137,6 +149,58 @@ internal sealed unsafe partial class ArchetypeClusterState
     [Conditional("DEBUG")]
     internal static void ExitPrepSlice() => InPrepSlice = false;
 
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // PER-ARCHETYPE ARRAY GROWTH under the parallel Migrate phase.
+    //
+    // Migrate slices are carved on DestCellKey boundaries, so no two workers share a destination CELL. That is what makes the per-cell structures safe. It
+    // says nothing about the per-ARCHETYPE arrays every worker indexes by cluster chunk id — ClusterAabbs, ClusterSpatialIndexSlot, ClusterCellMap, the
+    // write-bookkeeping quartet, PerCellIndex. Each of those used to grow by a bare Array.Resize from whichever worker happened to need the room, which is
+    // MD-02's "Array.Resize from worker → lost writes from siblings holding the old array reference", and it is worse than the two-growers race alone:
+    //   * a sibling that already loaded the reference writes its handle into the abandoned copy — the cluster is silently absent from its cell index;
+    //   * ExecuteMigrationsSlice holds `ref ClusterAabbs[dstChunkId]` ACROSS the union, so a concurrent grow sends the whole union into the dead array;
+    //   * for ClusterSpatialIndexSlot the resize additionally drags RebindCellTreeBackPointers behind it, and a rebind cannot be made safe against a
+    //     sibling worker's tree.Add no matter what lock the grower holds — the sibling is not holding it.
+    // The growth itself is therefore serialised on _finalizeLock (double-checked, so the fast path stays a lock-free length compare), and growth from INSIDE
+    // a Migrate slice is refused outright. That refusal is not a limitation: PreSizeArchetypeFence sizes every one of these arrays, before the Migrate
+    // dispatch, to a bound the phase provably cannot exceed — a slice allocates at most one new cluster per pending migration, so the largest chunk id it
+    // can produce is below PrimarySegmentCapacity + PendingMigrationCount, and the pre-size adds twice that plus 64. Reaching the throw means that reasoning
+    // broke, and a loud fence failure (TickOutcomeReason.FenceFailure) is the correct answer to it rather than a silently dropped index entry.
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// True on a worker while it runs a Migrate slice. Unlike <see cref="InPrepSlice"/> this is NOT compiled out in Release: what it guards is silent index
+    /// loss rather than a development-time ordering mistake.
+    /// </summary>
+    [ThreadStatic]
+    internal static bool InMigrateSlice;
+
+    /// <summary>
+    /// The bound the last <see cref="PreSizeMigrationBuffers"/> used. Diagnostic only — it makes a growth refusal say WHY the bound was short.
+    /// </summary>
+    internal int LastPreSizeUpperBound;
+
+    /// <summary>Marks the current thread as inside a parallel Migrate slice.</summary>
+    internal static void EnterMigrateSlice() => InMigrateSlice = true;
+
+    /// <inheritdoc cref="EnterMigrateSlice"/>
+    internal static void ExitMigrateSlice() => InMigrateSlice = false;
+
+    /// <summary>Refuse to reallocate a shared per-archetype array while sibling Migrate workers may be holding the current one. See the banner above.</summary>
+    private void ThrowIfGrowingInsideMigrateSlice(string arrayName, int requiredLength, int currentLength)
+    {
+        if (!InMigrateSlice)
+        {
+            return;
+        }
+
+        ThrowHelper.ThrowInvalidOp(
+            $"Archetype {ArchetypeId}'s {arrayName} needs {requiredLength} entries but holds {currentLength}, and the request came from inside a parallel "
+            + "Migrate slice. Growing it there would hand every sibling worker an abandoned array and silently drop their writes (MD-02). The fence "
+            + "pre-sizes this array in PreSizeArchetypeFence to a bound the Migrate phase cannot exceed, so reaching this means that bound is wrong. "
+            + $"[last pre-size bound {LastPreSizeUpperBound}, PrimarySegmentCapacity now {PrimarySegmentCapacity}, PendingMigrationCount "
+            + $"{PendingMigrationCount}]");
+    }
+
     /// <summary>
     /// Forgets whatever a previous sliced tick left behind. Called from the per-tick reset, so a Prep that threw — its tail never ran (the scheduler
     /// fails Migrate's dependency and skips its Prepare) — cannot hand stale slice lists to the next sliced tail, whose slots may since have changed hands.
@@ -153,6 +217,14 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// The equivalence fixture uses it to snapshot <c>PendingMigrations[0, PendingMigrationDrainCount)</c> from inside the fence, which is the only
     /// place the queue the throttle saw is observable. Null in production; the call is a null test.
     /// </summary>
+    /// <remarks>
+    /// <para><b>It fires LAST, after the pre-size, and that ordering is load-bearing.</b> The archetype it hands a probe is therefore exactly what the Migrate
+    /// phase will find, which is what lets a test falsify the pre-size bound at the one point a wrong bound would leave it —
+    /// <c>CellTreeDensityTransitionTests.AShortPerArchetypeArrayAbortsTheTickInsteadOfGrowingUnderSiblingWorkers</c> depends on it and silently stops
+    /// distinguishing a live guard from an absent one if ⑧ is ever moved back above this call.</para>
+    /// <para><b>The consequence for probe implementations:</b> one that FILES migration requests or allocates clusters now does so after the bound was taken,
+    /// and will trip the in-slice growth refusal as a false positive. Probes observe; they do not produce.</para>
+    /// </remarks>
     internal static Action<ArchetypeClusterState, long> PrepQueueProbe;
 
     /// <summary>Test-visible count of <c>PrepSlice</c> items executed, process-wide. Proves a fixture exercised the sliced path, not the atomic one.</summary>
@@ -472,8 +544,13 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </summary>
     /// <param name="upperBound">Worst-case maximum cluster chunk ID + 1 that this fence tick could touch. Typically, <c>PrimarySegmentCapacity +
     /// PendingMigrationCount</c> — one new cluster per migration in the worst case.</param>
-    internal void PreSizeMigrationBuffers(int upperBound)
+    /// <param name="cellUpperBound">Worst-case maximum cell key + 1. <see cref="PerCellIndex"/> is the one shared array a worker indexes by CELL rather than
+    /// by cluster, and it was the one this pre-size did not cover — leaving <c>AddClusterToPerCellIndex</c> as the last site that could reallocate a shared
+    /// array from a Migrate slice. Cell keys are pool slots handed out when a cell is first occupied, and the Migrate phase occupies no cell that crossing
+    /// detection has not already created in Prep, so the grid's current cell count bounds it.</param>
+    internal void PreSizeMigrationBuffers(int upperBound, int cellUpperBound = 0)
     {
+        LastPreSizeUpperBound = upperBound;
         Debug.Assert(!InPrepSlice, "a Prep slice must not grow the per-cluster arrays another slice is reading (#886)");
         if (upperBound <= 0)
         {
@@ -504,6 +581,11 @@ internal sealed unsafe partial class ArchetypeClusterState
         EnsureClusterSpatialIndexSlotCapacity(upperBound);
         EnsureClusterCellMapCapacity(upperBound);
         EnsureClusterWriteBookkeepingCapacity(upperBound);
+
+        if (cellUpperBound > 0)
+        {
+            EnsurePerCellIndexCapacity(cellUpperBound);
+        }
 
         // Deferred-drain list sized to PendingMigrationCount (each migration drains at most one source slot, so the cluster-drain count cannot exceed migration
         // count). _drainedCount is zeroed by Prep.
@@ -1276,11 +1358,11 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// The reader's half is the mirror: acquire-read the occupancy word, then read the summary.
     /// </para>
     /// <para>
-    /// <b>The CAS covers the element, NOT the array.</b> <see cref="EnsureClusterVisibilityCapacity"/> is unsynchronised: two concurrent growers each allocate,
-    /// copy and publish, and the later publish drops the earlier's contents — so a fold that lands between another thread's copy and its publish is lost
-    /// regardless of how atomically it was made. That hazard predates this method's CAS and is not fixed by it. It is bounded by the same open question as
-    /// <c>ClaimSlot</c>'s unguarded <c>FreeClusterHead</c> / <c>AllocateNewCluster</c> sequence: whether the spawn-commit path is single-writer, which
-    /// <c>ClaimSlot</c>'s own remark asserts and <see cref="ClaimFreeBit"/>'s #708 remark denies. Both cannot be true; settle it before adding a lock here.
+    /// <b>The CAS covers the element, NOT the array.</b> Two concurrent growers each allocate, copy and publish, and the later publish drops the earlier's
+    /// contents — so a fold that lands between another thread's copy and its publish is lost regardless of how atomically it was made. That hazard predates
+    /// this method's CAS and is not fixed by it. <see cref="EnsureClusterVisibilityCapacity"/> now serialises growers on <c>_finalizeLock</c>, which removes
+    /// the grower-versus-grower half; what remains is a FOLD racing a grow, which is why this method re-reads the array reference after its CAS rather than
+    /// trusting the one it started with. (This paragraph used to say the capacity method was unsynchronised. It was, until #722.)
     /// </para>
     /// <para>
     /// <b>The maximum is an upper bound, not the exact largest BornTSN present, and it is not monotone with the TSN clock.</b> Cluster migration folds the TSN
@@ -2627,7 +2709,8 @@ internal sealed unsafe partial class ArchetypeClusterState
         try
         {
             newChunkId = AllocateNewCluster(changeSet);
-            EnsureClusterCellMapCapacity(newChunkId + 1);
+            // ...Locked: we already hold _finalizeLock and AccessControlSmall is not reentrant.
+            EnsureClusterCellMapCapacityLocked(newChunkId + 1);
             ClusterCellMap[newChunkId] = cellKey;
             CellClusterPool.AddCluster(cellKey, newChunkId);
             // The fresh cluster is appended at the end of the cell list and is the only one with free slots — point the cursor at it so the next claim
@@ -2713,7 +2796,8 @@ internal sealed unsafe partial class ArchetypeClusterState
         try
         {
             newChunkId = AllocateNewCluster(null);
-            EnsureClusterCellMapCapacity(newChunkId + 1);
+            // ...Locked: we already hold _finalizeLock and AccessControlSmall is not reentrant.
+            EnsureClusterCellMapCapacityLocked(newChunkId + 1);
             ClusterCellMap[newChunkId] = cellKey;
             CellClusterPool.AddCluster(cellKey, newChunkId);
             // Point the cursor at the fresh cluster — see the PersistentStore overload.
@@ -3107,13 +3191,57 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// Grow <see cref="ClusterCellMap"/> to hold at least <paramref name="requiredLength"/> entries, initializing new slots to <c>-1</c> (unmapped).
     /// Called lazily by <c>ClaimSlotInCell</c> when a new cluster chunk ID lands beyond the current bounds.
     /// </summary>
+    /// <remarks>See the PER-ARCHETYPE ARRAY GROWTH banner: the fast path is a lock-free length compare, only an actual grow serialises.</remarks>
     internal void EnsureClusterCellMapCapacity(int requiredLength)
     {
+        if (Volatile.Read(ref ClusterCellMap) is { } current && current.Length >= requiredLength)
+        {
+            return;
+        }
+
+        ThrowIfGrowingInsideMigrateSlice(nameof(ClusterCellMap), requiredLength, ClusterCellMap?.Length ?? 0);
+
+        ref var growCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref growCtx);
+        try
+        {
+            EnsureClusterCellMapCapacityLocked(requiredLength);
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>
+    /// The <c>…Locked</c> bodies below all document "caller must hold <c>_finalizeLock</c>", and a comment is not a contract. Calling one without the latch
+    /// reintroduces exactly the lost-write this whole family exists to stop, and it does so silently, so the assertion is worth more than the check costs.
+    /// </summary>
+    [Conditional("DEBUG")]
+    private void AssertFinalizeLockHeld(string caller) =>
+        Debug.Assert(_finalizeLock.Lock.IsLockedByCurrentThread, $"{caller} mutates shared per-archetype state and must be called with _finalizeLock held");
+
+    /// <summary>The growth body of <see cref="EnsureClusterCellMapCapacity"/>. Caller must hold <c>_finalizeLock</c> exclusively.</summary>
+    /// <remarks>
+    /// Carries the in-slice refusal a second time, and that is not redundant: <c>ClaimSlotInCell</c>'s new-cluster path already holds the latch and so calls
+    /// this body DIRECTLY, bypassing the wrapper — and a parallel Migrate worker reaches that path whenever a migration needs a fresh destination cluster.
+    /// Without the check here, <see cref="ClusterCellMap"/> would be the one array of the five that a slice could still reallocate, which is exactly what
+    /// MD-02 now says cannot happen. It stays unreachable for the same reason as its siblings: the fence pre-sizes this array to the same bound.
+    /// </remarks>
+    internal void EnsureClusterCellMapCapacityLocked(int requiredLength)
+    {
+        AssertFinalizeLockHeld(nameof(EnsureClusterCellMapCapacityLocked));
+        if (ClusterCellMap != null && ClusterCellMap.Length < requiredLength)
+        {
+            ThrowIfGrowingInsideMigrateSlice(nameof(ClusterCellMap), requiredLength, ClusterCellMap.Length);
+        }
+
         if (ClusterCellMap == null)
         {
             var initial = Math.Max(16, requiredLength);
-            ClusterCellMap = new int[initial];
-            Array.Fill(ClusterCellMap, -1);
+            var seeded = new int[initial];
+            Array.Fill(seeded, -1);
+            Volatile.Write(ref ClusterCellMap, seeded);
             return;
         }
         if (ClusterCellMap.Length >= requiredLength)
@@ -3129,24 +3257,56 @@ internal sealed unsafe partial class ArchetypeClusterState
             newLen *= 2;
         }
         var oldLen = ClusterCellMap.Length;
-        Array.Resize(ref ClusterCellMap, newLen);
-        Array.Fill(ClusterCellMap, -1, oldLen, newLen - oldLen);
+        // Copy-fill-publish rather than Array.Resize(ref field): the resize overload stores the new reference BEFORE the tail is seeded, so a lock-free
+        // reader can observe an array whose new entries still read 0 — a valid cell key — instead of -1. Same shape as GrowClusterVisibilityCapacityLocked.
+        var grown = new int[newLen];
+        Array.Copy(ClusterCellMap, grown, oldLen);
+        Array.Fill(grown, -1, oldLen, newLen - oldLen);
+        Volatile.Write(ref ClusterCellMap, grown);
     }
 
     /// <summary>
     /// Grow <see cref="ClusterAabbs"/> to hold at least <paramref name="requiredLength"/> entries. Issue #230.
     /// New slots are left at <see cref="ClusterSpatialAabb.Empty"/> (neutral seed for subsequent unions).
     /// </summary>
+    /// <remarks>See the PER-ARCHETYPE ARRAY GROWTH banner: the fast path is a lock-free length compare, only an actual grow serialises.</remarks>
     internal void EnsureClusterAabbsCapacity(int requiredLength)
     {
+        if (Volatile.Read(ref ClusterAabbs) is { } current && current.Length >= requiredLength)
+        {
+            return;
+        }
+
+        // Refused from a slice like the other cluster-indexed arrays, and this is the one the refusal matters most for: ExecuteMigrations takes
+        // `ref ClusterAabbs[dstChunkId]` and holds that interior reference across the whole bounds union. A sibling growing concurrently would send the union
+        // into the abandoned array — a lost bound rather than a lost handle, which queries then prune against.
+        ThrowIfGrowingInsideMigrateSlice(nameof(ClusterAabbs), requiredLength, ClusterAabbs?.Length ?? 0);
+
+        ref var growCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref growCtx);
+        try
+        {
+            EnsureClusterAabbsCapacityLocked(requiredLength);
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>The growth body of <see cref="EnsureClusterAabbsCapacity"/>. Caller must hold <c>_finalizeLock</c> exclusively.</summary>
+    internal void EnsureClusterAabbsCapacityLocked(int requiredLength)
+    {
+        AssertFinalizeLockHeld(nameof(EnsureClusterAabbsCapacityLocked));
         if (ClusterAabbs == null)
         {
             var initial = Math.Max(16, requiredLength);
-            ClusterAabbs = new ClusterSpatialAabb[initial];
+            var seeded = new ClusterSpatialAabb[initial];
             for (var i = 0; i < initial; i++)
             {
-                ClusterAabbs[i] = ClusterSpatialAabb.Empty;
+                seeded[i] = ClusterSpatialAabb.Empty;
             }
+            Volatile.Write(ref ClusterAabbs, seeded);
             return;
         }
         if (ClusterAabbs.Length >= requiredLength)
@@ -3159,24 +3319,53 @@ internal sealed unsafe partial class ArchetypeClusterState
             newLen *= 2;
         }
         var oldLen = ClusterAabbs.Length;
-        Array.Resize(ref ClusterAabbs, newLen);
+        // Copy-fill-publish — Array.Resize(ref field) would publish the reference before the Empty seed runs, and a zero-filled ClusterSpatialAabb is a
+        // DEGENERATE box at the cell origin rather than a neutral union identity, so a reader in that window widens every subsequent union to the origin.
+        var grown = new ClusterSpatialAabb[newLen];
+        Array.Copy(ClusterAabbs, grown, oldLen);
         for (var i = oldLen; i < newLen; i++)
         {
-            ClusterAabbs[i] = ClusterSpatialAabb.Empty;
+            grown[i] = ClusterSpatialAabb.Empty;
         }
+        Volatile.Write(ref ClusterAabbs, grown);
     }
 
     /// <summary>
     /// Grow <see cref="ClusterSpatialIndexSlot"/> to hold at least <paramref name="requiredLength"/> entries, initializing new slots to <c>-1</c> (not in
     /// the per-cell index). Issue #230.
     /// </summary>
+    /// <remarks>See the PER-ARCHETYPE ARRAY GROWTH banner: the fast path is a lock-free length compare, only an actual grow serialises.</remarks>
     internal void EnsureClusterSpatialIndexSlotCapacity(int requiredLength)
     {
+        if (Volatile.Read(ref ClusterSpatialIndexSlot) is { } current && current.Length >= requiredLength)
+        {
+            return;
+        }
+
+        ThrowIfGrowingInsideMigrateSlice(nameof(ClusterSpatialIndexSlot), requiredLength, ClusterSpatialIndexSlot?.Length ?? 0);
+
+        ref var growCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref growCtx);
+        try
+        {
+            EnsureClusterSpatialIndexSlotCapacityLocked(requiredLength);
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>The growth body of <see cref="EnsureClusterSpatialIndexSlotCapacity"/>. Caller must hold <c>_finalizeLock</c> exclusively.</summary>
+    internal void EnsureClusterSpatialIndexSlotCapacityLocked(int requiredLength)
+    {
+        AssertFinalizeLockHeld(nameof(EnsureClusterSpatialIndexSlotCapacityLocked));
         if (ClusterSpatialIndexSlot == null)
         {
             var initial = Math.Max(16, requiredLength);
-            ClusterSpatialIndexSlot = new int[initial];
-            Array.Fill(ClusterSpatialIndexSlot, -1);
+            var seeded = new int[initial];
+            Array.Fill(seeded, -1);
+            Volatile.Write(ref ClusterSpatialIndexSlot, seeded);
             return;
         }
         if (ClusterSpatialIndexSlot.Length >= requiredLength)
@@ -3189,10 +3378,12 @@ internal sealed unsafe partial class ArchetypeClusterState
             newLen *= 2;
         }
         var oldLen = ClusterSpatialIndexSlot.Length;
-        Array.Resize(ref ClusterSpatialIndexSlot, newLen);
-        Array.Fill(ClusterSpatialIndexSlot, -1, oldLen, newLen - oldLen);
+        var grown = new int[newLen];
+        Array.Copy(ClusterSpatialIndexSlot, grown, oldLen);
+        Array.Fill(grown, -1, oldLen, newLen - oldLen);
+        Volatile.Write(ref ClusterSpatialIndexSlot, grown);
 
-        // Array.Resize REALLOCATES, and this array doubles as every cell tree's PayloadBackPointers — see RebindCellTreeBackPointers.
+        // The new array REPLACES the old one, and this array doubles as every cell tree's PayloadBackPointers — see RebindCellTreeBackPointers.
         RebindCellTreeBackPointers();
     }
 
@@ -3202,15 +3393,46 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// <see cref="ClusterShrinkPendingAxes"/> — in lockstep. Called alongside
     /// <see cref="EnsureClusterAabbsCapacity"/> so the four arrays are always sized to match the cluster segment's chunk-id range.
     /// </summary>
+    /// <remarks>See the PER-ARCHETYPE ARRAY GROWTH banner: the fast path is a lock-free length compare, only an actual grow serialises.</remarks>
     internal void EnsureClusterWriteBookkeepingCapacity(int requiredLength)
     {
+        var requiredBitmapWords = (requiredLength + 63) >> 6;
+        if (Volatile.Read(ref ClusterMigrationPendingSlots) is { } slots && slots.Length >= requiredLength
+            && Volatile.Read(ref ClusterProcessBitmap) is { } bitmap && bitmap.Length >= requiredBitmapWords)
+        {
+            return;
+        }
+
+        // Named by whichever of the two the fast path actually found short — the bitmap is sized in WORDS, so reporting the slot array's length for a
+        // bitmap-driven grow would point the reader at a bound that is not the one that failed.
+        var slotsShort = ClusterMigrationPendingSlots == null || ClusterMigrationPendingSlots.Length < requiredLength;
+        ThrowIfGrowingInsideMigrateSlice(
+            slotsShort ? nameof(ClusterMigrationPendingSlots) : nameof(ClusterProcessBitmap),
+            slotsShort ? requiredLength : requiredBitmapWords,
+            slotsShort ? ClusterMigrationPendingSlots?.Length ?? 0 : ClusterProcessBitmap?.Length ?? 0);
+
+        ref var growCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref growCtx);
+        try
+        {
+            EnsureClusterWriteBookkeepingCapacityLocked(requiredLength);
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>The growth body of <see cref="EnsureClusterWriteBookkeepingCapacity"/>. Caller must hold <c>_finalizeLock</c> exclusively.</summary>
+    internal void EnsureClusterWriteBookkeepingCapacityLocked(int requiredLength)
+    {
+        AssertFinalizeLockHeld(nameof(EnsureClusterWriteBookkeepingCapacityLocked));
         Debug.Assert(!InPrepSlice, "a Prep slice must not grow the per-cluster arrays another slice is reading (#886)");
         // ClusterProcessBitmap: 1 bit per cluster → (requiredLength + 63) / 64 long words.
         var requiredWords = (requiredLength + 63) >> 6;
         if (ClusterProcessBitmap == null)
         {
-            var initialWords = Math.Max(1, requiredWords);
-            ClusterProcessBitmap = new long[initialWords];
+            Volatile.Write(ref ClusterProcessBitmap, new long[Math.Max(1, requiredWords)]);
         }
         else if (ClusterProcessBitmap.Length < requiredWords)
         {
@@ -3220,18 +3442,21 @@ internal sealed unsafe partial class ArchetypeClusterState
                 newLen *= 2;
             }
 
-            Array.Resize(ref ClusterProcessBitmap, newLen);
-            // No init — Array.Resize zero-fills.
+            var grownBitmap = new long[newLen];
+            Array.Copy(ClusterProcessBitmap, grownBitmap, ClusterProcessBitmap.Length);
+            Volatile.Write(ref ClusterProcessBitmap, grownBitmap);
         }
 
         // Per-cluster arrays sized 1:1 with clusterChunkId range.
         if (ClusterMigrationPendingSlots == null)
         {
             var initial = Math.Max(16, requiredLength);
-            ClusterMigrationPendingSlots = new ulong[initial];
-            ClusterMigrationDestCellKeys = new int[initial];
-            Array.Fill(ClusterMigrationDestCellKeys, -1);
-            ClusterShrinkPendingAxes = new byte[initial];
+            var seededKeys = new int[initial];
+            Array.Fill(seededKeys, -1);
+            Volatile.Write(ref ClusterMigrationDestCellKeys, seededKeys);
+            Volatile.Write(ref ClusterShrinkPendingAxes, new byte[initial]);
+            // Published LAST: it is the array the lock-free fast path length-checks, so every sibling array must already be visible behind it.
+            Volatile.Write(ref ClusterMigrationPendingSlots, new ulong[initial]);
             return;
         }
         if (ClusterMigrationPendingSlots.Length >= requiredLength)
@@ -3245,10 +3470,16 @@ internal sealed unsafe partial class ArchetypeClusterState
         }
 
         var oldLen = ClusterMigrationPendingSlots.Length;
-        Array.Resize(ref ClusterMigrationPendingSlots, newClusterLen);
-        Array.Resize(ref ClusterMigrationDestCellKeys, newClusterLen);
-        Array.Fill(ClusterMigrationDestCellKeys, -1, oldLen, newClusterLen - oldLen);
-        Array.Resize(ref ClusterShrinkPendingAxes, newClusterLen);
+        var grownSlots = new ulong[newClusterLen];
+        Array.Copy(ClusterMigrationPendingSlots, grownSlots, oldLen);
+        var grownKeys = new int[newClusterLen];
+        Array.Copy(ClusterMigrationDestCellKeys, grownKeys, oldLen);
+        Array.Fill(grownKeys, -1, oldLen, newClusterLen - oldLen);
+        var grownAxes = new byte[newClusterLen];
+        Array.Copy(ClusterShrinkPendingAxes, grownAxes, oldLen);
+        Volatile.Write(ref ClusterMigrationDestCellKeys, grownKeys);
+        Volatile.Write(ref ClusterShrinkPendingAxes, grownAxes);
+        Volatile.Write(ref ClusterMigrationPendingSlots, grownSlots);
     }
 
     /// <summary>
@@ -3256,12 +3487,35 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// each <see cref="PerCellSpatialSlot"/> is lazily allocated on first cluster insertion into that cell via <see cref="AddClusterToPerCellIndex"/>.
     /// Issue #230.
     /// </summary>
+    /// <remarks>See the PER-ARCHETYPE ARRAY GROWTH banner: the fast path is a lock-free length compare, only an actual grow serialises.</remarks>
     internal void EnsurePerCellIndexCapacity(int requiredLength)
     {
+        if (Volatile.Read(ref PerCellIndex) is { } current && current.Length >= requiredLength)
+        {
+            return;
+        }
+
+        ThrowIfGrowingInsideMigrateSlice(nameof(PerCellIndex), requiredLength, PerCellIndex?.Length ?? 0);
+
+        ref var growCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref growCtx);
+        try
+        {
+            EnsurePerCellIndexCapacityLocked(requiredLength);
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
+    }
+
+    /// <summary>The growth body of <see cref="EnsurePerCellIndexCapacity"/>. Caller must hold <c>_finalizeLock</c> exclusively.</summary>
+    internal void EnsurePerCellIndexCapacityLocked(int requiredLength)
+    {
+        AssertFinalizeLockHeld(nameof(EnsurePerCellIndexCapacityLocked));
         if (PerCellIndex == null)
         {
-            var initial = Math.Max(16, requiredLength);
-            PerCellIndex = new PerCellSpatialSlot[initial];
+            Volatile.Write(ref PerCellIndex, new PerCellSpatialSlot[Math.Max(16, requiredLength)]);
             return;
         }
         if (PerCellIndex.Length >= requiredLength)
@@ -3273,7 +3527,9 @@ internal sealed unsafe partial class ArchetypeClusterState
         {
             newLen *= 2;
         }
-        Array.Resize(ref PerCellIndex, newLen);
+        var grown = new PerCellSpatialSlot[newLen];
+        Array.Copy(PerCellIndex, grown, PerCellIndex.Length);
+        Volatile.Write(ref PerCellIndex, grown);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -4680,6 +4936,22 @@ internal sealed unsafe partial class ArchetypeClusterState
             }
         }
 
+        // Empty the tree BEFORE building the linear index, and in that order for two independent reasons. The first is the leak: the tree's nodes are chunks
+        // of the archetype's SHARED CellTreeSegment, and simply dropping the reference retires nothing — the segment is transient and has no GC to notice, so
+        // every promote/fall-back cycle on one cell would strand that cell's whole node set for the life of the database. A cell oscillating across the
+        // threshold does that once per crossing. RemoveAt frees each leaf as it empties and the root with the last entry (SpatialRTree.Remove).
+        // The second is ST-05: RemoveAt reads the cluster's handle out of ClusterSpatialIndexSlot, and the loop below OVERWRITES that same array with linear
+        // slot indices. Interleaving the two would hand RemoveAt a small non-negative int that is a valid-looking packed handle, and it would unpack to a leaf
+        // and slot belonging to nothing.
+        for (var i = 0; i < found; i++)
+        {
+            tree.RemoveAt(ids[i]);
+        }
+
+        // The removals cascade leaf frees, but the final empty root has no parent to unlink it from and survives them all — measured at exactly one stranded
+        // chunk per promote/fall-back cycle before this call existed.
+        tree.Release();
+
         for (var i = 0; i < found; i++)
         {
             var clusterChunkId = ids[i];
@@ -4790,16 +5062,23 @@ internal sealed unsafe partial class ArchetypeClusterState
     }
 
     /// <summary>
-    /// The category mask currently stored for a cluster in its cell. The tree carries no parallel mask array, so the value comes from
-    /// <see cref="ClusterAabbs"/> — which is the same value the linear index would have been holding.
+    /// The category mask currently stored for a cluster in its cell. A promoted tree DOES carry a mask per leaf entry (written by
+    /// <c>CellClusterTree.Add</c> / <c>UpdateAt</c>); what it lacks is an INDEXABLE side array, so there is nothing to read back by slot. The value therefore
+    /// comes from <see cref="ClusterAabbs"/>, which is the authority and holds the same value the linear index would have been holding.
     /// </summary>
     internal uint ReadStoredCategoryMask(PerCellSpatialSlot slot, int clusterChunkId, int indexSlot) =>
         slot.HasDynamicTree ? ClusterAabbs[clusterChunkId].CategoryMask : slot.DynamicIndex.CategoryMasks[indexSlot];
 
     /// <summary>Obtain the archetype's shared cell-tree segment, creating it on first use. False when no factory was supplied.</summary>
+    /// <remarks>
+    /// Double-checked under <c>_finalizeLock</c>. Promotion is decided per CELL and the Migrate phase's slices are cell-disjoint, so two workers can promote
+    /// two different cells in the same instant — and both would reach a bare lazy initialiser. Each would build a whole
+    /// <see cref="ChunkBasedSegment{TStore}"/>, the later store would win, and every tree the loser's cells had already built would be reading nodes out of a
+    /// segment nothing else refers to. Queries against those cells would answer from an orphaned structure with nothing raised.
+    /// </remarks>
     private bool TryEnsureCellTreeSegment()
     {
-        if (CellTreeSegment != null)
+        if (Volatile.Read(ref CellTreeSegment) != null)
         {
             return true;
         }
@@ -4808,10 +5087,26 @@ internal sealed unsafe partial class ArchetypeClusterState
             return false;
         }
 
-        var (segment, store) = CellTreeSegmentFactory(SpatialNodeDescriptor.ForVariant(CellClusterTree.Variant).Stride);
-        CellTreeSegment = segment;
-        CellTreeStore = store;
-        return CellTreeSegment != null;
+        ref var createCtx = ref Unsafe.NullRef<WaitContext>();
+        _finalizeLock.Lock.EnterExclusiveAccess(ref createCtx);
+        try
+        {
+            if (CellTreeSegment != null)
+            {
+                return true;
+            }
+
+            var (segment, store) = CellTreeSegmentFactory(SpatialNodeDescriptor.ForVariant(CellClusterTree.Variant).Stride);
+            CellTreeStore = store;
+            // Published last, and with release semantics: CellTreeSegment is the field every other thread's fast path tests, so the store it carries must
+            // already be visible to anyone who sees it.
+            Volatile.Write(ref CellTreeSegment, segment);
+            return segment != null;
+        }
+        finally
+        {
+            _finalizeLock.Lock.ExitExclusiveAccess();
+        }
     }
 
     /// <summary>

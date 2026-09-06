@@ -542,37 +542,4 @@ class CellTreePromotionTests : TestBase<CellTreePromotionTests>
         });
     }
 
-    /// <summary>
-    /// Promotion together with the parallel fence must be refused at startup; either alone must be accepted.
-    /// </summary>
-    /// <remarks>
-    /// The combination is unreachable today only because the threshold defaults to <see cref="int.MaxValue"/> — a property of the configuration, not of the
-    /// code. The AabbRefresh phase slices by cluster id, so one promoted cell's clusters reach different workers and mutate one <c>SpatialRTree</c>
-    /// concurrently, which ADR-044's invariant O2 forbids. Both halves are asserted so the guard cannot be satisfied by refusing everything.
-    /// </remarks>
-    [Test]
-    [CancelAfter(60_000)]
-    public void PromotionWithTheParallelFence_IsRefused()
-    {
-        ServiceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
-        using var scope = ServiceProvider.CreateScope();
-        using var dbe = SetupEngine(scope, PromoteAt);
-
-        Assert.Multiple(() =>
-        {
-            Assert.Throws<InvalidOperationException>(dbe.AssertCellTreePromotionIsSafeForParallelFence,
-                "promotion plus the parallel fence must be refused — the AabbRefresh slice axis splits a cell across workers");
-
-            // Either alone is fine, or the guard is just refusing everything. The per-ARCHETYPE threshold has to be cleared too: it is a snapshot taken at
-            // InitializeArchetypes and it, not the engine property, is what actually governs whether a cell promotes — which is exactly why the guard reads
-            // both. Clearing only the property here is what the first version of this test did, and it passed against a guard that was checking the wrong one.
-            dbe.ClusterCellTreePromoteThreshold = int.MaxValue;
-            ClusterStateOf(dbe).CellTreePromoteThreshold = int.MaxValue;
-            Assert.DoesNotThrow(dbe.AssertCellTreePromotionIsSafeForParallelFence, "the parallel fence alone must be accepted");
-
-            ClusterStateOf(dbe).CellTreePromoteThreshold = PromoteAt;
-            dbe.AllowCellTreePromotionWithParallelFence = true;
-            Assert.DoesNotThrow(dbe.AssertCellTreePromotionIsSafeForParallelFence, "the explicit test-only bypass must be honoured");
-        });
-    }
 }

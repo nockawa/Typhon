@@ -220,7 +220,6 @@ public sealed partial class TyphonRuntime : IDisposable
         FenceExecBundle? fenceBundle = null;
         if (opts.EnableParallelFence)
         {
-            engine.AssertCellTreePromotionIsSafeForParallelFence();
             fenceBundle = FenceDagBuilder.DeclareFenceDag(schedule, engine);
         }
 

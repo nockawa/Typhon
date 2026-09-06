@@ -133,8 +133,10 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     /// has to cover the largest live one. A resize is not merely unsynchronised — it cannot be made safe by a writer-side lock alone:
     /// <see cref="ScatterLeafEntries"/> reads the field once and writes through that reference, so an <c>Array.Resize</c> concurrent with a split publishes
     /// a NEW array while the scatter fills the abandoned one. The lost write is a stale handle, which is the exact defect this array exists to remove.
-    /// <c>ArchetypeClusterState.EnsureClusterSpatialIndexSlotCapacity</c> is lock-free today, so the contract is the caller's to keep: size it, attach it,
-    /// and do not grow it under a live fence. <see cref="ThrowPayloadOutOfRange"/> makes a violation loud rather than silent.</para>
+    /// <c>ArchetypeClusterState.EnsureClusterSpatialIndexSlotCapacity</c> keeps that contract on the caller's behalf: growers serialise on the archetype's
+    /// latch, and growth is REFUSED outright from inside a parallel Migrate slice, because serialising growers does nothing for a split that is already
+    /// writing through the reference it loaded. The fence pre-sizes the array so the refusal is unreachable in a correct tick.
+    /// <see cref="ThrowPayloadOutOfRange"/> makes a violation loud rather than silent.</para>
     /// </remarks>
     internal int[] PayloadBackPointers;
 
@@ -254,6 +256,26 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     internal SpatialVariant Variant => _variant;
     internal int RootChunkId => _rootChunkId;
     internal int NodeCount => _nodeCount;
+
+    /// <summary>
+    /// Free the one chunk an emptied tree still owns — its root — and leave the instance unusable.
+    /// </summary>
+    /// <remarks>
+    /// Removal frees a leaf only when it has a parent to unlink it from (see <c>RemoveEmptyLeaf</c>), so a tree drained to zero entries collapses to a single
+    /// empty root leaf that nothing releases. That is correct while the tree lives, and a leak the moment its owner drops it: on a TRANSIENT segment there is
+    /// no GC watching the chunks, so the root outlives every reference to the structure that allocated it. Callers that retire a whole tree must call this.
+    /// </remarks>
+    internal void ReleaseRootChunk()
+    {
+        if (_rootChunkId < 0)
+        {
+            return;
+        }
+
+        _segment.FreeChunk(_rootChunkId);
+        _rootChunkId = -1;
+        _nodeCount = 0;
+    }
     internal int EntityCount => _entityCount;
     internal int Depth => _depth;
     internal int MutationVersion => _mutationVersion;
@@ -380,15 +402,33 @@ internal unsafe partial class SpatialRTree<TStore> where TStore : struct, IPageS
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static OlcLatch GetLatch(byte* nodeBase) => new(ref SpatialNodeHelper.OlcVersionRef(nodeBase));
 
-    /// <summary>Spin-wait to acquire write lock on a node.</summary>
+    /// <summary>Spin to acquire the write lock on a node.</summary>
+    /// <remarks>
+    /// <see cref="PureSpin"/> rather than <see cref="SpinWait"/>: the holder is a handful of node writes from releasing, so handing the core to the scheduler
+    /// to wait that out is never the right trade. The B+Tree keeps <see cref="SpinWait"/> at two sites for a reason that cannot arise here — a latch holder
+    /// there may be inside a page fault, because its nodes live in a mapped file and <c>PreDirtyForWrite</c> can pull a page in while a latch is held. Every
+    /// cell tree is built over a <see cref="TransientStore"/>: heap-backed, pinned, no file I/O and no cache eviction, so no holder of this latch can block on
+    /// anything. The waiting thread has nothing to gain by sleeping and a full quantum to lose.
+    /// <para>
+    /// <b>That argument is about <c>TStore</c>, and this method is not.</b> It sits on the generic type, so it applies to every instantiation — and the
+    /// reasoning above holds only for the transient one. <c>SpatialRTree&lt;PersistentStore&gt;</c> has no use anywhere in <c>src/</c> today (benchmarks
+    /// only), which is what makes the unqualified choice safe rather than merely convenient. Give this a store-conditional wait before putting a persistent
+    /// instantiation on a production path: there a holder CAN be inside a page fault while the latch is held, and spinning through one burns a core for the
+    /// length of an I/O.
+    /// </para>
+    /// <para>
+    /// The trade this accepts is visibility: a <see cref="PureSpin"/> wait emits no yield event, so a wait that runs long is invisible to that channel by
+    /// construction. Count it at the call site if that ever matters here.
+    /// </para>
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SpinWriteLock(byte* nodeBase, out OlcLatch latch)
     {
         latch = GetLatch(nodeBase);
-        SpinWait spin = default;
+        PureSpin spin = default;
         while (!latch.TryWriteLock())
         {
-            spin.SpinOnce();
+            spin.Once();
         }
     }
 

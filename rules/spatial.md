@@ -399,18 +399,22 @@
     buffer means the caller is already the single writer (the serial whole-archetype recompute), so the write
     happens inline. Written as `buffer?.Add(...)` with no else, a null sink DISCARDS the update — ClusterAabbs
     advances, the tree does not, and the two diverge into SQ-01 false negatives with nothing raised. That
-    shape was reachable on the only configuration the promotion guard leaves open
+    shape is reachable on the serial fence, where no sink is supplied
   invariant replay order is by cluster id, not arrival order. Arrival order depends on how the planner sliced
     and which worker finished first, so replaying in it would make the tree — and every handle in
     ClusterSpatialIndexSlot — a function of the worker count
   invariant promotion itself (MaybePromoteCellHalf) runs from AddClusterToPerCellIndex, which the parallel
-    Migrate phase reaches. Cell-disjoint slicing does NOT protect the per-archetype resources it touches
-    (Array.Resize of ClusterSpatialIndexSlot, the shared ChunkBasedSegment's Grow), so promotion is refused
-    alongside a parallel fence until that is closed — see the guard named in scope
+    Migrate phase reaches. Cell-disjoint slicing does NOT protect the per-archetype resources it touches, and
+    that is MD-02's concern rather than this rule's: the growers now serialise on _finalizeLock and refuse to
+    reallocate from inside a slice, and TryEnsureCellTreeSegment creates the shared segment under the same
+    latch. A startup guard used to refuse promotion alongside a parallel fence instead; it is gone, because
+    what it was protecting is now protected
   scope: ArchetypeClusterState.ApplyOrDeferClusterUpdate, ArchetypeClusterState.EnqueuePromotedAppliesBulk,
     ArchetypeClusterState.DrainPromotedAabbApplies, ArchetypeClusterState.UpdateClusterInPerCellIndex,
-    DatabaseEngine.AssertCellTreePromotionIsSafeForParallelFence
-  verified: CellTreeParallelFenceTests (both slicing branches, 50 parallel-fence ticks with motion). Ablated:
+    ArchetypeClusterState.MaybePromoteCellHalf, ArchetypeClusterState.DemoteCellHalf
+  verified: CellTreeParallelFenceTests (both slicing branches, 50 parallel-fence ticks with motion),
+    CellTreeDensityTransitionTests (the switch in both directions, and promotion under a parallel fence with
+    clusters migrating between cells). Ablated:
     reverting the divert to an unconditional UpdateClusterInPerCellIndex reddens it 3 runs of 3, on the
     membership comparison — "cell 1 holds cluster 46 twice", the duplicate a second concurrent
     remove-and-reinsert leaves behind
@@ -1055,6 +1059,27 @@
     the per-chunk delta buffers are sized in FenceMigrateExecSystem.Prepare, never grown from a worker:
       growing the shared buffer array from concurrent DispatchItem calls loses a bucket when two growers
       race, and the plain reference store is unordered against its Array.Copy on arm64
+    NO shared per-archetype array is REALLOCATED from inside a Migrate slice. ClusterAabbs,
+      ClusterSpatialIndexSlot, ClusterCellMap, PerCellIndex and the write-bookkeeping quartet are all
+      indexed by cluster chunk id or cell key, neither of which the cell-disjoint slice boundary separates.
+      Their growers take _finalizeLock (double-checked, so the fast path stays a lock-free length compare)
+      and refuse outright while ArchetypeClusterState.InMigrateSlice is set, which
+      FenceMigrateExecSystem.DispatchItem sets around each slice. Serialising the growers against each
+      other is NOT sufficient on its own: a sibling that already loaded the reference writes into the
+      abandoned copy, and ExecuteMigrations holds `ref ClusterAabbs[dstChunkId]` across a whole union.
+      For ClusterSpatialIndexSlot the resize additionally drags RebindCellTreeBackPointers behind it,
+      which cannot be made safe against a sibling's tree.Add by any lock the GROWER holds
+    the refusal is reachable only if the pre-size is wrong, and the pre-size runs from the tail of
+      FinishArchetypeFencePrep — the one point EVERY Prep exit passes through, and after the repair
+      planner has allocated its destination clusters and filed its requests. It used to sit at the
+      branch-2 exit of PrepareArchetypeFenceCore, which is one of three exits and is ahead of the planner;
+      an archetype leaving through the clean-bitmap exit was then sized by whichever earlier tick had
+      taken branch 2. Measured 2026-09-06: 3 000 entities, 464 pending migrations, ClusterSpatialIndexSlot
+      64 long and a destination chunk id of 64 to record
+    TryEnsureCellTreeSegment creates the archetype's shared cell-tree segment under _finalizeLock and
+      publishes it with Volatile.Write. Promotion is decided per CELL and slices are cell-disjoint, so two
+      workers can promote two cells at once; two unsynchronised creators each build a segment, the later
+      store wins, and every tree the loser's cells built is left reading an orphaned structure
     cluster-fully-drains path (popcount(prev & ~mask) == 0) does NOT finalize in the worker:
       it records the chunkId via RecordClusterDrain (Interlocked.Increment slot reservation)
       and returns. CellClusterPool.RemoveCluster, RemoveClusterFromPerCellIndex,
@@ -1081,7 +1106,7 @@
     ReleaseSlot (Persistent + Transient overloads), DecrementCellEntityCountOnRelease,
     FinaliseEmptyClusterCellState, ClaimSlotInCell (both overloads),
     RecordClusterDrain, DrainPendingClusterFinalizations
-  verified: FenceDirtyBitApplyTests
+  verified: FenceDirtyBitApplyTests, CellTreeDensityTransitionTests
   on_violation:
     plain ++/-- on cell counters → torn updates across workers → drift in EntityCount/ClusterCount
     plain occupancy clear → lost concurrent slot release → ghost entity in cluster
@@ -1089,6 +1114,11 @@
       ClaimSlotInCell has already CAS-claimed → live entity written into a freed chunk
     finalize pass moved before the phase barriers → same race, now unconditional
     Array.Resize from worker → lost writes from siblings holding the old array reference
+    a per-archetype array grown from a slice while a cell tree is promoted → the tree's back-pointer
+      rebind races the sibling's tree.Add; the sibling's handle lands in the abandoned array and the
+      cluster is unreachable through that cell for as long as the tree lives (ST-05, silent)
+    two workers creating the cell-tree segment → one archetype ends with two segments and the cells that
+      promoted against the loser answer queries from a structure nothing else refers to
     ApplyDirtyBitDeltas called without _finalizeLock while siblings run → its plain bit ops lose
       concurrent flips and its grow drops their writes
     the chunk-buffer array grown from a worker → two growers race, one bucket is dropped from the array,

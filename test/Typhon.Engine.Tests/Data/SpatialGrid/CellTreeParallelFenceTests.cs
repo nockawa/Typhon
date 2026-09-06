@@ -26,10 +26,9 @@ namespace Typhon.Engine.Tests;
 /// dirty clusters this population produces. Measured, not argued. The override is gone; <c>AdaptiveFenceCost</c> stays off only so the plan
 /// <see cref="AssertPlanStraddlesAPromotedCell"/> rebuilds is the one the run actually used. That assertion is what makes the interleaving a fact: it proves
 /// some promoted cell's clusters landed in two DIFFERENT chunks, which is "two workers, one tree" for an undiverted implementation.</para>
-/// <para><b>Migrations are deliberately absent.</b> Motion is a rotation about each cluster's own cell centre, at a radius inside the cell's inscribed
-/// circle, so no entity ever leaves its cell. That is not a convenience: <c>AddClusterToPerCellIndex</c> runs from the parallel Migrate slice and resizes
-/// per-archetype arrays, a separate and still-open hazard that <c>AssertCellTreePromotionIsSafeForParallelFence</c> exists to announce. Mixing it in would
-/// make this fixture red for something it does not test.</para>
+/// <para><b>Migrations are deliberately absent HERE.</b> Motion is a rotation about each cluster's own cell centre, at a radius inside the cell's inscribed
+/// circle, so no entity ever leaves its cell. That keeps this fixture about the AabbRefresh divert and nothing else. The Migrate half — a worker inserting
+/// into a cell's index while siblings hold the archetype-wide arrays it indexes through — is <c>CellTreeDensityTransitionTests</c>.</para>
 /// <para><b>Non-vacuity, by ablation.</b> Reverting the divert alone — <c>ApplyOrDeferClusterUpdate</c> calling <c>UpdateClusterInPerCellIndex</c>
 /// unconditionally, every other line untouched — turns both tests red in three runs of three, on <see cref="AssertPromotedTreesAgreeWithClusterState"/>:
 /// <i>"cell 1 holds cluster 46 twice"</i>. A duplicated leaf entry is precisely what two concurrent remove-and-reinserts leave behind. The
@@ -114,9 +113,6 @@ class CellTreeParallelFenceTests : TestBase<CellTreeParallelFenceTests>
         // Must precede InitializeArchetypes — the threshold is copied onto each ArchetypeClusterState as it is built.
         dbe.ClusterCellTreePromoteThreshold = PromoteAt;
 
-        // Promotion plus a parallel fence is refused in production by AssertCellTreePromotionIsSafeForParallelFence, for the Migrate-phase hazard the fixture
-        // remarks describe. This is the one place that combination is deliberately exercised, so the bypass is set explicitly and visibly.
-        dbe.AllowCellTreePromotionWithParallelFence = true;
         dbe.InitializeArchetypes();
 
         if (barrierOnly)

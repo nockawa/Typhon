@@ -364,6 +364,10 @@ public class DatabaseEngineOptions
     /// </summary>
     public StatisticsOptions Statistics { get; set; }
 
+    /// <summary>
+    /// Spatial broadphase tuning — where a cell switches between a linear scan and a per-cell R-Tree.
+    /// </summary>
+    public SpatialOptions Spatial { get; set; } = new();
 }
 
 /// <summary>
@@ -1098,6 +1102,10 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         _options = options;
         _injectedWalIo = injectedWalIo;
         MemoryAllocator = memoryAllocator;
+
+        // Seeded here rather than read at the point of use: AttachCellTreeFactory copies it onto every ArchetypeClusterState during InitializeArchetypes,
+        // and a per-archetype copy of a value that could still change would make two archetypes of one database disagree about where their cells promote.
+        ClusterCellTreePromoteThreshold = _options.Spatial?.CellTreePromoteThreshold ?? SpatialOptions.DefaultCellTreePromoteThreshold;
 
         // Resolve the WAL directory to {bundle}/wal when the caller left it null (the bundle-format default). This MUST run HERE — before
         // InitializeUowRegistry() below — because the reopen path reads _options.Wal.WalDirectory to decide whether WAL segments are present and recovery must
@@ -3146,9 +3154,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // ═══════════════════════════════════════════════════════════════════════
-            // Cluster storage eligibility: SV, Versioned, and Transient all allowed.
+            // Cluster storage: EVERY archetype is cluster-backed, unconditionally — see the constant below.
             // Versioned stores HEAD in cluster slot, chain separate. Transient stores component data in a parallel CBS<TransientStore> segment (zero page cache).
-            // Pure-Versioned archetypes stay on legacy path (must have ≥1 SV or Transient).
+            // Storage mode therefore decides PLACEMENT inside the cluster, never whether the archetype is clustered at all.
             // ═══════════════════════════════════════════════════════════════════════
             // An indexed Transient field no longer disqualifies its archetype (#655). Both documented reasons for that exclusion were wrong: the
             // BTree<TransientStore> / BTree<PersistentStore> split constrains tree INSTANCES rather than archetype placement, and the "cluster Write<T>

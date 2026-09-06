@@ -13,9 +13,16 @@ namespace Typhon.Engine.Internals;
 /// found unnecessary: <c>SharedSegmentRTreeHarnessTests.Claim2</c> drives two ordinary trees over one segment through 120 interleaved inserts, splits both,
 /// and each returns exactly its own payloads. The four metadata values are already per-INSTANCE fields; chunk 0 is a write-through mirror nothing reads
 /// unless the tree is constructed with <c>load: true</c>, which a transient tree never is.</para>
-/// <para>What that measurement did NOT excuse is the shared chunk 0 itself: every tree on the segment writes it on every insert under the tree's own
-/// <c>_metadataLock</c>, which is one contended line per archetype once the fence runs cells in parallel. That is a suppression inside
-/// <see cref="SpatialRTree{TStore}"/> and is tracked separately — it is a throughput problem, not a correctness one.</para>
+/// <para><b>That measurement is SEQUENTIAL, and the concurrent case rests on something else.</b> <c>Claim2</c> interleaves the two trees' operations on one
+/// thread — it spawns nothing — so it licenses two trees sharing a segment, not two trees mutating it at once. Cell-disjoint Migrate slices do produce the
+/// latter: two workers can promote or grow two different cells simultaneously. What makes that safe is <see cref="ChunkBasedSegment{TStore}"/>'s own
+/// allocator, which is lock-free with growth serialised on its <c>_growLock</c>, plus the double-check in <c>TryEnsureCellTreeSegment</c> for the creation
+/// race. <c>CellTreeDensityTransitionTests</c> is the first thing that drives it from several workers at all.</para>
+/// <para><b>The shared chunk 0 was the remaining worry, and it does not apply here.</b> The concern was that every tree on the segment writes chunk 0 on
+/// every insert under the tree's own <c>_metadataLock</c>, one contended line per archetype once the fence runs cells in parallel. This type constructs its
+/// tree with <c>mirrorMetadata: false</c> (see the constructor below), and <c>SpatialRTree.SyncMetadata</c> returns before taking that lock when the flag is
+/// clear — so a cell cluster tree neither writes chunk 0 nor contends for it. The mirror exists for trees that may be reloaded with <c>load: true</c>, which
+/// a transient per-cell tree never is.</para>
 /// <para><b>Why one segment per cell was rejected, with the number.</b> A <see cref="ChunkBasedSegment{TStore}"/> spans at least two pages since the v4
 /// directory-only root (the root page carries the page directory and holds zero chunks), so 16 KiB minimum. At the 128³ / 1 % baseline — 20 971 occupied
 /// cells — that is ~328 MiB of mostly-empty segment per spatial archetype, against ~10 MiB for the whole VDB layer.</para>
@@ -110,6 +117,25 @@ internal sealed class CellClusterTree
         {
             accessor.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Retire this tree, returning every chunk it still holds to the shared segment. The instance must not be used afterwards.
+    /// </summary>
+    /// <remarks>
+    /// Called by the demotion path once the last cluster has been removed. Removing entries cascades leaf frees up the tree, but the final empty ROOT has no
+    /// parent to unlink it from and so survives — one stranded chunk per tree, on a segment shared by every cell of the archetype and reclaimed by nothing.
+    /// </remarks>
+    internal void Release()
+    {
+        if (_clusterCount != 0)
+        {
+            ThrowHelper.ThrowInvalidOp($"This cell's tree still holds {_clusterCount} clusters; releasing it now would strand every chunk they occupy.");
+        }
+
+        _tree.ReleaseRootChunk();
+        _looseLeafCount = 0;
+        _freedChunks.Clear();
     }
 
     /// <summary>The cluster's current packed handle, or <see cref="SpatialRTree{TStore}.NullHandle"/> when it is not in this tree.</summary>

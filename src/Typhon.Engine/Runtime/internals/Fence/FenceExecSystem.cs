@@ -471,7 +471,18 @@ internal sealed class FenceMigrateExecSystem : FencePhaseExecSystemBase
         // Each migration's dirty-bit clear/set goes into this chunk's local buffer (review false-sharing fix).
         // OnAfterChunk flushes the buffer under each touched archetype's _finalizeLock.
         var buffer = GetChunkDirtyBuffer(chunkIndex);
-        Engine.ExecuteMigrationsSlice(meta, item.SliceStart, item.SliceCount, changeSet, buffer, chunkIndex);
+        // Marks the thread for the duration of the slice so the shared per-archetype arrays refuse to REALLOCATE under it — see the PER-ARCHETYPE ARRAY
+        // GROWTH banner in ArchetypeClusterState. Cleared in a finally: a slice that throws still leaves the thread to the pool, and a stale flag would
+        // turn the next legitimate serial grow on that thread into a spurious failure.
+        ArchetypeClusterState.EnterMigrateSlice();
+        try
+        {
+            Engine.ExecuteMigrationsSlice(meta, item.SliceStart, item.SliceCount, changeSet, buffer, chunkIndex);
+        }
+        finally
+        {
+            ArchetypeClusterState.ExitMigrateSlice();
+        }
         return 0;
     }
 

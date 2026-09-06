@@ -69,6 +69,16 @@ internal sealed class DatabaseEngineOptionsValidator : IValidateOptions<Database
                 + "0 disables the dirty-page trigger.");
         }
 
+        // A cell half promotes at this count and falls back at half of it, so anything below 2 leaves no gap between the two and a cell on the boundary
+        // rebuilds itself in both directions on alternating inserts. int.MaxValue is the documented "never promote" value and is deliberately in range.
+        var spatial = options.Spatial;
+        if (spatial != null && spatial.CellTreePromoteThreshold < 2)
+        {
+            failures.Add(
+                $"Spatial.CellTreePromoteThreshold must be >= 2 (was {spatial.CellTreePromoteThreshold}). "
+                + "Set it to int.MaxValue to keep every cell on the linear scan.");
+        }
+
         // WalWriterOptions is the real WAL config (unlike the removed vestigial ResourceOptions budget knobs). Validate its
         // wired invariants when present; the engine tolerates a null Wal by deriving defaults, so a null is not an error here.
         var wal = options.Wal;
