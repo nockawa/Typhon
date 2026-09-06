@@ -3056,11 +3056,14 @@ internal sealed unsafe partial class ArchetypeClusterState
         EnsureClusterWriteBookkeepingCapacity(PrimarySegmentCapacity);
         if (PerCellIndex != null)
         {
+            // Before the clear, not after: clearing the slots drops the last reference to every promoted cell's tree, and those trees own chunks of a
+            // TRANSIENT segment that nothing reclaims. See ReleaseAllCellTrees.
+            ReleaseAllCellTrees(epochManager);
             Array.Clear(PerCellIndex);
 
-            // Clearing the slots discards every promoted cell's tree with them, so the counter has to follow. Leaving it stale makes RefitPromotedCellTrees
-            // and RebindCellTreeBackPointers walk an array of nulls forever after a rebuild — harmless — but it also makes PromotedCellCount lie to the tests
-            // that use it as their non-vacuity guard, which is how a promotion test passes without promoting anything.
+            // The counter has to follow the clear. Leaving it stale makes RefitPromotedCellTrees and RebindCellTreeBackPointers walk an array of nulls
+            // forever after a rebuild — harmless — but it also makes PromotedCellCount lie to the tests that use it as their non-vacuity guard, which is how
+            // a promotion test passes without promoting anything.
             PromotedCellCount = 0;
         }
         Array.Fill(ClusterSpatialIndexSlot, -1);
@@ -3915,11 +3918,16 @@ internal sealed unsafe partial class ArchetypeClusterState
         // same process) do not double-count clusters that already have entries in the index from a prior spawn/migration path.
         if (PerCellIndex != null)
         {
+            // Before the clear, not after: clearing the slots drops the last reference to every promoted cell's tree, and those trees own chunks of a
+            // TRANSIENT segment that nothing reclaims. See ReleaseAllCellTrees.
+            // No epoch manager on this signature. It has no production caller (RebuildSpatialStateFromData replaced it at both), so rather than widen a
+            // public signature for a path nothing takes, this passes null and the release is skipped — see ReleaseAllCellTrees.
+            ReleaseAllCellTrees(null);
             Array.Clear(PerCellIndex);
 
-            // Clearing the slots discards every promoted cell's tree with them, so the counter has to follow. Leaving it stale makes RefitPromotedCellTrees
-            // and RebindCellTreeBackPointers walk an array of nulls forever after a rebuild — harmless — but it also makes PromotedCellCount lie to the tests
-            // that use it as their non-vacuity guard, which is how a promotion test passes without promoting anything.
+            // The counter has to follow the clear. Leaving it stale makes RefitPromotedCellTrees and RebindCellTreeBackPointers walk an array of nulls
+            // forever after a rebuild — harmless — but it also makes PromotedCellCount lie to the tests that use it as their non-vacuity guard, which is how
+            // a promotion test passes without promoting anything.
             PromotedCellCount = 0;
         }
         Array.Fill(ClusterSpatialIndexSlot, -1);
@@ -5068,6 +5076,55 @@ internal sealed unsafe partial class ArchetypeClusterState
     /// </summary>
     internal uint ReadStoredCategoryMask(PerCellSpatialSlot slot, int clusterChunkId, int indexSlot) =>
         slot.HasDynamicTree ? ClusterAabbs[clusterChunkId].CategoryMask : slot.DynamicIndex.CategoryMasks[indexSlot];
+
+    /// <summary>
+    /// Return every live cell tree's chunks to the archetype's shared segment. Call before discarding <see cref="PerCellIndex"/> wholesale.
+    /// </summary>
+    /// <remarks>
+    /// The rebuild paths clear the per-cell index and reset <see cref="PromotedCellCount"/>, which drops the last reference to every promoted cell's tree.
+    /// On a <c>TransientStore</c> segment that reclaims nothing — the chunks stay allocated and the segment is never rebuilt, so a rebuild that runs after
+    /// cells have promoted strands their whole node sets for the life of the database. Reachable because these same methods PROMOTE while rebuilding: they
+    /// call <see cref="AddClusterToPerCellIndex"/> per cluster, which evaluates the threshold.
+    /// </remarks>
+    /// <param name="epochManager">
+    /// Pins the calling thread while the trees are walked. Emptying a tree opens a query enumerator over its own segment, and a
+    /// <c>ChunkAccessor</c> may only be created inside an epoch scope — the demotion path inherits one from the fence, these rebuild paths have none of
+    /// their own. Null skips the release rather than asserting: a caller with no epoch manager cannot walk the trees safely, and leaking chunks on a path
+    /// that has no production caller is a better outcome than a torn read.
+    /// </param>
+    private void ReleaseAllCellTrees(EpochManager epochManager)
+    {
+        if (PerCellIndex == null || CellTreeSegment == null || epochManager == null)
+        {
+            return;
+        }
+
+        var depth = epochManager.EnterScope();
+        try
+        {
+            ReleaseAllCellTreesInScope();
+        }
+        finally
+        {
+            epochManager.ExitScope(depth);
+        }
+    }
+
+    /// <inheritdoc cref="ReleaseAllCellTrees"/>
+    private void ReleaseAllCellTreesInScope()
+    {
+        for (var i = 0; i < PerCellIndex.Length; i++)
+        {
+            var slot = PerCellIndex[i];
+            if (slot == null)
+            {
+                continue;
+            }
+
+            slot.DynamicTree?.ReleaseAll();
+            slot.StaticTree?.ReleaseAll();
+        }
+    }
 
     /// <summary>Obtain the archetype's shared cell-tree segment, creating it on first use. False when no factory was supplied.</summary>
     /// <remarks>

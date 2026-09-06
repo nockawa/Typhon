@@ -555,6 +555,65 @@ class CellTreeDensityTransitionTests : TestBase<CellTreeDensityTransitionTests>
             $"the tick failed for some other reason: {seen}");
     }
 
+    /// <summary>
+    /// Rebuilding the per-cell index after cells have promoted must return their trees' chunks, not strand them.
+    /// </summary>
+    /// <remarks>
+    /// <para>The rebuild paths clear <c>PerCellIndex</c> wholesale and reset the promoted-cell counter, which drops the last reference to every tree. On a
+    /// transient segment that reclaims nothing. It is reachable because the rebuild itself PROMOTES — it adds every cluster to its cell, and each of those
+    /// insertions evaluates the threshold — so a second rebuild discards what the first one built.</para>
+    /// <para>Three rebuilds, because one proves nothing: the first runs against an index that was already populated by the spawn path, and only the second
+    /// onwards discard trees the rebuild itself created.</para>
+    /// </remarks>
+    [Test]
+    [CancelAfter(120_000)]
+    public void RebuildingThePerCellIndexReleasesTheTreesItDiscards()
+    {
+        ServiceProvider.EnsureFileDeleted<ManagedPagedMMFOptions>();
+        using var scope = ServiceProvider.CreateScope();
+        using var dbe = SetupEngine(scope, PromoteAt);
+        var cs = ClusterStateOf(dbe);
+
+        var rng = new Random(24680);
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < DenseEntityCount; i++)
+            {
+                var x = 1f + ((float)rng.NextDouble() * (CellSize - 2f));
+                var y = 1f + ((float)rng.NextDouble() * (CellSize - 2f));
+                tx.Spawn<ClCohUnit>(ClCohUnit.Pos.Set(PointAt(x, y)));
+            }
+            tx.Commit();
+        }
+        dbe.WriteTickFence(1);
+        Assert.That(ObserveCell(dbe, cs, 1, 1f, 1f).IsTree, Is.True, "the seed population did not promote, so no tree exists to be discarded");
+
+        var afterFirst = -1;
+        for (var pass = 0; pass < 3; pass++)
+        {
+            // The production callers (InitializeArchetypes, RebuildClusterFromChains) run inside an epoch scope; the method assumes one and asserts on it.
+            using (EpochGuard.Enter(dbe.EpochManager))
+            {
+                cs.RebuildSpatialStateFromData(dbe.SpatialGrid, dbe.EpochManager);
+            }
+
+            Assert.That(ObserveCell(dbe, cs, pass, 1f, 1f).IsTree, Is.True, $"pass {pass}: the rebuild did not re-promote, so later passes discard nothing");
+            AssertQueryMatchesStorage(dbe, cs, $"rebuild pass {pass}");
+
+            var allocated = cs.CellTreeSegment?.AllocatedChunkCount ?? 0;
+            TestContext.Out.WriteLine($"rebuild pass {pass}: cell-tree segment holds {allocated} allocated chunks");
+            if (pass == 0)
+            {
+                afterFirst = allocated;
+            }
+            else
+            {
+                Assert.That(allocated, Is.LessThanOrEqualTo(afterFirst),
+                    $"pass {pass} left {allocated} chunks allocated against {afterFirst} after the first — each rebuild is stranding the trees it discards");
+            }
+        }
+    }
+
     /// <summary>The shipped default is what an engine built from unconfigured options actually carries.</summary>
     [Test]
     public void TheDefaultThresholdIsTheOneTheOptionsDeclare()

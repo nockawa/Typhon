@@ -138,6 +138,39 @@ internal sealed class CellClusterTree
         _freedChunks.Clear();
     }
 
+    /// <summary>
+    /// Retire a tree that is still populated, returning every chunk it holds. For the wholesale discard paths, where the owner is about to drop the entire
+    /// per-cell index rather than demote one cell.
+    /// </summary>
+    /// <remarks>
+    /// Empties through <see cref="RemoveAt"/> so the leaf frees cascade exactly as they do on the demotion path, then releases the root the cascade cannot
+    /// reach. Defensive about a handle that is already null rather than throwing the way <see cref="RemoveAt"/> does: this runs while state is being rebuilt,
+    /// sometimes after a crash, and abandoning a rebuild over one inconsistent handle would be a worse outcome than the chunk it would have reclaimed.
+    /// </remarks>
+    internal void ReleaseAll()
+    {
+        var ids = new int[_clusterCount];
+        var found = 0;
+        foreach (var clusterChunkId in EnumerateClusterIds())
+        {
+            if (found < ids.Length)
+            {
+                ids[found++] = clusterChunkId;
+            }
+        }
+
+        for (var i = 0; i < found; i++)
+        {
+            if (!SpatialRTree<TransientStore>.IsNullHandle(_tree.PayloadBackPointers[ids[i]]))
+            {
+                RemoveAt(ids[i]);
+            }
+        }
+
+        _clusterCount = 0;
+        Release();
+    }
+
     /// <summary>The cluster's current packed handle, or <see cref="SpatialRTree{TStore}.NullHandle"/> when it is not in this tree.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int HandleOf(int clusterChunkId) => _tree.PayloadBackPointers[clusterChunkId];
