@@ -10,7 +10,7 @@ description: 'Batched SoA storage that packs N same-archetype entities contiguou
 
 Per-entity storage pays a hash-map lookup plus a scattered page fetch for *every* component of *every* entity, *every* tick — at 100K+ entities that indirection, not your logic, dominates the cost. Cluster storage (the engine calls it *Entity Clusters*) packs N entities (8–64, auto-sized per [archetype](xref:concept-archetype) to fill a page) into one contiguous chunk, each component laid out as its own packed array — `Position[N]`, `Velocity[N]`, … . Bulk iteration becomes a linear scan the hardware prefetcher loves; random `Open`/`OpenMut` resolves through the EntityMap to the same cluster slot.
 
-> 📌 **Every archetype is cluster-backed.** There is no eligibility condition, no opt-in and no opt-out, and nothing in your component mix can put an archetype on a different path. What a component's [storage mode](xref:concept-storage-mode) decides is not *whether* you get a cluster but *where that component's array lives inside it*:
+> 📌 **Every archetype is cluster-backed**, and that is not something you configure — no opt-in, no opt-out, and nothing in your component mix can put an archetype on a different path. What a component's [storage mode](xref:concept-storage-mode) decides is not *whether* you get a cluster but *where that component's array lives inside it*:
 
 | Component's storage mode | Where its array lives | What that gives you |
 |---|---|---|

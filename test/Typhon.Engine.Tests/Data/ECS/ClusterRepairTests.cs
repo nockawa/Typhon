@@ -705,14 +705,26 @@ class ClusterRepairTests : TestBase<ClusterRepairTests>
     // ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Measure and report the wall-clock cost of one repair pass per entity, against §5.2's ~60 ns and the ~6 ms it
-    /// implies for a 100 K-entity cell.
+    /// Measure and report the tick fence's wall-clock cost per entity a repair moved.
     /// </summary>
+    /// <remarks>
+    /// <para><b>This is a fence-per-repaired-entity figure, not the cost of the re-sort.</b> The timer wraps the whole
+    /// <c>WriteTickFence</c> and the divisor is <c>RepairedEntityCount</c>, so the quotient also carries the AABB
+    /// refresh, the WAL emit and — because this fixture owns the ChangeSet — <c>SaveChanges</c> page writeback. It is
+    /// the right shape for sizing <c>ReclusterBudgetMs</c>, which is charged against the whole fence, and the wrong
+    /// shape for costing the re-sort, which the phase breakdown puts at nearer half. The label mattered: read as a
+    /// repair figure it was published as one, and the published range then also carried the outlier below.</para>
+    /// <para><b>Read the median of the warm rounds, not the spread.</b> Ten of thirteen warm rounds land at
+    /// 1 058-1 619 ns. Three land at 5 200-10 600 with zero GCs, flat total pause, identical allocation, and the stall
+    /// in a DIFFERENT phase each time — an external stall of a single-threaded fence on a shared box, not a property of
+    /// the pipeline. Quoting the worst of those as the top of a range overstates it by about 5x.</para>
+    /// </remarks>
     /// <remarks>
     /// <c>[Explicit]</c> because it is a measurement, not a check: a wall-clock threshold in the suite is a flake on a
     /// loaded machine and says nothing on an unloaded one. Run it deliberately, read the number, and compare it against
     /// <c>SpatialGridConfig.RepairNsPerEntity</c> — the constant the admission decision projects with, which is only
-    /// honest for as long as this measurement agrees with it.
+    /// honest for as long as this measurement agrees with it. In a running engine the same quantity is measured
+    /// continuously and published as <c>MeasuredNsPerEntity</c>, which is what an operator should read instead of this.
     /// </remarks>
     [Test]
     [Explicit("measurement, not an assertion — run deliberately and read the reported ns/entity")]
@@ -726,7 +738,7 @@ class ClusterRepairTests : TestBase<ClusterRepairTests>
         //
         // The FIRST repair a process performs is tick two of its life: the whole fence pipeline is still being JIT-ed,
         // the cluster segment is growing into pages nobody has touched, and the WAL is writing its first real batch.
-        // Measured that way the answer was 20 941 ns/entity, 349x the design's 60 ns — which says almost nothing about
+        // Measured that way the answer was 22 000-29 700 ns/entity — an order of magnitude out, and it says almost nothing about
         // the re-sort. Scrambling the population and repairing again, on the same engine, is what isolates the steady
         // cost, and the spread across repeats is what says whether the first number was warm-up or real.
         var samples = new List<(int moved, double ms)>();
@@ -753,16 +765,17 @@ class ClusterRepairTests : TestBase<ClusterRepairTests>
         Assert.That(samples, Is.Not.Empty, "no repair was ever measured");
 
         var report = new System.Text.StringBuilder();
-        report.AppendLine($"AC-12.7 — {Population} entities, {samples.Count} repairs measured (design estimate 60 ns/entity, ~6 ms per 100 K-entity cell):");
+        report.AppendLine($"AC-12.7 — {Population} entities, {samples.Count} repairs measured. FENCE ns per repaired entity, not re-sort cost:");
         var best = double.MaxValue;
         foreach (var (moved, ms) in samples)
         {
             var ns = ms * 1_000_000d / moved;
             best = Math.Min(best, ns);
-            report.AppendLine($"  {moved,6} entities in {ms,8:F3} ms = {ns,9:F1} ns/entity ({ns / 60d,7:F1}x estimate)");
+            report.AppendLine($"  {moved,6} entities in {ms,8:F3} ms = {ns,9:F1} ns/entity");
         }
 
         report.AppendLine($"  best {best:F1} ns/entity => {best * 100_000 / 1_000_000d:F2} ms projected for a 100 K-entity cell");
+        report.AppendLine("  read the MEDIAN of the warm rounds; sporadic 5-10x rounds are box stalls, not the pipeline (see the remarks)");
         Assert.Pass(report.ToString());
     }
 

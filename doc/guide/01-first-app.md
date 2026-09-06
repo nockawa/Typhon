@@ -98,7 +98,7 @@ namespace ShardGuide
     [Component("Shard.Bounds", 1, StorageMode = StorageMode.SingleVersion)]
     public struct Bounds
     {
-        [SpatialIndex(2f, Mode = SpatialMode.Dynamic)] public AABB2F Box;
+        [SpatialIndex(Mode = SpatialMode.Dynamic)] public AABB2F Box;
     }
 
     // HAM — three parallel pools (Health / Action / Mind), drained by exertion, regenerated over time.

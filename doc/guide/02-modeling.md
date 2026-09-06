@@ -96,7 +96,7 @@ public struct Wallet { public long Credits; }
 public struct Transform { public Point2F Pos; public Point2F Vel; }
 
 [Component("Shard.Bounds", 1, StorageMode = StorageMode.SingleVersion)]     // spatial index lives here (§5)
-public struct Bounds { [SpatialIndex(2f, Mode = SpatialMode.Dynamic)] public AABB2F Box; }
+public struct Bounds { [SpatialIndex(Mode = SpatialMode.Dynamic)] public AABB2F Box; }
 
 [Component("Shard.Intent", 1, StorageMode = StorageMode.Transient)]         // per-tick AI scratch
 public struct Intent { public Point2F Target; }
@@ -245,7 +245,7 @@ Purely organisational — it tags a component into a named family (`Social`, `In
 When entities live in space and you ask "what's near here?", a field scan is the wrong tool. A spatial index answers geometric queries — but it indexes an **axis-aligned box** (`AABB2F`), not a point. So a point entity carries a small `Bounds` component whose box collapses onto its position, marked `[SpatialIndex]`:
 
 ```csharp
-public struct Bounds { [SpatialIndex(2f, Mode = SpatialMode.Dynamic)] public AABB2F Box; }   // 2f = movement margin
+public struct Bounds { [SpatialIndex(Mode = SpatialMode.Dynamic)] public AABB2F Box; }
 ```
 
 Two attribute arguments shape how it's maintained:
@@ -310,4 +310,4 @@ You can now design a data model: archetypes and their hierarchy, the storage mod
 
 **Concepts:** [Component](../key-concepts/component.md) · [Archetype](../key-concepts/archetype.md) · [Storage mode](../key-concepts/storage-mode.md) · [Index](../key-concepts/secondary-index.md) · [Spatial index](../key-concepts/spatial-index.md) · [Schema evolution](../key-concepts/schema-evolution.md) · [EntityLink](../key-concepts/entity-link.md).
 
-**Exact calls:** `[Component(StorageMode = …)]` · `[Index]` / `[Index(AllowMultiple = true, OnParentDelete = CascadeAction.Delete)]` · `[SpatialIndex(margin, Mode = …, Category = …)]` on an `AABB2F` field · `[ComponentFamily]` · `Point2F` / `Point3F` · `EntityLink<T>` · `ComponentCollection<T>` · `Archetype<TSelf, TParent>` (inheritance) · generated `ReadAll` / `ReadWriteAll` · `ConfigureSpatialGrid` (in the `Open`/`AddTyphon` options) · `dbe.WriteTickFence` · `tx.Query<T>().WhereNearby/WhereInAABB/WhereRay` · `cluster.WriteSpatial`.
+**Exact calls:** `[Component(StorageMode = …)]` · `[Index]` / `[Index(AllowMultiple = true, OnParentDelete = CascadeAction.Delete)]` · `[SpatialIndex(Mode = …, Category = …)]` on an `AABB2F` field · `[ComponentFamily]` · `Point2F` / `Point3F` · `EntityLink<T>` · `ComponentCollection<T>` · `Archetype<TSelf, TParent>` (inheritance) · generated `ReadAll` / `ReadWriteAll` · `ConfigureSpatialGrid` (in the `Open`/`AddTyphon` options) · `dbe.WriteTickFence` · `tx.Query<T>().WhereNearby/WhereInAABB/WhereRay` · `cluster.WriteSpatial`.

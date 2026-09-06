@@ -101,7 +101,7 @@ public class Field
     public int ArrayLength { get; set; }            // > 0 if [n]-element fixed array
     public bool HasSpatialIndex { get; set; }
     public SpatialFieldType SpatialFieldType { get; set; }
-    public float SpatialMargin / SpatialCellSize { get; set; }
+    public float SpatialCellSize { get; set; }
     public SpatialMode SpatialMode { get; set; }    // Static / Dynamic
     public uint SpatialCategory { get; set; }       // archetype-level mask, default uint.MaxValue
     public bool IsForeignKey { get; set; }
@@ -120,7 +120,7 @@ public class Field
 | `[Component(name, revision, allowMultiple = false)]` + `StorageMode = ...` + `PreviousName = ...` | struct | Marks a struct as a component. `Name` keys the schema slot, `Revision` is the migration version, `StorageMode` chooses Versioned (default) / SingleVersion / Transient. |
 | `[Field(FieldId = N, Name = "...", PreviousName = "...")]` | field | Override the auto-assigned FieldId or current/previous field name. Used to keep FieldIds stable across renames. |
 | `[Index(AllowMultiple = false, OnParentDelete = CascadeAction.None)]` | field | Build a B+Tree index on this field. `AllowMultiple` allows non-unique keys (multi-value index). |
-| `[SpatialIndex(margin, cellSize, Mode = Dynamic, Category = uint.MaxValue)]` | field (AABB / BSphere) | Build a spatial index (R-Tree). At most one per component. Not allowed on Transient. |
+| `[SpatialIndex(cellSize, Mode = Dynamic, Category = uint.MaxValue)]` | field (AABB / BSphere) | Build a spatial index (R-Tree). At most one per component. Not allowed on Transient. |
 | `[ForeignKey(typeof(TargetComponent))]` | `long` field | Marks the field as an FK reference to another component's PK. |
 | `[Archetype(revision = 1, alias = null)]` + `Name = ...` + `PreviousName = ...` | class | Marks an ECS archetype. Identity is the CLR type name (or `Name = "…"`); the engine auto-assigns a per-process catalog id + a per-DB routing id — no numeric id is set in source. `PreviousName` keeps identity stable across a rename, matched on reopen (see [06-ecs](06-ecs.md)). |
 
