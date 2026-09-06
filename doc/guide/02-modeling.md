@@ -284,7 +284,7 @@ Three spatial predicates cover the common needs:
 - `WhereInAABB<T>(minX,…, maxX,…)` — everything inside a box (selection rectangle, region trigger).
 - `WhereRay<T>(origin…, dir…, maxDist)` — first hits along a ray (line of sight, scans).
 
-That's the user-facing surface. *How* it stays fast as thousands of characters move every tick (the broad-phase grid + per-component R-tree, margins, rebuild avoidance) is engine internals — see [07-spatial](../in-depth-overview/07-spatial.md) if you're curious; you don't need it to use spatial queries.
+That's the user-facing surface, and it is where the *free* part ends. Keeping the index live as thousands of characters move every tick costs real per-tick work — the fence recomputes cluster bounds, migrates entities across cells, and re-packs cells whose layout has decayed — and the size you gave `cellSize` above is the single number that most changes that bill. Read [What Spatial Costs You](../feature-set/Spatial/spatial-cost-model.md) before you declare a second spatial archetype; it covers the four cost centres and the rule for choosing a cell size. [07-spatial](../in-depth-overview/07-spatial.md) is the mechanism underneath, if you want it.
 
 ---
 

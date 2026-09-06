@@ -152,11 +152,11 @@ Page 6: Reserved for the occupancy bitmap's next map-extension directory page
 Page 7: Reserved for that map-extension page's TWIN (it is itself a directory page → needs a twin)
 ```
 
-`InitialReservedPageCount = 8`. The reserves are pre-allocated so the *first* occupancy grow doesn't need to chain through the allocator that's itself trying to grow. The **directory-only root (v4)** is why the occupancy bitmap needs a *separate* first data page (page 4): the root page now holds only the segment's page directory, no bitmap words.
+`InitialReservedPageCount = 8`. The reserves are pre-allocated so the *first* occupancy grow doesn't need to chain through the allocator that's itself trying to grow. The **directory-only root (v4)** is why the occupancy bitmap needs a *separate* first data page (page 4): the root page holds only the segment's page directory, no bitmap words.
 
 ### `RootFileHeader` — about 108 bytes
 
-On disk at page 0, offset `PageBaseHeaderSize` (64), there's a small identity header — *not* the 192 B figure that appeared in some older docs:
+On disk at page 0, offset `PageBaseHeaderSize` (64), there's a small identity header:
 
 ```csharp
 [StructLayout(LayoutKind.Sequential)]
@@ -363,7 +363,7 @@ Independent of the strategy, the moment the allocator decides backpressure is ne
 
 ## 7. Page CRC & seqlock writes
 
-Two mechanisms let the checkpoint snapshot a live page **consistently and verifiably** without blocking writers: a **seqlock counter** on every page detects in-flight writes, and a **CRC32C** on every page detects a torn write after a crash. There is **no FPI** — the Minimal-WAL redesign retired full-page images entirely; torn pages are healed by re-derivation or fail the open loudly (see [11-durability §6](11-durability.md)).
+Two mechanisms let the checkpoint snapshot a live page **consistently and verifiably** without blocking writers: a **seqlock counter** on every page detects in-flight writes, and a **CRC32C** on every page detects a torn write after a crash. There is **no FPI** — full-page images are never written; torn pages are healed by re-derivation or fail the open loudly (see [11-durability §6](11-durability.md)).
 
 ### The seqlock — `ModificationCounter`
 
@@ -371,7 +371,7 @@ Every page header has a `ModificationCounter : int`. Convention: **even = quiesc
 
 `CopyPageWithSeqlock` (≈ `:1697`) is the consumer used by checkpoint: it spins while the counter is odd, copies the page into staging, and re-checks the counter — if it changed, retry. There are **two skip conditions**: an odd counter on a page whose `PageState` is *not* `Exclusive` is a **stale** counter — no writer to wait for — and is skipped **immediately** (logged via `LogStaleSeqlockCounterSkip`); an odd counter held by a *real* exclusive writer for longer than the **100 ms** threshold is also skipped (the writer is hung or in backpressure). A skipped page holds the checkpoint's coverage gate back (CK-03) but keeps its dirty bit / DC so the next cycle re-captures it.
 
-Critically — `InitHeader` in `LogicalSegment.cs` (≈ `:498`) **preserves `ModificationCounter` across header clears**. Zeroing it while a page is latched would leave the counter odd after unlatch — a quiescent page falsely advertising a write. The stale-counter guard above now skips such a page immediately rather than spinning, but preserving the counter (and the slot-reuse reset in `TryAcquire`) is still the correct invariant: a quiescent page must read even.
+Critically — `InitHeader` in `LogicalSegment.cs` (≈ `:498`) **preserves `ModificationCounter` across header clears**. Zeroing it while a page is latched would leave the counter odd after unlatch — a quiescent page falsely advertising a write. The stale-counter guard above skips such a page immediately rather than spinning, but preserving the counter (and the slot-reuse reset in `TryAcquire`) is the correct invariant: a quiescent page must read even.
 
 ### The CRC — `PageChecksum`
 

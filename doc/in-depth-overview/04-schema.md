@@ -146,8 +146,8 @@ public struct ComponentR1
     public int CompOverhead;         // ComponentStorageOverhead
     public int ComponentSPI;         // root page index of ComponentSegment
     public int VersionSPI;           // root page index of CompRevSegment (revision chain)
-    // DefaultIndexSPI, String64IndexSPI, TailIndexSPI removed in #629 —
-    // secondary-index ownership moved to ArchetypeR1 (ClusterIndexSPI / ClusterString64IndexSPI).
+    // Secondary-index ownership sits on ArchetypeR1 (ClusterIndexSPI / ClusterString64IndexSPI),
+    // not here.
     public ComponentCollection<FieldR1> Fields;
     public int SchemaRevision;
     public int FieldCount;
@@ -360,11 +360,11 @@ public bool RegisterComponentByType(
 
 Throws `ArgumentException` if `componentType` is a reference type or an open generic — the `unmanaged` constraint is verified at specialization time by the CLR.
 
-> **Note on the diagram:** Older docs and the embedded SVG still use the name `RegisterComponent<T>()` for the entry point. The actual API surface has been `RegisterComponentFromAccessor<T>` / `RegisterComponentByType` for some time. Don't go looking for `RegisterComponent<T>` in current code.
+> **Note on the diagram:** the embedded SVG labels the entry point `RegisterComponent<T>()`. The API surface is `RegisterComponentFromAccessor<T>` / `RegisterComponentByType`; there is no `RegisterComponent<T>` to look for.
 
 ### StorageMode is fixed per `(name, revision)`
 
-`StorageMode` comes solely from the component's `[Component]` attribute — there is no per-registration override. On reopen, re-declaring a persisted component at the **same revision** with a different `StorageMode` throws `InvalidOperationException` (`definition.Revision == persisted.Comp.SchemaRevision && declared != persisted`): reinterpreting persisted bytes under a different storage discipline would be silent corruption. Changing how a component is stored requires a new `[Component]` revision. (Full data migration across a mode change on a revision bump is not yet wired — tracked in #546.)
+`StorageMode` comes solely from the component's `[Component]` attribute — there is no per-registration override. On reopen, re-declaring a persisted component at the **same revision** with a different `StorageMode` throws `InvalidOperationException` (`definition.Revision == persisted.Comp.SchemaRevision && declared != persisted`): reinterpreting persisted bytes under a different storage discipline would be silent corruption. Changing how a component is stored requires a new `[Component]` revision. (Full data migration across a mode change on a revision bump is not yet wired.)
 
 ---
 

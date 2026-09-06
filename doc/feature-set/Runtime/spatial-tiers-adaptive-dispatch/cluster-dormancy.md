@@ -7,7 +7,7 @@ description: 'Clusters untouched for N ticks sleep and are skipped by every disp
 # Cluster Dormancy (Sleep/Wake)
 > Clusters untouched for N ticks sleep and are skipped by every dispatch path, waking within one tick of being written to.
 
-**Status:** ✅ Implemented · **Visibility:** Public · **Level:** 🟣 Advanced · **Category:** [Runtime](../README.md)
+**Status:** ✅ Implemented · **Visibility:** Internal · **Category:** [Runtime](../README.md)
 
 ## 🎯 What it solves
 

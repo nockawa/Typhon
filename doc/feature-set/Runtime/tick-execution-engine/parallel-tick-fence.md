@@ -49,7 +49,7 @@ using var runtime = TyphonRuntime.Create(engine, schedule => { /* ... */ }, opti
 
 | Option | Default | Effect |
 |---|---|---|
-| `EnableParallelFence` | `true` | Parallel fence sub-DAG vs. the legacy single-threaded `WriteTickFence` |
+| `EnableParallelFence` | `true` | Parallel fence sub-DAG vs. the single-threaded `WriteTickFence` |
 | `FenceChunkOversubscription` | 2 | Chunk-count cap = oversubscription × `WorkerCount`; smooths per-worker preemption jitter |
 | `FenceCostModel` | AntHill-calibrated defaults | Seeds per-unit cost (migration ≈ 33µs/entity, AABB ≈ 2.4µs/cluster) |
 | `AdaptiveFenceCost` | `true` | Continuously recalibrates `FenceCostModel` from a 64-tick sliding window; disable to pin the static seed for repeatable benchmarks |
@@ -58,7 +58,7 @@ using var runtime = TyphonRuntime.Create(engine, schedule => { /* ... */ }, opti
 
 - Application code never interacts with the fence DAG directly — there is no API surface beyond the
   `RuntimeOptions` knobs above.
-- `EnableParallelFence = false` falls back to the legacy serial `WriteTickFence` on the TickDriver
+- `EnableParallelFence = false` falls back to the serial `WriteTickFence` on the TickDriver
   thread — useful for diagnostics or as a regression safety valve; observable behavior is otherwise
   equivalent.
 - Both the parallel and serial paths feed the engine's mandatory WAL + checkpoint pipeline to drain

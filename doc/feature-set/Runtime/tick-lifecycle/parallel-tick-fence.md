@@ -47,7 +47,7 @@ using var runtime = TyphonRuntime.Create(dbe, schedule => { /* ... */ }, options
 
 | Option | Default | Effect |
 |---|---|---|
-| `EnableParallelFence` | `true` | Parallel fence sub-DAG vs. the legacy single-threaded `WriteTickFence` |
+| `EnableParallelFence` | `true` | Parallel fence sub-DAG vs. the single-threaded `WriteTickFence` |
 | `FenceChunkOversubscription` | 2 | Chunk-count cap = oversubscription × `WorkerCount`; smooths per-worker preemption jitter |
 | `FenceCostModel` | AntHill-calibrated defaults | Seeds per-unit cost (migration ≈ 33µs/entity, AABB ≈ 2.4µs/cluster) |
 | `AdaptiveFenceCost` | `true` | Continuously recalibrates `FenceCostModel` from a 64-tick sliding window; disable to pin the static seed (repeatable benchmarks) |
@@ -56,7 +56,7 @@ using var runtime = TyphonRuntime.Create(dbe, schedule => { /* ... */ }, options
 
 - Application code never interacts with the fence DAG directly — there is no API surface beyond the
   `RuntimeOptions` knobs above.
-- `EnableParallelFence = false` falls back to the legacy serial `WriteTickFence` — useful for diagnostics or
+- `EnableParallelFence = false` falls back to the serial `WriteTickFence` — useful for diagnostics or
   as a regression safety valve; behavior is otherwise equivalent.
 - Requires the engine's WAL durability mode (mandatory engine-wide) — both the parallel and serial fence paths
   rely on it to drain dirty pages.
