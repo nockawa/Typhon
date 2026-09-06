@@ -1,0 +1,280 @@
+using System.Diagnostics;
+using JetBrains.Annotations;
+
+namespace Typhon.Engine;
+
+public partial class DatabaseEngine
+{
+    /// <summary>
+    /// Wall-clock milliseconds the most recent <see cref="InitializeArchetypes"/> spent rebuilding cluster-to-cell mappings.
+    /// </summary>
+    private double _openCellStateRebuildMs;
+
+    /// <summary>Wall-clock milliseconds the most recent <see cref="InitializeArchetypes"/> spent rebuilding per-cluster AABBs and the per-cell index.</summary>
+    private double _openClusterAabbRebuildMs;
+
+    /// <summary>
+    /// Milliseconds spent reconstructing the cluster-to-cell mapping at open (<c>RebuildCellState</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The cell layer is transient — nothing about the grid is persisted, so every open reconstructs it from entity positions in an <c>O(entities)</c> sweep.
+    /// This figure and <see cref="OpenClusterAabbRebuildMs"/> are what decide whether that reconstruction stays affordable at target entity counts or the grid
+    /// must be persisted. Zero on a database with no cluster-eligible archetypes, or when every archetype opened with no active clusters.
+    /// </para>
+    /// <para>
+    /// Describes the <b>most recent</b> <see cref="InitializeArchetypes"/> call, not the sum of all of them: a repeat call reallocates the per-archetype state
+    /// it measures, so every other counter restarts with it and a lifetime sum here would be the one figure that did not.
+    /// </para>
+    /// </remarks>
+    [PublicAPI]
+    public double OpenCellStateRebuildMs => _openCellStateRebuildMs;
+
+    /// <summary>
+    /// Milliseconds spent recomputing per-cluster AABBs and the per-cell spatial index at open (<c>RebuildClusterAabbs</c>).
+    /// </summary>
+    /// <remarks>See <see cref="OpenCellStateRebuildMs"/> — the two are halves of the same startup sweep and are read together.</remarks>
+    [PublicAPI]
+    public double OpenClusterAabbRebuildMs => _openClusterAabbRebuildMs;
+
+    /// <summary>
+    /// The spatial grid's occupancy and memory, or an all-zero snapshot when no grid is configured (#872 step 8, AC-8.5 and AC-8.7).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>What each figure answers.</b> <c>BlockCount</c> and <c>OccupiedCellCount</c> against <c>BlockCellCapacity</c> give <c>IntraBlockFill</c>,
+    /// which is Q3's measurement: a low fill argues for replacing the dense per-block <c>int[]</c> with a bitmask plus compaction (P2), a high one says the
+    /// dense array is right. <c>ResidentBytes</c> against <c>DenseEquivalentBytes</c> is C2's argument made observable — the dense predecessor allocated a
+    /// 64-byte descriptor for every cell the world bounds implied, occupied or not.</para>
+    /// <para><b>It is also the guard on the one discipline the sparse grid depends on.</b> A read path that resolves a cell WITH creation — a query
+    /// broadphase, a tier sweep — materialises a cell per coordinate it touches. Every answer stays correct and nothing fails; the only symptom is
+    /// <c>ResidentBytes</c> climbing toward <c>DenseEquivalentBytes</c>. See rule <c>VG-02</c>.</para>
+    /// <para>Read without a lock, so a snapshot taken during a tick can mix values from either side of a cell creation. These are diagnostic counters.</para>
+    /// </remarks>
+    [PublicAPI]
+    public SpatialGridOccupancy GetSpatialGridOccupancy()
+    {
+        var grid = _spatialGrid;
+        if (grid == null)
+        {
+            return default;
+        }
+
+        var (bx, by, bz) = grid.BlockDimensions;
+        return new SpatialGridOccupancy
+        {
+            BlockCount = grid.BlockCount,
+            OccupiedCellCount = grid.CellCount,
+            BlockCellCapacity = grid.BlockCellCapacity,
+            BlockDimX = bx,
+            BlockDimY = by,
+            BlockDimZ = bz,
+            IntraBlockFill = grid.IntraBlockFill,
+            ResidentBytes = grid.ResidentBytes,
+            DenseEquivalentBytes = grid.DenseEquivalentBytes,
+        };
+    }
+
+    /// <summary>
+    /// Reads one archetype's spatial-partitioning counters. Allocation-free; never throws.
+    /// </summary>
+    /// <param name="archetypeId">The archetype's runtime id. Out of range, or an archetype with no cluster state, yields an all-zero snapshot.</param>
+    /// <returns>A snapshot of the archetype's counters. See <see cref="SpatialMigrationTelemetry"/> for which members describe the last tick and which are
+    /// cumulative.</returns>
+    /// <remarks>
+    /// The snapshot is taken field by field without a lock, so a read racing the tick fence can mix values from either side of it. That is deliberate: these
+    /// are diagnostic counters, and serializing a reader against the fence would cost more than the inconsistency is worth. Call it from the tick loop —
+    /// after the fence, before the next tick — for a coherent view.
+    /// </remarks>
+    [PublicAPI]
+    public SpatialMigrationTelemetry GetSpatialTelemetry(int archetypeId)
+    {
+        var states = _archetypeStates;
+        if (states == null || archetypeId < 0 || archetypeId >= states.Length)
+        {
+            return default;
+        }
+
+        var clusterState = states[archetypeId]?.ClusterState;
+        if (clusterState == null)
+        {
+            return default;
+        }
+
+        return new SpatialMigrationTelemetry(
+            clusterState.LastTickMigrationCount,
+            clusterState.LastTickHysteresisAbsorbedCount,
+            clusterState.LastTickMigrationExecuteMs,
+            clusterState.LastTickClustersScanned,
+            clusterState.LastTickDriftersDetected,
+            clusterState.LastTickDriftAbsorbedCount,
+            clusterState.LastTickReclusterBudgetUsedMs,
+            clusterState.ActiveClusterCount,
+            clusterState.TotalMigrationCount,
+            clusterState.TotalHysteresisAbsorbedCount,
+            clusterState.LastTickRepairedEntityCount,
+            clusterState.LastTickRepairUnitCount,
+            clusterState.LastTickRepairUnitsRefused)
+        {
+            // #872 step 11's members ride an object initialiser rather than the constructor: at thirteen positional arguments the call was already at the
+            // limit of what a reader can check, and six more would make a mis-ordered pair of ints a silent telemetry bug rather than a compile error.
+            SlotsScanned = clusterState.LastTickSlotsScanned,
+            MigrationTotalMs = clusterState.LastTickMigrationTotalMs,
+            RelocationsThrottled = clusterState.LastTickRelocationsThrottled,
+            RelocationsSuperseded = clusterState.LastTickRelocationsSuperseded,
+            PrepSnapshotMs = TicksToMs(clusterState.PrepSnapshotTicks),
+            PrepMaskMs = TicksToMs(clusterState.PrepMaskTicks),
+            PrepShadowMs = TicksToMs(clusterState.PrepShadowTicks),
+            PrepZoneMapMs = TicksToMs(clusterState.PrepZoneMapTicks),
+            PrepDetectMs = TicksToMs(clusterState.PrepDetectTicks),
+            PrepThrottleMs = TicksToMs(clusterState.PrepThrottleTicks),
+            PrepPlanMs = TicksToMs(clusterState.PrepPlanTicks),
+            PrepPreSizeMs = TicksToMs(clusterState.PrepPreSizeTicks),
+            PrepDirtyClusters = clusterState.PrepDirtyClusters,
+            DriftersUnplaced = clusterState.LastTickDriftersUnplaced,
+            RepairValveFires = clusterState.LastTickRepairValveFires,
+            RepairQueueDepth = clusterState.RepairQueue?.Count ?? 0,
+            RepairQueueEvicted = clusterState.RepairQueue?.TotalEvicted ?? 0L,
+            RepairQueueMaintenanceMs = QueueMaintenanceMs(clusterState),
+            MeasuredNsPerEntity = clusterState.LastTickMeasuredNsPerEntity,
+            DriftGatedClusters = clusterState.LastTickDriftGatedClusters,
+            DriftSuppressedByDensity = clusterState.LastTickDriftSuppressedByDensity,
+            DriftersUnplacedNoCandidate = clusterState.LastTickDriftersUnplacedNoCandidate,
+            DriftersSpilled = clusterState.LastTickDriftersSpilled,
+            PinsRejected = clusterState.LastTickPinsRejected,
+            RelocationsAdmitted = clusterState.LastTickRelocationsAdmitted,
+            CrossingsQueued = clusterState.LastTickCrossingsQueued,
+            RelocationSpendNs = clusterState.LastTickRelocationSpendNs,
+            RepairBudgetStarvedNs = clusterState.LastTickRepairBudgetStarvedNs,
+        };
+    }
+
+    /// <summary>One archetype's queue-maintenance time in milliseconds, or zero when it has no queue yet.</summary>
+    /// <summary>Stopwatch ticks to milliseconds. The sub-spans are accumulated as raw timestamps to keep the bracket to one subtraction.</summary>
+    private static double TicksToMs(long ticks) => ticks * 1000d / System.Diagnostics.Stopwatch.Frequency;
+
+    private static double QueueMaintenanceMs(ArchetypeClusterState clusterState) =>
+        clusterState.RepairQueue == null ? 0d : clusterState.RepairQueue.LastTickMaintenanceTicks * 1000d / Stopwatch.Frequency;
+
+    /// <summary>
+    /// Sums <see cref="GetSpatialTelemetry"/> across every archetype in this engine. Allocation-free; never throws.
+    /// </summary>
+    /// <returns>An engine-wide snapshot. <see cref="SpatialMigrationTelemetry.MigrationExecuteMs"/> is a sum across archetypes, not a wall-clock duration —
+    /// parallel fence workers overlap, so it can exceed the tick's elapsed time.</returns>
+    [PublicAPI]
+    public SpatialMigrationTelemetry GetSpatialTelemetryTotal()
+    {
+        var states = _archetypeStates;
+        if (states == null)
+        {
+            return default;
+        }
+
+        var migrations = 0;
+        var absorbed = 0;
+        var executeMs = 0d;
+        var scanned = 0;
+        var slotsScanned = 0;
+        var drifters = 0;
+        var driftAbsorbed = 0;
+        var budgetMs = 0d;
+        var activeClusters = 0;
+        var totalMigrations = 0L;
+        var totalAbsorbed = 0L;
+        var repairedEntities = 0;
+        var repairUnits = 0;
+        var repairRefused = 0;
+        var migrationTotalMs = 0d;
+        var relocationsThrottled = 0;
+        var relocationsSuperseded = 0;
+        var driftersUnplaced = 0;
+        var valveFires = 0;
+        var queueDepth = 0;
+        var queueEvicted = 0L;
+        var queueMaintenanceMs = 0d;
+        var measuredNsPerEntity = 0d;
+        var measuredSamples = 0;
+        var driftGated = 0;
+        var driftSuppressedByDensity = 0;
+        var unplacedNoCandidate = 0;
+        var spilled = 0;
+        var pinsRejected = 0;
+        var relocationsAdmitted = 0;
+        var crossingsQueued = 0;
+        var relocationSpendNs = 0d;
+        var repairStarvedNs = 0d;
+
+        for (var i = 0; i < states.Length; i++)
+        {
+            var clusterState = states[i]?.ClusterState;
+            if (clusterState == null)
+            {
+                continue;
+            }
+
+            migrations += clusterState.LastTickMigrationCount;
+            absorbed += clusterState.LastTickHysteresisAbsorbedCount;
+            executeMs += clusterState.LastTickMigrationExecuteMs;
+            scanned += clusterState.LastTickClustersScanned;
+            slotsScanned += clusterState.LastTickSlotsScanned;
+            drifters += clusterState.LastTickDriftersDetected;
+            driftAbsorbed += clusterState.LastTickDriftAbsorbedCount;
+            budgetMs += clusterState.LastTickReclusterBudgetUsedMs;
+            activeClusters += clusterState.ActiveClusterCount;
+            totalMigrations += clusterState.TotalMigrationCount;
+            totalAbsorbed += clusterState.TotalHysteresisAbsorbedCount;
+            repairedEntities += clusterState.LastTickRepairedEntityCount;
+            repairUnits += clusterState.LastTickRepairUnitCount;
+            repairRefused += clusterState.LastTickRepairUnitsRefused;
+            migrationTotalMs += clusterState.LastTickMigrationTotalMs;
+            relocationsThrottled += clusterState.LastTickRelocationsThrottled;
+            relocationsSuperseded += clusterState.LastTickRelocationsSuperseded;
+            driftersUnplaced += clusterState.LastTickDriftersUnplaced;
+            valveFires += clusterState.LastTickRepairValveFires;
+            queueDepth += clusterState.RepairQueue?.Count ?? 0;
+            queueEvicted += clusterState.RepairQueue?.TotalEvicted ?? 0L;
+            queueMaintenanceMs += QueueMaintenanceMs(clusterState);
+            driftGated += clusterState.LastTickDriftGatedClusters;
+            driftSuppressedByDensity += clusterState.LastTickDriftSuppressedByDensity;
+            unplacedNoCandidate += clusterState.LastTickDriftersUnplacedNoCandidate;
+            spilled += clusterState.LastTickDriftersSpilled;
+            pinsRejected += clusterState.LastTickPinsRejected;
+            relocationsAdmitted += clusterState.LastTickRelocationsAdmitted;
+            crossingsQueued += clusterState.LastTickCrossingsQueued;
+            relocationSpendNs += clusterState.LastTickRelocationSpendNs;
+            repairStarvedNs += clusterState.LastTickRepairBudgetStarvedNs;
+
+            // AVERAGED, not summed, and it is the one member here that is. Every other value is an extensive quantity — more archetypes, more of it — but
+            // a cost per entity is intensive, and summing it would report an engine with four archetypes as four times as expensive per entity as each of
+            // them is. Only archetypes that actually produced an estimate contribute, so a quiet one does not drag the mean toward zero.
+            if (clusterState.LastTickMeasuredNsPerEntity > 0d)
+            {
+                measuredNsPerEntity += clusterState.LastTickMeasuredNsPerEntity;
+                measuredSamples++;
+            }
+        }
+
+        return new SpatialMigrationTelemetry(migrations, absorbed, executeMs, scanned, drifters, driftAbsorbed, budgetMs, activeClusters, totalMigrations,
+            totalAbsorbed, repairedEntities, repairUnits, repairRefused)
+        {
+            SlotsScanned = slotsScanned,
+            MigrationTotalMs = migrationTotalMs,
+            RelocationsThrottled = relocationsThrottled,
+            RelocationsSuperseded = relocationsSuperseded,
+            DriftersUnplaced = driftersUnplaced,
+            RepairValveFires = valveFires,
+            RepairQueueDepth = queueDepth,
+            RepairQueueEvicted = queueEvicted,
+            RepairQueueMaintenanceMs = queueMaintenanceMs,
+            MeasuredNsPerEntity = measuredSamples > 0 ? measuredNsPerEntity / measuredSamples : 0d,
+            DriftGatedClusters = driftGated,
+            DriftSuppressedByDensity = driftSuppressedByDensity,
+            DriftersUnplacedNoCandidate = unplacedNoCandidate,
+            DriftersSpilled = spilled,
+            PinsRejected = pinsRejected,
+            RelocationsAdmitted = relocationsAdmitted,
+            CrossingsQueued = crossingsQueued,
+            RelocationSpendNs = relocationSpendNs,
+            RepairBudgetStarvedNs = repairStarvedNs,
+        };
+    }
+}

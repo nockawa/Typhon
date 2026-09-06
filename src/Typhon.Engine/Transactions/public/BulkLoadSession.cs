@@ -92,7 +92,7 @@ public sealed class BulkLoadSession : IDisposable
         // Emit BulkBegin placeholder. Body is just the BulkManifestHeader with PageRangeCount=0 (allocation
         // tracking deferred to P3 where the recovery consumer is). The LSN claimed here anchors the bulk in
         // the WAL stream.
-        BulkBeginLsn = EmitBulkManifestChunk(isBegin: true, isFinal: false);
+        BulkBeginLsn = EmitBulkManifestChunk(true, false);
     }
 
     /// <summary>
@@ -278,7 +278,7 @@ public sealed class BulkLoadSession : IDisposable
         }
 
         // Step 5: Emit BulkEnd chunk carrying the final manifest (entity counters; PageRangeCount=0 in v1).
-        var bulkEndLsn = EmitBulkManifestChunk(isBegin: false, isFinal: true);
+        var bulkEndLsn = EmitBulkManifestChunk(false, true);
 
         // Step 6: Wait for BulkEnd LSN to be durable.
         var wc = WaitContext.FromTimeout(Options.CheckpointTimeout);
@@ -387,7 +387,7 @@ public sealed class BulkLoadSession : IDisposable
     {
         // Manifest is emitted at most twice per session — a per-call arena is fine.
         var arena = new CommitBatchArena();
-        var batch = new CommitBatchBuilder(arena, tsn: 0, uowEpoch: 0, fenceMode: true);
+        var batch = new CommitBatchBuilder(arena, 0, 0, true);
         batch.AddBulkManifest(BulkSessionId, isBegin ? 0 : BulkBeginLsn, isFinal ? EntitiesSpawned : 0, isFinal ? EntitiesUpdated : 0);
 
         var wc = WaitContext.FromTimeout(Options.CheckpointTimeout);

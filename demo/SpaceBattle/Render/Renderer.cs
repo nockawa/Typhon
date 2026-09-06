@@ -421,7 +421,7 @@ internal sealed class Renderer
         }
     }
 
-    private int CellKey(int cx, int cy) => _host.Grid.ComputeCellKey(cx, cy);
+    private int CellKey(int cx, int cy) => _host.Grid.ComputeCellKey(cx, cy, 0);
 
     // ─── Level 2: clusters ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -435,7 +435,7 @@ internal sealed class Renderer
             using var e = acc.GetClusterEnumerator();
             foreach (var c in e)
             {
-                AddClusterBox(_host.StationArchetypeId, c.ChunkId, in c.SpatialBounds, c.LiveCount, AabbStation,
+                AddClusterBox(_host.StationArchetypeId, c.ChunkId, c.SpatialBounds, c.LiveCount, AabbStation,
                               spriteClearance: _cfg.ShipRadius * 8f);
             }
         }
@@ -444,7 +444,7 @@ internal sealed class Renderer
             using var e = acc.GetClusterEnumerator();
             foreach (var c in e)
             {
-                AddClusterBox(_host.RockArchetypeId, c.ChunkId, in c.SpatialBounds, c.LiveCount, AabbRock,
+                AddClusterBox(_host.RockArchetypeId, c.ChunkId, c.SpatialBounds, c.LiveCount, AabbRock,
                               spriteClearance: _cfg.AsteroidRadius * 1.3f);
             }
         }
@@ -453,7 +453,7 @@ internal sealed class Renderer
             using var e = acc.GetClusterEnumerator();
             foreach (var c in e)
             {
-                AddClusterBox(_host.LootArchetypeId, c.ChunkId, in c.SpatialBounds, c.LiveCount, AabbLoot,
+                AddClusterBox(_host.LootArchetypeId, c.ChunkId, c.SpatialBounds, c.LiveCount, AabbLoot,
                               spriteClearance: _cfg.PickupRadius * 1.6f);
             }
         }
@@ -462,7 +462,7 @@ internal sealed class Renderer
             using var e = acc.GetClusterEnumerator();
             foreach (var c in e)
             {
-                AddClusterBox(_host.ShipArchetypeId, c.ChunkId, in c.SpatialBounds, c.LiveCount, AabbShip,
+                AddClusterBox(_host.ShipArchetypeId, c.ChunkId, c.SpatialBounds, c.LiveCount, AabbShip,
                               spriteClearance: _cfg.ShipRadius * 2.4f);
             }
         }
@@ -472,7 +472,7 @@ internal sealed class Renderer
             using var e = acc.GetClusterEnumerator();
             foreach (var c in e)
             {
-                AddClusterBox(_host.ShotArchetypeId, c.ChunkId, in c.SpatialBounds, c.LiveCount, AabbShot);
+                AddClusterBox(_host.ShotArchetypeId, c.ChunkId, c.SpatialBounds, c.LiveCount, AabbShot);
             }
         }
     }
@@ -489,7 +489,7 @@ internal sealed class Renderer
             return;
         }
         var homeCell = _host.ClusterHomeCell(archetypeId, chunkId);
-        var centreCell = _host.Grid.WorldToCellKey(0.5f * (a.MinX + a.MaxX), 0.5f * (a.MinY + a.MaxY));
+        var centreCell = _host.Grid.WorldToCellKey(0.5f * (a.MinX + a.MaxX), 0.5f * (a.MinY + a.MaxY), 0f);
         ClusterBoxes.Add(new ClusterBox
         {
             ArchetypeId = archetypeId,

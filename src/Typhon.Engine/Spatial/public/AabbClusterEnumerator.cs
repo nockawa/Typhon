@@ -1,3 +1,4 @@
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -47,14 +48,26 @@ public unsafe ref struct AabbClusterEnumerator
     private readonly float _queryMaxX;
     private readonly float _queryMaxY;
     private readonly float _queryMaxZ;
+
+    // The query box expressed in the CURRENT cell's frame. Cluster bounds are C15 cell-relative (#872 step 9), so the broadphase compare needs both sides in
+    // the same frame. Converted once per CELL rather than once per cluster: the origin is constant across every cluster in a cell, so this is six
+    // subtractions per cell instead of six per cluster, on a path whose whole purpose is to reject clusters in bulk.
+    private float _cellQueryMinX;
+    private float _cellQueryMinY;
+    private float _cellQueryMinZ;
+    private float _cellQueryMaxX;
+    private float _cellQueryMaxY;
+    private float _cellQueryMaxZ;
     private readonly uint _categoryMask;
 
-    // Cell range the query AABB covers, inclusive. Clamped to the grid extent by SpatialGrid. The grid itself is 2D (XY) — Z is never used for cell
-    // bucketing; 3D archetypes still bucket into the same XY cells and distinguish by Z at the narrowphase only.
+    // Cell range the query AABB covers, inclusive. Clamped to the grid extent by SpatialGrid. A 2D archetype's query passes ±Infinity on Z, which
+    // WorldToCellRange saturates to the full depth range — one cell for a flat world, so the Z loop below runs exactly once and costs nothing.
     private readonly int _cellMinX;
     private readonly int _cellMinY;
+    private readonly int _cellMinZ;
     private readonly int _cellMaxX;
     private readonly int _cellMaxY;
+    private readonly int _cellMaxZ;
 
     // Cluster-SoA field offset for the spatial field within each cluster, precomputed.
     private readonly int _spatialCompOffset;
@@ -83,8 +96,25 @@ public unsafe ref struct AabbClusterEnumerator
     // Iteration state.
     private int _currentCellX;
     private int _currentCellY;
+    private int _currentCellZ;
     private CellSpatialIndex _currentCellIndex;    // null when we need to advance to the next cell
     private int _currentBroadphaseSlot;            // next index into _currentCellIndex.ClusterIds to scan
+
+    // ── Batched broadphase (SIMD) ──────────────────────────────────────────────────────────────────────────────────
+    //
+    // The linear scan is what a spatial query actually runs: a cell only gets an R-Tree above CellTreePromoteThreshold
+    // clusters, which measured game worlds essentially never reach. It was a scalar loop over six float SoA arrays while
+    // the tree's leaf scan had already been vectorised — the optimisation effort aimed at the path that does not run.
+    //
+    // CellSpatialIndex.MatchBatch tests 64 slots at a time and returns a bit per overlap; this carries the current batch's
+    // mask and its base slot, refilling when the mask empties. Sixty-four rather than the whole index because this is an
+    // enumerator: the narrowphase runs between yields, so an unbounded match set would need somewhere to live.
+    private ulong _scanMask;
+    private int _scanMaskBase;
+    private int _scanNextBatch;
+
+    /// <summary>Is the current cell half big enough for the batched scan to beat the scalar loop? See <see cref="CellSpatialIndex.SimdScanMinClusters"/>.</summary>
+    private bool _useSimdScan;
     private ulong _currentOccupancyBits;           // remaining occupied slots in the current cluster (bits cleared as we iterate)
     private int _currentClusterChunkId;            // chunk id of the cluster currently in narrowphase
     private byte* _currentClusterBase;             // base pointer of that cluster
@@ -94,6 +124,22 @@ public unsafe ref struct AabbClusterEnumerator
     // DynamicIndex and are now iterating StaticIndex for the same cell.
     private bool _currentCellStaticPass;
     private PerCellSpatialSlot _currentPerCellSlot;
+
+    // Tree half of the broadphase (#872 step 9). A cell half is served by EITHER _currentCellIndex or this enumerator, never both — see PerCellSpatialSlot.
+    private SpatialRTree<TransientStore>.AABBQueryEnumerator _treeEnum;
+    private bool _treeActive;
+
+    /// <summary>
+    /// True while a cell half is being scanned, through EITHER structure.
+    /// </summary>
+    /// <remarks>
+    /// The cell walk uses this to decide it has found a cell and can stop advancing. Spelling that as <c>_currentCellIndex != null</c> — which it was until
+    /// the tree path existed — reads a promoted cell as empty, walks straight past the cell it just started, and returns nothing at all. The query is then
+    /// silently empty, and only above the promotion threshold: <c>SQ-01</c>'s worst shape. Caught by
+    /// <c>CellTreePromotionTests.PromotedCell_AnswersIdenticallyToTheLinearScan</c>, which is why that test compares against the linear path rather than
+    /// against an expected count.
+    /// </remarks>
+    private readonly bool HasStartedHalf => _currentCellIndex != null || _treeActive;
 
     // Last-yielded result.
     private ClusterSpatialQueryResult _current;
@@ -115,9 +161,9 @@ public unsafe ref struct AabbClusterEnumerator
         _radiusCenterY = radiusCenterY;
         _radiusCenterZ = radiusCenterZ;
 
-        // Expand query AABB to the overlapping cell range. The grid is 2D (XY) — Z coordinates never participate in cell bucketing. Each overlapping cell's
-        // per-archetype spatial slot may or may not exist — the iteration handles null slots gracefully.
-        grid.WorldToCellRange(minX, minY, maxX, maxY, out _cellMinX, out _cellMinY, out _cellMaxX, out _cellMaxY);
+        // Expand the query AABB to the overlapping cell range. Each overlapping cell's per-archetype spatial slot may or may not exist — the iteration
+        // handles null slots gracefully. The Z range is narrowed again below for a 2D archetype.
+        grid.WorldToCellRange(minX, minY, minZ, maxX, maxY, maxZ, out _cellMinX, out _cellMinY, out _cellMinZ, out _cellMaxX, out _cellMaxY, out _cellMaxZ);
 
         var ss = state.SpatialSlot;
         _spatialCompOffset = state.Layout.ComponentOffset(ss.Slot);
@@ -127,12 +173,25 @@ public unsafe ref struct AabbClusterEnumerator
         _descriptor = ss.Descriptor;
         _is3D = ss.FieldInfo.FieldType == SpatialFieldType.AABB3F || ss.FieldInfo.FieldType == SpatialFieldType.BSphere3F;
 
+        // A 2D archetype's query carries ±Infinity on Z, meaning "every Z", which WorldToCellRange saturates to the full depth. Left alone that makes every
+        // such query sweep every Z plane of a deep grid, of which exactly one can ever hold a cell: ReadSpatialCenter3D reports posZ = 0 for both 2D field
+        // types, so a 2D archetype's entities all live in the plane containing world Z = 0. Collapsing to that plane is not an optimisation of the answer —
+        // the other planes are empty by construction. A flat world is already one plane deep, so this only bites a 2D archetype sharing a volumetric grid.
+        if (!_is3D)
+        {
+            grid.WorldToCellCoords(0f, 0f, 0f, out _, out _, out int planeZ);
+            _cellMinZ = planeZ;
+            _cellMaxZ = planeZ;
+        }
+
         _accessor = default;
         _accessorCreated = false;
         _currentCellX = _cellMinX;
         _currentCellY = _cellMinY;
+        _currentCellZ = _cellMinZ;
         _currentCellIndex = null;
         _currentBroadphaseSlot = 0;
+        _useSimdScan = false;
         _currentOccupancyBits = 0UL;
         _currentClusterChunkId = 0;
         _currentClusterBase = null;
@@ -144,6 +203,71 @@ public unsafe ref struct AabbClusterEnumerator
     /// <summary>The most recently yielded result. Valid only after <see cref="MoveNext"/> returns <c>true</c>.</summary>
     public ClusterSpatialQueryResult Current => _current;
 
+    /// <summary>
+    /// Re-express the query box in <paramref name="cellKey"/>'s frame, so the broadphase can compare it against that cell's <c>C15</c> cell-relative cluster
+    /// bounds.
+    /// </summary>
+    /// <remarks>
+    /// <para>The rounding goes OUTWARD on both sides — min down, max up — the opposite of what a stored bound does, and for the same reason. A query box
+    /// that narrows by an ULP under the conversion can drop a cluster grazing its edge, and <c>SQ-01</c> counts that as a false negative however small the
+    /// margin was. Widening can only ever produce an extra narrowphase visit, which the entity-level test then rejects.</para>
+    /// <para>Infinities pass through unchanged: a 2D query uses ±Infinity for Z, and <c>±Infinity - origin</c> is still ±Infinity, so the Z test stays the
+    /// trivially-true comparison it is meant to be. It is <c>Infinity - Infinity</c> that would produce a NaN, and neither side of this subtraction is ever
+    /// the cluster's sentinel — the origin is a finite world coordinate.</para>
+    /// </remarks>
+    private void SetCellQueryFrame(int cellKey)
+    {
+        _grid.CellOrigin(cellKey, out float originX, out float originY, out float originZ);
+        _cellQueryMinX = ClusterSpatialAabb.ToCellRelativeMin(_queryMinX, originX);
+        _cellQueryMinY = ClusterSpatialAabb.ToCellRelativeMin(_queryMinY, originY);
+        _cellQueryMinZ = ClusterSpatialAabb.ToCellRelativeMin(_queryMinZ, originZ);
+        _cellQueryMaxX = ClusterSpatialAabb.ToCellRelativeMax(_queryMaxX, originX);
+        _cellQueryMaxY = ClusterSpatialAabb.ToCellRelativeMax(_queryMaxY, originY);
+        _cellQueryMaxZ = ClusterSpatialAabb.ToCellRelativeMax(_queryMaxZ, originZ);
+    }
+
+    /// <summary>
+    /// Begin scanning one half of a cell, through whichever structure is serving it. Returns false when that half is empty.
+    /// </summary>
+    /// <remarks>
+    /// <b><see cref="SetCellQueryFrame"/> must already have run for this cell.</b> The tree query box is built from that cell-relative frame, so starting a
+    /// half before the frame is established would query the tree with the PREVIOUS cell's coordinates — every bound off by the offset between the two cells,
+    /// and the cell answering nothing rather than answering wrongly. That is <c>SQ-01</c>'s silent direction, and it is the same defect the two
+    /// <c>SetCellQueryFrame</c> call sites in the cell walk already exist to prevent.
+    /// </remarks>
+    private bool TryStartCellHalf(PerCellSpatialSlot slot, bool isStatic)
+    {
+        // Acquire, not a plain field read: PerCellSpatialSlot publishes the tree with a release store precisely so this load pairs with it, and it must
+        // come BEFORE the index load below — that order is what makes the promotion window unobservable.
+        var tree = slot.ReadTree(isStatic);
+        if (tree != null && tree.ClusterCount > 0)
+        {
+            Span<double> queryCoords = stackalloc double[6];
+            CellClusterTree.QueryToCoords(_cellQueryMinX, _cellQueryMinY, _cellQueryMinZ, _cellQueryMaxX, _cellQueryMaxY, _cellQueryMaxZ, queryCoords);
+
+            // categoryMask 0: the filter is applied on the way out instead, because this broadphase and SpatialRTree disagree on what a mask means. See the
+            // tree branch in MoveNext.
+            _treeEnum = tree.Query(queryCoords, 0);
+            _treeActive = true;
+            _currentCellIndex = null;
+            return true;
+        }
+
+        var linear = slot.ReadIndex(isStatic);
+        if (linear != null && linear.ClusterCount > 0)
+        {
+            _currentCellIndex = linear;
+            _currentBroadphaseSlot = 0;
+            _scanMask = 0;
+            _scanMaskBase = 0;
+            _scanNextBatch = 0;
+            _useSimdScan = SpatialQueryTuning.SimdLinearScan && linear.ClusterCount >= CellSpatialIndex.SimdScanMinClusters;
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Advance to the next matching entity. Returns <c>false</c> when the query is exhausted.</summary>
     public bool MoveNext()
     {
@@ -151,7 +275,7 @@ public unsafe ref struct AabbClusterEnumerator
         // unused tail costs nothing. Allocating ONCE per MoveNext call (not per loop iteration) avoids accumulating stack pressure across iterations of the
         // state machine's while(true) — a query that scans thousands of clusters before finding the first match would otherwise allocate 48 bytes per
         // iteration that can't be released until MoveNext returns. See CA2014 for the general guidance.
-        System.Span<double> entityCoords = stackalloc double[6];
+        Span<double> entityCoords = stackalloc double[6];
 
         // Lazy accessor creation: only opened when the first cluster is about to be scanned. Avoids accessor construction cost for empty queries (no
         // overlapping cells with clusters).
@@ -219,9 +343,9 @@ public unsafe ref struct AabbClusterEnumerator
                 float distSq = 0f;
                 if (_radiusSq > 0f)
                 {
-                    float dx = _radiusCenterX - System.Math.Clamp(_radiusCenterX, eMinX, eMaxX);
-                    float dy = _radiusCenterY - System.Math.Clamp(_radiusCenterY, eMinY, eMaxY);
-                    float dz = _radiusCenterZ - System.Math.Clamp(_radiusCenterZ, eMinZ, eMaxZ);
+                    float dx = _radiusCenterX - Math.Clamp(_radiusCenterX, eMinX, eMaxX);
+                    float dy = _radiusCenterY - Math.Clamp(_radiusCenterY, eMinY, eMaxY);
+                    float dz = _radiusCenterZ - Math.Clamp(_radiusCenterZ, eMinZ, eMaxZ);
                     distSq = dx * dx + dy * dy + dz * dz;
                     if (distSq > _radiusSq)
                     {
@@ -234,8 +358,53 @@ public unsafe ref struct AabbClusterEnumerator
                 return true;
             }
 
+            // 2a. Advance to the next cluster via this cell's R-Tree, when it has one.
+            if (_treeActive)
+            {
+                if (_treeEnum.MoveNext())
+                {
+                    int treeChunkId = (int)_treeEnum.Current.PayloadId;
+
+                    // The category filter is applied HERE rather than handed to the tree, because the two disagree: this broadphase accepts any overlapping
+                    // bit and a zero mask means "no filter", while SpatialRTree's own mask test is the legacy stricter one. Passing _categoryMask down would
+                    // therefore make a promoted cell answer a different question from an unpromoted one — an SQ-01 false negative that only appears above the
+                    // promotion threshold, which is the hardest possible place to notice it. The mask comes from ClusterAabbs, which is the same value the
+                    // linear index would have read.
+                    if (_categoryMask != 0 && (_state.ClusterAabbs[treeChunkId].CategoryMask & _categoryMask) == 0)
+                    {
+                        continue;
+                    }
+
+                    EnsureAccessor();
+                    _currentClusterBase = _accessor.GetChunkAddress(treeChunkId);
+                    _currentClusterChunkId = treeChunkId;
+                    _currentOccupancyBits = *(ulong*)_currentClusterBase;
+                    continue;
+                }
+
+                _treeEnum.Dispose();
+                _treeActive = false;
+                // Fall through to section 3: this half is drained.
+            }
+
+            // 2a. Batched broadphase: the AABB test already happened for a whole batch, so this only pops set bits.
+            if (_currentCellIndex != null && _useSimdScan && TryNextBatchedSlot(out int batchedIdx))
+            {
+                if (_categoryMask != 0 && (_currentCellIndex.CategoryMasks[batchedIdx] & _categoryMask) == 0)
+                {
+                    continue;   // category miss — same "any bit overlap" rule as the scalar branch below
+                }
+
+                int batchedChunkId = _currentCellIndex.ClusterIds[batchedIdx];
+                EnsureAccessor();
+                _currentClusterBase = _accessor.GetChunkAddress(batchedChunkId);
+                _currentClusterChunkId = batchedChunkId;
+                _currentOccupancyBits = *(ulong*)_currentClusterBase;
+                continue;
+            }
+
             // 2. Advance to the next cluster in the current cell's broadphase (linear scan).
-            if (_currentCellIndex != null && _currentBroadphaseSlot < _currentCellIndex.ClusterCount)
+            if (_currentCellIndex != null && !_useSimdScan && _currentBroadphaseSlot < _currentCellIndex.ClusterCount)
             {
                 int idx = _currentBroadphaseSlot++;
                 // Category filter. Convention matches the legacy SpatialRTree: a zero categoryMask means "no filter" (accept all). A non-zero categoryMask
@@ -261,17 +430,17 @@ public unsafe ref struct AabbClusterEnumerator
                 float cMaxX = _currentCellIndex.MaxX[idx];
                 float cMaxY = _currentCellIndex.MaxY[idx];
                 float cMaxZ = _currentCellIndex.MaxZ[idx];
-                if (cMaxX < _queryMinX || cMinX > _queryMaxX)
+                if (cMaxX < _cellQueryMinX || cMinX > _cellQueryMaxX)
                 {
                     continue;
                 }
 
-                if (cMaxY < _queryMinY || cMinY > _queryMaxY)
+                if (cMaxY < _cellQueryMinY || cMinY > _cellQueryMaxY)
                 {
                     continue;
                 }
 
-                if (cMaxZ < _queryMinZ || cMinZ > _queryMaxZ)
+                if (cMaxZ < _cellQueryMinZ || cMinZ > _cellQueryMaxZ)
                 {
                     continue;
                 }
@@ -291,14 +460,14 @@ public unsafe ref struct AabbClusterEnumerator
             //    skip fence updates, queries check both").
             _currentCellIndex = null;
             _currentBroadphaseSlot = 0;
+            _useSimdScan = false;
 
             // 3a. If we just finished DynamicIndex for the current cell and haven't yet tried StaticIndex, try it now.
             if (!_currentCellStaticPass && _currentPerCellSlot != null)
             {
                 _currentCellStaticPass = true;
-                if (_currentPerCellSlot.StaticIndex != null && _currentPerCellSlot.StaticIndex.ClusterCount > 0)
+                if (TryStartCellHalf(_currentPerCellSlot, isStatic: true))
                 {
-                    _currentCellIndex = _currentPerCellSlot.StaticIndex;
                     continue;
                 }
             }
@@ -306,47 +475,70 @@ public unsafe ref struct AabbClusterEnumerator
             // 3b. Advance to the next cell and start fresh with its DynamicIndex.
             _currentCellStaticPass = false;
             _currentPerCellSlot = null;
-            while (_currentCellY <= _cellMaxY)
+            while (_currentCellZ <= _cellMaxZ)
             {
-                while (_currentCellX <= _cellMaxX)
+                while (_currentCellY <= _cellMaxY)
                 {
-                    int cellKey = _grid.ComputeCellKey(_currentCellX, _currentCellY);
-                    _currentCellX++;
-                    if (cellKey < 0 || _state.PerCellIndex == null || cellKey >= _state.PerCellIndex.Length)
+                    while (_currentCellX <= _cellMaxX)
                     {
-                        continue;
+                        // TryGetCellKey, never ComputeCellKey: a query box covers mostly empty space, and resolving-with-create would materialise a cell for
+                        // every coordinate it sweeps — turning the broadphase into the thing that fills a sparse grid in.
+                        bool exists = _grid.TryGetCellKey(_currentCellX, _currentCellY, _currentCellZ, out int cellKey);
+                        _currentCellX++;
+                        if (!exists || _state.PerCellIndex == null || cellKey >= _state.PerCellIndex.Length)
+                        {
+                            continue;
+                        }
+                        var slot = _state.PerCellIndex[cellKey];
+                        if (slot == null)
+                        {
+                            continue;
+                        }
+                        // Prefer the dynamic half if it holds anything; otherwise fall through to the static half in the same iteration.
+                        if (slot.DynamicClusterCount > 0)
+                        {
+                            // Established only once a cell is known to HOLD something. A query box sweeps mostly-empty space — that is why the walk two
+                            // lines above uses TryGetCellKey rather than ComputeCellKey — so converting the frame before that is proven would pay an
+                            // origin chase and six conversions for every empty cell the box crosses. It must also precede TryStartCellHalf, which builds
+                            // the tree query box out of the frame.
+                            SetCellQueryFrame(cellKey);
+                            _currentPerCellSlot = slot;
+                            _currentCellStaticPass = false;
+                            TryStartCellHalf(slot, isStatic: false);
+                            break;
+                        }
+                        if (slot.StaticClusterCount > 0)
+                        {
+                            // BOTH break paths must establish the frame. Setting it only on the Dynamic one leaves a cell whose Dynamic index is empty
+                            // reading its clusters against the PREVIOUS cell's origin — every bound off by the offset between the two, and every Static-only
+                            // cell silently answering nothing. Three Release-suite tests caught exactly that.
+                            SetCellQueryFrame(cellKey);
+                            _currentPerCellSlot = slot;
+                            _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
+                            TryStartCellHalf(slot, isStatic: true);
+                            break;
+                        }
                     }
-                    var slot = _state.PerCellIndex[cellKey];
-                    if (slot == null)
+                    // A started half is EITHER a linear index or a tree, so "did we find a cell" cannot be spelled as "_currentCellIndex != null" — that
+                    // reads a promoted cell as empty, walks straight past it, and the query returns nothing at all. Silent, and only above the threshold.
+                    if (HasStartedHalf)
                     {
-                        continue;
-                    }
-                    // Prefer DynamicIndex if it has entries; otherwise fall through to StaticIndex in the same iteration.
-                    if (slot.DynamicIndex != null && slot.DynamicIndex.ClusterCount > 0)
-                    {
-                        _currentPerCellSlot = slot;
-                        _currentCellIndex = slot.DynamicIndex;
-                        _currentCellStaticPass = false;
                         break;
                     }
-                    if (slot.StaticIndex != null && slot.StaticIndex.ClusterCount > 0)
-                    {
-                        _currentPerCellSlot = slot;
-                        _currentCellIndex = slot.StaticIndex;
-                        _currentCellStaticPass = true; // already at Static, no second pass needed for this cell
-                        break;
-                    }
+                    _currentCellY++;
+                    _currentCellX = _cellMinX;
                 }
-                if (_currentCellIndex != null)
+                if (HasStartedHalf)
                 {
                     break;
                 }
-                _currentCellY++;
+                _currentCellZ++;
+                _currentCellY = _cellMinY;
                 _currentCellX = _cellMinX;
             }
 
             // 4. Done — no more cells with clusters.
-            if (_currentCellIndex == null)
+            if (!HasStartedHalf)
             {
                 return false;
             }
@@ -358,6 +550,15 @@ public unsafe ref struct AabbClusterEnumerator
     /// </summary>
     public void Dispose()
     {
+        // The tree enumerator holds its OWN ChunkAccessor over the transient segment and an open telemetry span, and it is only drained naturally when a query
+        // runs to completion. A caller that breaks out of the foreach mid-cell — a "first hit wins" search, an exception — would otherwise leak both. The
+        // pre-tree enumerator had no second resource, so this line has no ancestor to have been copied from.
+        if (_treeActive)
+        {
+            _treeEnum.Dispose();
+            _treeActive = false;
+        }
+
         if (_accessorCreated)
         {
             _accessor.Dispose();
@@ -367,6 +568,38 @@ public unsafe ref struct AabbClusterEnumerator
 
     /// <summary>Enumerator pattern: a ref struct enumerator is its own source.</summary>
     public AabbClusterEnumerator GetEnumerator() => this;
+
+    /// <summary>
+    /// Next slot whose cluster AABB overlaps the query box, from the batched match mask, refilling it as needed.
+    /// </summary>
+    /// <remarks>
+    /// The Z axis is tested like any other. A 2D cluster leaves Z at the <c>+∞ / −∞</c> sentinel and a 2D query passes
+    /// <c>±∞</c> bounds, and both comparisons come out true on those values — so the axis costs two vector compares and
+    /// needs no special case, exactly as in the scalar loop it replaces.
+    /// </remarks>
+    private bool TryNextBatchedSlot(out int slot)
+    {
+        while (_scanMask == 0)
+        {
+            if (_scanNextBatch >= _currentCellIndex.ClusterCount)
+            {
+                slot = -1;
+                return false;
+            }
+
+            _scanMaskBase = _scanNextBatch;
+            _scanMask = _currentCellIndex.MatchBatch(
+                _scanMaskBase,
+                _cellQueryMinX, _cellQueryMinY, _cellQueryMinZ,
+                _cellQueryMaxX, _cellQueryMaxY, _cellQueryMaxZ,
+                testZ: true);
+            _scanNextBatch += 64;
+        }
+
+        slot = _scanMaskBase + System.Numerics.BitOperations.TrailingZeroCount(_scanMask);
+        _scanMask &= _scanMask - 1;
+        return true;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureAccessor()

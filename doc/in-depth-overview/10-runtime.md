@@ -121,7 +121,7 @@ Once phases and explicit edges are known, the deriver walks each DAG's systems a
 
 1. **Validates conflicts** as hard errors (W×W with no ordering, R×W plain without `ReadsFresh` / `ReadsSnapshot`, resource W×W, `ExclusivePhase` violations). `ReadsSnapshot` on a non-`Versioned` component (`SingleVersion` or `Transient`) is *also* a hard `Build()`-time error — SV/Transient have no per-tick consistent snapshot to give, regardless of `CommitDiscipline` (rule AC-05 / CM-04).
 2. **Emits intra-phase edges**: `ReadsFresh` ⇒ writer-before-reader, `ReadsSnapshot` ⇒ reader-before-writer (snapshot is the previous-tick value, so the writer can run concurrently *after* the reader started), event producer-before-consumer, resource R/W ordering.
-3. **Emits cross-phase edges only on conflict** (post-2026-05-07 change): a phase-(N+1) system with no access conflict against a phase-N system can run concurrently with it. Phase order is still a coarse contract, but no longer an all-to-all barrier.
+3. **Emits cross-phase edges only on conflict**: a phase-(N+1) system with no access conflict against a phase-N system can run concurrently with it. Phase order is a coarse contract, not an all-to-all barrier.
 
 The result is a single static graph the scheduler walks every tick.
 
@@ -254,7 +254,7 @@ if (Engine.WalManager == null) {
 }
 ```
 
-Parallel fence is **WAL-mode only** in v1. The per-worker `ChangeSet` cleanup (`ReleaseExcessDirtyMarks`) is correct only in WAL mode — WAL-less mode would risk torn writes across workers touching the same page. When no `WalManager` is configured, the runtime falls back to the serial `WriteTickFence` on the TickDriver thread, which uses the UoW's single-thread `ChangeSet` correctly.
+Parallel fence is **WAL-mode only**. The per-worker `ChangeSet` cleanup (`ReleaseExcessDirtyMarks`) is correct only in WAL mode — WAL-less mode would risk torn writes across workers touching the same page. When no `WalManager` is configured, the runtime falls back to the serial `WriteTickFence` on the TickDriver thread, which uses the UoW's single-thread `ChangeSet` correctly.
 
 The split is also why `EnableParallelFence` exists as an off switch in `RuntimeOptions` — a diagnostic safety valve.
 

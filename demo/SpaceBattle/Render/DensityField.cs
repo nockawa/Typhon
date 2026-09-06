@@ -125,7 +125,7 @@ internal sealed class DensityField
         {
             for (var cx = 0; cx < g.GridWidth; cx++)
             {
-                var n = host.CellEntityCount(host.Grid.ComputeCellKey(cx, cy));
+                var n = host.CellEntityCount(host.Grid.ComputeCellKey(cx, cy, 0));
                 if (n <= 0)
                 {
                     continue;

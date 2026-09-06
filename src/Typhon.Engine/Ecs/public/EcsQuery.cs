@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq.Expressions;
@@ -19,6 +20,7 @@ internal enum SpatialQueryType : byte
     AABB = 1,
     Radius = 2,
     Ray = 3,
+    Frustum = 4,
 }
 
 /// <summary>
@@ -82,7 +84,54 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
     private SpatialQueryType _spatialQueryType;
     // Inline query parameters: meaning depends on _spatialQueryType
     // AABB: [min0..max0..] in [0]..[5]. Radius: center in [0]..[2], radius in [3]. Ray: origin in [0]..[2], dir in [3]..[5], maxDist in [6].
+    // Frustum: the bounding box of the frustum in [0]..[5], same layout as AABB; the planes themselves live in _frustumPlanes.
     private fixed double _spatialParams[7];
+
+    /// <summary>
+    /// First buffer size tried for a cluster ray or frustum query.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Those two cluster APIs truncate silently.</b> Both fill a caller-supplied <c>Span</c> and stop when it is full, which is right for a picking
+    /// ray asking for the nearest few and wrong for a query whose contract is "every match" — a short buffer would be an <c>SQ-01</c> false negative that no
+    /// oracle test would catch unless it happened to exceed the size chosen here. So the buffer is grown and the query re-run whenever the returned count
+    /// equals the capacity offered. That test cannot distinguish "exactly full" from "truncated", which costs one redundant re-run on an exact multiple and
+    /// is the correct way round: guessing wrong re-runs, guessing wrong the other way loses rows.</para>
+    /// <para><b>The re-run is safe because the query is a pure read.</b> Both walks take an <c>EpochGuard</c> per call and mutate nothing, so a second pass
+    /// over the same grid returns the same set.</para>
+    /// </remarks>
+    private const int InitialClusterResultCapacity = 1024;
+
+    /// <summary>Ceiling on the growth above — 16 M ids is 128 MB of buffer, well past any result set a single query should be materialising.</summary>
+    /// <remarks>
+    /// Reaching it <b>throws</b>. The first version of the growth loop stopped doubling here and processed the truncated buffer as if it were complete, which
+    /// relocated the <c>SQ-01</c> false negative to 16 M rather than removing it — the exact defect the loop exists to prevent, at a size no test would reach.
+    /// </remarks>
+    private const int MaxClusterResultCapacity = 1 << 24;
+
+    /// <summary>
+    /// Largest capacity still worth renting from <see cref="ArrayPool{T}"/>; above this the loop allocates directly.
+    /// </summary>
+    /// <remarks>
+    /// <c>ArrayPool&lt;T&gt;.Shared</c>'s largest bucket is 2²⁰ elements. A <c>Rent</c> above that allocates a fresh array and the matching <c>Return</c>
+    /// drops it, so the doubling loop would churn one large-object allocation per attempt — for a result set that actually needs 16 M, several hundred MB of
+    /// LOH garbage for one query. Past the bucket the loop allocates once and keeps it for the attempt, which is the same cost without pretending to pool.
+    /// </remarks>
+    private const int MaxPooledResultCapacity = 1 << 20;
+
+    /// <summary>
+    /// Upper bound on <c>WhereFrustum</c>'s plane count.
+    /// </summary>
+    /// <remarks>
+    /// The cluster frustum query <c>stackalloc</c>s <c>planeCount × (dim + 1)</c> doubles per call and again per promoted cell. An unbounded count from user
+    /// input is a stack overflow, which kills the process rather than raising something a caller can catch. Sixty-four is far past any real frustum — a camera
+    /// has six planes, a portal-clipped one a handful more.
+    /// </remarks>
+    private const int MaxFrustumPlanes = 64;
+
+    // Frustum planes, packed (normalX, normalY[, normalZ], distance) — 3 doubles per plane in 2D, 4 in 3D. A plane set does not fit the inline buffer and
+    // its length depends on the caller, so it is the one spatial parameter held by reference.
+    private double[] _frustumPlanes;
+    private int _frustumPlaneCount;
 
     internal EcsQuery(Transaction tx, bool polymorphic, string sourceFile = null, int sourceLine = 0, string sourceMethod = null)
     {
@@ -508,7 +557,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         if (_spatialQueryType != SpatialQueryType.None)
         {
             throw new InvalidOperationException(
-                "Only one spatial predicate is allowed per query (WhereNearby / WhereInAABB / WhereRay). Run separate queries for multiple regions.");
+                "Only one spatial predicate is allowed per query (WhereNearby / WhereInAABB / WhereRay / WhereFrustum). "
+                + "Run separate queries for multiple regions.");
         }
     }
 
@@ -551,6 +601,52 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         _spatialParams[3] = dirX; _spatialParams[4] = dirY; _spatialParams[5] = dirZ; _spatialParams[6] = maxDist;
         // Phase 7: ECS:Query:Spatial:Attach instant — origin + endpoint XY projection.
         TyphonEvent.EmitEcsQuerySpatialAttach((byte)SpatialQueryType.Ray, (float)originX, (float)originY, (float)(originX + dirX * maxDist), (float)(originY + dirY * maxDist));
+        return this;
+    }
+
+    /// <summary>
+    /// Filter by a set of half-space planes — a camera frustum, or any convex region. Component <typeparamref name="T"/> must have <c>[SpatialIndex]</c>.
+    /// </summary>
+    /// <param name="planes">
+    /// Packed <c>(normalX, normalY, [normalZ,] distance)</c> — <b>three</b> doubles per plane for a 2D spatial component, <b>four</b> for a 3D one. A point
+    /// is inside a plane when <c>dot(n, p) + d &gt;= 0</c>, and inside the region when it is inside every plane.
+    /// </param>
+    /// <param name="planeCount">How many planes <paramref name="planes"/> holds.</param>
+    /// <param name="boundsMinX">World-space minimum corner of a box containing the region.</param>
+    /// <param name="boundsMinY">See <paramref name="boundsMinX"/>.</param>
+    /// <param name="boundsMinZ">See <paramref name="boundsMinX"/>. Ignored for a 2D component.</param>
+    /// <param name="boundsMaxX">World-space maximum corner of that box.</param>
+    /// <param name="boundsMaxY">See <paramref name="boundsMaxX"/>.</param>
+    /// <param name="boundsMaxZ">See <paramref name="boundsMaxX"/>. Ignored for a 2D component.</param>
+    /// <remarks>
+    /// <para><b>The bounding box is required, and it is the caller's to compute.</b> A set of half-spaces need not be bounded at all — six camera planes are,
+    /// but three are not — so there is no general way to derive which cells to walk from the planes alone, and walking the whole grid to find out would cost
+    /// more than the query. A camera frustum's box falls out of its eight corners. An over-generous box costs a few rejected cells, never wrong results; a box
+    /// that does not contain the region is a false negative, so err wide.</para>
+    /// </remarks>
+    public EcsQuery<TArchetype> WhereFrustum<T>(ReadOnlySpan<double> planes, int planeCount, double boundsMinX, double boundsMinY, double boundsMinZ,
+        double boundsMaxX, double boundsMaxY, double boundsMaxZ) where T : unmanaged
+    {
+        ThrowIfSpatialAlreadySet();
+        if (planeCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(planeCount), planeCount, "A frustum query needs at least one plane.");
+        }
+
+        if (planeCount > MaxFrustumPlanes)
+        {
+            throw new ArgumentOutOfRangeException(nameof(planeCount), planeCount,
+                $"A frustum query is limited to {MaxFrustumPlanes} planes; the query walks them in stack-allocated buffers.");
+        }
+
+        _spatialTable = _tx.DBE.GetComponentTable<T>();
+        CheckConfig.Require(CheckConfig.Enabled, _spatialTable?.SpatialIndex != null, $"Component {typeof(T).Name} has no [SpatialIndex]");
+        _spatialQueryType = SpatialQueryType.Frustum;
+        _frustumPlanes = planes.ToArray();
+        _frustumPlaneCount = planeCount;
+        _spatialParams[0] = boundsMinX; _spatialParams[1] = boundsMinY; _spatialParams[2] = boundsMinZ;
+        _spatialParams[3] = boundsMaxX; _spatialParams[4] = boundsMaxY; _spatialParams[5] = boundsMaxZ;
+        TyphonEvent.EmitEcsQuerySpatialAttach((byte)SpatialQueryType.Frustum, (float)boundsMinX, (float)boundsMinY, (float)boundsMaxX, (float)boundsMaxY);
         return this;
     }
 
@@ -708,7 +804,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             }
             if (_spatialQueryType != SpatialQueryType.None)
             {
-                throw new InvalidOperationException("A view cannot combine WhereField with a spatial predicate (WhereNearby / WhereInAABB / WhereRay).");
+                throw new InvalidOperationException(
+                    "A view cannot combine WhereField with a spatial predicate (WhereNearby / WhereInAABB / WhereRay / WhereFrustum).");
             }
             return ToIncrementalView(bufferCapacity, callerFile, callerLine, callerMethod);
         }
@@ -821,9 +918,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         // Single AND branch
         var evaluators = QueryResolverHelper.ResolveEvaluators(branches[0], ct, 0);
         var plan = PlanBuilder.Instance.BuildPlanAttributed(evaluators, ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, null,
-            queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-            definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-            executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+            1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
 
         var view = new EcsView<TArchetype>(this, evaluators, ct, _whereFieldReader, plan, bufferCapacity, _tx.TSN, callerFile, callerLine, callerMethod);
 
@@ -849,9 +944,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         {
             branchEvaluators[b] = QueryResolverHelper.ResolveEvaluators(branches[b], ct, 0, (byte)b);
             plans[b] = PlanBuilder.Instance.BuildPlanAttributed(branchEvaluators[b], ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, null,
-                queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-                definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-                executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+                1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
         }
 
         var view = new EcsView<TArchetype>(this, branchEvaluators, plans, ct, _whereFieldReader, bufferCapacity, _tx.TSN, callerFile, callerLine, callerMethod);
@@ -964,9 +1057,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var ct = _whereComponentTable;
         var evaluators = QueryResolverHelper.ResolveEvaluators(SingleBranchOrThrow("ExecuteOrdered()"), ct, 0);
         var plan = PlanBuilder.Instance.BuildPlanAttributed(evaluators, ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, _orderBy.Value,
-            queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-            definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-            executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+            1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
 
         // Every archetype whose where-component owns a per-archetype tree can be K-way merged; anything else falls back to scan-then-sort. The third case this
         // used to have — a PipelineExecutor ordered scan over the shared ComponentTable tree — is gone with that tree (#629). It could only ever have returned
@@ -1000,7 +1091,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var dbe = _tx.DBE;
         // Use rented array instead of List + ToArray to avoid redundant allocations.
         // Typical K is 1-3 archetypes; rent 8 to avoid resize in common cases.
-        var streams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(8);
+        var streams = ArrayPool<ArchetypeSortedStream>.Shared.Rent(8);
         var streamCount = 0;
 
         // The plan's PrimaryFieldIndex may be -1 when the shared B+Tree has 0 entries (cluster archetypes store entries in per-archetype B+Trees,
@@ -1101,9 +1192,9 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 // Grow rented array if needed (rare — most queries match 1-3 archetypes)
                 if (streamCount >= streams.Length)
                 {
-                    var newStreams = System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Rent(streams.Length * 2);
+                    var newStreams = ArrayPool<ArchetypeSortedStream>.Shared.Rent(streams.Length * 2);
                     Array.Copy(streams, newStreams, streamCount);
-                    System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
+                    ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
                     streams = newStreams;
                 }
 
@@ -1114,7 +1205,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
             if (streamCount == 0)
             {
-                System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
+                ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
                 return [];
             }
 
@@ -1136,7 +1227,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
             {
                 streams[i].Dispose();
             }
-            System.Buffers.ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
+            ArrayPool<ArchetypeSortedStream>.Shared.Return(streams, true);
             throw;
         }
     }
@@ -1325,9 +1416,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
 
         var evaluators = QueryResolverHelper.ResolveEvaluators(SingleBranchOrThrow("One-shot execution"), ct, 0);
         var plan = PlanBuilder.Instance.BuildPlanAttributed(evaluators, ct, PlannerStats(ct), AdvancedSelectivityEstimator.Instance, null,
-            queryInstanceKind: 1, queryInstanceLocalId: (uint)EcsQueryId,
-            definitionSourceFile: SourceFile, definitionSourceLine: SourceLine, definitionSourceMethod: SourceMethod,
-            executionSourceFile: callerFile, executionSourceLine: callerLine, executionSourceMethod: callerMethod);
+            1, (uint)EcsQueryId, SourceFile, SourceLine, SourceMethod, callerFile, callerLine, callerMethod);
 
         // Scan for matching entities across all matching archetypes.
         var result = new HashSet<EntityId>(_take > 0 ? _take : 64);
@@ -2054,7 +2143,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         // Step 1: Range scan B+Tree → collect ClusterLocations grouped by clusterChunkId.
         // Use a flat array indexed by clusterChunkId (bounded by segment ChunkCapacity, typically small).
         var chunkCapacity = clusterState.ClusterSegment.ChunkCapacity;
-        var matchBitsArr = System.Buffers.ArrayPool<ulong>.Shared.Rent(chunkCapacity);
+        var matchBitsArr = ArrayPool<ulong>.Shared.Rent(chunkCapacity);
         try
         {
             Array.Clear(matchBitsArr, 0, chunkCapacity);
@@ -2228,7 +2317,7 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         }
         finally
         {
-            System.Buffers.ArrayPool<ulong>.Shared.Return(matchBitsArr);
+            ArrayPool<ulong>.Shared.Return(matchBitsArr);
         }
     }
 
@@ -2343,21 +2432,10 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         var result = new HashSet<EntityId>(_take > 0 ? _take : 64);
         var tx = _tx;
 
-        // Fan out to both trees (SD1 guarantees no overlap). With per-component-type mode, only one is non-null.
-        if (state.StaticTree != null)
-        {
-            QuerySingleTree(state.StaticTree, state, result);
-        }
-        if (state.DynamicTree != null)
-        {
-            QuerySingleTree(state.DynamicTree, state, result);
-        }
-
-        // Fan out to per-archetype cluster spatial index (issue #230 Phase 3 Option B).
-        // Cluster entities are NOT in the shared per-table R-Tree — they have per-archetype indexes. AABB and Radius queries route to the per-cell cluster
-        // index via ArchetypeClusterState.QueryAabb / QueryRadius. Under Option B, the SpatialGrid is guaranteed non-null for cluster spatial archetypes
-        // (enforced at DatabaseEngine.InitializeArchetypes). Any other query shape on the cluster tier (e.g. Ray, Frustum) throws NotSupportedException —
-        // adding Ray/Frustum on cluster archetypes is tracked as a follow-up sub-issue of #228.
+        // Fan out to the per-archetype cluster spatial index — the only index home there is. Before #872 step 13 an entity-level R-Tree was traversed first
+        // and its results unioned in; that tree had had no writer since #666, so the traversal was a full descent of an empty structure on every spatial
+        // query. Every shape now resolves here: AABB and Radius since #230 Phase 3 Option B, Ray and Frustum since step 13 wired in the step-9 walks.
+        // The SpatialGrid is guaranteed non-null for cluster spatial archetypes (enforced at DatabaseEngine.InitializeArchetypes).
         if (state.ClusterArchetypes != null)
         {
             var grid = _tx.DBE.SpatialGrid;
@@ -2369,28 +2447,23 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                 }
                 if (_spatialQueryType == SpatialQueryType.AABB)
                 {
-                    // New path: per-cell cluster index AABB query. Extract the 2D/3D query bounds from _spatialParams (same layout as in QuerySingleTree's
-                    // AABB case: 6 doubles stored as [minX, minY, minZ, maxX, maxY, maxZ], with the 3D slots ignored for 2D archetypes).
+                    // The max corner is ALWAYS at [3]/[4], for both dimensions. Only Z varies.
+                    //
+                    // This block used to read qMaxX from [2] and qMaxY from [3] for a 2D component — i.e. it took the caller's minZ as maxX and their maxX as
+                    // maxY. WhereInAABB documents and packs six doubles as (minX, minY, minZ, maxX, maxY, maxZ) whatever the dimension, so a 2D query got a
+                    // garbage box and a silently empty answer: an SQ-01 false negative with no exception. It survived because every EcsQuery spatial test
+                    // uses a 3D component, and because the Workbench's QuerySpecCompiler re-packed its arguments to compensate — a workaround at a call site
+                    // three projects away, which is how a defect gets mistaken for a convention. Found by the #872 measurement harness, whose 2D rows all
+                    // reported zero hits.
                     var qMinX = (float)_spatialParams[0];
                     var qMinY = (float)_spatialParams[1];
-                    float qMinZ;
-                    float qMaxX;
-                    float qMaxY;
-                    float qMaxZ;
-                    if (state.Descriptor.CoordCount == 4)
-                    {
-                        qMinZ = float.NegativeInfinity;
-                        qMaxX = (float)_spatialParams[2];
-                        qMaxY = (float)_spatialParams[3];
-                        qMaxZ = float.PositiveInfinity;
-                    }
-                    else
-                    {
-                        qMinZ = (float)_spatialParams[2];
-                        qMaxX = (float)_spatialParams[3];
-                        qMaxY = (float)_spatialParams[4];
-                        qMaxZ = (float)_spatialParams[5];
-                    }
+                    var qMaxX = (float)_spatialParams[3];
+                    var qMaxY = (float)_spatialParams[4];
+
+                    // A 2D archetype stores its clusters on a flat Z slab, so an unbounded Z accepts them whatever the caller passed.
+                    var is3D = state.Descriptor.CoordCount == 6;
+                    var qMinZ = is3D ? (float)_spatialParams[2] : float.NegativeInfinity;
+                    var qMaxZ = is3D ? (float)_spatialParams[5] : float.PositiveInfinity;
 
                     using var guard = EpochGuard.Enter(_tx.DBE.EpochManager);
                     foreach (var hit in cs.QueryAabb(grid, qMinX, qMinY, qMinZ, qMaxX, qMaxY, qMaxZ))
@@ -2422,12 +2495,20 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
                         }
                     }
                 }
+                else if (_spatialQueryType == SpatialQueryType.Ray)
+                {
+                    CollectClusterRay(cs, grid, result);
+                }
+                else if (_spatialQueryType == SpatialQueryType.Frustum)
+                {
+                    CollectClusterFrustum(cs, grid, state, result);
+                }
                 else
                 {
-                    // Option B: any query shape beyond AABB / Radius is unsupported on the cluster tier. No silent fallback — surface the limitation.
-                    throw new NotSupportedException(
-                        $"Cluster spatial queries for shape '{_spatialQueryType}' are not implemented in issue #230 Phase 3 Option B. " +
-                        $"Supported shapes on the cluster tier are AABB and Radius. See follow-up sub-issues of #228 for Ray/Frustum support.");
+                    // Every shape the builder can set is handled above. This is the guard for a shape ADDED to SpatialQueryType without a cluster branch —
+                    // the alternative being a query that silently returns nothing, which is an SQ-01 false negative that no differential test would catch
+                    // because the shape would have no oracle either.
+                    throw new NotSupportedException($"Cluster spatial queries for shape '{_spatialQueryType}' have no implementation.");
                 }
             }
         }
@@ -2451,63 +2532,138 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         return result;
     }
 
-    /// <summary>Query a single R-Tree and collect matching EntityIds into the result set.</summary>
-    private void QuerySingleTree(SpatialRTree<PersistentStore> tree, SpatialIndexState state, HashSet<EntityId> result)
+    /// <summary>
+    /// Ray query against one cluster archetype, collected into <paramref name="result"/>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Grown until it is not truncated</b> — see <see cref="InitialClusterResultCapacity"/> for why a fixed buffer would be an <c>SQ-01</c> false negative.
+    /// The cluster API returns hits front-to-back; that ordering is discarded here because <c>ExecuteSpatial</c>'s contract is a set, and honouring it would
+    /// mean merging across archetypes on a distance this method no longer carries.
+    /// </remarks>
+    private void CollectClusterRay(ArchetypeClusterState cs, SpatialGrid grid, HashSet<EntityId> result)
     {
-        var tx = _tx;
-        switch (_spatialQueryType)
+        var originX = (float)_spatialParams[0];
+        var originY = (float)_spatialParams[1];
+        var originZ = (float)_spatialParams[2];
+        var dirX = (float)_spatialParams[3];
+        var dirY = (float)_spatialParams[4];
+        var dirZ = (float)_spatialParams[5];
+        var maxDist = (float)_spatialParams[6];
+
+        var capacity = InitialClusterResultCapacity;
+        while (true)
         {
-            case SpatialQueryType.AABB:
+            var pooled = capacity <= MaxPooledResultCapacity;
+            var buffer = pooled
+                ? ArrayPool<(long entityId, float distance)>.Shared.Rent(capacity)
+                : new (long entityId, float distance)[capacity];
+            try
             {
-                Span<double> coords = stackalloc double[6];
-                for (var i = 0; i < 6; i++) coords[i] = _spatialParams[i];
-                var coordSlice = coords[..state.Descriptor.CoordCount];
-
-                using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
-                foreach (var hit in tree.QueryAABB(coordSlice))
+                var span = buffer.AsSpan(0, capacity);
+                int hits;
+                using (EpochGuard.Enter(_tx.DBE.EpochManager))
                 {
-                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    // ordered: false — the sort's output goes straight into a HashSet below. See QueryRay's remarks.
+                    hits = cs.QueryRay(grid, originX, originY, originZ, dirX, dirY, dirZ, maxDist, span, ordered: false);
+                }
+
+                if (hits == capacity)
+                {
+                    if (capacity >= MaxClusterResultCapacity)
+                    {
+                        throw new InvalidOperationException(
+                            $"A cluster spatial query filled its {capacity:N0}-entry ceiling, so the result may be truncated. Narrow the query region "
+                            + "rather than accepting a silently partial answer.");
+                    }
+
+                    capacity <<= 1;
+                    continue;
+                }
+
+                for (var i = 0; i < hits; i++)
+                {
+                    var entityId = EntityId.FromRaw(span[i].entityId);
                     if (MaskTestByRouting(entityId.ArchetypeId))
                     {
                         result.Add(entityId);
                     }
                 }
-                break;
+
+                return;
             }
-            case SpatialQueryType.Radius:
+            finally
             {
-                var halfCoord = state.Descriptor.CoordCount / 2;
-                Span<double> center = stackalloc double[halfCoord];
-                for (var i = 0; i < halfCoord; i++) center[i] = _spatialParams[i];
-
-                using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
-                foreach (var hit in tree.QueryRadius(center, _spatialParams[3]))
+                if (pooled)
                 {
-                    var entityId = EntityId.FromRaw(hit.EntityId);
-                    if (MaskTestByRouting(entityId.ArchetypeId))
-                    {
-                        result.Add(entityId);
-                    }
+                    ArrayPool<(long entityId, float distance)>.Shared.Return(buffer);
                 }
-                break;
             }
-            case SpatialQueryType.Ray:
-            {
-                var halfCoord = state.Descriptor.CoordCount / 2;
-                Span<double> origin = stackalloc double[halfCoord];
-                Span<double> dir = stackalloc double[halfCoord];
-                for (var i = 0; i < halfCoord; i++) { origin[i] = _spatialParams[i]; dir[i] = _spatialParams[3 + i]; }
+        }
+    }
 
-                using var guard = EpochGuard.Enter(tx.DBE.EpochManager);
-                foreach (var hit in tree.QueryRay(origin, dir, _spatialParams[6]))
+    /// <summary>Frustum query against one cluster archetype, collected into <paramref name="result"/>.</summary>
+    /// <remarks><inheritdoc cref="CollectClusterRay" path="/remarks"/></remarks>
+    private void CollectClusterFrustum(ArchetypeClusterState cs, SpatialGrid grid, SpatialIndexState state, HashSet<EntityId> result)
+    {
+        // The caller packs planes for the component's dimension; a 2D component takes 3 doubles per plane and a 3D one takes 4. Checking here rather than
+        // letting the cluster query throw keeps the message in terms of the API the user called.
+        var stride = state.Descriptor.CoordCount == 6 ? 4 : 3;
+        var needed = _frustumPlaneCount * stride;
+        if (_frustumPlanes == null || _frustumPlanes.Length < needed)
+        {
+            throw new ArgumentException(
+                $"A {(stride == 4 ? "3D" : "2D")} frustum query needs {needed} doubles for {_frustumPlaneCount} planes ({stride} each), got "
+                + $"{_frustumPlanes?.Length ?? 0}.");
+        }
+
+        var boundsMin = new Vector3Like((float)_spatialParams[0], (float)_spatialParams[1], (float)_spatialParams[2]);
+        var boundsMax = new Vector3Like((float)_spatialParams[3], (float)_spatialParams[4], (float)_spatialParams[5]);
+        var planes = _frustumPlanes.AsSpan(0, needed);
+
+        var capacity = InitialClusterResultCapacity;
+        while (true)
+        {
+            var pooled = capacity <= MaxPooledResultCapacity;
+            var buffer = pooled ? ArrayPool<long>.Shared.Rent(capacity) : new long[capacity];
+            try
+            {
+                var span = buffer.AsSpan(0, capacity);
+                int hits;
+                using (EpochGuard.Enter(_tx.DBE.EpochManager))
                 {
-                    var entityId = EntityId.FromRaw(hit.EntityId);
+                    hits = cs.QueryFrustum(grid, planes, _frustumPlaneCount, boundsMin, boundsMax, span);
+                }
+
+                if (hits == capacity)
+                {
+                    if (capacity >= MaxClusterResultCapacity)
+                    {
+                        throw new InvalidOperationException(
+                            $"A cluster spatial query filled its {capacity:N0}-entry ceiling, so the result may be truncated. Narrow the query region "
+                            + "rather than accepting a silently partial answer.");
+                    }
+
+                    capacity <<= 1;
+                    continue;
+                }
+
+                for (var i = 0; i < hits; i++)
+                {
+                    var entityId = EntityId.FromRaw(span[i]);
                     if (MaskTestByRouting(entityId.ArchetypeId))
                     {
                         result.Add(entityId);
                     }
                 }
-                break;
+
+                return;
+            }
+            finally
+            {
+                if (pooled)
+                {
+                    ArrayPool<long>.Shared.Return(buffer);
+                }
             }
         }
     }
@@ -2692,7 +2848,8 @@ public unsafe struct EcsQuery<TArchetype> where TArchetype : class
         }
         if (_spatialQueryType != SpatialQueryType.None)
         {
-            throw new InvalidOperationException("foreach does not apply spatial predicates (WhereNearby / WhereInAABB / WhereRay) — call .Execute().");
+            throw new InvalidOperationException(
+                "foreach does not apply spatial predicates (WhereNearby / WhereInAABB / WhereRay / WhereFrustum) — call .Execute().");
         }
         if (_orderBy.HasValue)
         {

@@ -52,9 +52,6 @@ public readonly struct SpatialFieldInfo
     /// <summary>Kind of spatial bounds stored in the field (dimensionality + precision).</summary>
     public readonly SpatialFieldType FieldType;
 
-    /// <summary>Fat-AABB margin, in world units, added around an entity's tight bounds so small movements don't force an index update.</summary>
-    public readonly float Margin;
-
     /// <summary>Grid cell size, in world units, used to bucket this field's entities.</summary>
     public readonly float CellSize;
 
@@ -75,16 +72,15 @@ public readonly struct SpatialFieldInfo
     /// <param name="fieldOffset">Byte offset of the bounds field within the component data.</param>
     /// <param name="fieldSize">Size, in bytes, of the bounds field.</param>
     /// <param name="fieldType">Kind of bounds stored (dimensionality + precision).</param>
-    /// <param name="margin">Fat-AABB margin in world units added around tight bounds.</param>
     /// <param name="cellSize">Grid cell size in world units; <see cref="InverseCellSize"/> is derived from it.</param>
     /// <param name="mode">Index mode: <see cref="SpatialMode.Dynamic"/> (default) or <see cref="SpatialMode.Static"/>.</param>
     /// <param name="category">Archetype-level category bitmask; defaults to <see cref="uint.MaxValue"/> (matches any query mask).</param>
-    public SpatialFieldInfo(int fieldOffset, int fieldSize, SpatialFieldType fieldType, float margin, float cellSize, SpatialMode mode = SpatialMode.Dynamic, uint category = uint.MaxValue)
+    public SpatialFieldInfo(int fieldOffset, int fieldSize, SpatialFieldType fieldType, float cellSize, SpatialMode mode = SpatialMode.Dynamic,
+        uint category = uint.MaxValue)
     {
         FieldOffset = fieldOffset;
         FieldSize = fieldSize;
         FieldType = fieldType;
-        Margin = margin;
         CellSize = cellSize;
         InverseCellSize = cellSize > 0 ? 1.0f / cellSize : 0;
         Mode = mode;

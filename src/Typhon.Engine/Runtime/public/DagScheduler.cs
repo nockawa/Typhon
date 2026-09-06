@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics.X86;
 using System.Threading;
 using Typhon.Profiler;
 
@@ -128,6 +129,17 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     // steady state; padding keeps that line from being invalidated by the hot counters either side of it.
     private CacheLinePaddedInt _tickAborted;
 
+    // Fence-failure latch (#890). Separate from _tickAborted because the two are different verdicts: an application system throwing under AbortTickAndStop
+    // cancels the REST of the tick, while an engine-track system throwing means the work that ENDS the tick did not finish — there is nothing left to cancel
+    // and, per design/Runtime/08-strict-tick-abort.md D3, it is reported as its own TickOutcomeReason rather than as an abort.
+    private CacheLinePaddedInt _fenceFailed;
+
+    // First-failure record, written by whichever thread wins the CAS on _fenceFailed. Same publication argument as the abort's: the latch is taken first, and
+    // the detail is read at tick end, after the tick has drained through a barrier every worker passes.
+    private int _fenceFailedSystemIndex = -1;
+    private Exception _fenceFailedException;
+    private long _fenceFailedTickNumber;
+
     // First-failure record, written by whichever thread wins the CAS on _tickAborted — see TryRecordTickAbort for why the latch is taken before these are
     // written, and why that ordering is safe.
     private int _abortedSystemIndex = -1;
@@ -184,6 +196,98 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         LogSystemException(sysIdx, systemName, ex);
         CaptureSystemException(sysIdx, ex);
         TryRecordTickAbort(sysIdx, ex);
+        RecordEngineTrackFailure(sysIdx, systemName, ex);
+    }
+
+    /// <summary>
+    /// An engine-track system failed: latch the tick's fence-failure verdict and tell the host, whichever gate caught it — <c>ShouldRun</c>, <c>Prepare</c>
+    /// or <c>Execute</c>, on any dispatch path (#890).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this sits in the funnel and not at the catch sites.</b> Before #890 only ONE catch site — the WorkerLoop's outer safety net — invoked
+    /// <see cref="UnhandledExceptionCallback"/>, so a fence phase whose <c>Prepare</c> threw was recorded in per-system telemetry, had every successor
+    /// skipped as <see cref="SkipReason.DependencyFailed"/>, and reached the host through nothing at all. That is what happened for #889's
+    /// <c>NullReferenceException</c>: Prep ran and then no WAL emit, no dormancy sweep and no dirty-ring archive, on every tick with dirty data, while the
+    /// process kept ticking. TP-01a's reasoning applies unchanged — a fence that did not finish leaves cluster pages mutated, dirty and un-logged, which the
+    /// checkpoint then persists on its own schedule.
+    /// </para>
+    /// <para>
+    /// <b>Application systems are deliberately untouched.</b> Their failures keep the documented contract: the per-system handlers log and capture, and the
+    /// callback stays reserved for what escaped every inner handler. Widening it to every user-system throw is a separate decision with a much larger blast
+    /// radius, and <see cref="SkipReason.Exception"/> already carries that detail.
+    /// </para>
+    /// </remarks>
+    private void RecordEngineTrackFailure(int sysIdx, string systemName, Exception ex)
+    {
+        if ((uint)sysIdx >= (uint)_systemIsEngine.Length || !_systemIsEngine[sysIdx])
+        {
+            return;
+        }
+
+        // Latch before the detail, exactly as TryRecordTickAbort does and for the same reason: the CAS elects one recorder and racing losers must not stomp it.
+        if (Interlocked.CompareExchange(ref _fenceFailed.Value, 1, 0) == 0)
+        {
+            _fenceFailedSystemIndex = sysIdx;
+            _fenceFailedException = ex;
+            _fenceFailedTickNumber = _currentTickNumber;
+        }
+
+        // Fired per failure rather than once per tick: a second engine phase failing for a second reason is a second thing the host has to be told about.
+        try { UnhandledExceptionCallback?.Invoke(sysIdx, systemName, ex); }
+        catch { /* swallow — the callback itself threw; we are the last line of defence */ }
+    }
+
+    /// <summary>
+    /// The fence failed on the tick DRIVER rather than inside a phase — the serial <c>WriteTickFence</c>, or the parallel fence's serial prep (#890).
+    /// </summary>
+    /// <remarks>
+    /// Same latch, same callback, same terminal gate as a phase failure: the host's question is "did the fence finish", and which thread the answer came
+    /// from is not part of it. <c>sysIdx</c> is -1 because no system owns this failure, which is also what the tick driver's own safety net reports.
+    /// </remarks>
+    internal void RecordFenceDriverFailure(Exception ex)
+    {
+        LogSystemException(-1, FenceDriverName, ex);
+        if (Interlocked.CompareExchange(ref _fenceFailed.Value, 1, 0) == 0)
+        {
+            _fenceFailedSystemIndex = -1;
+            _fenceFailedException = ex;
+            _fenceFailedTickNumber = _currentTickNumber;
+        }
+
+        try { UnhandledExceptionCallback?.Invoke(-1, FenceDriverName, ex); }
+        catch { /* swallow — the callback itself threw; we are the last line of defence */ }
+    }
+
+    /// <summary>What <see cref="RecordFenceDriverFailure"/> reports as the failing system's name.</summary>
+    internal const string FenceDriverName = "<tick fence>";
+
+    /// <summary>
+    /// True once an engine-track (Fence-DAG) system has thrown. Terminal — never cleared; the tick that follows one is not a tick that completed.
+    /// </summary>
+    public bool IsFenceFailed => Volatile.Read(ref _fenceFailed.Value) != 0;
+
+    /// <summary>The outcome describing the fence failure. Only meaningful once <see cref="IsFenceFailed"/> is true.</summary>
+    /// <remarks>
+    /// The barrier is not decoration. The abort's twin justifies its plain reads by "the tick drained through a barrier every worker passes", but that drain
+    /// is the plain-load spin at <c>DispatchTrackMultiThreaded</c>, which EQ-02 names as exactly what a reader may not lean on under arm64 — and this outcome
+    /// is read one drain later than the abort's, not a whole tick later. Acquiring <c>_fenceFailed</c> orders nothing useful either: the writer sets the latch
+    /// BEFORE the detail. So the detail reads get the fence, JIT-folded away on x64 (<c>X86Base.IsSupported</c> is a constant there).
+    /// </remarks>
+    internal TickOutcome FenceFailureOutcome
+    {
+        get
+        {
+            if (!X86Base.IsSupported)
+            {
+                Interlocked.MemoryBarrier();
+            }
+
+            var idx = _fenceFailedSystemIndex;
+            // -1 is the driver's own failure, which has a name but no system; a host reading the outcome should not have to special-case it.
+            var name = (uint)idx < (uint)Systems.Length ? Systems[idx].Name : FenceDriverName;
+            return new TickOutcome(_fenceFailedTickNumber, TickOutcomeReason.FenceFailure, idx, name, _fenceFailedException);
+        }
     }
 
     /// <summary>
@@ -336,15 +440,19 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
     internal Action<DagScheduler> GaugeSnapshotCallback;
 
     /// <summary>
-    /// Public hook fired when the WorkerLoop's outer safety net catches an unhandled exception that escaped every inner try/catch (engine bug, runaway
-    /// exception from inside a catch handler, etc.). User code can subscribe to log to file, send to telemetry, request graceful shutdown, or escalate to a
-    /// debugger break. Invoked on the worker thread that caught the exception. Defaults to null (no-op).
+    /// Public hook fired when something threw that the host has to be told about. User code can subscribe to log to file, send to telemetry, request graceful
+    /// shutdown, or escalate to a debugger break. Invoked on the thread that caught the exception — a worker or the tick driver — so do not block in it.
+    /// Defaults to null (no-op).
     /// <para>
-    /// <b>Note:</b> The vast majority of user-code exceptions are already caught by the per-system handlers in
-    /// <see cref="ProcessParallelQuery"/>, <see cref="ProcessCallbackOrQuery"/>, <see cref="ProcessPipeline"/>, and
-    /// <see cref="ExecuteInline"/>. Those paths log via <c>LogSystemException</c> and capture via
-    /// <c>CaptureSystemException</c> without invoking this callback. This callback fires ONLY when the outer WorkerLoop safety net catches something — meaning
-    /// an inner handler didn't, which is itself a bug worth surfacing prominently.
+    /// <b>Two sources, and only two.</b> (1) The WorkerLoop's outer safety net and the tick driver's, when an exception escaped every inner try/catch —
+    /// meaning an inner handler didn't catch it, which is itself a bug worth surfacing prominently. (2) Since #890, ANY failure of a system on an
+    /// ENGINE track — the Fence DAG — from its <c>ShouldRun</c>, <c>Prepare</c> or <c>Execute</c>, on any dispatch path, because the fence is the work
+    /// that makes a tick durable and a fence that did not finish must not be silent (see <see cref="RecordEngineTrackFailure"/>).
+    /// </para>
+    /// <para>
+    /// <b>Application-track systems keep the original contract:</b> the per-system handlers in <see cref="ProcessParallelQuery"/>,
+    /// <see cref="ProcessCallbackOrQuery"/>, <see cref="ProcessPipeline"/> and <see cref="ExecuteInline"/> log via <c>LogSystemException</c> and capture via
+    /// <c>CaptureSystemException</c> without invoking this callback; their detail lives in <see cref="SkipReason.Exception"/> in the telemetry ring.
     /// </para>
     /// </summary>
     public Action<int, string, Exception> UnhandledExceptionCallback;
@@ -406,6 +514,14 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
         // not silently resume on top of it. The host is expected to have stopped us from its OnTickAborted handler; this is the backstop for the ticks that
         // fire before it gets there.
         if (IsTickAborted)
+        {
+            return;
+        }
+
+        // Terminal fence failure (#890). Same backstop as the abort above and for a stronger reason: the fence is what makes a tick durable, so a tick that
+        // follows one whose fence did not finish would layer more un-logged page mutations on top of the first. design/Runtime/08-strict-tick-abort.md D3
+        // calls this "straight to fatal stop"; the host is expected to react to OnTickAborted, and this covers the ticks that fire before it gets there.
+        if (IsFenceFailed)
         {
             return;
         }
@@ -1307,8 +1423,12 @@ public sealed partial class DagScheduler : HighResolutionTimerServiceBase
                         }
                         var sysName = (uint)sysIdx < (uint)Systems.Length ? Systems[sysIdx].Name : "<unknown>";
                         RecordSystemFailure(sysIdx, sysName, ex);
-                        try { UnhandledExceptionCallback?.Invoke(sysIdx, sysName, ex); }
-                        catch { /* swallow — the callback itself threw; we're the last line of defense */ }
+                        if ((uint)sysIdx >= (uint)_systemIsEngine.Length || !_systemIsEngine[sysIdx])
+                        {
+                            // An engine-track failure was already surfaced by the funnel (#890); firing again here would report it twice.
+                            try { UnhandledExceptionCallback?.Invoke(sysIdx, sysName, ex); }
+                            catch { /* swallow — the callback itself threw; we're the last line of defense */ }
+                        }
                     }
                 }
                 else

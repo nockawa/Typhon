@@ -2079,12 +2079,14 @@ public unsafe partial class Transaction : EntityAccessor
     /// values genuinely collide — a health total, a category, a bucket — must say <c>[Index(AllowMultiple = true)]</c>.
     /// </para>
     /// <para>
-    /// Cost is one extra optimistic descent per unique-index write. That is not free on a commit path, and it can be removed later by surfacing the
-    /// <c>InsertArguments.Added</c> flag that <c>AddOrUpdateCore</c> already computes — the check is here rather than inside <c>Add</c> because that method's
-    /// body is contractually throw-free (see its PROFILING-SPAN-NO-THROW markers).
+    /// Cost is one extra optimistic descent per unique-index write, and it is a read followed by a write with no lock spanning the two — correct on a path
+    /// where nothing else moves keys in the same tree concurrently, which is the two commit-path callers' situation today. <b>The tick-fence shadow drain
+    /// no longer calls this first (#886):</b> it reads
+    /// <c>BTree.Move</c>'s own verdict, which is taken under the leaf's write latch and so survives a parallel drain, and calls this only on the cold path
+    /// where <c>Move</c> returned <c>false</c>, to tell "old key absent" from "new key held by another" and raise the message below for the second.
     /// </para>
     /// </remarks>
-    internal static unsafe void RejectUniqueIndexCollision<TStore>(ref ClusterIndexField<TStore> field, byte* newKeyPtr, int clusterLocation,
+    internal static void RejectUniqueIndexCollision<TStore>(ref ClusterIndexField<TStore> field, byte* newKeyPtr, int clusterLocation,
         ref ChunkAccessor<TStore> idxAccessor)
         where TStore : struct, IPageStore
     {

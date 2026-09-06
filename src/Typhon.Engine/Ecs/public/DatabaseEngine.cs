@@ -364,6 +364,10 @@ public class DatabaseEngineOptions
     /// </summary>
     public StatisticsOptions Statistics { get; set; }
 
+    /// <summary>
+    /// Spatial broadphase tuning — where a cell switches between a linear scan and a per-cell R-Tree.
+    /// </summary>
+    public SpatialOptions Spatial { get; set; } = new();
 }
 
 /// <summary>
@@ -403,6 +407,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     internal const string BK_SysSchemaHistory       = "sys.SchemaHistory";
     internal const string BK_SysAssemblyR1          = "sys.AssemblyR1";
     internal const string BK_SpatialGridConfig      = "spatial.GridConfig";
+
+    /// <summary>
+    /// Values in the persisted <see cref="SpatialGridConfig"/> record: <c>WorldMin.xyz</c>, <c>WorldMax.xyz</c>, cell size, hysteresis ratio.
+    /// </summary>
+    /// <remarks>
+    /// Six before #872 step 8 gave the grid a Z axis. A record of any other width is from another format and is rejected, never reinterpreted.
+    /// </remarks>
+    internal const int SpatialGridConfigIntCount = 8;
     internal const string BK_NextFreeTSN            = "NextFreeTSN";
     internal const string BK_UowRegistrySPI         = "UowRegistrySPI";
     internal const string BK_CollectionFieldR1      = "collection.FieldR1";
@@ -741,6 +753,19 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     // ══════════════════════════════════════════════════════════════════════════════
     private SpatialGrid _spatialGrid;
     private SpatialGridConfig? _pendingGridConfig;
+
+    /// <summary>
+    /// CPU-to-span ratio of the previous fence's migration phases (Migrate + IndexMassUpdate + EntityMapUpdate), ≥ 1. The per-entity migration cost the
+    /// repair budget is spent against is measured in summed CPU and the budget is a frame budget, so the sample is divided by this (step 14, D2).
+    /// <c>1</c> until the parallel runtime publishes a value, which is also the truth for the serial fence.
+    /// </summary>
+    private double _lastFenceMigrationParallelism = 1d;
+
+    /// <summary>Published by <c>TyphonRuntime</c> after each parallel fence. See <see cref="_lastFenceMigrationParallelism"/>.</summary>
+    internal void SetLastFenceMigrationParallelism(double parallelism) => _lastFenceMigrationParallelism = parallelism >= 1d ? parallelism : 1d;
+
+    /// <summary>See <see cref="_lastFenceMigrationParallelism"/>. Exposed for tests and telemetry.</summary>
+    internal double LastFenceMigrationParallelism => _lastFenceMigrationParallelism;
 
     /// <summary>
     /// Sets the spatial grid configuration for this engine. Must be called before <see cref="InitializeArchetypes"/>. Only required when at least one
@@ -1090,6 +1115,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         _options = options;
         _injectedWalIo = injectedWalIo;
         MemoryAllocator = memoryAllocator;
+
+        // Seeded here rather than read at the point of use: AttachCellTreeFactory copies it onto every ArchetypeClusterState during InitializeArchetypes,
+        // and a per-archetype copy of a value that could still change would make two archetypes of one database disagree about where their cells promote.
+        ClusterCellTreePromoteThreshold = _options.Spatial?.CellTreePromoteThreshold ?? SpatialOptions.DefaultCellTreePromoteThreshold;
+        ClusterCellTreePromoteTightness = _options.Spatial?.CellTreePromoteTightness ?? SpatialOptions.DefaultCellTreePromoteTightness;
 
         // Resolve the WAL directory to {bundle}/wal when the caller left it null (the bundle-format default). This MUST run HERE — before
         // InitializeUowRegistry() below — because the reopen path reads _options.Wal.WalDirectory to decide whether WAL segments are present and recovery must
@@ -1470,105 +1500,47 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     }
 
     /// <summary>
-    /// Iterate dirty entities from the tick fence snapshot and update spatial R-Tree positions.
-    /// For each dirty entity: if not destroyed, call UpdateSpatial (fat AABB containment check → possible reinsert).
-    /// </summary>
-    private unsafe int ProcessSpatialEntries(ComponentTable table, long[] dirtyBits, ChangeSet changeSet)
-    {
-        var state = table.SpatialIndex;
-
-        // Hoist accessor creation before the entity loop (same pattern as B+Tree batch index maintenance)
-        var compAccessor = table.ComponentSegment.CreateChunkAccessor(changeSet);
-        var treeAccessor = state.ActiveTree.Segment.CreateChunkAccessor(changeSet);
-        var bpAccessor = state.BackPointerSegment.CreateChunkAccessor(changeSet);
-        var dirtyCount = 0;
-        var escapeCount = 0;
-        try
-        {
-            for (var wordIdx = 0; wordIdx < dirtyBits.Length; wordIdx++)
-            {
-                var word = dirtyBits[wordIdx];
-                while (word != 0)
-                {
-                    var bit = BitOperations.TrailingZeroCount((ulong)word);
-                    var chunkId = wordIdx * 64 + bit;
-                    word &= word - 1; // clear lowest set bit
-
-                    if (table.IsChunkDestroyed(chunkId))
-                    {
-                        continue;
-                    }
-
-                    long entityPK = 0;
-                    if (table.Definition.EntityPKOverheadSize > 0)
-                    {
-                        var chunkPtr = compAccessor.GetChunkAddress(chunkId);
-                        entityPK = *(long*)chunkPtr;
-                    }
-
-                    dirtyCount++;
-                    if (SpatialMaintainer.UpdateSpatialBatch(entityPK, chunkId, table, ref compAccessor, ref treeAccessor, ref bpAccessor, changeSet))
-                    {
-                        escapeCount++;
-                    }
-                }
-            }
-        }
-        finally
-        {
-            bpAccessor.Dispose();
-            treeAccessor.Dispose();
-            compAccessor.Dispose();
-            // SaveChanges deliberately omitted: caller (WriteTickFence) owns the ChangeSet lifecycle.
-        }
-
-        // Escape rate telemetry: warn when > 10% of dirty entities escape their fat AABB.
-        // To silence: configure Microsoft.Extensions.Logging filter for "Typhon.Engine.Data.SpatialMaintainer" at Error level.
-        if (dirtyCount > 0)
-        {
-            var escapeRate = (double)escapeCount / dirtyCount;
-            if (escapeRate > 0.10)
-            {
-                SpatialMaintainer.LogHighEscapeRate(Logger, table.Definition.Name, escapeRate, escapeCount, dirtyCount);
-            }
-        }
-
-        return escapeCount;
-    }
-
-    /// <summary>
-    /// Persist spatial index segment root page indexes to BootstrapDictionary.
-    /// Written once at component registration; segment root pages are immutable after allocation.
-    /// </summary>
-    private void SaveSpatialBootstrap(ComponentTable table)
-    {
-        var state = table.SpatialIndex;
-        var fi = state.FieldInfo;
-        var key = $"spatial.{table.Definition.Name}";
-
-        // Tree SPIs + config packed into Int5: treeSPI, backPtrSPI, variant|mode|stride, margin bits, hmSPI (0 if no hashmap)
-        var activeTree = state.ActiveTree;
-        MMF.Bootstrap.Set(key, BootstrapDictionary.Value.FromInt5(activeTree.Segment.RootPageIndex, state.BackPointerSegment.RootPageIndex, 
-            (int)activeTree.Variant | ((int)fi.Mode << 4) | (state.Descriptor.Stride << 8), BitConverter.SingleToInt32Bits(fi.Margin),
-            state.OccupancyMap?.Segment.RootPageIndex ?? 0));
-
-        MMF.SaveBootstrap();
-    }
-
-    /// <summary>
-    /// Persists the engine-wide <see cref="SpatialGridConfig"/> (world bounds, cell size, hysteresis — the 6 source floats; the rest is derived) so a generic
+    /// Persists the engine-wide <see cref="SpatialGridConfig"/> (world bounds, cell size, hysteresis — the 8 source floats; the rest is derived) so a generic
     /// opener that never calls <see cref="ConfigureSpatialGrid"/> can reconstruct the grid and fully initialize cluster-spatial archetypes. Floats are stored as
-    /// their raw bit patterns in an Int6 bootstrap value.
+    /// their raw bit patterns in an Int8 bootstrap value.
     /// </summary>
+    /// <remarks>
+    /// Six floats before #872 step 8, when the grid gained a Z axis and outgrew <c>BootstrapDictionary.ValueType.Int6</c> — which is why <c>Int7</c> and
+    /// <c>Int8</c> exist. The widening is a clean break, not a migration: a database written by an older build has a six-int value under this key and
+    /// <see cref="TryLoadSpatialGridConfig"/> rejects it rather than guessing a Z extent.
+    /// </remarks>
     private void SaveSpatialGridConfig(SpatialGridConfig config)
     {
-        MMF.Bootstrap.Set(BK_SpatialGridConfig, BootstrapDictionary.Value.FromInt6(
+        Span<int> bits =
+        [
             BitConverter.SingleToInt32Bits(config.WorldMin.X),
             BitConverter.SingleToInt32Bits(config.WorldMin.Y),
+            BitConverter.SingleToInt32Bits(config.WorldMin.Z),
             BitConverter.SingleToInt32Bits(config.WorldMax.X),
             BitConverter.SingleToInt32Bits(config.WorldMax.Y),
+            BitConverter.SingleToInt32Bits(config.WorldMax.Z),
             BitConverter.SingleToInt32Bits(config.CellSize),
-            BitConverter.SingleToInt32Bits(config.MigrationHysteresisRatio)));
+            BitConverter.SingleToInt32Bits(config.MigrationHysteresisRatio),
+        ];
+
+        // #872's tuning knobs — step 10's ClusterTargetExtentRatio and ClusterDriftMarginRatio, and step 12's ClusterRepairExtentRatio,
+        // ReclusterBudgetMs, RepairNsPerEntity and RepairWorstClustersPerUnit — are deliberately NOT in this record, and the reason is worth stating
+        // because their absence looks like an oversight next to MigrationHysteresisRatio.
+        //
+        // What this record exists for is RECONSTRUCTION BY AN OPENER THAT NEVER CONFIGURED THE GRID — the Workbench, or `typhon check`. Everything in it
+        // defines CELL IDENTITY: change a world bound or the cell size and a position maps to a different cell, which files clusters into cells the writer
+        // never chose (the C13 misplacement the loud rejection below guards). The six omitted knobs decide only WHEN intra-cell relocation and repair
+        // fire. They move no entity into a different cell and no query into a different answer, so a tool reading the database for introspection is correct
+        // with the defaults.
+        //
+        // An application that sets them calls ConfigureSpatialGrid, and that path wins outright over the persisted record — the grid is built from the
+        // pending config and this record is only rewritten, never read back. So a tuned ratio is never silently replaced by a default; the only consumer
+        // of the stored values is the opener that supplied none.
+        //
+        // There is also no room: BootstrapDictionary caps an int-vector at 8 values and the eight above fill it, so adding them here needs a second
+        // bootstrap key. That is worth doing the day one becomes part of the on-disk contract — step 11, if the adaptive re-clustering budget is persisted
+        // with it — and not before.
+        MMF.Bootstrap.Set(BK_SpatialGridConfig, BootstrapDictionary.Value.FromInts(bits));
         MMF.SaveBootstrap();
     }
 
@@ -1580,65 +1552,28 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         {
             return false;
         }
+
+        if (v.IntCount != SpatialGridConfigIntCount)
+        {
+            // A pre-#872 six-float record. Reconstructing it would mean inventing a Z extent, and the grid built from that invention would file every cluster
+            // into a cell the writer never chose — a silent misplacement on reopen, which is exactly the failure C13 exists to prevent.
+            throw new InvalidOperationException(
+                $"The persisted spatial grid configuration holds {v.IntCount} values, not the 8 a three-dimensional grid needs. " +
+                $"This database was written before the grid gained a Z axis (#872 step 8) and cannot be opened by this build.");
+        }
+
         config = new SpatialGridConfig(
-            new Vector2(BitConverter.Int32BitsToSingle(v.GetInt()), BitConverter.Int32BitsToSingle(v.GetInt(1))),
-            new Vector2(BitConverter.Int32BitsToSingle(v.GetInt(2)), BitConverter.Int32BitsToSingle(v.GetInt(3))),
-            BitConverter.Int32BitsToSingle(v.GetInt(4)),
-            BitConverter.Int32BitsToSingle(v.GetInt(5)));
+            new Vector3(
+                BitConverter.Int32BitsToSingle(v.GetInt()),
+                BitConverter.Int32BitsToSingle(v.GetInt(1)),
+                BitConverter.Int32BitsToSingle(v.GetInt(2))),
+            new Vector3(
+                BitConverter.Int32BitsToSingle(v.GetInt(3)),
+                BitConverter.Int32BitsToSingle(v.GetInt(4)),
+                BitConverter.Int32BitsToSingle(v.GetInt(5))),
+            BitConverter.Int32BitsToSingle(v.GetInt(6)),
+            BitConverter.Int32BitsToSingle(v.GetInt(7)));
         return true;
-    }
-
-    /// <summary>
-    /// Load spatial index from BootstrapDictionary and attach to the ComponentTable.
-    /// Called during database reopen for components with [SpatialIndex].
-    /// </summary>
-    private void LoadSpatialBootstrap(ComponentTable table)
-    {
-        var key = $"spatial.{table.Definition.Name}";
-        if (!MMF.Bootstrap.TryGet(key, out var val))
-        {
-            return; // No spatial index persisted (new attribute added after last save)
-        }
-
-        var treeSPI = val.GetInt();
-        var backPtrSPI = val.GetInt(1);
-        var variantStride = val.GetInt(2);
-
-        var variant = (SpatialVariant)(variantStride & 0x0F);
-        var mode = (SpatialMode)((variantStride >> 4) & 0x0F);
-        var stride = variantStride >> 8;
-        var descriptor = SpatialNodeDescriptor.FromVariant(variant, stride);
-
-        var treeSegment = MMF.LoadChunkBasedSegment(treeSPI, descriptor.Stride);
-        var backPtrSegment = MMF.LoadChunkBasedSegment(backPtrSPI, 8);
-
-        // Load Layer 1 occupancy hashmap if persisted (Int5[4] > 0)
-        PagedHashMap<long, int, PersistentStore> occupancyMap = null;
-        var hmSPI = val.GetInt(4);
-        if (hmSPI > 0)
-        {
-            var hmStride = PagedHashMap<long, int, PersistentStore>.RecommendedStride();
-            var hmSegment = MMF.LoadChunkBasedSegment(hmSPI, hmStride);
-            occupancyMap = PagedHashMap<long, int, PersistentStore>.Open(hmSegment);
-        }
-
-        var tree = new SpatialRTree<PersistentStore>(treeSegment, variant, true);
-        tree.BackPointerSegment = backPtrSegment;
-
-        var sf = table.Definition.SpatialField;
-        var fieldInfo = new SpatialFieldInfo(table.ComponentOverhead + sf.OffsetInComponentStorage, sf.SizeInComponentStorage, sf.SpatialFieldType,
-            sf.SpatialMargin, sf.SpatialCellSize, mode, sf.SpatialCategory);
-
-        SpatialRTree<PersistentStore> staticTree = null, dynamicTree = null;
-        if (mode == SpatialMode.Static)
-        {
-            staticTree = tree;
-        }
-        else
-        {
-            dynamicTree = tree;
-        }
-        table.SpatialIndex = new SpatialIndexState(staticTree, dynamicTree, backPtrSegment, fieldInfo, descriptor, occupancyMap);
     }
 
     private void ConstructComponentStore()
@@ -1795,7 +1730,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
     /// because the generated registrar lives in the consumer's own assembly and cannot reach engine internals.
     /// </summary>
     /// <param name="archetypeType">The <c>[Archetype]</c> class type to finalize.</param>
-    public static void RegisterArchetype(Type archetypeType) => ArchetypeRegistry.EnsureFinalized(archetypeType, fromBarrier: true);
+    public static void RegisterArchetype(Type archetypeType) => ArchetypeRegistry.EnsureFinalized(archetypeType, true);
 
     internal VariableSizedBufferSegment<T, PersistentStore> GetComponentCollectionVSBS<T>() where T : unmanaged => GetComponentCollectionVSBS<T>(null);
 
@@ -2950,10 +2885,11 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         changeSet: migrationChangeSet, restoreCollectionInfo: true);
                 }
 
-                // Load spatial index from bootstrap if present
+                // Spatial metadata is derived from the schema attribute, not reloaded: the segments a spatial component used to persist were the entity
+                // R-Tree's, and it no longer exists (#872 step 13). The load constructor builds SpatialIndex the same way the create constructor does.
                 if (definition.SpatialField != null)
                 {
-                    LoadSpatialBootstrap(componentTable);
+                    componentTable.BuildSpatialIndex();
                 }
 
                 // A newly declared index starts empty. The per-archetype trees are repopulated in InitializeArchetypes, which is the only place that knows
@@ -3019,12 +2955,6 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             if (_componentsTable != null)
             {
                 var saved = SaveInSystemSchema(componentTable);
-
-                // Persist spatial index segment SPIs in bootstrap (segment root pages are immutable after creation)
-                if (componentTable.SpatialIndex != null)
-                {
-                    SaveSpatialBootstrap(componentTable);
-                }
 
                 cs.SaveChanges();
                 MMF.FlushToDisk();
@@ -3145,7 +3075,12 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             var gridConfig = _pendingGridConfig.Value;
             _spatialGrid = new SpatialGrid(gridConfig);
             _pendingGridConfig = null;
-            if (!MMF.Bootstrap.ContainsKey(BK_SpatialGridConfig))
+
+            // Rewrite whenever the stored record is absent OR the wrong width. A pre-#872 database holds a six-value record; an app that calls
+            // ConfigureSpatialGrid itself opens fine either way, so a plain ContainsKey check would leave that record in place forever and let the loud
+            // rejection in TryLoadSpatialGridConfig land later on some OTHER tool — the Workbench, or `typhon check` — which did nothing wrong. The break
+            // belongs at the first open by a build that understands the new shape.
+            if (!MMF.Bootstrap.TryGet(BK_SpatialGridConfig, out var stored) || stored.IntCount != SpatialGridConfigIntCount)
             {
                 SaveSpatialGridConfig(gridConfig);
             }
@@ -3233,9 +3168,9 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             ValidateArchetypeSchema(meta);
 
             // ═══════════════════════════════════════════════════════════════════════
-            // Cluster storage eligibility: SV, Versioned, and Transient all allowed.
+            // Cluster storage: EVERY archetype is cluster-backed, unconditionally — see the constant below.
             // Versioned stores HEAD in cluster slot, chain separate. Transient stores component data in a parallel CBS<TransientStore> segment (zero page cache).
-            // Pure-Versioned archetypes stay on legacy path (must have ≥1 SV or Transient).
+            // Storage mode therefore decides PLACEMENT inside the cluster, never whether the archetype is clustered at all.
             // ═══════════════════════════════════════════════════════════════════════
             // An indexed Transient field no longer disqualifies its archetype (#655). Both documented reasons for that exclusion were wrong: the
             // BTree<TransientStore> / BTree<PersistentStore> split constrains tree INSTANCES rather than archetype placement, and the "cluster Write<T>
@@ -3426,7 +3361,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     }
 
                     _archetypeStates[meta.ArchetypeId].ClusterState =
-                        ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment, transientClusterSegment, transientClusterStore);
+                        AttachCellTreeFactory(ArchetypeClusterState.Create(meta.ClusterLayout, clusterSegment, transientClusterSegment, transientClusterStore));
                 }
                 else if (TryGetPersistedArchetype(meta, out var clusterPersisted) && clusterPersisted.Arch.ClusterSegmentSPI > 0)
                 {
@@ -3450,7 +3385,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     if (loaded)
                     {
                         using var clusterEpoch = EpochGuard.Enter(EpochManager);
-                        var clusterState = ArchetypeClusterState.CreateFromExisting(meta.ClusterLayout, loadedCluster, transientClusterSegment, transientClusterStore);
+                        var clusterState = AttachCellTreeFactory(ArchetypeClusterState.CreateFromExisting(meta.ClusterLayout, loadedCluster, transientClusterSegment, transientClusterStore));
                         _archetypeStates[meta.ArchetypeId].ClusterState = clusterState;
 
                         // Sync TransientSegment chunk IDs with PersistentStore's active clusters
@@ -3464,13 +3399,13 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         var fallbackSegment = MMF.AllocateChunkBasedSegment(PageBlockType.None, 20, meta.ClusterLayout.ClusterStride, null, 
                             StorageSegmentKind.Cluster);
                         _archetypeStates[meta.ArchetypeId].ClusterState =
-                            ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment, transientClusterSegment, transientClusterStore);
+                            AttachCellTreeFactory(ArchetypeClusterState.Create(meta.ClusterLayout, fallbackSegment, transientClusterSegment, transientClusterStore));
                     }
                     else
                     {
                         // Pure-Transient reopen: no persisted data, create fresh
                         _archetypeStates[meta.ArchetypeId].ClusterState =
-                            ArchetypeClusterState.Create(meta.ClusterLayout, null, transientClusterSegment, transientClusterStore);
+                            AttachCellTreeFactory(ArchetypeClusterState.Create(meta.ClusterLayout, null, transientClusterSegment, transientClusterStore));
                     }
                 }
 
@@ -3680,16 +3615,18 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                         if (clusterState.ActiveClusterCount > 0)
                         {
                             using var cellEpoch = EpochGuard.Enter(EpochManager);
-                            var cellStart = Stopwatch.GetTimestamp();
-                            clusterState.RebuildCellState(_spatialGrid);
-                            cellStateTicks += Stopwatch.GetTimestamp() - cellStart;
 
-                            // Issue #230 Phase 1: rebuild per-cluster AABBs and the per-cell dynamic index from the same entity positions.
-                            // Runs AFTER RebuildCellState so ClusterCellMap is populated. Transient state — not persisted, always reconstructed at startup.
-                            // No-op for static-mode archetypes (Phase 1 supports dynamic mode only).
-                            var aabbStart = Stopwatch.GetTimestamp();
-                            clusterState.RebuildClusterAabbs();
-                            clusterAabbTicks += Stopwatch.GetTimestamp() - aabbStart;
+                            // One walk for both halves (#872 step 2). The cluster→cell map and the per-cluster AABBs used to be two back-to-back passes over
+                            // the same clusters, with an ordering constraint between them (the AABB pass read the map the cell pass populated) — a constraint
+                            // that simply dissolves when they are the same loop. The O(entities) half fans out across workers; the fold into the grid, the
+                            // pool and the per-cell index stays serial and ordered, because the index assigns slots by append order.
+                            //
+                            // Both timers still exist and are still reported separately, but they now split one walk rather than two passes: cellStateTicks is
+                            // zero and the whole cost lands in clusterAabbTicks. Kept as two fields rather than collapsed to one so the open-time log line and
+                            // the step-1 telemetry accessors keep their shape.
+                            var rebuildStart = Stopwatch.GetTimestamp();
+                            clusterState.RebuildSpatialStateFromData(_spatialGrid, EpochManager);
+                            clusterAabbTicks += Stopwatch.GetTimestamp() - rebuildStart;
                         }
                     }
                     finally
@@ -3763,6 +3700,14 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // build. Each figure is summed across all archetypes; the WAL-recovery cost is logged separately at its own
         // call site (it runs in the engine ctor, before this method).
         var toMs = 1000.0 / Stopwatch.Frequency;
+
+        // #872 step 1: the two spatial rebuild costs were locals consumed only by the log line below, so nothing could read them back from a running engine —
+        // and they are precisely what decides whether the transient cell layer stays affordable at target entity counts (Q1 of the VDB partitioning design) or
+        // has to be persisted. Assign rather than accumulate: the names say "open-time cost", and a repeat InitializeArchetypes reallocates _archetypeStates
+        // anyway, so every per-archetype counter restarts with it — a lifetime sum here would be the one figure that did not.
+        _openCellStateRebuildMs = cellStateTicks * toMs;
+        _openClusterAabbRebuildMs = clusterAabbTicks * toMs;
+
         LogInitArchetypesTiming(
             (Stopwatch.GetTimestamp() - initStart) * toMs,
             versionedHeadTicks * toMs,
@@ -4065,15 +4010,15 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
     /// <summary>Any non-Transient indexed <see cref="String64"/> field ⇒ the archetype needs the wider-stride persisted index segment (#658).</summary>
     private static bool ArchetypeHasIndexedString64Field(ComponentTable[] slotToTable)
-        => ArchetypeIndexesField(slotToTable, transient: false, FieldType.String64);
+        => ArchetypeIndexesField(slotToTable, false, FieldType.String64);
 
     /// <summary>Any indexed field on a Transient slot ⇒ the archetype needs its heap-backed index segment (#655).</summary>
     private static bool ArchetypeHasIndexedTransientField(ComponentTable[] slotToTable)
-        => ArchetypeIndexesField(slotToTable, transient: true, null);
+        => ArchetypeIndexesField(slotToTable, true, null);
 
     /// <summary>Any indexed <see cref="String64"/> field on a Transient slot ⇒ it also needs the wider-stride heap-backed segment.</summary>
     private static bool ArchetypeHasIndexedTransientString64Field(ComponentTable[] slotToTable)
-        => ArchetypeIndexesField(slotToTable, transient: true, FieldType.String64);
+        => ArchetypeIndexesField(slotToTable, true, FieldType.String64);
 
     internal static bool IsDerivedSegmentKind(StorageSegmentKind kind)
         => kind is StorageSegmentKind.Index or StorageSegmentKind.Spatial or StorageSegmentKind.Occupancy;
@@ -4239,7 +4184,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
 
             // Flat (legacy / non-cluster) chain-head rebuild, shared with the crash-path rebuild (RebuildEntityMapOnCrash) so the two never drift — the only
             // difference is the insert primitive (plain Insert here vs InsertDuringRebuild after a ClearForRebuild on the crash path).
-            BuildFlatEntityMapEntries(meta, state, mapCs, duringRebuild: false);
+            BuildFlatEntityMapEntries(meta, state, mapCs, false);
         }
     }
 
@@ -4492,7 +4437,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
                     // tolerateTorn: true unconditionally, not gated on WalFilesPresentAtOpen like every other load in this file. Those loads gate on it because
                     // they go on to READ the segment and a torn one must not be trusted; this one wants nothing but the page list, and a segment we are about
                     // to delete has no content left to be wrong about.
-                    if (MMF.TryLoadChunkBasedSegment(rootPageIndex, stride, out _, tolerateTornForRebuild: true))
+                    if (MMF.TryLoadChunkBasedSegment(rootPageIndex, stride, out _, true))
                     {
                         MMF.DeleteSegment(rootPageIndex, cs);
                     }
@@ -4713,9 +4658,8 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
         // placed anything, so it would have seen an empty cluster. Redo it here or the archetype reopens with entities present and every spatial query empty.
         if (meta.HasClusterSpatial && _spatialGrid != null && clusterState.ActiveClusterCount > 0)
         {
-            // Same order as InitializeArchetypes: cell state first, because RebuildClusterAabbs reads the ClusterCellMap it populates.
-            clusterState.RebuildCellState(_spatialGrid);
-            clusterState.RebuildClusterAabbs();
+            // One walk, same as InitializeArchetypes — the ordering constraint that used to force cell state first is internal to it now (#872 step 2).
+            clusterState.RebuildSpatialStateFromData(_spatialGrid, EpochManager);
         }
 
         cs.SaveChanges();
@@ -5011,7 +4955,7 @@ public partial class DatabaseEngine : ResourceNode, IMetricSource, IDebugPropert
             }
             else
             {
-                BuildFlatEntityMapEntries(meta, state, cs, duringRebuild: true, enabledSnapshot);
+                BuildFlatEntityMapEntries(meta, state, cs, true, enabledSnapshot);
             }
 
             _crashRebuiltEntityMapSegments.Add(state.EntityMap.Segment.RootPageIndex);

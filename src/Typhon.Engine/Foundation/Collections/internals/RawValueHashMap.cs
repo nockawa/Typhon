@@ -31,7 +31,7 @@ internal unsafe interface IRawValueUpdater
     void Update(byte* valueBytes);
 }
 
-unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TStore : struct, IPageStore
+unsafe partial class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where TKey : unmanaged, IEquatable<TKey> where TStore : struct, IPageStore
 {
     // ═══════════════════════════════════════════════════════════════════════
     // Layout fields (computed once at construction)
@@ -46,11 +46,16 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
+    /// <summary>This map's engine-scoped <c>EW-01</c> guard. The EntityMap is one of the structures the tick fence rewrites, so a mutation from
+    /// outside the fence while it is open is the same defect as one on a cluster B+Tree.</summary>
+    private readonly ExclusiveWindow _fenceWindow;
+
     private RawValuePagedHashMap(ChunkBasedSegment<TStore> segment, int n0, int valueSize) : base(segment, n0)
     {
+        _fenceWindow = segment?.FenceWindow;
         Debug.Assert(valueSize > 0, "Value size must be positive");
         _valueSize = valueSize;
-        _bucketCapacity = (segment.Stride - sizeof(PagedHashMapBucketHeader)) / (sizeof(TKey) + valueSize);
+        _bucketCapacity = (segment!.Stride - sizeof(PagedHashMapBucketHeader)) / (sizeof(TKey) + valueSize);
         Debug.Assert(_bucketCapacity >= 1, $"Stride {segment.Stride} too small for entry size {sizeof(TKey) + valueSize}");
         _keysOffset = sizeof(PagedHashMapBucketHeader);
         _valuesOffset = sizeof(PagedHashMapBucketHeader) + _bucketCapacity * sizeof(TKey);
@@ -196,6 +201,22 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     }
 
     internal static uint ComputeHashForTest(TKey key) => ComputeHash(key);
+
+    /// <summary>The overflow chunk id linked from <paramref name="chunkId"/>, or -1 when the chain ends there. Tests only.</summary>
+    /// <remarks>Lets <c>AC-7.6</c> CONSTRUCT its overflow-chain case and fail loudly when the map has none, instead of hoping one exists.</remarks>
+    internal static int BucketOverflowChunkIdForTest(int chunkId, ref ChunkAccessor<TStore> accessor) 
+        => GetHeader(accessor.GetChunkAddress(chunkId)).OverflowChunkId;
+
+    /// <summary>Raw hint-slot contents for <paramref name="key"/>: packed <c>((chunkId &lt;&lt; 8) | index) + 1</c>, or 0 when unset. Tests only.</summary>
+    /// <remarks>
+    /// Exposed for <c>AC-7.2</c>. Comparing <c>TryGetWithHint</c> against <c>TryGet</c> proves the two AGREE, which a cache that was silently cleared would
+    /// also satisfy; reading the slot is what distinguishes "the hint survived" from "the hint was thrown away and the fallback covered for it".
+    /// </remarks>
+    internal long HintSlotForTest(TKey key)
+    {
+        var hints = _locationHints;
+        return hints == null ? 0 : hints[HintSlot(key, hints.Length)];
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // Bucket initialization
@@ -649,6 +670,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public bool Insert(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.Insert");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -697,6 +719,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public void InsertNew(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.InsertNew");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -736,6 +759,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public bool Upsert(TKey key, byte* value, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.Upsert");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -788,6 +812,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// <see cref="IRawValueUpdater.Update"/> call so the callback inlines into this loop.</typeparam>
     public bool TryUpdateInPlace<TUpdater>(TKey key, ref TUpdater updater, ref ChunkAccessor<TStore> accessor) where TUpdater : struct, IRawValueUpdater
     {
+        _fenceWindow?.NoteMutation("EntityMap.TryUpdateInPlace");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -825,6 +850,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
     /// </summary>
     public bool Remove(TKey key, ref ChunkAccessor<TStore> accessor, ChangeSet changeSet)
     {
+        _fenceWindow?.NoteMutation("EntityMap.Remove");
         uint hash = ComputeHash(key);
 
         while (true)
@@ -1216,7 +1242,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
         // bucket seen — a single small allocation amortised across the whole O(n) scan.
         int bufCap = _bucketCapacity * 2;
         var keyBuf = new TKey[bufCap];
-        var valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, pinned: true);
+        var valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, true);
         byte* valPtr = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(valBuf));
 
         for (int b = 0; b < bucketCount; b++)
@@ -1269,7 +1295,7 @@ unsafe class RawValuePagedHashMap<TKey, TStore> : PagedHashMapBase<TStore> where
                     {
                         bufCap = Math.Max(bufCap * 2, n + count);
                         keyBuf = new TKey[bufCap];
-                        valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, pinned: true);
+                        valBuf = GC.AllocateUninitializedArray<byte>(bufCap * _valueSize, true);
                         valPtr = (byte*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(valBuf));
                         retry = true;   // restart the bucket with the larger buffer
                         break;

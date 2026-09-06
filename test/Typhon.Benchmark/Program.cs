@@ -147,6 +147,42 @@ class Program
                 return;
             }
 
+            if (args.Contains("--profile-repair"))
+            {
+                ClusterRepairProfile.Run(args);
+                return;
+            }
+
+            if (args.Contains("--profile-aabb"))
+            {
+                ClusterAabbRecomputeProfile.Run(args);
+                return;
+            }
+
+            if (args.Contains("--profile-partition"))
+            {
+                SpatialPartitionMatrix.Run(args);
+                return;
+            }
+
+            if (args.Contains("--game"))
+            {
+                GameScenarios.Run(args);
+                return;
+            }
+
+            if (args.Contains("--profile-broadphase"))
+            {
+                BroadphaseQueryProfile.Run(args);
+                return;
+            }
+
+            if (args.Contains("--profile-openmut"))
+            {
+                OpenMutLossProfile.Run(args);
+                return;
+            }
+
             if (args.Contains("--profile-delete"))
             {
                 BTreeDeleteProfile.Run();
@@ -222,6 +258,83 @@ class Program
             if (args.Contains("--tickfence-bench"))
             {
                 ArchetypeAccessorBenchmark.RunTickFenceBench();
+                return;
+            }
+
+            if (args.Contains("--bulk-visits"))
+            {
+                BulkUpdateBench.Run();
+                return;
+            }
+
+            if (args.Contains("--entitymap-bulk"))
+            {
+                var mapSize = 400_000;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--map=", StringComparison.Ordinal) && !int.TryParse(a["--map=".Length..], out mapSize))
+                    {
+                        Console.WriteLine($"--map: '{a["--map=".Length..]}' is not a number.");
+                        return;
+                    }
+                }
+
+                EntityMapBulkBench.Run(mapSize);
+                return;
+            }
+
+            if (args.Contains("--fence-phase"))
+            {
+                var migrants = 10_000;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--migrants=", StringComparison.Ordinal))
+                    {
+                        migrants = int.Parse(a.AsSpan(11));
+                    }
+                }
+
+                var bulkMin = 0f;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--bulk-min=", StringComparison.Ordinal)
+                        && !float.TryParse(a["--bulk-min=".Length..], System.Globalization.CultureInfo.InvariantCulture, out bulkMin))
+                    {
+                        // Discarding the result would leave bulkMin at 0, which FORCES the bulk path — so a typo would silently measure the wrong arm and
+                        // report it under the other arm's label.
+                        Console.WriteLine($"--bulk-min: '{a["--bulk-min=".Length..]}' is not a number.");
+                        return;
+                    }
+                }
+
+                FenceIndexPhaseBench.Run(migrantsPerTick: migrants, bulkMinPerBucket: bulkMin);
+                return;
+            }
+
+            if (args.Contains("--fence-parallel"))
+            {
+                var batch = 10_000;
+                foreach (var a in args)
+                {
+                    if (a.StartsWith("--n=", StringComparison.Ordinal))
+                    {
+                        batch = int.Parse(a.AsSpan(4));
+                    }
+                }
+
+                FenceParallelBench.Run(n: batch);
+                return;
+            }
+
+            if (args.Contains("--rebuild-bench"))
+            {
+                RebuildBench.Run();
+                return;
+            }
+
+            if (args.Contains("--rebuild-matrix"))
+            {
+                RebuildBench.RunMatrix();
                 return;
             }
 

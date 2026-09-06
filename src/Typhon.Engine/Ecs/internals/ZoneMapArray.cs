@@ -43,7 +43,7 @@ internal sealed unsafe class ZoneMapArray
     /// <c>ArchetypeClusterState.EnsureClusterVisibilityCapacity</c>, whose comment cites this finding.
     /// </para>
     /// </remarks>
-    private sealed class Store
+    internal sealed class Store
     {
         internal readonly long[] Mins;      // [clusterChunkId] → min value (ordered long, sign-flipped for float/unsigned ordering)
         internal readonly long[] Maxs;      // [clusterChunkId] → max value (ordered long, sign-flipped for float/unsigned ordering)
@@ -176,6 +176,77 @@ internal sealed unsafe class ZoneMapArray
     }
 
     /// <summary>
+    /// Widen the bounds to cover only the slots named by <paramref name="slotMask"/>, under ONE latch acquisition.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The cheap half of the tick's zone-map maintenance.</b> <c>Recompute</c> re-derives min/max from every OCCUPIED slot because narrowing
+    /// needs the whole population; the fence calls it once per dirty cluster per indexed field. But the fence also knows exactly WHICH slots changed — Prep's
+    /// occupancy-masked dirty word is a per-cluster slot mask — and at the reference point that is ~8 changed slots of ~32 occupied, and ~1.2 of ~32 on a
+    /// quiet tick. Re-reading the other 24 to 31 is work whose only product is a narrower bound.</para>
+    /// <para><b>Widening is always sound; narrowing is what needs the full scan.</b> A zone map that is too wide answers <see cref="MayContain"/> with
+    /// <c>true</c> more often, so a query opens a cluster it could have pruned — slower, never wrong, and explicitly permitted (RP-05 already allows the
+    /// widen-only path used on the commit and migration routes). Narrowing is recovered by the caller re-tightening on a rotation.</para>
+    /// <para>One latch for the whole mask rather than one per value, which is the difference between this and calling <see cref="Widen"/> in a loop: at eight
+    /// changed slots that loop would take eight uncontended acquisitions to save the same reads.</para>
+    /// </remarks>
+    public void WidenMasked(int clusterChunkId, ulong slotMask, byte* dataBase, ArchetypeClusterInfo layout, int compSlot, int fieldOffset)
+    {
+        if (slotMask == 0)
+        {
+            return;
+        }
+
+        // Decoded outside the latch, exactly as Recompute scans outside it: this reads cluster memory, which the latch does not protect.
+        var compSize = layout.ComponentSize(compSlot);
+        var compBase = dataBase + layout.ComponentOffset(compSlot);
+
+        var min = long.MaxValue;
+        var max = long.MinValue;
+        var bits = slotMask;
+        while (bits != 0)
+        {
+            var slotIndex = BitOperations.TrailingZeroCount(bits);
+            bits &= bits - 1;
+            var val = ReadFieldAsOrderedLong(compBase + slotIndex * compSize + fieldOffset);
+            if (val < min)
+            {
+                min = val;
+            }
+
+            if (val > max)
+            {
+                max = val;
+            }
+        }
+
+        var store = AcquireForWrite(clusterChunkId);
+        try
+        {
+            if (!store.Valid[clusterChunkId])
+            {
+                store.Mins[clusterChunkId] = min;
+                store.Maxs[clusterChunkId] = max;
+                store.Valid[clusterChunkId] = true;
+                return;
+            }
+
+            if (min < store.Mins[clusterChunkId])
+            {
+                store.Mins[clusterChunkId] = min;
+            }
+
+            if (max > store.Maxs[clusterChunkId])
+            {
+                store.Maxs[clusterChunkId] = max;
+            }
+        }
+        finally
+        {
+            ReleaseAfterWrite();
+        }
+    }
+
+    /// <summary>
     /// Widen bounds to include a new value (eager, on spawn). Never narrows.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -230,8 +301,39 @@ internal sealed unsafe class ZoneMapArray
     }
 
     /// <summary>
+    /// Read a cluster's recorded bounds, in the ordered-long encoding <see cref="MayContain"/> compares against. Returns <see langword="false"/> when the
+    /// cluster has no bounds recorded — either past the current capacity, or invalidated and not yet re-widened.
+    /// </summary>
+    /// <remarks>
+    /// The only way to observe a zone map's WIDTH rather than its verdict on one query. <see cref="MayContain"/> answers "could this cluster match", which
+    /// is what the planner needs and is deliberately conservative — an unrecorded map answers yes — so it cannot distinguish a map that has narrowed from
+    /// one that has been dropped. #872 step 12 needs that distinction: the repair path is the only thing in the engine that narrows a zone map, and
+    /// <c>AC-12.2</c> asks for the narrowing to be measured before and after rather than inferred.
+    /// </remarks>
+    internal bool TryGetBounds(int clusterChunkId, out long min, out long max)
+    {
+        var store = Volatile.Read(ref _store);
+        if ((uint)clusterChunkId >= (uint)store.Capacity || !store.Valid[clusterChunkId])
+        {
+            min = 0;
+            max = 0;
+            return false;
+        }
+
+        min = store.Mins[clusterChunkId];
+        max = store.Maxs[clusterChunkId];
+        return true;
+    }
+
+    /// <summary>
     /// Invalidate a cluster's zone map (e.g., when cluster is freed).
     /// </summary>
+    /// <remarks>
+    /// <b>Had no caller at all until #872 step 12.</b> Nothing frees a zone map when its cluster is freed, so a recycled chunk id inherits the min/max of
+    /// its previous tenant and <see cref="Widen"/> — the only other writer — can then only make that wider. The consequence is conservative rather than
+    /// wrong (<see cref="MayContain"/> over-reports, so queries open clusters they need not and never miss one), which is why it went unnoticed. The repair
+    /// path calls this on every destination cluster it allocates, so the re-packed contents define the bounds rather than inheriting them.
+    /// </remarks>
     public void Invalidate(int clusterChunkId)
     {
         // A write, so it takes the latch like the other two — but never grows: an index past the current capacity has no bounds recorded, which is already
@@ -431,11 +533,124 @@ internal sealed unsafe class ZoneMapArray
 
     private void ReleaseAfterWrite() => _growLatch.Lock.ExitSharedAccess();
 
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+    // Batched writes (#886 lead D). The per-write shared acquire above is one CAS on one padded word per FIELD, and under a sliced tick-fence Prep eight
+    // workers widen ~2 000 clusters of the same field at once: that word bounced between cores ~4 000 times a tick and the zone-map step's CPU tripled.
+    // A slice holds the latch shared for its whole run over one field instead — a grower still excludes it, so the lost-widen argument above is intact.
+    // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>Takes the grow latch shared once and returns the store every write in the batch goes to; the store is guaranteed to cover
+    /// <c>[0, maxIndexExclusive)</c>. Pair with <see cref="EndBatch"/>; hold nothing else in between.</summary>
+    /// <remarks>
+    /// Sound only inside the tick fence's window, where no commit-path writer runs and the head has pre-sized the map, so nothing waits on the latch while
+    /// a batch holds it — the unbatched writers keep their scan OUTSIDE the latch for the opposite situation. The returned <see cref="Store"/> is dead the
+    /// moment <see cref="EndBatch"/> runs: a write through it after that is the lost widen the latch exists to prevent.
+    /// </remarks>
+    internal Store BeginBatch(int maxIndexExclusive) => AcquireForWrite(Math.Max(0, maxIndexExclusive - 1));
+
+    internal void EndBatch() => ReleaseAfterWrite();
+
+    /// <summary>The batch form of <see cref="Recompute(int, byte*, byte*, ArchetypeClusterInfo, int, int)"/>: same result, written into a store the caller
+    /// already holds the latch for.</summary>
+    internal void RecomputeInto(Store store, int clusterChunkId, byte* primaryBase, byte* dataBase, ArchetypeClusterInfo layout, int compSlot, int fieldOffset)
+    {
+        var occupancy = *(ulong*)primaryBase;
+        if (occupancy == 0)
+        {
+            store.Valid[clusterChunkId] = false;
+            return;
+        }
+
+        var compSize = layout.ComponentSize(compSlot);
+        var compBase = dataBase + layout.ComponentOffset(compSlot);
+        var min = long.MaxValue;
+        var max = long.MinValue;
+        var bits = occupancy;
+        while (bits != 0)
+        {
+            var slotIndex = BitOperations.TrailingZeroCount(bits);
+            bits &= bits - 1;
+            var val = ReadFieldAsOrderedLong(compBase + slotIndex * compSize + fieldOffset);
+            if (val < min)
+            {
+                min = val;
+            }
+
+            if (val > max)
+            {
+                max = val;
+            }
+        }
+
+        store.Mins[clusterChunkId] = min;
+        store.Maxs[clusterChunkId] = max;
+        store.Valid[clusterChunkId] = true;
+    }
+
+    /// <summary>The batch form of <see cref="WidenMasked"/>.</summary>
+    internal void WidenMaskedInto(Store store, int clusterChunkId, ulong slotMask, byte* dataBase, ArchetypeClusterInfo layout, int compSlot, int fieldOffset)
+    {
+        if (slotMask == 0)
+        {
+            return;
+        }
+
+        var compSize = layout.ComponentSize(compSlot);
+        var compBase = dataBase + layout.ComponentOffset(compSlot);
+        var min = long.MaxValue;
+        var max = long.MinValue;
+        var bits = slotMask;
+        while (bits != 0)
+        {
+            var slotIndex = BitOperations.TrailingZeroCount(bits);
+            bits &= bits - 1;
+            var val = ReadFieldAsOrderedLong(compBase + slotIndex * compSize + fieldOffset);
+            if (val < min)
+            {
+                min = val;
+            }
+
+            if (val > max)
+            {
+                max = val;
+            }
+        }
+
+        if (!store.Valid[clusterChunkId])
+        {
+            store.Mins[clusterChunkId] = min;
+            store.Maxs[clusterChunkId] = max;
+            store.Valid[clusterChunkId] = true;
+            return;
+        }
+
+        if (min < store.Mins[clusterChunkId])
+        {
+            store.Mins[clusterChunkId] = min;
+        }
+
+        if (max > store.Maxs[clusterChunkId])
+        {
+            store.Maxs[clusterChunkId] = max;
+        }
+    }
+
+    /// <summary>Grows the store to hold <paramref name="capacity"/> clusters now, on the caller's thread, so that no later writer has to take the grow latch
+    /// exclusively — the tick fence's Prep head does this before its slices run (#886 lead D).</summary>
+    internal void EnsureCapacity(int capacity)
+    {
+        if (capacity > 0 && capacity > Volatile.Read(ref _store).Capacity)
+        {
+            Grow(capacity - 1);
+        }
+    }
+
     /// <summary>
     /// Replaces the current generation with one large enough for <paramref name="index"/>, under EXCLUSIVE access so no element write is in flight.
     /// </summary>
     private void Grow(int index)
     {
+        Debug.Assert(!ArchetypeClusterState.InPrepSlice, "a Prep slice must never grow a zone map — the head pre-sizes every one of them (#886)");
         _growLatch.Lock.EnterExclusiveAccess(ref WaitContext.Null);
         try
         {

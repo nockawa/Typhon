@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using Typhon.Engine.Internals;
 
 namespace Typhon.Benchmark;
 

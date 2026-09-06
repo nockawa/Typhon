@@ -37,6 +37,8 @@ public sealed partial class TyphonRuntime : IDisposable
     // OnTickEndInternal then falls back to the legacy single-threaded WriteTickFence path. Each phase has its own FenceWorkPlan instance (rebuilt every tick).
     private readonly FencePrepExecSystem _fencePrepExec;
     private readonly FenceMigrateExecSystem _fenceMigrateExec;
+    private readonly FenceIndexMassUpdateExecSystem _fenceIndexMassUpdateExec;
+    private readonly FenceEntityMapUpdateExecSystem _fenceEntityMapUpdateExec;
     private readonly FenceAabbRefreshExecSystem _fenceAabbRefreshExec;
     private readonly FenceFinalizeExecSystem _fenceFinalizeExec;
     private readonly LiveFenceCostModel _liveFenceCost;
@@ -239,6 +241,8 @@ public sealed partial class TyphonRuntime : IDisposable
         {
             _fencePrepExec = fenceBundle.Value.Prep;
             _fenceMigrateExec = fenceBundle.Value.Migrate;
+            _fenceIndexMassUpdateExec = fenceBundle.Value.IndexMassUpdate;
+            _fenceEntityMapUpdateExec = fenceBundle.Value.EntityMapUpdate;
             _fenceAabbRefreshExec = fenceBundle.Value.AabbRefresh;
             _fenceFinalizeExec = fenceBundle.Value.Finalize;
             _liveFenceCost = new LiveFenceCostModel(options.FenceCostModel);
@@ -347,6 +351,8 @@ public sealed partial class TyphonRuntime : IDisposable
     internal FenceMigrateExecSystem FenceMigrateExec => _fenceMigrateExec;
     internal FenceAabbRefreshExecSystem FenceAabbRefreshExec => _fenceAabbRefreshExec;
     internal FenceFinalizeExecSystem FenceFinalizeExec => _fenceFinalizeExec;
+    internal FenceIndexMassUpdateExecSystem FenceIndexMassUpdateExec => _fenceIndexMassUpdateExec;
+    internal FenceEntityMapUpdateExecSystem FenceEntityMapUpdateExec => _fenceEntityMapUpdateExec;
 
     /// <summary>
     /// Gracefully shuts down the runtime. Stops the subscription server, fires <see cref="OnShutdown"/>, then stops the scheduler.
@@ -481,6 +487,12 @@ public sealed partial class TyphonRuntime : IDisposable
     /// The caller owns the returned Transaction and must Commit + Dispose it.
     /// Side-transactions are NOT visible to the current tick's main Transactions (snapshot isolation).
     /// </summary>
+    /// <remarks>
+    /// <b>Commit and dispose it before the system that created it returns</b> (rule <c>EW-01</c>). This is an ordinary transaction — it can write an indexed
+    /// field and therefore mutate a B+Tree — and nothing joins it to the tick. Held past the system's epilogue and committed later, it can land while the tick
+    /// fence is rewriting those same structures, which is the one path inside the runtime that can violate the fence's exclusivity. Per-system transactions
+    /// carry no such risk: the runtime commits and disposes those itself.
+    /// </remarks>
     public Transaction CreateSideTransaction(DurabilityMode durability = DurabilityMode.Immediate,
         CommitDiscipline discipline = CommitDiscipline.TickFence) => Engine.CreateQuickTransaction(durability, discipline);
 
@@ -1687,7 +1699,7 @@ public sealed partial class TyphonRuntime : IDisposable
 
     /// <summary>
     /// Split the filtered cluster list for a checkerboard system into Red and Black sets based on cell coordinates (issue #234).
-    /// Red = clusters in cells where <c>(cellX + cellY) % 2 == 0</c>, Black = the rest. Reads <see cref="_systemTierClusterIds"/>
+    /// Red = clusters in cells where <c>(cellX + cellY + cellZ) % 2 == 0</c>, Black = the rest. Reads <see cref="_systemTierClusterIds"/>
     /// + <see cref="_systemTierClusterCount"/> as input, writes to the per-system Red/Black buffers.
     /// </summary>
     private void SplitCheckerboardClusters(int sysIdx)
@@ -1732,8 +1744,10 @@ public sealed partial class TyphonRuntime : IDisposable
                 redBuf[redCount++] = chunkId;
                 continue;
             }
-            var (x, y) = grid.CellKeyToCoords(cellKey);
-            if ((x + y) % 2 == 0)
+            // (x + y + z) % 2 — the three-dimensional 2-colouring. Still exhaustive and disjoint, and still gives no two 6-neighbour-adjacent cells the same
+            // colour, which is the property CB-01 actually depends on. A flat world has z = 0 throughout, so its Red/Black split is unchanged.
+            var (x, y, z) = grid.CellKeyToCoords(cellKey);
+            if ((x + y + z) % 2 == 0)
             {
                 redBuf[redCount++] = chunkId;
             }
@@ -2065,15 +2079,30 @@ public sealed partial class TyphonRuntime : IDisposable
         // through one accounting bucket. UoW.Flush below handles the writeback per the configured DurabilityMode (and skips it entirely in WAL mode where
         // WAL records carry durability). Without this, each tick-fence callee would create+commit its own private ChangeSet, doing redundant disk I/O on
         // every tick (measured at ~22 ms / 88% of ExecuteMigrations time on a 1071-migration AntHill storm).
-        if (_parallelFenceEnabled)
+        // Caught, on BOTH arms, and that is #890's other half. The serial arm runs the whole fence inline on this thread, so a throw from it used to
+        // escape OnTickEndInternal entirely: the UoW flush and dispose below never ran (`_currentUow` leaked and was overwritten by the next tick's), the
+        // outcome stayed the PREVIOUS tick's `Success`, and the runtime went on ticking — the same silence the parallel arm had, reached a different way.
+        // The parallel arm's own phases are caught by the scheduler and reported through RecordSystemFailure; what can still reach here from it is a throw
+        // in RunParallelFence's serial prep, which is engine code on the tick driver and belongs in the same verdict.
+        try
         {
-            // RunParallelFence brackets its own serial-prep portion with the WriteTickFence phase marker and dispatches the Fence DAG *outside* it — the four
-            // Fence systems carry their own Engine-Post telemetry, so wrapping the dispatch would double-count them into `writeTickFenceUs`.
-            RunParallelFence(scheduler);
+            if (_parallelFenceEnabled)
+            {
+                // RunParallelFence brackets its own serial-prep portion with the WriteTickFence phase marker and dispatches the Fence DAG *outside* it — the
+                // four Fence systems carry their own Engine-Post telemetry, so wrapping the dispatch would double-count them into `writeTickFenceUs`.
+                RunParallelFence(scheduler);
+            }
+            else
+            {
+                InspectorPhase(TickPhase.WriteTickFence, () => Engine.WriteTickFence(scheduler.CurrentTickNumber, _currentUow?.ChangeSet));
+            }
         }
-        else
+        catch (Exception ex)
         {
-            InspectorPhase(TickPhase.WriteTickFence, () => Engine.WriteTickFence(scheduler.CurrentTickNumber, _currentUow?.ChangeSet));
+            // Latched through the scheduler so there is ONE fence-failure verdict however the fence failed, and so the terminal gate in ExecuteCallbacks and
+            // the host callback both fire exactly as they do for a phase that threw. Execution then continues to the flush below: TP-01a's other half is
+            // that the flush is mandatory, and a partly-run fence's pages are exactly the ones that must not be left un-flushed AND un-logged.
+            scheduler.RecordFenceDriverFailure(ex);
         }
 
         // Flush the UoW to make all Deferred writes (including the tick fence publishes above) durable, then dispose. UoW.Flush in WAL mode calls
@@ -2099,8 +2128,13 @@ public sealed partial class TyphonRuntime : IDisposable
         // Publish this tick's outcome BEFORE the output phase, so a host reading LastTickOutcome from a subscription callback already sees the verdict.
         // Written on EVERY tick under EVERY policy (#567 AC8b) — a stale outcome must never be mistaken for a fresh one. Under Isolate this is always Success:
         // a tick in which a system threw and its branch was skipped completed exactly as that policy promises. Per-system detail stays in SkipReason.
+        // A fence phase that threw is its own verdict (#890, design/Runtime/08-strict-tick-abort.md D3): the fence is the work that ends the tick, so there is
+        // no "rest of the tick" to cancel and it is never reported as an abort — but it is emphatically not a Success either, and before #890 it WAS, because
+        // nothing but per-system telemetry recorded it. Checked after the abort so a tick carrying both keeps naming the user system that started it.
         var tickAborted = scheduler.IsTickAborted;
-        LastTickOutcome = tickAborted ? scheduler.AbortedOutcome : TickOutcome.ForSuccess(scheduler.CurrentTickNumber);
+        var fenceFailed = !tickAborted && scheduler.IsFenceFailed;
+        LastTickOutcome = tickAborted ? scheduler.AbortedOutcome : fenceFailed 
+            ? scheduler.FenceFailureOutcome : TickOutcome.ForSuccess(scheduler.CurrentTickNumber);
 
         // #199: Output phase — subscription deltas.
         // Runs AFTER WriteTickFence so that:
@@ -2110,7 +2144,10 @@ public sealed partial class TyphonRuntime : IDisposable
         //
         // Suppressed on an aborted tick (#567): publication is the ONE tick-end act carrying tick-wide "this was a good tick" semantics, so it is the only one
         // of the three that may be skipped. The fence and the flush above ran unconditionally and must keep doing so — rule TP-01a.
-        if (!tickAborted)
+        // Suppressed on a fence failure for the same reason as on an abort, and with a sharper one: the output phase reads this tick's dirty bitmap and the
+        // ring buffer, and a fence that did not reach Finalize left neither of them complete. Publishing deltas from it would tell subscribers a story the
+        // WAL does not carry.
+        if (!tickAborted && !fenceFailed)
         {
             InspectorPhase(TickPhase.OutputPhase, () =>
             {
@@ -2123,6 +2160,8 @@ public sealed partial class TyphonRuntime : IDisposable
         }
         else if (!_tickAbortedNotified)
         {
+            // One event for both verdicts: a host that reacts to OnTickAborted by stopping the runtime wants to do exactly that here too, and
+            // TickOutcome.Reason tells the two apart.
             // Fires once, on the TickDriver, after the tick has fully drained — so every worker's stores are ordered ahead of the handler reading the outcome.
             // Subsequent ticks never reach here: DagScheduler.ExecuteCallbacks returns early once the abort latch is set.
             _tickAbortedNotified = true;
@@ -2145,12 +2184,17 @@ public sealed partial class TyphonRuntime : IDisposable
         // OnTickEndInternal).
         var ctx = Engine.FenceContext;
 
+        // EW-01's window covers the WHOLE phase — the serial prep AND the Fence DAG dispatched below — because both mutate the structures the rule names.
+        // Opening it enrols the TickDriver thread; each fence worker enrols itself in FencePhaseExecSystemBase.Execute.
+        using var window = Engine.EpochManager.FenceWindow.Open();
+
         // `TickPhase.WriteTickFence` brackets ONLY the serial prep — context reset, dormancy drain, and the serial component-table fences. This is the sole
         // genuinely-serial post-tick fence cost; the Fence DAG dispatched below is four chained systems on the Engine-Post track, each with its own per-system
         // telemetry. Pre-#354 the marker wrapped `DispatchDeferredTracks` too, so `writeTickFenceUs` double-counted the Fence systems' wall-time.
         InspectorPhase(TickPhase.WriteTickFence, () =>
         {
-            ctx.Reset(scheduler.CurrentTickNumber, _currentUow?.ChangeSet, scheduler.WorkerCount, Options.FenceChunkOversubscription, _liveFenceCost);
+            ctx.Reset(scheduler.CurrentTickNumber, _currentUow?.ChangeSet, scheduler.WorkerCount, Options.FenceChunkOversubscription, _liveFenceCost,
+                Options.EntityMapBulkMinEntriesPerBucket);
 
             // Drain dormancy wake requests globally on TickDriver (single-threaded contract from issue #233).
             DormancyReporter.DrainAll(Engine._archetypeStates);
@@ -2192,12 +2236,154 @@ public sealed partial class TyphonRuntime : IDisposable
             Engine.UpdateLastTickFenceLSNAtomic(overall);
         }
 
+        // Step 14 (D2): the migration cost model charges a frame budget, so it needs the migration phases' CPU-to-span ratio — how many workers' worth of
+        // CPU one unit of span bought. Summed across the three phases a migration passes through; a tick that moved nothing leaves the previous value.
+        var migrationCpuTicks = _fenceMigrateExec.TotalWallTicks + _fenceIndexMassUpdateExec.TotalWallTicks + _fenceEntityMapUpdateExec.TotalWallTicks;
+        var migrationSpanTicks = _fenceMigrateExec.PhaseSpanTicks + _fenceIndexMassUpdateExec.PhaseSpanTicks + _fenceEntityMapUpdateExec.PhaseSpanTicks;
+        if (migrationSpanTicks > 0 && migrationCpuTicks > 0)
+        {
+            Engine.SetLastFenceMigrationParallelism(migrationCpuTicks / (double)migrationSpanTicks);
+        }
+
         if (Options.AdaptiveFenceCost)
         {
+            _liveFenceCost.UpdatePhase(FencePhase.Prep, _fencePrepExec.TotalWallTicks, _fencePrepExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.Migrate, _fenceMigrateExec.TotalWallTicks, _fenceMigrateExec.TotalUnitCount);
+            _liveFenceCost.UpdatePhase(FencePhase.IndexMassUpdate, _fenceIndexMassUpdateExec.TotalWallTicks, _fenceIndexMassUpdateExec.TotalUnitCount);
+            _liveFenceCost.UpdatePhase(FencePhase.EntityMapUpdate, _fenceEntityMapUpdateExec.TotalWallTicks, _fenceEntityMapUpdateExec.TotalUnitCount);
             _liveFenceCost.UpdatePhase(FencePhase.AabbRefresh, _fenceAabbRefreshExec.TotalWallTicks, _fenceAabbRefreshExec.TotalUnitCount);
+            _liveFenceCost.UpdatePhase(FencePhase.Finalize, _fenceFinalizeExec.TotalWallTicks, _fenceFinalizeExec.TotalUnitCount);
         }
     }
+
+    /// <summary>
+    /// Last tick's Prep phase — cell-crossing detection, the relocation throttle and the repair planner.
+    /// </summary>
+    /// <remarks>
+    /// <b>Exposed because a fence measured only at Migrate, IndexMassUpdate and EntityMapUpdate leaves most of its cost unattributed.</b> #872's partition
+    /// campaign measured a 128 000-entity fence at 47 ms of which migration accounted for 10.4 ms, and had no instrumentation to say what the other 36.7 ms
+    /// was — which made the largest term in the measurement the one nobody could name. Prep, AabbRefresh and Finalize are where it lives, and all three
+    /// already keep the counters; only the accessors were missing.
+    /// </remarks>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastPrepStats
+        => _fencePrepExec == null
+            ? (0, 0, 0, 0)
+            : (_fencePrepExec.PhaseSpanTicks, _fencePrepExec.TotalWallTicks, _fencePrepExec.TotalUnitCount, _fencePrepExec.PlanForTest.ChunkCount);
+
+    /// <summary>Last tick's AabbRefresh phase — cluster bound recompute, drift detection and the outlier guard.</summary>
+    /// <inheritdoc cref="LastPrepStats" path="/remarks"/>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastAabbRefreshStats
+        => _fenceAabbRefreshExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceAabbRefreshExec.PhaseSpanTicks,
+               _fenceAabbRefreshExec.TotalWallTicks,
+               _fenceAabbRefreshExec.TotalUnitCount,
+               _fenceAabbRefreshExec.PlanForTest.ChunkCount);
+
+    /// <summary>Last tick's Finalize phase — bookkeeping clear, dormancy sweep, cluster finalization and the WAL emit.</summary>
+    /// <inheritdoc cref="LastPrepStats" path="/remarks"/>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastFinalizeStats
+        => _fenceFinalizeExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceFinalizeExec.PhaseSpanTicks,
+               _fenceFinalizeExec.TotalWallTicks,
+               _fenceFinalizeExec.TotalUnitCount,
+               _fenceFinalizeExec.PlanForTest.ChunkCount);
+
+    /// <summary>Last tick's Migrate phase, in the same shape. Needed to compare the inline EntityMap path against the staged one: the inline path's cost
+    /// lands here, the staged path's in <see cref="LastEntityMapUpdateStats"/>.</summary>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastMigrateStats
+        => _fenceMigrateExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceMigrateExec.PhaseSpanTicks, _fenceMigrateExec.TotalWallTicks, _fenceMigrateExec.TotalUnitCount, _fenceMigrateExec.PlanForTest.ChunkCount);
+
+    /// <summary>Last tick's EntityMapUpdate phase, in the same shape as <see cref="LastIndexMassUpdateStats"/> (#872 step 7).</summary>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastEntityMapUpdateStats
+        => _fenceEntityMapUpdateExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceEntityMapUpdateExec.PhaseSpanTicks,
+               _fenceEntityMapUpdateExec.TotalWallTicks,
+               _fenceEntityMapUpdateExec.TotalUnitCount,
+               _fenceEntityMapUpdateExec.PlanForTest.ChunkCount);
+
+    /// <summary>
+    /// Last tick's IndexMassUpdate phase: summed per-chunk wall time in <see cref="Stopwatch"/> ticks, entries applied, and chunks dispatched.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so <c>AC-6.5</c> can be measured on the PHASE rather than on the primitive underneath it. Hand-rolling W threads around
+    /// <c>BTree.UpdateValues</c> measures the descent's scaling and misses everything the phase actually pays for: the planner choosing its own chunk count
+    /// from the cost model, bin-packing, dependency resolution, the per-chunk ChangeSet and EpochGuard, and the barriers either side.
+    /// </remarks>
+    internal (long SpanTicks, long CpuTicks, long Units, int Chunks) LastIndexMassUpdateStats
+        => _fenceIndexMassUpdateExec == null
+            ? (0, 0, 0, 0)
+            : (_fenceIndexMassUpdateExec.PhaseSpanTicks,
+               _fenceIndexMassUpdateExec.TotalWallTicks,
+               _fenceIndexMassUpdateExec.TotalUnitCount,
+               _fenceIndexMassUpdateExec.PlanForTest.ChunkCount);
+
+    /// <summary>
+    /// Last tick's fence from the start of Prep's Prepare to the end of the last phase that dispatched a chunk — the six spans PLUS the scheduler's gaps
+    /// between them. The sum of the six is what the partitioning costs; this is what the host waits.
+    /// </summary>
+    internal long LastFenceWallTicks
+    {
+        get
+        {
+            if (_fencePrepExec == null)
+            {
+                return 0;
+            }
+
+            var start = _fencePrepExec.PhaseStartTicks;
+            var end = Math.Max(
+                Math.Max(_fenceFinalizeExec.PhaseEndTicks, _fenceAabbRefreshExec.PhaseEndTicks),
+                Math.Max(Math.Max(_fenceEntityMapUpdateExec.PhaseEndTicks, _fenceIndexMassUpdateExec.PhaseEndTicks),
+                    Math.Max(_fenceMigrateExec.PhaseEndTicks, _fencePrepExec.PhaseEndTicks)));
+            return start > 0 && end > start ? end - start : 0;
+        }
+    }
+
+    /// <summary>
+    /// Last tick's serial steps inside the phases, in <see cref="Stopwatch"/> ticks: the #886 Prep tails and the destination-cell sort (Migrate's
+    /// Prepare), the merge and leaf-snap (index Prepare), the merge and bucket partition (EntityMap Prepare), and the WAL emit summed over every archetype
+    /// Finalize handled. Each is a piece of a phase span that no worker count can shrink, which is why they are reported apart from the spans.
+    /// </summary>
+    internal (long MigrateTail, long MigrateSort, long IndexMerge, long EntityMapMerge, long FinalizeEmit, long FinalizeAppend) LastFenceSerialTicks
+    {
+        get
+        {
+            if (_fenceMigrateExec == null)
+            {
+                return (0, 0, 0, 0, 0, 0);
+            }
+
+            long emit = 0;
+            long append = 0;
+            var states = Engine._archetypeStates;
+            if (states != null)
+            {
+                for (var aid = 0; aid < states.Length; aid++)
+                {
+                    var cs = states[aid]?.ClusterState;
+                    if (cs != null)
+                    {
+                        emit += cs.LastTickFinalizeEmitTicks;
+                        append += cs.LastTickFinalizeAppendTicks;
+                    }
+                }
+            }
+
+            return (_fenceMigrateExec.LastTailTicks, _fenceMigrateExec.LastSortTicks, _fenceIndexMassUpdateExec.LastSerialPrepareTicks,
+                _fenceEntityMapUpdateExec.LastSerialPrepareTicks, emit, append);
+        }
+    }
+
+    /// <summary>
+    /// Last tick's per-chunk sort CPU in the Migrate phase's <c>OnAfterChunk</c>, in <see cref="Stopwatch"/> ticks summed over the chunks: the index runs,
+    /// the EntityMap runs, the dirty-delta grouping. Worker time, not span — the chunks run in parallel — reported so the sorts can be A/B'd.
+    /// </summary>
+    internal (long IndexSort, long MapSort, long DirtySort) LastFenceChunkSortTicks => _fenceMigrateExec?.ChunkSortTicks ?? default;
 
     /// <summary>
     /// Wraps a tick phase with paired profiler boundary events. When <see cref="TelemetryConfig.ProfilerActive"/> is false the JIT folds both Emit calls to

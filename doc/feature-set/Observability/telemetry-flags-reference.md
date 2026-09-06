@@ -157,7 +157,7 @@ Copy this into `typhon.telemetry.json` (the loader skips comments and trailing c
           // Combined gate for the Scheduler:Queue subtree.
           "Enabled": false,
           "TickEnd": {
-            // Combined flag for the QueueTickEnd instant (kind 244). Per-(tick, queue) rollup emitted at end-of-tick; drives the Workbench Data API queue/&lt;name&gt; tracks (#311 / DAG view backpressure edges).
+            // Combined flag for the QueueTickEnd instant (kind 244). Per-(tick, queue) rollup emitted at end-of-tick; drives the Workbench Data API queue/&lt;name&gt; tracks and the DAG view's backpressure edges.
             "Enabled": false,
           },
         },
@@ -273,7 +273,7 @@ Copy this into `typhon.telemetry.json` (the loader skips comments and trailing c
           // Combined gate for the AdaptiveWaiter subtree.
           "Enabled": false,
           "YieldOrSleep": {
-            // Combined gate for AdaptiveWaiter yield-or-sleep transition events. Phase 2 design (#280) chose transitions only — NOT per-spin — to keep trace volume sane.
+            // Combined gate for AdaptiveWaiter yield-or-sleep transition events. Transitions only — NOT per-spin — to keep trace volume sane.
             "Enabled": false,
           },
         },
@@ -397,7 +397,7 @@ Copy this into `typhon.telemetry.json` (the loader skips comments and trailing c
             "Enabled": false,
           },
           "Execute": {
-            // Combined gate for the Spatial:ClusterMigration:Execute span (migration apply; legacy kind 60, on by default).
+            // Combined gate for the Spatial:ClusterMigration:Execute span (migration apply; kind 60, on by default).
             "Enabled": false,
           },
           "Hysteresis": {
@@ -1002,7 +1002,7 @@ Copy this into `typhon.telemetry.json` (the loader skips comments and trailing c
 | `Typhon:Profiler:Scheduler:Metronome:Enabled` | `false` | Combined gate for the Scheduler:Metronome subtree. |
 | `Typhon:Profiler:Scheduler:Metronome:Wait:Enabled` | `false` | Combined flag for the SchedulerMetronomeWait span (kind 241). |
 | `Typhon:Profiler:Scheduler:Queue:Enabled` | `false` | Combined gate for the Scheduler:Queue subtree. |
-| `Typhon:Profiler:Scheduler:Queue:TickEnd:Enabled` | `false` | Combined flag for the QueueTickEnd instant (kind 244). Per-(tick, queue) rollup emitted at end-of-tick; drives the Workbench Data API queue/&lt;name&gt; tracks (#311 / DAG view backpressure edges). |
+| `Typhon:Profiler:Scheduler:Queue:TickEnd:Enabled` | `false` | Combined flag for the QueueTickEnd instant (kind 244). Per-(tick, queue) rollup emitted at end-of-tick; drives the Workbench Data API queue/&lt;name&gt; tracks and the DAG view's backpressure edges. |
 
 ### Concurrency
 
@@ -1036,7 +1036,7 @@ Copy this into `typhon.telemetry.json` (the loader skips comments and trailing c
 | `Typhon:Profiler:Concurrency:Epoch:SlotClaim:Enabled` | `false` | Combined gate for EpochThreadRegistry slot-claim events. |
 | `Typhon:Profiler:Concurrency:Epoch:SlotReclaim:Enabled` | `false` | Combined gate for EpochThreadRegistry dead-thread slot-reclaim events. |
 | `Typhon:Profiler:Concurrency:AdaptiveWaiter:Enabled` | `false` | Combined gate for the AdaptiveWaiter subtree. |
-| `Typhon:Profiler:Concurrency:AdaptiveWaiter:YieldOrSleep:Enabled` | `false` | Combined gate for AdaptiveWaiter yield-or-sleep transition events. Phase 2 design (#280) chose transitions only — NOT per-spin — to keep trace volume sane. |
+| `Typhon:Profiler:Concurrency:AdaptiveWaiter:YieldOrSleep:Enabled` | `false` | Combined gate for AdaptiveWaiter yield-or-sleep transition events. Transitions only — NOT per-spin — to keep trace volume sane. |
 | `Typhon:Profiler:Concurrency:OlcLatch:Enabled` | `false` | Combined gate for the OlcLatch subtree. |
 | `Typhon:Profiler:Concurrency:OlcLatch:WriteLockAttempt:Enabled` | `false` | Combined gate for OlcLatch TryWriteLock-failure events. |
 | `Typhon:Profiler:Concurrency:OlcLatch:WriteUnlock:Enabled` | `false` | Combined gate for OlcLatch WriteUnlock events. |
@@ -1072,7 +1072,7 @@ Copy this into `typhon.telemetry.json` (the loader skips comments and trailing c
 | `Typhon:Profiler:Spatial:ClusterMigration:Enabled` | `false` | Combined gate for the Spatial:ClusterMigration subtree (cross-cell cluster migration spans). |
 | `Typhon:Profiler:Spatial:ClusterMigration:Detect:Enabled` | `false` | Combined gate for the Spatial:ClusterMigration:Detect span (migration-needed detection). |
 | `Typhon:Profiler:Spatial:ClusterMigration:Queue:Enabled` | `false` | Combined gate for the Spatial:ClusterMigration:Queue span (migration enqueue). |
-| `Typhon:Profiler:Spatial:ClusterMigration:Execute:Enabled` | `false` | Combined gate for the Spatial:ClusterMigration:Execute span (migration apply; legacy kind 60, on by default). |
+| `Typhon:Profiler:Spatial:ClusterMigration:Execute:Enabled` | `false` | Combined gate for the Spatial:ClusterMigration:Execute span (migration apply; kind 60, on by default). |
 | `Typhon:Profiler:Spatial:ClusterMigration:Hysteresis:Enabled` | `false` | Combined gate for the Spatial:ClusterMigration:Hysteresis span (hysteresis suppression of a migration). |
 | `Typhon:Profiler:Spatial:TierIndex:Enabled` | `false` | Combined gate for the Spatial:TierIndex subtree (tier-index rebuild spans). |
 | `Typhon:Profiler:Spatial:TierIndex:Rebuild:Enabled` | `false` | Combined gate for the Spatial:TierIndex:Rebuild span. |

@@ -1,9 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
+using Typhon.Engine.Internals;
 using Typhon.Schema.Definition;
 
 namespace Typhon.Engine.Tests;
@@ -18,7 +21,7 @@ namespace Typhon.Engine.Tests;
 struct ClMigPos
 {
     [Field]
-    [SpatialIndex(1.0f)]
+    [SpatialIndex]
     public AABB2F Bounds;
 
     // Non-unique cluster B+Tree index — used by the Phase 3 non-unique index tests to verify that
@@ -73,7 +76,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         var dbe = ServiceProvider.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClMigPos>();
         dbe.RegisterComponentFromAccessor<ClMigScratch>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(WorldMax, WorldMax),
             cellSize: CellSize));
@@ -139,8 +142,8 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
-        int dstCell = dbe.SpatialGrid.WorldToCellKey(150f, 250f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
+        int dstCell = dbe.SpatialGrid.WorldToCellKey(150f, 250f, 0f);
         Assert.That(srcCell, Is.Not.EqualTo(dstCell));
 
         var (preChunk, preSlot) = ReadLocation(dbe, id);
@@ -201,7 +204,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         }
 
         var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
         int cursorBefore = cs.CellClusterPool.GetScanCursor(srcCell);
         Assert.That(cursorBefore, Is.GreaterThan(0), "cursor advanced during the spawn");
 
@@ -251,7 +254,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int dstCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+        int dstCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
 
         // Tick 1: migrate one entity OUT of the dst cell — frees a slot in its cluster 0; the deferFinalize release leaves the cursor advanced (stale-high).
         using (var tx = dbe.CreateQuickTransaction())
@@ -302,7 +305,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(95f, 50f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(95f, 50f, 0f);
 
         // Move just 7 units across the boundary (to x=102). Raw cell is (1, 0) — a boundary crossing — but
         // the position is only 2 world units into the new cell, far less than the 5-unit hysteresis margin.
@@ -356,7 +359,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         Assert.That(cs.LastTickMigrationCount, Is.EqualTo(1), "crossing beyond margin must migrate");
         Assert.That(cs.LastTickHysteresisAbsorbedCount, Is.EqualTo(0));
 
-        int dstCell = dbe.SpatialGrid.WorldToCellKey(110f, 50f);
+        int dstCell = dbe.SpatialGrid.WorldToCellKey(110f, 50f, 0f);
         Assert.That(dbe.SpatialGrid.GetCell(dstCell).EntityCount, Is.EqualTo(1));
     }
 
@@ -382,7 +385,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
         Assert.That(dbe.SpatialGrid.GetCell(srcCell).EntityCount, Is.EqualTo(3));
 
         // Move all three entities to three different cells
@@ -418,7 +421,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         Assert.That(dbe.SpatialGrid.GetCell(srcCell).EntityCount, Is.EqualTo(0));
         foreach (var (x, y) in destPositions)
         {
-            int dst = dbe.SpatialGrid.WorldToCellKey(x, y);
+            int dst = dbe.SpatialGrid.WorldToCellKey(x, y, 0f);
             Assert.That(dbe.SpatialGrid.GetCell(dst).EntityCount, Is.EqualTo(1), $"cell at ({x}, {y}) should have 1 entity");
         }
     }
@@ -441,7 +444,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
         Assert.That(dbe.SpatialGrid.GetCell(srcCell).ClusterCount, Is.EqualTo(1));
 
         using (var tx = dbe.CreateQuickTransaction())
@@ -480,7 +483,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
         Assert.That(dbe.SpatialGrid.GetCell(srcCell).EntityCount, Is.EqualTo(4));
 
         using (var tx = dbe.CreateQuickTransaction())
@@ -517,7 +520,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
 
         // Update position (dirty bit set) AND destroy in the same transaction.
         using (var tx = dbe.CreateQuickTransaction())
@@ -636,7 +639,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
                     ClMigUnit.Scratch.Set(ScratchOf(0, 0f)));
                 tx.Commit();
             }
-            srcCellKey = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
+            srcCellKey = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
 
             using (var tx = dbe.CreateQuickTransaction())
             {
@@ -645,7 +648,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
                 pos.Bounds = new AABB2F { MinX = 550f, MinY = 750f, MaxX = 550f, MaxY = 750f };
                 tx.Commit();
             }
-            dstCellKey = dbe.SpatialGrid.WorldToCellKey(550f, 750f);
+            dstCellKey = dbe.SpatialGrid.WorldToCellKey(550f, 750f, 0f);
 
             dbe.WriteTickFence(1);
 
@@ -662,12 +665,18 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
 
             Assert.That(cs.ClusterCellMap, Is.Not.Null);
-            // Source cell is empty; destination cell has 1 entity in exactly one cluster.
-            Assert.That(dbe.SpatialGrid.GetCell(srcCellKey).EntityCount, Is.EqualTo(0),
-                "source cell must remain empty after reopen — migration was persisted");
-            Assert.That(dbe.SpatialGrid.GetCell(dstCellKey).EntityCount, Is.EqualTo(1),
-                "destination cell must be reconstructed with the migrated entity");
-            Assert.That(dbe.SpatialGrid.GetCell(dstCellKey).ClusterCount, Is.EqualTo(1));
+
+            // Session 1's keys are NOT reusable here. A cell key is a pool slot handed out when a cell is first occupied (#872 step 8), so a rebuild
+            // renumbers them from zero — session 1's srcCellKey happens to be slot 0, and after this reopen slot 0 is the DESTINATION. Reading it would
+            // have asserted the destination's count against the source's expectation and passed or failed for reasons unrelated to migration.
+            var grid = dbe.SpatialGrid;
+            Assert.That(grid.TryGetCellKeyAt(50f, 50f, 0f, out _), Is.False,
+                "the source cell must not even exist after the rebuild — nothing occupies it, and a sparse grid does not create empty cells");
+
+            Assert.That(grid.TryGetCellKeyAt(550f, 750f, 0f, out int rebuiltDst), Is.True, "the destination cell must have been reconstructed");
+            Assert.That(grid.GetCell(rebuiltDst).EntityCount, Is.EqualTo(1), "destination cell must be reconstructed with the migrated entity");
+            Assert.That(grid.GetCell(rebuiltDst).ClusterCount, Is.EqualTo(1));
+            Assert.That(grid.CellCount, Is.EqualTo(1), "one occupied cell, so exactly one cell exists");
         }
     }
 
@@ -870,6 +879,101 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         }
     }
 
+    /// <summary>
+    /// The VALUES in the cluster B+Tree buffer at a given key — the ClusterLocations the index resolves that key to.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ReadIndexBufferCount"/> is not enough and the difference is the point. A count is invariant under a value-only update, so it says nothing
+    /// about whether a migrated entity's entry was repointed at the cluster it moved to. The whole suite passed with migration's index maintenance ablated
+    /// away, because the only assertions on this buffer were counts.
+    /// </remarks>
+    private static unsafe List<int> ReadIndexBufferValues(DatabaseEngine dbe, ushort archetypeId, int tagKey)
+    {
+        var cs = dbe._archetypeStates[archetypeId].ClusterState;
+        ref var ixSlot = ref cs.IndexSlots[0];
+        ref var field = ref ixSlot.Fields[0];
+        var values = new List<int>();
+        using var epoch = EpochGuard.Enter(dbe.EpochManager);
+        var idxAccessor = cs.IndexSegment.CreateChunkAccessor();
+        try
+        {
+            using var buf = field.Index.TryGetMultiple(&tagKey, ref idxAccessor);
+            if (!buf.IsValid)
+            {
+                return values;
+            }
+
+            do
+            {
+                foreach (var v in buf.ReadOnlyElements)
+                {
+                    values.Add(v);
+                }
+            }
+            while (buf.NextChunk());
+        }
+        finally
+        {
+            idxAccessor.Dispose();
+        }
+
+        return values;
+    }
+
+    [Test]
+    public void ClusterIndex_MigrateOneEntity_RepointsItsIndexValueAtTheNewClusterLocation()
+    {
+        // The gap #872 step 6 found: every existing assertion on this buffer is a COUNT, and a count cannot tell a repointed entry from an untouched one.
+        // With the tick fence's index maintenance ablated entirely, all 5 675 tests stayed green — a migrated entity kept an index entry pointing at the
+        // cluster slot it had left, and nothing noticed. This asserts the thing that actually has to be true.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+
+        EntityId[] ids = new EntityId[3];
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                ids[i] = tx.Spawn<ClMigUnit>(
+                    ClMigUnit.Pos.Set(PointAt(50f + i, 50f, tag: 4242)),
+                    ClMigUnit.Scratch.Set(ScratchOf(i, 0f)));
+            }
+            tx.Commit();
+        }
+
+        var before = ReadIndexBufferValues(dbe, meta.ArchetypeId, 4242);
+        Assert.That(before, Has.Count.EqualTo(3), "sanity: three (Tag=4242, clusterLocation) entries before migration");
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var eref = tx.OpenMut(ids[0]);
+            ref var pos = ref eref.Write(ClMigUnit.Pos);
+            pos.Bounds = new AABB2F { MinX = 550f, MinY = 750f, MaxX = 550f, MaxY = 750f };
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+
+        var after = ReadIndexBufferValues(dbe, meta.ArchetypeId, 4242);
+        Assert.That(after, Has.Count.EqualTo(3), "the buffer must still hold three entries — the migrant is repointed, not removed");
+
+        // The migrant crossed into another cell and therefore another cluster, so its ClusterLocation must have changed; the two siblings did not move, so
+        // theirs must not have. Exactly one value gone, exactly one value new.
+        var beforeSet = new HashSet<int>(before);
+        var afterSet = new HashSet<int>(after);
+
+        var departed = new HashSet<int>(beforeSet);
+        departed.ExceptWith(afterSet);
+        var arrived = new HashSet<int>(afterSet);
+        arrived.ExceptWith(beforeSet);
+
+        var trace = $"before={string.Join(",", before)} after={string.Join(",", after)}";
+        Assert.That(departed, Has.Count.EqualTo(1),
+            $"exactly one cluster location must have left the index (the migrant's old slot); {trace}");
+        Assert.That(arrived, Has.Count.EqualTo(1),
+            $"exactly one cluster location must have entered the index (the migrant's new slot); {trace}");
+    }
+
     [Test]
     public void ClusterIndex_NonUniqueField_DestroyOneEntity_PreservesSiblingsInIndex()
     {
@@ -1027,8 +1131,8 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
-        int dstCell = dbe.SpatialGrid.WorldToCellKey(550f, 750f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
+        int dstCell = dbe.SpatialGrid.WorldToCellKey(550f, 750f, 0f);
 
         var meta = Archetype<ClMigUnit>.Metadata;
         var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
@@ -1121,7 +1225,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
 
         var meta = Archetype<ClMigUnit>.Metadata;
         var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
-        int dstCell = dbe.SpatialGrid.WorldToCellKey(450f, 550f);
+        int dstCell = dbe.SpatialGrid.WorldToCellKey(450f, 550f, 0f);
         Assert.That(cs.ClusterCellMap[postChunk], Is.EqualTo(dstCell));
     }
 
@@ -1224,7 +1328,7 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
         var dbe = sp.GetRequiredService<DatabaseEngine>();
         dbe.RegisterComponentFromAccessor<ClMigPos>();
         dbe.RegisterComponentFromAccessor<ClMigScratch>();
-        dbe.ConfigureSpatialGrid(new SpatialGridConfig(
+        dbe.ConfigureSpatialGrid(SpatialGridConfig.Flat(
             worldMin: new Vector2(0, 0),
             worldMax: new Vector2(WorldMax, WorldMax),
             cellSize: CellSize));
@@ -1253,8 +1357,8 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             tx.Commit();
         }
 
-        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f);
-        int dstCell = dbe.SpatialGrid.WorldToCellKey(250f, 250f);
+        int srcCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
+        int dstCell = dbe.SpatialGrid.WorldToCellKey(250f, 250f, 0f);
         Assert.That(srcCell, Is.Not.EqualTo(dstCell));
 
         var meta = Archetype<ClMigUnit>.Metadata;
@@ -1293,6 +1397,108 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
 
         // Post-fence the bookkeeping bits MUST be cleared.
         Assert.That(cs.ClusterMigrationPendingSlots[preChunkId], Is.Zero, "migration pending bits cleared at fence");
+    }
+
+    /// <summary>
+    /// An entity that crosses into another cell and comes back within the same tick is still home at the fence. The outbound <c>WriteSpatial</c> flags the
+    /// slot with the far cell as its destination; the return write finds the entity home and clears nothing; the drain must therefore re-derive the
+    /// destination from the position the slot holds NOW and drop the request, not execute the one recorded at write time (CC-02).
+    /// </summary>
+    /// <remarks>
+    /// Found by <c>ClusterPlacementTests.ConcurrentSpawnsAndBoundGrowthKeepClustersInTheirCell</c> in its two-cell form: a concurrent writer reached a
+    /// spawn's slot between its claim and its data (the documented in-flight window), flagged a crossing from the writer's position, the spawn's own
+    /// position then landed, and the fence migrated the entity to a cell it had never been in. That took a race to reach; this takes two writes.
+    /// </remarks>
+    [Test]
+    [VerifiesRule("CC-02")]
+    public void WriteSpatial_CrossAndReturnInOneTick_StaysInItsCell()
+    {
+        using var dbe = SetupEngineWithGrid();
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            id = tx.Spawn<ClMigUnit>(ClMigUnit.Pos.Set(PointAt(50f, 50f)), ClMigUnit.Scratch.Set(ScratchOf(0, 0f)));
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+        var homeCell = dbe.SpatialGrid.WorldToCellKey(50f, 50f, 0f);
+        var cs = dbe._archetypeStates[Archetype<ClMigUnit>.Metadata.ArchetypeId].ClusterState;
+        var (chunkId, slot) = ReadLocation(dbe, id);
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var accessor = tx.For<ClMigUnit>();
+            foreach (var cluster in accessor.GetClusterEnumerator())
+            {
+                if (cluster.ChunkId != chunkId)
+                {
+                    continue;
+                }
+
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(250f, 250f));   // out: flagged, destination = the far cell
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(60f, 60f));     // back home in the same tick — nothing clears the flag
+            }
+
+            accessor.Dispose();
+            tx.Commit();
+        }
+
+        Assert.That(cs.ClusterMigrationPendingSlots[chunkId] & (1UL << slot), Is.Not.Zero, "precondition: the outbound write left its flag behind");
+        dbe.WriteTickFence(2);
+
+        var (chunkAfter, _) = ReadLocation(dbe, id);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cs.ClusterCellMap[chunkAfter], Is.EqualTo(homeCell), "migrated on a destination the entity no longer has");
+            Assert.That(dbe.SpatialGrid.GetCell(homeCell).EntityCount, Is.EqualTo(1));
+            Assert.That(cs.LastTickMigrationCount, Is.Zero, "a stale flag is dropped at the drain, not executed");
+        });
+    }
+
+    /// <summary>Two crossings in one tick: the flag's per-cluster destination is the LAST write's, and the drain must land the entity where it is.</summary>
+    [Test]
+    [VerifiesRule("CC-02")]
+    public void WriteSpatial_TwoCrossingsInOneTick_LandsWhereItIs()
+    {
+        using var dbe = SetupEngineWithGrid();
+        EntityId id;
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            id = tx.Spawn<ClMigUnit>(ClMigUnit.Pos.Set(PointAt(50f, 50f)), ClMigUnit.Scratch.Set(ScratchOf(0, 0f)));
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(1);
+        var (chunkId, slot) = ReadLocation(dbe, id);
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            var accessor = tx.For<ClMigUnit>();
+            foreach (var cluster in accessor.GetClusterEnumerator())
+            {
+                if (cluster.ChunkId != chunkId)
+                {
+                    continue;
+                }
+
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(250f, 250f));
+                cluster.WriteSpatial(ClMigUnit.Pos, slot, PointAt(150f, 50f));
+            }
+
+            accessor.Dispose();
+            tx.Commit();
+        }
+
+        dbe.WriteTickFence(2);
+        var cs = dbe._archetypeStates[Archetype<ClMigUnit>.Metadata.ArchetypeId].ClusterState;
+        var (chunkAfter, _) = ReadLocation(dbe, id);
+        var whereItIs = dbe.SpatialGrid.WorldToCellKey(150f, 50f, 0f);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cs.ClusterCellMap[chunkAfter], Is.EqualTo(whereItIs));
+            Assert.That(dbe.SpatialGrid.GetCell(whereItIs).EntityCount, Is.EqualTo(1));
+            Assert.That(cs.LastTickMigrationCount, Is.EqualTo(1));
+        });
     }
 
     [Test]
@@ -1520,5 +1726,377 @@ class ClusterMigrationTests : TestBase<ClusterMigrationTests>
             "every ActiveChunkWriters registration taken during migration and cluster finalisation must be released "
             + "(CP-13). A non-zero count here means the checkpoint coverage gate will skip those pages forever and "
             + "the WAL will never be reclaimed — see #817.");
+    }
+
+    /// <summary>
+    /// Ground truth for "where does each entity carrying <paramref name="tagKey"/> actually live", read straight from cluster occupancy.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT derived from the index — comparing the index against itself is how the count-only assertions this fixture used to rely on managed to
+    /// stay green with index maintenance ablated entirely.
+    /// </remarks>
+    private static unsafe List<int> ActualClusterLocationsForTag(DatabaseEngine dbe, ushort archetypeId, int tagKey)
+    {
+        var cs = dbe._archetypeStates[archetypeId].ClusterState;
+        ref var ixSlot = ref cs.IndexSlots[0];
+        ref var field = ref ixSlot.Fields[0];
+        var compOffset = cs.Layout.ComponentOffset(ixSlot.Slot);
+        var compSize = cs.Layout.ComponentSize(ixSlot.Slot);
+        var fieldOffset = field.FieldOffset;
+
+        var result = new List<int>();
+        using var epoch = EpochGuard.Enter(dbe.EpochManager);
+        var accessor = cs.ClusterSegment.CreateChunkAccessor();
+        try
+        {
+            for (var i = 0; i < cs.ActiveClusterCount; i++)
+            {
+                var cid = cs.ActiveClusterIds[i];
+                var clusterBase = accessor.GetChunkAddress(cid);
+                var occupancy = *(ulong*)clusterBase;
+                while (occupancy != 0)
+                {
+                    var slot = BitOperations.TrailingZeroCount(occupancy);
+                    occupancy &= occupancy - 1;
+                    if (*(int*)(clusterBase + compOffset + slot * compSize + fieldOffset) == tagKey)
+                    {
+                        result.Add(cid * 64 + slot);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+
+        return result;
+    }
+
+    /// <summary>Where the EntityMap says an entity lives — the (clusterChunkId, slotIndex) pair its ClusterEntityRecord carries.</summary>
+    private static unsafe (int ChunkId, int Slot) ReadEntityMapLocation(DatabaseEngine dbe, ushort archetypeId, EntityId id)
+    {
+        var state = dbe._archetypeStates[archetypeId];
+        var buffer = stackalloc byte[512];
+        using var epoch = EpochGuard.Enter(dbe.EpochManager);
+        var accessor = state.EntityMap.Segment.CreateChunkAccessor();
+        try
+        {
+            return state.EntityMap.TryGet(id.EntityKey, buffer, ref accessor)
+                ? (ClusterEntityRecordAccessor.GetClusterChunkId(buffer), ClusterEntityRecordAccessor.GetSlotIndex(buffer))
+                : (-1, -1);
+        }
+        finally
+        {
+            accessor.Dispose();
+        }
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void EntityMap_MigrationUnderTheParallelFence_InlinePath_RepointsEveryMigrantsRecord()
+    {
+        // The OTHER arm. RuntimeOptions.EntityMapBulkMinEntriesPerBucket picks between staging the location patches for the bulk phase and applying them
+        // inline, and a batch below the threshold takes the inline path — which is what the shipped default does for every batch this size. Two paths mean
+        // two tests: covering only the one the default does not take is how a fallback rots.
+        RunParallelFenceMigrationAndAssertEntityMap(bulkMinEntriesPerBucket: float.MaxValue, tag: 6271, expectBulk: false);
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void EntityMap_MigrationUnderTheParallelFence_RepointsEveryMigrantsRecord()
+        => RunParallelFenceMigrationAndAssertEntityMap(bulkMinEntriesPerBucket: 0f, tag: 6270, expectBulk: true);
+
+    /// <summary>Drives a live runtime tick that migrates half a spawn set, then asserts the EntityMap against cluster occupancy.</summary>
+    private void RunParallelFenceMigrationAndAssertEntityMap(float bulkMinEntriesPerBucket, int tag, bool expectBulk)
+    {
+        // The step-6 gap, reproduced exactly on the EntityMap side and caught before review this time. Ablating FenceEntityMapUpdateExecSystem.DispatchItem
+        // left all 5 692 tests green, because every migration fixture drives WriteTickFence — the SERIAL drain — so nothing exercised the phase that a live
+        // runtime actually runs. Ablating the serial drain, by contrast, reddens
+        // Migration_ThenSubsequentSpawn_ReclaimingSourceSlot_DoesNotCorruptMigratedEntity immediately.
+        //
+        // The assertion is the EntityMap's own record against cluster occupancy: a stale record is what makes a migrated entity resolve to the slot it left,
+        // and once a later spawn reclaims that slot it resolves to an unrelated entity's bytes.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+
+        var ids = new EntityId[24];
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < ids.Length; i++)
+            {
+                var cell = i / 6;
+                ids[i] = tx.Spawn<ClMigUnit>(
+                    ClMigUnit.Pos.Set(PointAt(50f + cell * CellSize + i % 6, 50f, tag: tag)),
+                    ClMigUnit.Scratch.Set(ScratchOf(i, 0f)));
+            }
+
+            tx.Commit();
+        }
+
+        var before = new (int ChunkId, int Slot)[ids.Length];
+        for (var i = 0; i < ids.Length; i++)
+        {
+            before[i] = ReadEntityMapLocation(dbe, meta.ArchetypeId, ids[i]);
+            Assert.That(before[i].ChunkId, Is.GreaterThanOrEqualTo(0), $"sanity: entity {i} must be in the map before anything migrates");
+        }
+
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < ids.Length; i += 2)
+            {
+                ref var pos = ref tx.OpenMut(ids[i]).Write(ClMigUnit.Pos);
+                pos.Bounds = new AABB2F { MinX = 550f + i, MinY = 750f, MaxX = 550f + i, MaxY = 750f };
+            }
+
+            tx.Commit();
+        }
+
+        // Sampled EVERY tick from inside the tick, not once after Shutdown. Read afterwards it carries the LAST tick's decision — taken with zero pending
+        // migrations — rather than the migrating tick's, and passes only because the two sentinel thresholds happen to be migration-count-independent. Any
+        // mid-range threshold would have made it assert something other than what it claims.
+        var ticks = 0;
+        var bulkObservations = new System.Collections.Concurrent.ConcurrentBag<bool>();
+        bool[] observedPaths = [];
+        using (var runtime = TyphonRuntime.Create(dbe, schedule =>
+               {
+                   schedule.PublicTrack.DeclareDag("Test").CallbackSystem("Tick", _ =>
+                   {
+                       // From tick 2 onward. This callback is on the PUBLIC track and the fence is Engine-Post, so tick 1 samples the flag before any fence
+                       // has run and reads its initial `false` — a stale value that says nothing about which path migration took.
+                       if (Interlocked.Increment(ref ticks) > 1)
+                       {
+                           bulkObservations.Add(dbe._archetypeStates[meta.ArchetypeId].ClusterState.UseBulkEntityMapUpdate);
+                       }
+                   });
+               }, new RuntimeOptions
+               {
+                   WorkerCount = 4,
+                   BaseTickRate = 1000,
+                   EnableParallelFence = true,
+
+                   // FORCED to one arm. The shipped default sends a batch this small down the inline path, so without this the bulk arm would go green while
+                   // exercising none of the phase it exists to cover — the exact vacuity the step-6 review caught.
+                   EntityMapBulkMinEntriesPerBucket = bulkMinEntriesPerBucket,
+               }))
+        {
+            Exception unhandled = null;
+            runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) => Interlocked.CompareExchange(ref unhandled, ex, null);
+
+            runtime.Start();
+            // Both observables: `ticks` is incremented by a system INSIDE the tick, CurrentTickNumber counts ticks that FINISHED, and the assertions below
+            // read both. Waiting only on the counter races the clock whenever a fence runs long (ClusterDriftParallelTests hit exactly that, "But was: 4").
+            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6 && runtime.CurrentTickNumber >= 6, TimeSpan.FromSeconds(5));
+
+            // Snapshotted BEFORE Shutdown, and that is not tidiness. Disposing the engine drives a final SERIAL WriteTickFence, which picks its path from
+            // EntityMapUpdateStaging.DefaultMinEntriesPerBucket rather than from RuntimeOptions — a runtime-less fence has no options object — so the flag
+            // flips to the default's answer on the way down. Asserting over samples taken after that would be asserting about shutdown, not about the ticks
+            // that migrated.
+            observedPaths = bulkObservations.ToArray();
+            runtime.Shutdown();
+
+            // `unhandled` alone was NOT enough before #890, and believing it was is the defect this replaces. The callback fired from the tick driver and
+            // the system-execute path only (DagScheduler.cs:433, :1310); the scheduler's PREPARE catch calls RecordSystemFailure instead, so anything a fence
+            // phase throws while merging, partitioning or leaf-snapping — the subtlest code in the phase — never reaches this callback. Proven by injecting a
+            // throw into a phase's Prepare: `unhandled` stayed null. CurrentTickNumber is the observable that does move, because a failed system aborts its
+            // tick and the clock stops advancing.
+            Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while applying the staged EntityMap batch. Got: {unhandled}");
+            Assert.That(ticks, Is.GreaterThanOrEqualTo(6), "the runtime must actually have ticked, or nothing was measured");
+            Assert.That(runtime.CurrentTickNumber, Is.GreaterThanOrEqualTo(6),
+                "the runtime clock must have advanced — since #890 a phase that throws in Prepare also stops it, so a stalled clock is a failed fence");
+        }
+
+        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+
+        // Which path ran, asserted rather than assumed. Both paths are correct, so without this the two tests pass whichever one the threshold selects —
+        // inverting the decision in DecideEntityMapPath reddened NOTHING before this line existed, which means a future change routing every batch inline
+        // would leave the bulk phase dead and the suite green.
+        Assert.That(observedPaths, Is.Not.Empty, "no tick sampled the path decision, so the assertion below would prove nothing");
+        Assert.That(observedPaths, Is.All.EqualTo(expectBulk),
+            expectBulk
+                ? "every tick of this arm must take the BULK path, or it is not covering the phase it exists for"
+                : "every tick of this arm must take the INLINE path, or the fallback is untested");
+
+        // Readable at all only because ReportOrphanedMigrant is a counter rather than a Debug.Fail: Fail terminates the host uncatchably, so in Debug — the
+        // configuration this suite runs in — this assertion could never have executed.
+        Assert.That(cs.OrphanedMigrantCount, Is.Zero,
+            $"no migrant may go missing from the EntityMap inside the fence — that requires a mutation EW-01 forbids. "
+            + $"First was key {cs.FirstOrphanedMigrantKey} at dst {cs.FirstOrphanedMigrantDst >> 8}/{cs.FirstOrphanedMigrantDst & 0xFF}.");
+
+        var occupancy = new HashSet<int>(ActualClusterLocationsForTag(dbe, meta.ArchetypeId, tag));
+        var moved = 0;
+        for (var i = 0; i < ids.Length; i++)
+        {
+            var now = ReadEntityMapLocation(dbe, meta.ArchetypeId, ids[i]);
+            Assert.That(now.ChunkId, Is.GreaterThanOrEqualTo(0), $"entity {i} vanished from the EntityMap");
+            Assert.That(occupancy, Does.Contain(now.ChunkId * 64 + now.Slot),
+                $"entity {i}: the EntityMap points at cluster slot {now.ChunkId}/{now.Slot}, which no entity of this tag occupies");
+
+            if (now != before[i])
+            {
+                moved++;
+            }
+        }
+
+        // Without this the assertion above is satisfied by a tick in which nothing migrated at all: every record would still name a slot that is occupied.
+        Assert.That(moved, Is.GreaterThan(0), "no record moved, so the run proved nothing about repointing");
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public void ClusterIndex_MigrationUnderTheParallelFence_RepointsEveryMigrantsIndexValue()
+    {
+        // The gap this closes, stated plainly: every other migration test in this fixture calls WriteTickFence, which is the SERIAL drain. The phase #872
+        // step 6 actually adds — FenceIndexMassUpdateExecSystem, its plan emission and its chunked apply — is reached only from RunParallelFence, i.e. only
+        // from a live TyphonRuntime tick. Ablating FenceWorkPlan.EmitIndexUpdateSliceItems to an early return left all 54 tests of the reviewed set green,
+        // which is exactly what "the deliverable has no test" looks like.
+        //
+        // The assertion is against cluster occupancy, not against a count: the index's value set must equal the set of slots the entities are really in.
+        // A stale entry (migrant repointed nowhere) and a lost entry (migrant dropped) both fail it, and neither would move a count.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+        const int Tag = 5150;
+
+        var ids = new EntityId[24];
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            // Four source cells, six entities each, so the batch spans several clusters rather than one.
+            for (var i = 0; i < ids.Length; i++)
+            {
+                var cell = i / 6;
+                ids[i] = tx.Spawn<ClMigUnit>(
+                    ClMigUnit.Pos.Set(PointAt(50f + cell * CellSize + i % 6, 50f, tag: Tag)),
+                    ClMigUnit.Scratch.Set(ScratchOf(i, 0f)));
+            }
+
+            tx.Commit();
+        }
+
+        Assert.That(ReadIndexBufferValues(dbe, meta.ArchetypeId, Tag), Has.Count.EqualTo(ids.Length),
+            "sanity: one (Tag, clusterLocation) entry per spawned entity before anything migrates");
+
+        // Half of them cross a cell boundary — enough that a phase which silently applied nothing cannot pass by luck.
+        using (var tx = dbe.CreateQuickTransaction())
+        {
+            for (var i = 0; i < ids.Length; i += 2)
+            {
+                ref var pos = ref tx.OpenMut(ids[i]).Write(ClMigUnit.Pos);
+                pos.Bounds = new AABB2F { MinX = 550f + i, MinY = 750f, MaxX = 550f + i, MaxY = 750f };
+            }
+
+            tx.Commit();
+        }
+
+        // No WriteTickFence anywhere in this test, and that is the point.
+        var ticks = 0;
+        using (var runtime = TyphonRuntime.Create(dbe, schedule =>
+               {
+                   schedule.PublicTrack.DeclareDag("Test").CallbackSystem("Tick", _ => Interlocked.Increment(ref ticks));
+               }, new RuntimeOptions { WorkerCount = 4, BaseTickRate = 1000, EnableParallelFence = true }))
+        {
+            Exception unhandled = null;
+            runtime.Scheduler.UnhandledExceptionCallback = (_, _, ex) => Interlocked.CompareExchange(ref unhandled, ex, null);
+
+            runtime.Start();
+            // Migration executes on the fence of one tick and the emptied source clusters are drained on later ones, so give it several.
+            // Both observables: `ticks` is incremented by a system INSIDE the tick, CurrentTickNumber counts ticks that FINISHED, and the assertions below
+            // read both. Waiting only on the counter races the clock whenever a fence runs long (ClusterDriftParallelTests hit exactly that, "But was: 4").
+            SpinWait.SpinUntil(() => Volatile.Read(ref ticks) >= 6 && runtime.CurrentTickNumber >= 6, TimeSpan.FromSeconds(5));
+            runtime.Shutdown();
+
+            // `unhandled` alone was NOT enough before #890, and believing it was is the defect this replaces. The callback fired from the tick driver and
+            // the system-execute path only (DagScheduler.cs:433, :1310); the scheduler's PREPARE catch calls RecordSystemFailure instead, so anything a fence
+            // phase throws while merging, partitioning or leaf-snapping — the subtlest code in the phase — never reaches this callback. Proven by injecting a
+            // throw into a phase's Prepare: `unhandled` stayed null. CurrentTickNumber is the observable that does move, because a failed system aborts its
+            // tick and the clock stops advancing.
+            Assert.That(unhandled, Is.Null, $"the parallel fence must not throw while applying the staged index batch. Got: {unhandled}");
+            Assert.That(ticks, Is.GreaterThanOrEqualTo(6), "the runtime must actually have ticked, or nothing was measured");
+            Assert.That(runtime.CurrentTickNumber, Is.GreaterThanOrEqualTo(6),
+                "the runtime clock must have advanced — since #890 a phase that throws in Prepare also stops it, so a stalled clock is a failed fence");
+        }
+
+        var expected = ActualClusterLocationsForTag(dbe, meta.ArchetypeId, Tag);
+        var actual = ReadIndexBufferValues(dbe, meta.ArchetypeId, Tag);
+        expected.Sort();
+        actual.Sort();
+
+        Assert.That(expected, Has.Count.EqualTo(ids.Length), "sanity: every entity must still be somewhere after migrating");
+        Assert.That(actual, Is.EqualTo(expected),
+            $"after the parallel fence the index must name exactly the cluster slots the entities occupy. "
+            + $"index=[{string.Join(",", actual)}] occupancy=[{string.Join(",", expected)}]");
+    }
+
+    [Test]
+    [CancelAfter(15_000)]
+    public unsafe void IndexUpdateStaging_MergeSortedRuns_ProducesOneSortedRunFromMany()
+    {
+        // MergeSortedRuns is the phase's remaining serial step and has no other unit seam: reaching it through a tick exercises it with ONE run, because the
+        // planner sizes Migrate chunks by cost and a unit-test-sized batch fits in one. Its interesting behaviour — the pairwise passes, the odd-run carry,
+        // the ping-pong buffer swap — starts at run three. Driven directly here, with five runs, over the same tree the migration path uses.
+        //
+        // Lives in this fixture rather than IndexMassUpdatePhaseTests because ClMigPos.Tag is the AllowMultiple int index the staging path actually writes;
+        // constructing a second clustered indexed archetype elsewhere would register a duplicate for no gain.
+        using var dbe = SetupEngineWithGrid();
+        var meta = Archetype<ClMigUnit>.Metadata;
+        var cs = dbe._archetypeStates[meta.ArchetypeId].ClusterState;
+        var tree = cs.IndexSlots[0].Fields[0].Index;
+
+        const int Runs = 5;
+        const int PerRun = 7;
+        var staging = new IndexUpdateStaging([new IndexUpdateStaging.FieldRef(0, 0)]);
+        staging.BeginTick(Runs);
+
+        var stride = tree.BulkEntryStride(true);
+        var radixCounts = new int[RadixSort.Buckets];
+        var expected = new List<(int Key, int NewValue)>();
+        for (var run = 0; run < Runs; run++)
+        {
+            for (var i = 0; i < PerRun; i++)
+            {
+                // Interleaved keys so no run is a prefix of the merged result and a merge that simply concatenated would be caught.
+                var key = i * Runs + run;
+                var newValue = run * 1000 + i;
+                tree.WriteBulkMultiEntry(staging.Reserve(run, 0, stride), &key, elementId: i, oldValue: -1, newValue: newValue);
+                expected.Add((key, newValue));
+            }
+
+            // What the Migrate worker does before it leaves its chunk. MergeSortedRuns' whole contract is that its inputs arrive sorted.
+            var runBytes = staging.ChunkSpan(run, 0);
+            tree.SortBulkEntries(runBytes, staging.SortScratch(run, runBytes.Length), radixCounts, true);
+        }
+
+        var merged = staging.MergeSortedRuns(0, stride, tree, true, out var byteCount);
+        var entries = MemoryMarshal.Cast<byte, BTreeMultiValueUpdate<int>>(merged.AsSpan(0, byteCount));
+
+        Assert.That(entries.Length, Is.EqualTo(Runs * PerRun), "the merge must neither drop nor duplicate an entry");
+
+        var seen = new List<(int Key, int NewValue)>();
+        for (var i = 0; i < entries.Length; i++)
+        {
+            if (i > 0)
+            {
+                Assert.That(entries[i].Key, Is.GreaterThanOrEqualTo(entries[i - 1].Key),
+                    $"the merged batch must be non-decreasing by key — the partitioning descent asserts sortedness and applies to the wrong leaf without "
+                    + $"it. Broke at index {i}.");
+            }
+
+            seen.Add((entries[i].Key, entries[i].NewValue));
+        }
+
+        expected.Sort((a, b) => a.Key != b.Key ? a.Key.CompareTo(b.Key) : a.NewValue.CompareTo(b.NewValue));
+        var seenSorted = new List<(int Key, int NewValue)>(seen);
+        seenSorted.Sort((a, b) => a.Key != b.Key ? a.Key.CompareTo(b.Key) : a.NewValue.CompareTo(b.NewValue));
+        Assert.That(seenSorted, Is.EqualTo(expected), "every staged entry must survive the merge unchanged");
+
+        // Stability, which AC-6.4 leans on: entries sharing a key must stay in run order, so the merged bytes are a pure function of the runs and not of how
+        // the pairwise passes happened to pair them. NewValue encodes run * 1000 + i, so within a key the run index must ascend.
+        for (var i = 1; i < seen.Count; i++)
+        {
+            if (seen[i].Key == seen[i - 1].Key)
+            {
+                Assert.That(seen[i].NewValue / 1000, Is.GreaterThan(seen[i - 1].NewValue / 1000),
+                    $"equal keys must keep the order their runs were gathered in; broke at index {i}");
+            }
+        }
     }
 }

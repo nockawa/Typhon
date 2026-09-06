@@ -334,7 +334,11 @@ Compile-time stripped in RELEASE; active in DEBUG to catch declaration drift.
   never skip WriteTickFence to "avoid establishing a durability boundary" — that reasoning is inverted, see below
   may the output/subscription phase be suppressed for a tick — it is the ONLY one of the three that may be skipped,
       because publication is the only tick-end act carrying tick-wide "this was a good tick" semantics
-  scope: TyphonRuntime.OnTickEndInternal; RuntimeOptions.SystemExceptionPolicy = AbortTickAndStop
+  may a tick that does NOT RUN skip both — the terminal gates in DagScheduler.ExecuteCallbacks (tick abort, and fence failure since #890)
+      return before TickStartCallback, so no UoW is created and no SV/Transient write happens. This rule's failure mode is mutate-then-skip;
+      with no mutation there is nothing for a fence to cover. The damage a fence failure DOES leave is on its own tick, and stopping bounds
+      it rather than undoing it.
+  scope: TyphonRuntime.OnTickEndInternal; RuntimeOptions.SystemExceptionPolicy = AbortTickAndStop; DagScheduler.ExecuteCallbacks
   on_violation: SingleVersion / Transient writes are made IN PLACE into cluster pages and receive their WAL record at
     the fence. Skipping the fence leaves the page mutated, dirty and un-logged; the checkpoint thread then persists it
     on its own schedule, producing a durable mutation with no WAL record behind it. CK-02's WAL-before-data ordering
@@ -358,6 +362,59 @@ Compile-time stripped in RELEASE; active in DEBUG to catch declaration drift.
     entity in a tier-filtered or dormancy-filtered view.
   rationale: fixed in #566; before that the binding took the first cluster-eligible archetype globally. Recorded so a
     cleanup does not reintroduce either half.
+
+## Module: Tick Fence Exclusivity
+
+The interval in which the tick fence owns the structures it maintains. Everything the spatial partitioning update
+is allowed to do cheaply — and steps 4-7 of `design/Spatial/vdb-cell-grid-and-migration.md` are built on it —
+descends from this one property.
+
+### EW-01: The tick fence runs with no concurrent mutation of the structures it maintains `[fatal]` `[silent]`
+  invariant ∀ t ∈ fence_window: ¬∃ thread ≠ fence_thread mutating (cluster B+Trees ∪ EntityMap ∪
+            per-cell spatial index ∪ ClusterCellMap ∪ ClusterAabbs)
+  invariant under TyphonRuntime the window opens at Scheduler.TickEndCallback, so every system has completed;
+            a system's own Transaction is committed and disposed in its epilogue before the tick can end
+  licences: within the window a writer of those structures may skip OLC version validation, the write latch,
+            the B-link right-walk and the epoch guard, and may use plain reads and plain counter increments on
+            disjoint partitions. This is the whole economic point of the window — roughly 15-20% on top of what
+            batching alone buys — and none of it is safe if the invariant does not hold.
+  never a side transaction that writes any of the structures above is committed while the window is open.
+        TickContext.CreateSideTransaction returns an ORDINARY transaction (TyphonRuntime.CreateSideTransactionInternal
+        -> DatabaseEngine.CreateQuickTransaction), so it CAN write an indexed field and therefore mutate a B+Tree, and
+        its caller owns Commit and Dispose — nothing joins it to the tick. One that touches none of those structures is
+        harmless, but the distinction is not checkable at the fence and not obvious at the call site, so the API states
+        the conservative form: commit and dispose it before the creating system returns. It is the one path inside the
+        runtime that can overlap the window.
+  scope: DatabaseEngine.TickFence.cs (WriteTickFence, WriteClusterTickFence), TyphonRuntime.cs (OnTickEndInternal),
+         TickContext.cs (CreateSideTransaction)
+  rationale: the window is not built, it already exists — OnTickEndInternal is the scheduler's TickEndCallback.
+    What was missing is that nothing STATED it, so nothing protected it: a licence nobody wrote down is one a
+    later change silently revokes. Phases cannot supply this property and never could — see PH-01, which makes
+    them ordering contracts rather than barriers, and ExclusivePhase, which is Build()-time validation that no
+    other system shares a phase and says nothing about adjacent ones.
+  host_mode: WriteTickFence is public and a runtime-less host drives it directly (demo/SpaceBattle
+    TyphonHost.RunTickFence). For such a host this is a DOCUMENTED CALLER OBLIGATION, not an enforced one, and it
+    is stated on the method's own XML doc. Trivially satisfied single-threaded; unchecked for a host that runs its
+    own worker threads. Enforcing it would require the engine to track every application thread, which it does not
+    and should not.
+  on_violation: silent. A concurrent writer racing a fence that has taken the licences above corrupts index
+    structure with no exception at the point of damage — the B+Tree's own validators find it later, or a query
+    returns a wrong answer and nothing finds it at all.
+  verified: ExclusiveWindowTests.LiveWorkload_TheFenceNeverSeesAForeignWriter — a spawn / destroy / indexed-field
+            rewrite workload over 6+ ticks asserting zero foreign writers, and asserting ObservedFenceMutation too
+            so a fence that wrote no guarded structure fails as loudly as one that was raced. Mutant:
+            ForeignThreadMutatingAnIndexInsideTheWindow_IsCaught.
+            The detector is ExclusiveWindow, an assertion at the MUTATION SITES: armed on the seven typed B+Tree
+            mutators and the EntityMap's five, ALWAYS COMPILED (the merge gate runs Release, so a
+            [Conditional("DEBUG")] guard is one the gate never executes), and scoped PER ENGINE off EpochManager
+            rather than to a process-wide static — under the parallel fixtures a global would let one engine's
+            fence indict another engine's legal write.
+            Two cheaper proxies were tried in step 3 and rejected: TransactionChain.ActiveCount counts handles that
+            exist rather than threads that are mutating, and reddens 21 tests that legitimately hold a
+            committed-or-idle transaction across the fence — `using var tx = ...; tx.Commit();` before the scope
+            ends, and the long-lived read transaction that owns a pull View. Asserting "no system runs
+            concurrently" verifies the half that was never in doubt. A rule whose verifier cannot fail is worse
+            than a rule with no verifier.
 
 ## Module: API Contract Stability
 

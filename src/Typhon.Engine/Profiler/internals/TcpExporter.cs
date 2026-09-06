@@ -33,7 +33,7 @@ internal sealed class TcpExporter : ResourceNode, IProfilerExporter
 {
     private readonly int _port;
     private readonly int _liveConnectTimeoutMs;
-    private readonly ManualResetEventSlim _firstClientConnected = new(initialState: false);
+    private readonly ManualResetEventSlim _firstClientConnected = new(false);
     private TcpListener _listener;
     private Thread _acceptThread;
     private bool _shutdown;
@@ -416,7 +416,7 @@ internal sealed class TcpExporter : ResourceNode, IProfilerExporter
         // FileTable frame payload: [u32 entryCount][per entry: u16 fileId, u16 pathLen, UTF-8 bytes]
         byte[] fileTableFrame;
         using (var ms = new MemoryStream())
-        using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: false))
+        using (var bw = new BinaryWriter(ms, Encoding.UTF8, false))
         {
             bw.Write((uint)files.Length);
             for (ushort i = 0; i < files.Length; i++)
@@ -437,7 +437,7 @@ internal sealed class TcpExporter : ResourceNode, IProfilerExporter
         // SourceLocationManifest frame payload: [u32 entryCount][per entry: u16 id, u16 fileId, u32 line, u8 kind, u8 methodLen, UTF-8 method bytes]
         byte[] manifestFrame;
         using (var ms = new MemoryStream())
-        using (var bw = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: false))
+        using (var bw = new BinaryWriter(ms, Encoding.UTF8, false))
         {
             bw.Write((uint)entries.Length);
             foreach (var e in entries)

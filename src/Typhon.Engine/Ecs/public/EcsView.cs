@@ -445,7 +445,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             // canSettle must still respect pending work: this arm is checked FIRST, so when both hold it would otherwise settle the view over
             // state that exists only in this transaction's staging — the same permanent-phantom bug the arm below was fixed for. The differential
             // test uses this path as its ORACLE, so letting it settle would make the oracle silently become the thing under test.
-            RefreshMembershipResync(tx, ref scope, EcsViewRefreshMode.Pull, canSettle: !tx.HasPendingEcsWork);
+            RefreshMembershipResync(tx, ref scope, EcsViewRefreshMode.Pull, !tx.HasPendingEcsWork);
             return;
         }
 
@@ -460,7 +460,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             // so the epoch comparison at the end would find nothing changed, clear _needsResync, and mark the view clean over staged-only state: if
             // the transaction then rolls back, no commit ever publishes a matching entry, no epoch ever moves, and every later refresh takes the gate.
             // The phantoms are permanent — the exact failure _needsResync exists to prevent, arriving through the door opened to fix a different one.
-            RefreshMembershipResync(tx, ref scope, EcsViewRefreshMode.Pull, canSettle: false);
+            RefreshMembershipResync(tx, ref scope, EcsViewRefreshMode.Pull, false);
             return;
         }
 
@@ -476,7 +476,7 @@ public unsafe class EcsView<TArchetype> : ViewBase where TArchetype : class
             // Report Overflow only for a REAL one. Every view's first refresh is a seed resync, so reporting the mode unconditionally would make
             // the profiler show an overflow per view per lifetime while EmitEcsViewDeltaBufferOverflow fires only for genuine ones — two signals
             // that disagree, and an overflow rate that looks catastrophic and is not.
-            RefreshMembershipResync(tx, ref scope, overflowed ? EcsViewRefreshMode.Overflow : EcsViewRefreshMode.Pull, canSettle: true);
+            RefreshMembershipResync(tx, ref scope, overflowed ? EcsViewRefreshMode.Overflow : EcsViewRefreshMode.Pull, true);
             return;
         }
 

@@ -206,7 +206,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public PageAccessor GetPageExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        memPageIndex = RequestExclusiveForGrow(Pages[segmentPageIndex], epoch, verifyCrc: true);
+        memPageIndex = RequestExclusiveForGrow(Pages[segmentPageIndex], epoch, true);
         return _store.GetPage(memPageIndex);
     }
 
@@ -217,7 +217,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal PageAccessor GetPageExclusiveUnchecked(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        memPageIndex = RequestExclusiveForGrow(Pages[segmentPageIndex], epoch, verifyCrc: false);
+        memPageIndex = RequestExclusiveForGrow(Pages[segmentPageIndex], epoch, false);
         return _store.GetPage(memPageIndex);
     }
 
@@ -239,7 +239,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public unsafe byte* GetPageAddressExclusive(int segmentPageIndex, long epoch, out int memPageIndex)
     {
-        memPageIndex = RequestExclusiveForGrow(Pages[segmentPageIndex], epoch, verifyCrc: true);
+        memPageIndex = RequestExclusiveForGrow(Pages[segmentPageIndex], epoch, true);
         return _store.GetMemPageAddress(memPageIndex);
     }
 
@@ -473,7 +473,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
                 // If it's a new page, initialize it (skip CRC — page will be fully overwritten)
                 if (isNewPage)
                 {
-                    memPageIdx = RequestExclusiveForGrow(curMapPageIndex, epoch, verifyCrc: false);
+                    memPageIdx = RequestExclusiveForGrow(curMapPageIndex, epoch, false);
                     page = _store.GetPage(memPageIdx);
                     hasPage = true;
 
@@ -488,7 +488,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
                 {
                     if (hasPage == false)
                     {
-                        memPageIdx = RequestExclusiveForGrow(curMapPageIndex, epoch, verifyCrc: true);
+                        memPageIdx = RequestExclusiveForGrow(curMapPageIndex, epoch, true);
                         page = _store.GetPage(memPageIdx);
                         hasPage = true;
                     }
@@ -510,7 +510,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
                 {
                     if (hasPage == false)
                     {
-                        memPageIdx = RequestExclusiveForGrow(curMapPageIndex, epoch, verifyCrc: true);
+                        memPageIdx = RequestExclusiveForGrow(curMapPageIndex, epoch, true);
                         page = _store.GetPage(memPageIdx);
                         hasPage = true;
                     }
@@ -533,9 +533,9 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
                         // The current page is full, we need on fetch one more... just to store the termination 0 value
                         else
                         {
-                            var endMemIdx = RequestExclusiveForGrow(mapIndices[curIndexMapIndex + 1], epoch, verifyCrc: false);
+                            var endMemIdx = RequestExclusiveForGrow(mapIndices[curIndexMapIndex + 1], epoch, false);
                             var endPage = _store.GetPage(endMemIdx);
-                            InitHeader(endPage.Address, PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1, MetadataReservedBytes(isRootPage: false),
+                            InitHeader(endPage.Address, PageClearMode.Header, PageBlockFlags.IsLogicalSegment, type, 1, MetadataReservedBytes(false),
                                 ChunkStrideForGeometry);
                             changeSet?.AddByMemPageIndex(endMemIdx);
                             endPage.RawData<int>(0, 1)[0] = 0;
@@ -602,7 +602,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
         if (growFrom > 0)
         {
             var oldTailFilePage = filePageIndices[growFrom - 1];
-            var oldTailMemIdx = RequestExclusiveForGrow(oldTailFilePage, epoch, verifyCrc: true);
+            var oldTailMemIdx = RequestExclusiveForGrow(oldTailFilePage, epoch, true);
             var oldTailPage = _store.GetPage(oldTailMemIdx);
             ref var oldTailLsh = ref oldTailPage.StructAt<LogicalSegmentHeader>(LogicalSegmentHeader.Offset);
             oldTailLsh.LogicalSegmentNextRawDataPBID = filePageIndices[growFrom];
@@ -627,7 +627,7 @@ public class LogicalSegment<TStore> : IDisposable where TStore : struct, IPageSt
         for (var i = growFrom; i < filePageIndices.Length; i++)
         {
             var pageIndex = filePageIndices[i];
-            var memPageIdx = RequestExclusiveForGrow(pageIndex, epoch, verifyCrc: false);
+            var memPageIdx = RequestExclusiveForGrow(pageIndex, epoch, false);
             var page = _store.GetPage(memPageIdx);
 
             if (clear)

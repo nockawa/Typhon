@@ -194,7 +194,7 @@ public readonly struct ClusterSpatialQueryResult
     public readonly int SlotIndex;
 
     /// <summary>Squared distance from the query center to the closest point on the entity's AABB. Populated by Radius queries; always <c>0</c> for AABB
-    /// queries. Used by <see cref="ArchetypeClusterState.QueryNearest"/> for top-k sorting. Issue #230 Phase 3.</summary>
+    /// queries. Used by <c>ArchetypeClusterState.QueryNearest</c> for top-k sorting. Issue #230 Phase 3.</summary>
     public readonly float DistanceSq;
 
     /// <summary>

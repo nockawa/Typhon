@@ -1773,57 +1773,10 @@ public class TraceEventEncodeEquivalenceTests
         AssertSpanEqualsGolden(bufStruct, lenStruct, golden);
     }
 
-    [Test]
-    public void SpatialMaintainInsertEvent_StructEncode_MatchesCodec()
-    {
-        var ev = new SpatialMaintainInsertEvent
-        {
-            Header = new TraceSpanHeader
-            {
-                ThreadSlot = ThreadSlot,
-                StartTimestamp = StartTs,
-                SpanId = SpanId,
-                ParentSpanId = ParentSpanId,
-                TraceIdHi = TraceIdHi,
-                TraceIdLo = TraceIdLo,
-            },
-            EntityPK = 1001L,
-            ComponentTypeId = 0x1300,
-            DidDegenerate = 0x13,
-        };
-
-        Span<byte> bufStruct = stackalloc byte[256];
-        ev.EncodeTo(bufStruct, EndTs, out var lenStruct);
-
-        var golden = Convert.FromHexString("40008A0744443333222211111111000000000000DDDDCCCCBBBBAAAAF0DEBC9A78563412010F0F0F0F0F0F0F0FF0F0F0F0F0F0F0F0E903000000000000001313");
-        AssertSpanEqualsGolden(bufStruct, lenStruct, golden);
-    }
-
-    [Test]
-    public void SpatialMaintainUpdateSlowPathEvent_StructEncode_MatchesCodec()
-    {
-        var ev = new SpatialMaintainUpdateSlowPathEvent
-        {
-            Header = new TraceSpanHeader
-            {
-                ThreadSlot = ThreadSlot,
-                StartTimestamp = StartTs,
-                SpanId = SpanId,
-                ParentSpanId = ParentSpanId,
-                TraceIdHi = TraceIdHi,
-                TraceIdLo = TraceIdLo,
-            },
-            EntityPK = 1001L,
-            ComponentTypeId = 0x1300,
-            EscapeDistSq = 3.5f,
-        };
-
-        Span<byte> bufStruct = stackalloc byte[256];
-        ev.EncodeTo(bufStruct, EndTs, out var lenStruct);
-
-        var golden = Convert.FromHexString("43008B0744443333222211111111000000000000DDDDCCCCBBBBAAAAF0DEBC9A78563412010F0F0F0F0F0F0F0FF0F0F0F0F0F0F0F0E903000000000000001300006040");
-        AssertSpanEqualsGolden(bufStruct, lenStruct, golden);
-    }
+    // SpatialMaintainInsertEvent and SpatialMaintainUpdateSlowPathEvent had golden-encoding tests here until #872
+    // step 13. Both producer structs were emitted only from SpatialMaintainer's entity-tree writers, which went with
+    // the tree; a golden test over a producer nothing can call proves the codec agrees with a struct that will never
+    // encode anything. Their TraceEventKind values (138, 139) are reserved rather than reused — see the enum.
 
     [Test]
     public void SpatialTierIndexRebuildEvent_StructEncode_MatchesCodec()
